@@ -1,0 +1,586 @@
+use std::env;
+use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use atomic_write_file::AtomicWriteFile;
+use fs2::FileExt;
+use hubrpc::prelude::{HubRpcConnection, InterfaceHandler, RegisterOptions};
+use hubrpc_tokio::ndjson::{NdjsonTransport, Preamble};
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
+use tokio::time::sleep;
+
+use crate::debugger_service::DebuggerService;
+use crate::service_api::{
+    DebuggerServiceApiClient, DebuggerServiceApiServer, SERVICE_PROTOCOL_VERSION,
+    debugger_service_api,
+};
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalServiceEndpoint {
+    pub protocol_version: u32,
+    pub process_id: u32,
+    pub transport: LocalTransportEndpoint,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LocalTransportEndpoint {
+    NamedPipe { pipe_name: String },
+    UnixSocket { path: PathBuf },
+}
+
+pub fn default_state_file() -> PathBuf {
+    if let Some(path) = env::var_os("JSDBG_SERVICE_STATE") {
+        return PathBuf::from(path);
+    }
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join("hediet")
+            .join("cdp-client")
+            .join("service.json");
+    }
+    if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir)
+            .join("hediet-cdp-client")
+            .join("service.json");
+    }
+    if let Some(home) = env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("hediet")
+            .join("cdp-client")
+            .join("service.json");
+    }
+    env::temp_dir()
+        .join(format!("hediet-cdp-client-{}", std::process::id()))
+        .join("service.json")
+}
+
+pub fn persistent_state_file(endpoint_file: &Path) -> PathBuf {
+    endpoint_file.with_extension("contexts.json")
+}
+
+pub fn startup_error_file(endpoint_file: &Path) -> PathBuf {
+    endpoint_file.with_extension("startup-error.txt")
+}
+
+pub fn write_startup_error(endpoint_file: &Path, message: &str) -> Result<(), LocalRpcError> {
+    let path = startup_error_file(endpoint_file);
+    if let Some(parent) = path.parent() {
+        ensure_private_directory(parent)?;
+    }
+    let mut file = AtomicWriteFile::open(&path)?;
+    file.write_all(message.as_bytes())?;
+    file.commit()?;
+    restrict_private_file(&path)?;
+    Ok(())
+}
+
+pub async fn serve_local(
+    state_file: &Path,
+    shutdown_sender: watch::Sender<bool>,
+    shutdown_receiver: watch::Receiver<bool>,
+) -> Result<(), LocalRpcError> {
+    #[cfg(windows)]
+    {
+        serve_named_pipe(state_file, shutdown_sender, shutdown_receiver).await
+    }
+    #[cfg(unix)]
+    {
+        serve_unix_socket(state_file, shutdown_sender, shutdown_receiver).await
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = (state_file, shutdown_sender, shutdown_receiver);
+        Err(LocalRpcError::UnsupportedPlatform)
+    }
+}
+
+#[cfg(windows)]
+async fn serve_named_pipe(
+    state_file: &Path,
+    shutdown_sender: watch::Sender<bool>,
+    mut shutdown_receiver: watch::Receiver<bool>,
+) -> Result<(), LocalRpcError> {
+    use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+    fn create_server(name: &str, first: bool) -> std::io::Result<NamedPipeServer> {
+        ServerOptions::new()
+            .first_pipe_instance(first)
+            .reject_remote_clients(true)
+            .create(name)
+    }
+
+    let service = Arc::new(DebuggerService::load(
+        shutdown_sender,
+        persistent_state_file(state_file),
+    )?);
+    let token = random_token()?;
+    let pipe_id = random_token()?;
+    let pipe_name = format!(r"\\.\pipe\hediet-cdp-client-{}", &pipe_id[..32]);
+    let mut server = create_server(&pipe_name, true)?;
+    let endpoint = LocalServiceEndpoint {
+        protocol_version: SERVICE_PROTOCOL_VERSION,
+        process_id: std::process::id(),
+        transport: LocalTransportEndpoint::NamedPipe {
+            pipe_name: pipe_name.clone(),
+        },
+        token,
+    };
+    write_endpoint(state_file, &endpoint)?;
+
+    loop {
+        let accepted = tokio::select! {
+            result = server.connect() => Some(result),
+            changed = shutdown_receiver.changed() => {
+                if changed.is_err() || *shutdown_receiver.borrow() {
+                    None
+                } else {
+                    continue;
+                }
+            }
+        };
+        let Some(accepted) = accepted else {
+            break;
+        };
+        accepted?;
+        let connected = server;
+        server = create_server(&pipe_name, false)?;
+        let service = service.clone();
+        let token = endpoint.token.clone();
+        tokio::spawn(async move {
+            let _ = serve_peer(connected, &token, service).await;
+        });
+    }
+
+    remove_endpoint_if_owned(state_file, &endpoint);
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn serve_unix_socket(
+    state_file: &Path,
+    shutdown_sender: watch::Sender<bool>,
+    mut shutdown_receiver: watch::Receiver<bool>,
+) -> Result<(), LocalRpcError> {
+    let service = Arc::new(DebuggerService::load(
+        shutdown_sender,
+        persistent_state_file(state_file),
+    )?);
+    let token = random_token()?;
+    let socket_path = state_file.with_extension(format!("{}-service.sock", std::process::id()));
+    if let Some(parent) = socket_path.parent() {
+        ensure_private_directory(parent)?;
+    }
+    if socket_path.exists() {
+        fs::remove_file(&socket_path)?;
+    }
+    let listener = tokio::net::UnixListener::bind(&socket_path)?;
+    restrict_private_file(&socket_path)?;
+    let endpoint = LocalServiceEndpoint {
+        protocol_version: SERVICE_PROTOCOL_VERSION,
+        process_id: std::process::id(),
+        transport: LocalTransportEndpoint::UnixSocket {
+            path: socket_path.clone(),
+        },
+        token,
+    };
+    write_endpoint(state_file, &endpoint)?;
+
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let service = service.clone();
+                let token = endpoint.token.clone();
+                tokio::spawn(async move {
+                    let _ = serve_peer(stream, &token, service).await;
+                });
+            }
+            changed = shutdown_receiver.changed() => {
+                if changed.is_err() || *shutdown_receiver.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+
+    remove_endpoint_if_owned(state_file, &endpoint);
+    let _ = fs::remove_file(socket_path);
+    Ok(())
+}
+
+pub async fn connect_endpoint(
+    endpoint: &LocalServiceEndpoint,
+) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+    if endpoint.protocol_version != SERVICE_PROTOCOL_VERSION {
+        return Err(LocalRpcError::ProtocolVersion {
+            expected: SERVICE_PROTOCOL_VERSION,
+            actual: endpoint.protocol_version,
+        });
+    }
+    match &endpoint.transport {
+        #[cfg(windows)]
+        LocalTransportEndpoint::NamedPipe { pipe_name } => {
+            let stream = open_named_pipe(pipe_name).await?;
+            connect_stream(stream, &endpoint.token).await
+        }
+        #[cfg(unix)]
+        LocalTransportEndpoint::UnixSocket { path } => {
+            let stream = tokio::net::UnixStream::connect(path).await?;
+            connect_stream(stream, &endpoint.token).await
+        }
+        _ => Err(LocalRpcError::UnsupportedTransport(
+            endpoint.transport.clone(),
+        )),
+    }
+}
+
+#[cfg(windows)]
+async fn open_named_pipe(
+    pipe_name: &str,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient, std::io::Error> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match ClientOptions::new().open(pipe_name) {
+            Ok(client) => return Ok(client),
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && Instant::now() < deadline =>
+            {
+                sleep(Duration::from_millis(5)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+async fn connect_stream<S>(
+    stream: S,
+    token: &str,
+) -> Result<DebuggerServiceApiClient, LocalRpcError>
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
+    let transport = NdjsonTransport::from_stream(stream);
+    transport
+        .write_preamble(&Preamble::new(Some(token.to_owned())))
+        .await?;
+    let connection = HubRpcConnection::new(Box::new(transport));
+    let run = connection.clone();
+    tokio::spawn(async move { run.run().await });
+    Ok(DebuggerServiceApiClient::new(connection))
+}
+
+pub async fn connect_existing(
+    state_file: &Path,
+) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+    let endpoint = read_endpoint(state_file)?;
+    let client = connect_endpoint(&endpoint).await?;
+    let info = client
+        .service_info()
+        .await
+        .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+    if info.process_id != endpoint.process_id {
+        return Err(LocalRpcError::EndpointOwnerChanged {
+            expected: endpoint.process_id,
+            actual: info.process_id,
+        });
+    }
+    Ok(client)
+}
+
+pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+    if let Ok(client) = connect_existing(state_file).await {
+        return Ok(client);
+    }
+
+    if let Some(parent) = state_file.parent() {
+        ensure_private_directory(parent)?;
+    }
+    let startup_lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(state_file.with_extension("startup.lock"))?;
+    let lock_deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        match startup_lock.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if let Ok(client) = connect_existing(state_file).await {
+                    return Ok(client);
+                }
+                if Instant::now() >= lock_deadline {
+                    return Err(LocalRpcError::StartupLockTimeout);
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if let Ok(client) = connect_existing(state_file).await {
+        return Ok(client);
+    }
+
+    let startup_error = startup_error_file(state_file);
+    let _ = fs::remove_file(&startup_error);
+    spawn_service(state_file)?;
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match connect_existing(state_file).await {
+            Ok(client) => return Ok(client),
+            Err(error) => last_error = Some(error),
+        }
+        if let Ok(message) = fs::read_to_string(&startup_error) {
+            return Err(LocalRpcError::StartupFailed(message));
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    Err(LocalRpcError::StartupTimeout {
+        last_error: last_error.map(Box::new),
+    })
+}
+
+pub fn read_endpoint(path: &Path) -> Result<LocalServiceEndpoint, LocalRpcError> {
+    let bytes = fs::read(path)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn serve_peer(
+    stream: impl AsyncRead + AsyncWrite + Send + 'static,
+    expected_token: &str,
+    service: Arc<DebuggerService>,
+) -> Result<(), LocalRpcError> {
+    let transport = NdjsonTransport::from_stream(stream);
+    let Some(preamble) = transport.read_preamble().await? else {
+        return Ok(());
+    };
+    if preamble.hello != 1 || preamble.token.as_deref() != Some(expected_token) {
+        return Err(LocalRpcError::AuthenticationFailed);
+    }
+
+    let connection = HubRpcConnection::new(Box::new(transport));
+    connection.register(
+        Arc::new(debugger_service_api::interface()),
+        Arc::new(DebuggerServiceApiServer::new(service)) as Arc<dyn InterfaceHandler>,
+        RegisterOptions::default(),
+    )?;
+    connection.enable_reflection();
+    connection.run().await;
+    Ok(())
+}
+
+fn write_endpoint(path: &Path, endpoint: &LocalServiceEndpoint) -> Result<(), LocalRpcError> {
+    if let Some(parent) = path.parent() {
+        ensure_private_directory(parent)?;
+    }
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(&serde_json::to_vec(endpoint)?)?;
+    file.commit()?;
+    restrict_private_file(path)?;
+    Ok(())
+}
+
+fn ensure_private_directory(path: &Path) -> Result<(), std::io::Error> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn restrict_private_file(path: &Path) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    let _ = path;
+    Ok(())
+}
+
+fn remove_endpoint_if_owned(path: &Path, endpoint: &LocalServiceEndpoint) {
+    if matches!(read_endpoint(path), Ok(current) if current == *endpoint) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn spawn_service(state_file: &Path) -> Result<(), LocalRpcError> {
+    let executable = match env::var_os("JSDBG_SERVICE_EXE") {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let mut path = env::current_exe()?;
+            path.set_file_name(if cfg!(windows) {
+                "jsdbg-service.exe"
+            } else {
+                "jsdbg-service"
+            });
+            path
+        }
+    };
+    let mut command = Command::new(&executable);
+    command
+        .arg("--state-file")
+        .arg(state_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_detached(&mut command);
+    command
+        .spawn()
+        .map_err(|source| LocalRpcError::Spawn { executable, source })?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_detached(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+}
+
+#[cfg(not(windows))]
+fn configure_detached(_command: &mut Command) {}
+
+fn random_token() -> Result<String, LocalRpcError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| LocalRpcError::Random(error.to_string()))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum LocalRpcError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Connection(#[from] hubrpc::connection::hub_connection::ConnError),
+    #[error("local service authentication failed")]
+    AuthenticationFailed,
+    #[error("local service protocol version {actual} is incompatible; expected {expected}")]
+    ProtocolVersion { expected: u32, actual: u32 },
+    #[error("service endpoint changed owner from process {expected} to {actual}")]
+    EndpointOwnerChanged { expected: u32, actual: u32 },
+    #[error("failed to spawn {executable}: {source}")]
+    Spawn {
+        executable: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("service did not become ready before timeout")]
+    StartupTimeout {
+        last_error: Option<Box<LocalRpcError>>,
+    },
+    #[error("timed out waiting for another CLI to start the service")]
+    StartupLockTimeout,
+    #[error("service failed during startup: {0}")]
+    StartupFailed(String),
+    #[error("service RPC failed: {0}")]
+    Rpc(String),
+    #[error("failed to generate authentication token: {0}")]
+    Random(String),
+    #[error(transparent)]
+    Persistence(#[from] crate::debugger_service::ServicePersistenceError),
+    #[error("local RPC is unsupported on this platform")]
+    UnsupportedPlatform,
+    #[error("local service transport is unsupported on this platform: {0:?}")]
+    UnsupportedTransport(LocalTransportEndpoint),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn typed_context_state_round_trips_over_native_local_ipc() {
+        let state_file = env::temp_dir().join(format!(
+            "jsdbg-local-rpc-{}-{}.json",
+            std::process::id(),
+            random_token().unwrap()
+        ));
+        let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+        let server_state_file = state_file.clone();
+        let server = tokio::spawn(async move {
+            serve_local(&server_state_file, shutdown_sender, shutdown_receiver)
+                .await
+                .unwrap();
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let client = loop {
+            if let Ok(client) = connect_existing(&state_file).await {
+                break client;
+            }
+            assert!(Instant::now() < deadline, "service did not become ready");
+            sleep(Duration::from_millis(10)).await;
+        };
+
+        let created = client
+            .put_context("shop".into(), Some("Shop".into()))
+            .await
+            .unwrap();
+        assert_eq!(created.revision, 1);
+
+        let server_connection = client
+            .put_connection("shop".into(), "server".into(), "ws://127.0.0.1:9229".into())
+            .await
+            .unwrap();
+        assert_eq!(server_connection.connections.len(), 1);
+        let browser_connection = client
+            .put_connection(
+                "shop".into(),
+                "browser".into(),
+                "ws://127.0.0.1:9222".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            browser_connection
+                .connections
+                .iter()
+                .map(|connection| connection.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["browser", "server"]
+        );
+
+        let with_breakpoint = client
+            .put_breakpoint(
+                "shop".into(),
+                "shared-validation".into(),
+                "file:///workspace/shared/validation.ts".into(),
+                41,
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(with_breakpoint.breakpoints.len(), 1);
+        assert_eq!(
+            with_breakpoint.breakpoints[0].status,
+            crate::service_api::BreakpointStatus::Unconfirmed
+        );
+
+        assert!(client.shutdown().await.unwrap());
+        server.await.unwrap();
+        assert!(!state_file.exists());
+        let _ = fs::remove_file(persistent_state_file(&state_file));
+    }
+}
