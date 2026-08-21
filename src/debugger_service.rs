@@ -23,8 +23,9 @@ use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec, ServiceInfo,
-    StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate,
+    EvaluationSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapSnapshotProgress,
+    HeapSnapshotResult, LogpointSpec, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -912,6 +913,40 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn capture_heap_snapshot(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: Option<String>,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+    ) -> Result<HeapCaptureResult, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_heap_classes(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        filter: Option<String>,
+        no_cache: bool,
+    ) -> Result<HeapClassSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_heap_classes(capture_id, filter, no_cache)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn get_heap_snapshot_progress(
         &self,
         _ctx: &CallCtx,
@@ -1362,6 +1397,8 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::CoverageNotActive
         | TargetDebuggerError::CoverageCaptureNotFound(_)
         | TargetDebuggerError::CoverageCaptureAlreadyExists(_)
+        | TargetDebuggerError::HeapCaptureNotFound(_)
+        | TargetDebuggerError::InvalidHeapFilter(_)
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::SettlementTimedOut

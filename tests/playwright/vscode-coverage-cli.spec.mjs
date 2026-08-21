@@ -15,7 +15,7 @@ const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/release/jsdbg${executableSuffix}`);
 const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-typing-coverage.md");
-const expectedDurationMs = 120_000;
+const expectedDurationMs = 300_000;
 const hardTimeoutMs = Math.ceil(expectedDurationMs * 1.2);
 const commandTimeoutMs = 90_000;
 let stepNumber = 0;
@@ -87,6 +87,38 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 			30_000,
 		);
+		const heapClasses = await runCli(
+			"Capture the live heap and render source-mapped PieceTree classes with representative object IDs.",
+			[
+				"heap",
+				"classes",
+				"--create-snapshot",
+				"--filter",
+				".*PieceTree.*",
+				"--instances",
+				"--max-lines",
+				"80",
+			],
+			environment,
+			180_000,
+		);
+		expect(heapClasses).toMatch(/^\d+ classes, \d+ instances, .+ shallow size$/m);
+		expect(heapClasses).toMatch(/PieceTree.*@\d+\s+id \d+/);
+		expect(heapClasses.trimEnd().split("\n").length).toBeLessThanOrEqual(80);
+		const heapSnapshot = await runJsonSilent(
+			["heap", "classes", ".", "--filter", ".*PieceTree.*"],
+			environment,
+			180_000,
+		);
+		expect(heapSnapshot.classes.length).toBeGreaterThan(0);
+		expect(heapSnapshot.totalInstances).toBeGreaterThan(0);
+		expect(
+			heapSnapshot.classes.some(
+				(class_) =>
+					/\.tsx?$/.test(class_.sourceUrl) &&
+					/PieceTree/.test(class_.name),
+			),
+		).toBe(true);
 		await runCli(
 			"Start precise function and block coverage.",
 			["coverage", "start"],
@@ -125,6 +157,10 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		expect(report).not.toContain("additional hit ranges omitted");
 		expect(report).toContain("snippet/browser/snippetParser.ts");
 		expect(report).not.toContain("Scanner.next");
+		expect(report).toMatch(
+			/snippetParser\.ts\s+\d+ HL, \d+ RL[\s\S]*SnippetParser\s+\d+ HL, \d+ RL/,
+		);
+		expect(report).toMatch(/all \d+ children pruned/);
 		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(300);
 		const bounded = await runTextSilent(
 			["coverage", "show", ".", "--max-lines", "40"],

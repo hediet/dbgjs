@@ -7,16 +7,18 @@ use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, HeapSnapshotProgress,
-    LogpointSpec, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetWaitPredicate,
+    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, HeapCaptureResult,
+    HeapSnapshotProgress, LogpointSpec, PlaywrightChannel, StepKind, TargetDebuggerPhase,
+    TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
+#[path = "jsdbg/bounded_tree.rs"]
+mod bounded_tree;
 #[path = "jsdbg/output.rs"]
 mod output;
 
-use output::{CoverageOutputOptions, OutputFormat};
+use output::{CoverageOutputOptions, HeapClassOutputOptions, OutputFormat};
 
 #[tokio::main]
 async fn main() {
@@ -358,6 +360,57 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     path: options.path.as_deref(),
                     all: options.all,
                     max_lines: options.max_lines,
+                },
+            )?;
+        }
+        [heap, capture, options @ ..] if heap == "heap" && capture == "capture" => {
+            let options = parse_heap_capture_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let operation = client.capture_heap_snapshot(
+                scope.context.clone(),
+                scope.connection.clone(),
+                scope.target.clone(),
+                options.capture_id,
+                options.capture_numeric_value,
+                options.expose_internals,
+            );
+            tokio::pin!(operation);
+            let result = wait_for_heap_capture(&output, &client, &scope, &mut operation).await?;
+            output.print(&result)?;
+        }
+        [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
+            let options = parse_heap_class_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            if options.capture {
+                let operation = client.capture_heap_snapshot(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    Some(options.capture_id.clone()),
+                    false,
+                    false,
+                );
+                tokio::pin!(operation);
+                wait_for_heap_capture(&output, &client, &scope, &mut operation).await?;
+            }
+            let classes = rpc(client
+                .get_heap_classes(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.filter,
+                    options.no_cache,
+                )
+                .await)?;
+            output.print_heap_classes(
+                &classes,
+                HeapClassOutputOptions {
+                    all: options.all,
+                    max_lines: options.max_lines,
+                    instances: options.instances,
                 },
             )?;
         }
@@ -1155,6 +1208,138 @@ struct HeapSnapshotOptions {
     expose_internals: bool,
 }
 
+struct HeapCaptureOptions {
+    capture_id: Option<String>,
+    capture_numeric_value: bool,
+    expose_internals: bool,
+}
+
+struct HeapClassOptions {
+    capture_id: String,
+    capture: bool,
+    filter: Option<String>,
+    all: bool,
+    max_lines: usize,
+    instances: bool,
+    no_cache: bool,
+}
+
+fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, io::Error> {
+    let mut capture_id = None;
+    let mut capture_numeric_value = false;
+    let mut expose_internals = false;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--id" => {
+                index += 1;
+                capture_id = Some(
+                    values
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "--id requires a name")
+                        })?
+                        .clone(),
+                );
+            }
+            "--capture-numeric-value" => capture_numeric_value = true,
+            "--expose-internals" => expose_internals = true,
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap capture option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapCaptureOptions {
+        capture_id,
+        capture_numeric_value,
+        expose_internals,
+    })
+}
+
+fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::Error> {
+    let mut capture_id = None;
+    let mut capture = false;
+    let mut filter = None;
+    let mut all = false;
+    let mut max_lines = 300_usize;
+    let mut instances = false;
+    let mut no_cache = false;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--capture" | "--create-snapshot" => capture = true,
+            "--filter" => {
+                index += 1;
+                filter = Some(
+                    values
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--filter requires a regular expression",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--all" => all = true,
+            "--instances" => instances = true,
+            "--no-cache" => no_cache = true,
+            "--max-lines" => {
+                index += 1;
+                max_lines = values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--max-lines requires a positive integer",
+                        )
+                    })?
+                    .parse()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid --max-lines value: {error}"),
+                        )
+                    })?;
+                if max_lines == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--max-lines must be positive",
+                    ));
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap classes option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected heap classes argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapClassOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        capture,
+        filter,
+        all,
+        max_lines,
+        instances,
+        no_cache,
+    })
+}
+
 fn parse_heap_snapshot_options(values: &[String]) -> Result<HeapSnapshotOptions, io::Error> {
     let mut options = HeapSnapshotOptions {
         capture_numeric_value: false,
@@ -1181,6 +1366,51 @@ fn absolute_path(path: &Path) -> Result<std::path::PathBuf, io::Error> {
     } else {
         Ok(env::current_dir()?.join(path))
     }
+}
+
+async fn wait_for_heap_capture<F>(
+    output: &OutputFormat,
+    client: &DebuggerServiceApiClient,
+    scope: &ResolvedScope,
+    operation: &mut std::pin::Pin<&mut F>,
+) -> Result<HeapCaptureResult, Box<dyn std::error::Error>>
+where
+    F: std::future::Future<Output = Result<HeapCaptureResult, hubrpc::prelude::JsonRpcError>>,
+{
+    let mut last_progress = None::<HeapSnapshotProgress>;
+    let result = loop {
+        tokio::select! {
+            result = operation.as_mut() => break rpc(result)?,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                let progress = rpc(client
+                    .get_heap_snapshot_progress(
+                        scope.context.clone(),
+                        scope.connection.clone(),
+                        scope.target.clone(),
+                    )
+                    .await)?;
+                if let Some(progress) = progress
+                    && last_progress.as_ref() != Some(&progress)
+                {
+                    output.print_heap_snapshot_progress(&progress)?;
+                    last_progress = Some(progress);
+                }
+            }
+        }
+    };
+    let progress = rpc(client
+        .get_heap_snapshot_progress(
+            scope.context.clone(),
+            scope.connection.clone(),
+            scope.target.clone(),
+        )
+        .await)?;
+    if let Some(progress) = progress
+        && last_progress.as_ref() != Some(&progress)
+    {
+        output.print_heap_snapshot_progress(&progress)?;
+    }
+    Ok(result)
 }
 
 fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions, io::Error> {
@@ -1470,9 +1700,63 @@ commands:
   jsdbg coverage stop [--exclude <name>]
   jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache]
   jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
+  jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals]
+  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--instances] [--max-lines <count>] [--all] [--no-cache]
   jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals]
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
   jsdbg target eval <context-id> <connection-id> <target> <expression>
   jsdbg target logpoint <context-id> <connection-id> <target> <id> <source> <line> <column> <expression>"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_heap_capture_options, parse_heap_class_options};
+
+    fn arguments(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_managed_heap_capture_options() {
+        let options = parse_heap_capture_options(&arguments(&[
+            "--id",
+            "startup",
+            "--capture-numeric-value",
+            "--expose-internals",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id.as_deref(), Some("startup"));
+        assert!(options.capture_numeric_value);
+        assert!(options.expose_internals);
+    }
+
+    #[test]
+    fn parses_heap_class_capture_and_output_options() {
+        let options = parse_heap_class_options(&arguments(&[
+            "startup",
+            "--create-snapshot",
+            "--filter",
+            ".*PieceTree.*",
+            "--instances",
+            "--max-lines",
+            "42",
+            "--no-cache",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id, "startup");
+        assert!(options.capture);
+        assert_eq!(options.filter.as_deref(), Some(".*PieceTree.*"));
+        assert!(options.instances);
+        assert_eq!(options.max_lines, 42);
+        assert!(options.no_cache);
+    }
+
+    #[test]
+    fn heap_classes_default_to_coverage_aligned_capture_and_limit() {
+        let options = parse_heap_class_options(&[]).unwrap();
+        assert_eq!(options.capture_id, ".");
+        assert_eq!(options.max_lines, 300);
+        assert!(!options.capture);
+    }
 }

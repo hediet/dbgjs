@@ -1,11 +1,14 @@
 use cdp_client::service_api::{
     BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
     ContextSnapshot, ContextSummary, CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
-    HeapSnapshotProgress, HeapSnapshotResult, PlaywrightChannel, ServiceInfo, SourceExcerpt,
-    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapSnapshotProgress,
+    HeapSnapshotResult, PlaywrightChannel, ServiceInfo, SourceExcerpt, TargetBreakpointStatus,
+    TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+
+use super::bounded_tree::{BoundedTree, BoundedTreeStyle, TreeAggregate};
 
 #[derive(Clone, Copy)]
 pub enum OutputFormat {
@@ -17,6 +20,12 @@ pub struct CoverageOutputOptions<'a> {
     pub path: Option<&'a str>,
     pub all: bool,
     pub max_lines: usize,
+}
+
+pub struct HeapClassOutputOptions {
+    pub all: bool,
+    pub max_lines: usize,
+    pub instances: bool,
 }
 
 impl OutputFormat {
@@ -199,6 +208,18 @@ impl OutputFormat {
         }
         Ok(())
     }
+
+    pub fn print_heap_classes(
+        &self,
+        snapshot: &HeapClassSnapshot,
+        options: HeapClassOutputOptions,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => print_heap_classes_human(snapshot, options),
+            Self::Json => println!("{}", serde_json::to_string_pretty(snapshot)?),
+        }
+        Ok(())
+    }
 }
 
 fn page_logs(
@@ -249,6 +270,16 @@ impl HumanOutput for HeapSnapshotResult {
         println!(
             "Heap snapshot written to {} ({} bytes).",
             self.path, self.bytes_written
+        );
+    }
+}
+
+impl HumanOutput for HeapCaptureResult {
+    fn print_human(&self) {
+        println!(
+            "Captured {} ({}).",
+            self.capture_id,
+            compact_bytes(self.bytes_written)
         );
     }
 }
@@ -457,18 +488,271 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
     for entry in coverage_entries(snapshot) {
         files.entry(entry.path.clone()).or_default().push(entry);
     }
+    print_coverage_tree(snapshot, options, files);
+}
 
-    let mut root = CoverageTree::default();
+#[derive(Clone, Copy, Default)]
+struct HeapClassMetrics {
+    classes: u64,
+    instances: u64,
+    shallow_size: u64,
+}
+
+impl TreeAggregate for HeapClassMetrics {
+    fn merge(&mut self, other: &Self) {
+        self.classes = self.classes.saturating_add(other.classes);
+        self.instances = self.instances.saturating_add(other.instances);
+        self.shallow_size = self.shallow_size.saturating_add(other.shallow_size);
+    }
+}
+
+struct HeapClassTreeStyle {
+    instances: bool,
+}
+
+impl BoundedTreeStyle<HeapClassMetrics, Vec<HeapClassSnapshotEntry>> for HeapClassTreeStyle {
+    fn sort_weight(&self, aggregate: &HeapClassMetrics) -> u64 {
+        aggregate.instances
+    }
+
+    fn expansion_weight(
+        &self,
+        node: &BoundedTree<HeapClassMetrics, Vec<HeapClassSnapshotEntry>>,
+        _expand_leaves: bool,
+    ) -> u64 {
+        if node.children().is_empty() && node.leaf().is_none() {
+            0
+        } else {
+            (node.aggregate().instances.max(1) as f64).sqrt().ceil() as u64
+        }
+    }
+
+    fn render_node(
+        &self,
+        label: &str,
+        node: &BoundedTree<HeapClassMetrics, Vec<HeapClassSnapshotEntry>>,
+        _prefix: &str,
+        _expand_leaves: bool,
+    ) -> String {
+        let suffix = format!(
+            "{} instances, {}",
+            node.aggregate().instances,
+            compact_bytes(node.aggregate().shallow_size)
+        );
+        if node.leaf().is_some() {
+            format!("{label}  {suffix}")
+        } else {
+            format!(
+                "{label}/  [{} classes in {} files, {suffix}]",
+                node.aggregate().classes,
+                node.leaf_count()
+            )
+        }
+    }
+
+    fn render_leaf_children(
+        &self,
+        prefix: &str,
+        node: &BoundedTree<HeapClassMetrics, Vec<HeapClassSnapshotEntry>>,
+        budget: usize,
+        _expand_leaves: bool,
+    ) -> Vec<String> {
+        let Some(classes) = node.leaf() else {
+            return Vec::new();
+        };
+        let mut classes = classes.iter().collect::<Vec<_>>();
+        classes.sort_by_key(|class| std::cmp::Reverse(class.instance_count));
+        let mut output = Vec::new();
+        let mut rendered_classes = 0;
+        for (index, class) in classes.iter().enumerate() {
+            if output.len() >= budget {
+                break;
+            }
+            if budget != usize::MAX
+                && output.len().saturating_add(1) >= budget
+                && index + 1 < classes.len()
+            {
+                break;
+            }
+            let last_class = index + 1 == classes.len();
+            let branch = if last_class { "└─" } else { "├─" };
+            let inline = if !self.instances && class.instance_count <= 3 {
+                let aliases = class
+                    .instances
+                    .iter()
+                    .map(|instance| format!("{} id {}", instance.alias, instance.heap_object_id))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (!aliases.is_empty())
+                    .then(|| format!("  [{aliases}]"))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            output.push(format!(
+                "{prefix}{branch} {}  {} instances, {}{}",
+                class.name,
+                class.instance_count,
+                compact_bytes(class.shallow_size),
+                inline
+            ));
+            rendered_classes += 1;
+            if self.instances {
+                let instance_budget = if index + 1 < classes.len() {
+                    budget.saturating_sub(1)
+                } else {
+                    budget
+                };
+                let instance_prefix = format!("{prefix}{}", if last_class { "   " } else { "│  " });
+                for (instance_index, instance) in class.instances.iter().enumerate() {
+                    if output.len() >= instance_budget {
+                        break;
+                    }
+                    let last_instance = instance_index + 1 == class.instances.len()
+                        && class.omitted_instance_count == 0;
+                    output.push(format!(
+                        "{instance_prefix}{} {}  id {}  {}",
+                        if last_instance { "└─" } else { "├─" },
+                        instance.alias,
+                        instance.heap_object_id,
+                        compact_bytes(instance.shallow_size)
+                    ));
+                }
+                if class.omitted_instance_count > 0 && output.len() < instance_budget {
+                    output.push(format!(
+                        "{instance_prefix}└─ … {} instances omitted",
+                        class.omitted_instance_count
+                    ));
+                }
+            }
+        }
+        if rendered_classes < classes.len() && output.len() < budget {
+            output.push(format!(
+                "{prefix}└─ … {} classes omitted",
+                classes.len().saturating_sub(rendered_classes)
+            ));
+        }
+        output.truncate(budget);
+        output
+    }
+
+    fn render_omitted(
+        &self,
+        hidden_items: usize,
+        hidden_leaves: usize,
+        aggregate: &HeapClassMetrics,
+    ) -> String {
+        format!(
+            "[{hidden_items} items, {} classes in {hidden_leaves} files, {} instances, {}]",
+            aggregate.classes,
+            aggregate.instances,
+            compact_bytes(aggregate.shallow_size)
+        )
+    }
+
+    fn render_all_pruned(
+        &self,
+        child_count: usize,
+        hidden_leaves: usize,
+        aggregate: &HeapClassMetrics,
+    ) -> String {
+        self.render_omitted(child_count, hidden_leaves, aggregate)
+    }
+}
+
+fn print_heap_classes_human(snapshot: &HeapClassSnapshot, options: HeapClassOutputOptions) {
+    for line in render_heap_classes_human(snapshot, options) {
+        println!("{line}");
+    }
+}
+
+fn render_heap_classes_human(
+    snapshot: &HeapClassSnapshot,
+    options: HeapClassOutputOptions,
+) -> Vec<String> {
+    let mut output = vec![format!(
+        "{} classes, {} instances, {} shallow size",
+        snapshot.classes.len(),
+        snapshot.total_instances,
+        compact_bytes(snapshot.total_shallow_size)
+    )];
+    if snapshot.classes.is_empty() {
+        return output;
+    }
+    let mut files = BTreeMap::<String, Vec<HeapClassSnapshotEntry>>::new();
+    for class in &snapshot.classes {
+        files
+            .entry(normalize_source_path(&class.source_url))
+            .or_default()
+            .push(class.clone());
+    }
+    let mut tree = BoundedTree::default();
+    for (path, classes) in files {
+        let metrics = classes
+            .iter()
+            .fold(HeapClassMetrics::default(), |mut metrics, class| {
+                metrics.classes = metrics.classes.saturating_add(1);
+                metrics.instances = metrics.instances.saturating_add(class.instance_count);
+                metrics.shallow_size = metrics.shallow_size.saturating_add(class.shallow_size);
+                metrics
+            });
+        tree.insert(
+            path.split('/')
+                .filter(|component| !component.is_empty())
+                .map(str::to_owned),
+            metrics,
+            classes,
+        );
+    }
+    let budget = if options.all {
+        usize::MAX
+    } else {
+        options.max_lines.saturating_sub(1)
+    };
+    let style = HeapClassTreeStyle {
+        instances: options.instances,
+    };
+    output.extend(tree.render(&style, true, budget));
+    output
+}
+
+fn compact_bytes(bytes: u64) -> String {
+    const UNITS: &[(&str, u64)] = &[
+        ("GiB", 1024 * 1024 * 1024),
+        ("MiB", 1024 * 1024),
+        ("KiB", 1024),
+    ];
+    for (unit, size) in UNITS {
+        if bytes >= *size {
+            return format!("{:.1} {unit}", bytes as f64 / *size as f64);
+        }
+    }
+    format!("{bytes} B")
+}
+
+fn print_coverage_tree(
+    snapshot: &CoverageSnapshot,
+    options: CoverageOutputOptions<'_>,
+    files: BTreeMap<String, Vec<CoverageEntry>>,
+) {
+    let mut root = BoundedTree::default();
     for (path, entries) in files {
         let mut entries = aggregate_coverage_entries(entries);
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.metrics.hit_lines));
         let metrics = effective_file_metrics(&entries);
-        root.insert_file(path, metrics, entries);
+        root.insert(
+            path.split('/')
+                .filter(|component| !component.is_empty())
+                .map(str::to_owned),
+            metrics,
+            entries,
+        );
     }
 
     println!(
         "{} RL (run lines), {} HL (hit lines)",
-        root.metrics.run_lines, root.metrics.hit_lines
+        root.aggregate().run_lines,
+        root.aggregate().hit_lines
     );
     if let Some(analysis) = &snapshot.analysis {
         println!(
@@ -479,13 +763,17 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
             analysis.source_map_cache_bypasses
         );
     }
-    root.print(CoverageOutputOptions {
-        path: options.path,
-        all: options.all,
-        max_lines: options
+    let symbols = options.path.is_some() || options.all;
+    let budget = if options.all {
+        usize::MAX
+    } else {
+        options
             .max_lines
-            .saturating_sub(1 + usize::from(snapshot.analysis.is_some())),
-    });
+            .saturating_sub(1 + usize::from(snapshot.analysis.is_some()))
+    };
+    for line in root.render(&CoverageTreeStyle, symbols, budget) {
+        println!("{line}");
+    }
 }
 
 fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSnapshot {
@@ -544,6 +832,12 @@ impl CoverageMetrics {
 
     fn compact(self) -> String {
         format!("{} HL, {} RL", self.hit_lines, self.run_lines)
+    }
+}
+
+impl TreeAggregate for CoverageMetrics {
+    fn merge(&mut self, other: &Self) {
+        self.add(*other);
     }
 }
 
@@ -751,141 +1045,96 @@ fn normalize_source_path(path: &str) -> String {
         .to_owned()
 }
 
-#[derive(Default)]
-struct CoverageTree {
-    children: BTreeMap<String, CoverageTree>,
-    ranges: Vec<CoverageEntry>,
-    metrics: CoverageMetrics,
-    file_count: usize,
-}
+struct CoverageTreeStyle;
 
-impl CoverageTree {
-    fn insert_file(&mut self, path: String, metrics: CoverageMetrics, ranges: Vec<CoverageEntry>) {
-        let components = path
-            .split('/')
-            .filter(|component| !component.is_empty())
-            .collect::<Vec<_>>();
-        let mut node = self;
-        node.metrics.add(metrics);
-        node.file_count += 1;
-        for component in components {
-            node = node.children.entry(component.to_owned()).or_default();
-            node.metrics.add(metrics);
-            node.file_count += 1;
-        }
-        node.ranges = ranges;
+impl BoundedTreeStyle<CoverageMetrics, Vec<CoverageEntry>> for CoverageTreeStyle {
+    fn sort_weight(&self, aggregate: &CoverageMetrics) -> u64 {
+        aggregate.hit_lines
     }
 
-    fn print(&self, options: CoverageOutputOptions<'_>) {
-        let budget = if options.all {
-            usize::MAX
-        } else {
-            options.max_lines
-        };
-        for line in self.render_children("", options.path.is_some() || options.all, budget) {
-            println!("{line}");
-        }
-    }
-
-    fn render_children(&self, prefix: &str, symbols: bool, budget: usize) -> Vec<String> {
-        const LONG_LIST: usize = 24;
-        if budget == 0 {
-            return Vec::new();
-        }
-        let mut children = self.children.iter().collect::<Vec<_>>();
-        children.sort_by_key(|(_, child)| std::cmp::Reverse(child.metrics.hit_lines));
-        let visible = if budget == usize::MAX {
-            children.len()
-        } else if children.len() <= LONG_LIST {
-            children.len().min(budget)
-        } else {
-            children.len().min(budget.saturating_sub(1))
-        };
-        let hidden_items = children.len().saturating_sub(visible);
-        let hidden_files = children[visible..]
-            .iter()
-            .map(|(_, child)| child.file_count)
-            .sum::<usize>();
-        let hidden_metrics =
-            children[visible..]
-                .iter()
-                .fold(CoverageMetrics::default(), |mut total, (_, child)| {
-                    total.add(child.metrics);
-                    total
-                });
-        let output_len = visible + usize::from(hidden_items > 0);
-        let descendant_budget = budget.saturating_sub(output_len);
-        let weight = children
-            .iter()
-            .take(visible)
-            .map(|(_, child)| child.expansion_weight(symbols))
-            .sum::<u64>();
-        let mut output = Vec::new();
-        for (index, (name, child)) in children.into_iter().take(visible).enumerate() {
-            let last = index + 1 == output_len;
-            let branch = if last { "└─" } else { "├─" };
-            let (label, child) = collapse_tree_label(name, child);
-            if child.ranges.is_empty() {
-                output.push(format!(
-                    "{prefix}{branch} {label}/  [{} files, {}]",
-                    child.file_count,
-                    child.metrics.compact()
-                ));
-            } else {
-                output.push(format!(
-                    "{prefix}{branch} {label}  {}{}",
-                    child.metrics.compact(),
-                    if symbols {
-                        String::new()
-                    } else {
-                        inline_symbol_summary(child, &label, prefix, 120)
-                    }
-                ));
-            }
-            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            let child_budget = if budget == usize::MAX {
-                usize::MAX
-            } else if weight == 0 {
-                0
-            } else {
-                (((descendant_budget as u128 * child.expansion_weight(symbols) as u128)
-                    / weight as u128) as usize)
-                    .max(1)
-            };
-            output.extend(child.render_children(&child_prefix, symbols, child_budget));
-            if symbols && child.children.is_empty() {
-                output.extend(render_symbol_groups(
-                    &child_prefix,
-                    &child.ranges,
-                    child_budget,
-                ));
-            }
-        }
-        if hidden_items > 0 {
-            output.push(format!(
-                "{prefix}└─ … [{hidden_items} items, {hidden_files} files, {}]",
-                hidden_metrics.compact()
-            ));
-        }
-        if budget != usize::MAX {
-            output.truncate(budget);
-        }
-        output
-    }
-
-    fn expansion_weight(&self, symbols: bool) -> u64 {
-        if self.children.is_empty() && !(symbols && !self.ranges.is_empty()) {
+    fn expansion_weight(
+        &self,
+        node: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
+        symbols: bool,
+    ) -> u64 {
+        let has_class = node
+            .leaf()
+            .is_some_and(|entries| entries.iter().any(has_resolved_class));
+        if node.children().is_empty() && !(symbols && node.leaf().is_some()) && !has_class {
             return 0;
         }
-        (self.metrics.hit_lines.max(1) as f64).sqrt().ceil() as u64
+        (node.aggregate().hit_lines.max(1) as f64).sqrt().ceil() as u64
+    }
+
+    fn render_node(
+        &self,
+        label: &str,
+        node: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
+        prefix: &str,
+        _symbols: bool,
+    ) -> String {
+        match node.leaf() {
+            None => format!(
+                "{label}/  [{} files, {}]",
+                node.leaf_count(),
+                node.aggregate().compact()
+            ),
+            Some(_) => format!(
+                "{label}  {}{}",
+                node.aggregate().compact(),
+                inline_symbol_summary(node, label, prefix, 120)
+            ),
+        }
+    }
+
+    fn render_leaf_children(
+        &self,
+        prefix: &str,
+        node: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
+        budget: usize,
+        expand_leaves: bool,
+    ) -> Vec<String> {
+        node.leaf().map_or_else(Vec::new, |entries| {
+            render_symbol_groups(prefix, entries, budget, expand_leaves)
+        })
+    }
+
+    fn render_omitted(
+        &self,
+        hidden_items: usize,
+        hidden_files: usize,
+        metrics: &CoverageMetrics,
+    ) -> String {
+        format!(
+            "[{hidden_items} items, {hidden_files} files, {}]",
+            metrics.compact()
+        )
+    }
+
+    fn render_all_pruned(
+        &self,
+        child_count: usize,
+        hidden_files: usize,
+        metrics: &CoverageMetrics,
+    ) -> String {
+        format!(
+            "[all {child_count} children pruned, {hidden_files} files, {}]",
+            metrics.compact()
+        )
     }
 }
 
-fn inline_symbol_summary(tree: &CoverageTree, label: &str, prefix: &str, maximum: usize) -> String {
+fn inline_symbol_summary(
+    tree: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
+    label: &str,
+    prefix: &str,
+    maximum: usize,
+) -> String {
     let resolved = tree
-        .ranges
-        .iter()
-        .filter(|entry| entry.generated_location.is_none())
+        .leaf()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.generated_location.is_none() && !has_resolved_class(entry))
         .cloned()
         .collect::<Vec<_>>();
     let summaries = symbol_summaries(&resolved);
@@ -898,8 +1147,10 @@ fn inline_symbol_summary(tree: &CoverageTree, label: &str, prefix: &str, maximum
         .collect::<Vec<_>>()
         .join(", ");
     let suffix = format!(" [{rendered}]");
-    let base =
-        prefix.chars().count() + label.chars().count() + tree.metrics.compact().chars().count() + 4;
+    let base = prefix.chars().count()
+        + label.chars().count()
+        + tree.aggregate().compact().chars().count()
+        + 4;
     (base + suffix.chars().count() <= maximum)
         .then_some(suffix)
         .unwrap_or_default()
@@ -909,6 +1160,7 @@ struct SymbolSummary<'a> {
     name: String,
     metrics: CoverageMetrics,
     entries: Vec<&'a CoverageEntry>,
+    is_class: bool,
 }
 
 fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
@@ -929,6 +1181,7 @@ fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
         .into_iter()
         .map(|(name, entries)| SymbolSummary {
             metrics: effective_file_metrics(&entries.iter().copied().cloned().collect::<Vec<_>>()),
+            is_class: entries.iter().any(|entry| has_resolved_class(entry)),
             name,
             entries,
         })
@@ -937,8 +1190,16 @@ fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
     summaries
 }
 
-fn render_symbol_groups(prefix: &str, entries: &[CoverageEntry], budget: usize) -> Vec<String> {
-    let summaries = symbol_summaries(entries);
+fn render_symbol_groups(
+    prefix: &str,
+    entries: &[CoverageEntry],
+    budget: usize,
+    expand_methods: bool,
+) -> Vec<String> {
+    let summaries = symbol_summaries(entries)
+        .into_iter()
+        .filter(|summary| expand_methods || summary.is_class)
+        .collect::<Vec<_>>();
     let mut output = Vec::new();
     for (index, summary) in summaries.iter().enumerate() {
         if output.len() >= budget {
@@ -950,7 +1211,9 @@ fn render_symbol_groups(prefix: &str, entries: &[CoverageEntry], budget: usize) 
             "{prefix}{branch} {}  {}{}",
             summary.name,
             summary.metrics.compact(),
-            if summary.entries.len() == 1 {
+            if !expand_methods && summary.is_class {
+                inline_method_summary(summary, prefix, 120)
+            } else if summary.entries.len() == 1 {
                 summary.entries[0]
                     .generated_location
                     .as_ref()
@@ -959,7 +1222,7 @@ fn render_symbol_groups(prefix: &str, entries: &[CoverageEntry], budget: usize) 
                 String::new()
             }
         ));
-        if summary.entries.len() > 1 {
+        if expand_methods && summary.entries.len() > 1 {
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
             for (method_index, entry) in summary.entries.iter().enumerate() {
                 if output.len() >= budget {
@@ -985,15 +1248,38 @@ fn render_symbol_groups(prefix: &str, entries: &[CoverageEntry], budget: usize) 
     output
 }
 
-fn collapse_tree_label<'a>(name: &str, mut node: &'a CoverageTree) -> (String, &'a CoverageTree) {
-    let mut label = name.to_owned();
-    while node.ranges.is_empty() && node.children.len() == 1 {
-        let (child_name, child) = node.children.first_key_value().unwrap();
-        label.push('/');
-        label.push_str(child_name);
-        node = child;
-    }
-    (label, node)
+fn has_resolved_class(entry: &CoverageEntry) -> bool {
+    entry
+        .function
+        .split_once('.')
+        .is_some_and(|(class, method)| {
+            !class.is_empty()
+                && !method.is_empty()
+                && class.starts_with(|character: char| character.is_ascii_uppercase())
+        })
+}
+
+fn inline_method_summary(summary: &SymbolSummary<'_>, prefix: &str, maximum: usize) -> String {
+    let rendered = summary
+        .entries
+        .iter()
+        .map(|entry| {
+            let method = entry
+                .function
+                .split_once('.')
+                .map_or(entry.function.as_str(), |(_, method)| method);
+            format!("{method} {}", entry.metrics.compact())
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suffix = format!(" [{rendered}]");
+    let base = prefix.chars().count()
+        + summary.name.chars().count()
+        + summary.metrics.compact().chars().count()
+        + 4;
+    (base + suffix.chars().count() <= maximum)
+        .then_some(suffix)
+        .unwrap_or_default()
 }
 
 fn print_source_excerpt(label: &str, source: &SourceExcerpt) {
@@ -1127,14 +1413,84 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageEntry, CoverageMetrics, aggregate_coverage_entries, coverage_entries,
-        effective_file_metrics, looks_minified_identifier, page_logs,
+        CoverageEntry, CoverageMetrics, HeapClassOutputOptions, aggregate_coverage_entries,
+        coverage_entries, effective_file_metrics, looks_minified_identifier, page_logs,
+        render_heap_classes_human,
     };
     use cdp_client::service_api::{
         ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
-        CoverageSourceSnapshot, SourceLocation,
+        CoverageSourceSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot,
+        SourceLocation,
     };
     use std::collections::BTreeMap;
+
+    fn heap_class(name: &str, count: u64) -> HeapClassSnapshotEntry {
+        let retained = count.min(20);
+        HeapClassSnapshotEntry {
+            name: name.to_owned(),
+            source_url: "src/model.ts".to_owned(),
+            location: SourceLocation {
+                source_url: "src/model.ts".to_owned(),
+                line: 1,
+                column: 1,
+            },
+            generated_name: name.to_owned(),
+            instance_count: count,
+            shallow_size: count * 8,
+            instances: (1..=retained)
+                .map(|index| HeapInstanceSnapshot {
+                    alias: format!("{name}@{index}"),
+                    heap_object_id: index.to_string(),
+                    shallow_size: 8,
+                })
+                .collect(),
+            omitted_instance_count: count.saturating_sub(retained),
+        }
+    }
+
+    fn heap_snapshot(classes: Vec<HeapClassSnapshotEntry>) -> HeapClassSnapshot {
+        HeapClassSnapshot {
+            capture_id: ".".to_owned(),
+            total_instances: classes.iter().map(|class| class.instance_count).sum(),
+            total_shallow_size: classes.iter().map(|class| class.shallow_size).sum(),
+            classes,
+        }
+    }
+
+    #[test]
+    fn heap_classes_inline_small_instance_sets() {
+        let lines = render_heap_classes_human(
+            &heap_snapshot(vec![heap_class("PieceTreeModel", 2)]),
+            HeapClassOutputOptions {
+                all: false,
+                max_lines: 300,
+                instances: false,
+            },
+        );
+        assert!(lines.iter().any(|line| {
+            line.contains("PieceTreeModel@1 id 1") && line.contains("PieceTreeModel@2 id 2")
+        }));
+    }
+
+    #[test]
+    fn heap_classes_bound_output_and_report_pruned_classes() {
+        let classes = (0..40)
+            .map(|index| heap_class(&format!("Class{index}"), 100 - index))
+            .collect();
+        let lines = render_heap_classes_human(
+            &heap_snapshot(classes),
+            HeapClassOutputOptions {
+                all: false,
+                max_lines: 8,
+                instances: true,
+            },
+        );
+        assert!(lines.len() <= 8, "{lines:#?}");
+        assert!(
+            lines.iter().any(|line| line.contains("classes omitted")),
+            "{lines:#?}"
+        );
+    }
 
     #[test]
     fn identifies_short_mangled_names_without_flagging_readable_symbols() {

@@ -1,5 +1,7 @@
 use std::env;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -191,7 +193,12 @@ impl CdpDebuggerSession {
             .parent()
             .filter(|path| !path.as_os_str().is_empty());
         if let Some(parent) = parent {
+            let existed = parent.exists();
             tokio::fs::create_dir_all(parent).await?;
+            #[cfg(unix)]
+            if !existed {
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+            }
         }
         let file_name = destination
             .file_name()
@@ -207,11 +214,11 @@ impl CdpDebuggerSession {
             std::process::id(),
             TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
         ));
-        let file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .await?;
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(&temporary).await?;
         *snapshot = Some(HeapSnapshotWriter {
             destination,
             temporary,

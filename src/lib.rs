@@ -8,6 +8,7 @@ pub mod cdp_runtime;
 pub mod debugger_driver;
 pub mod debugger_engine;
 pub mod debugger_service;
+pub mod heap_snapshot;
 pub mod language_intelligence;
 pub mod local_rpc;
 pub mod protocol_schema;

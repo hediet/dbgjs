@@ -313,6 +313,43 @@ pub struct HeapSnapshotResult {
     pub bytes_written: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapCaptureResult {
+    pub capture_id: String,
+    pub bytes_written: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassSnapshot {
+    pub capture_id: String,
+    pub total_instances: u64,
+    pub total_shallow_size: u64,
+    pub classes: Vec<HeapClassSnapshotEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassSnapshotEntry {
+    pub name: String,
+    pub source_url: String,
+    pub location: SourceLocation,
+    pub generated_name: String,
+    pub instance_count: u64,
+    pub shallow_size: u64,
+    pub instances: Vec<HeapInstanceSnapshot>,
+    pub omitted_instance_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapInstanceSnapshot {
+    pub alias: String,
+    pub heap_object_id: String,
+    pub shallow_size: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StepKind {
@@ -521,6 +558,24 @@ pub trait DebuggerServiceApi {
         capture_numeric_value: bool,
         expose_internals: bool,
     ) -> Result<HeapSnapshotResult, JsonRpcError>;
+
+    async fn capture_heap_snapshot(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: Option<String>,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+    ) -> Result<HeapCaptureResult, JsonRpcError>;
+
+    async fn get_heap_classes(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        filter: Option<String>,
+        no_cache: bool,
+    ) -> Result<HeapClassSnapshot, JsonRpcError>;
 
     async fn get_heap_snapshot_progress(
         context_id: String,

@@ -320,6 +320,30 @@ impl SourceEffectInterpreter {
         projected.map(|projected| (projected.source_url, projected.position, projected.content))
     }
 
+    pub fn project_generated_position(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        position: Position,
+    ) -> Option<(String, Position, Arc<str>)> {
+        let ScriptSourceState::Resolved(source_state) = &state.scripts.get(script_key)?.source
+        else {
+            return None;
+        };
+        let retained = self.views.get(&source_state.view_id)?;
+        let mapped = retained
+            .view
+            .forward(&retained.generated_url, position)
+            .into_iter()
+            .next()?;
+        retained
+            .view
+            .files()
+            .get(&mapped.source_url)
+            .and_then(|authored| self.store.get(authored.primary.content))
+            .map(|content| (mapped.source_url, mapped.position, content))
+    }
+
     pub fn generated_position(
         &self,
         state: &DebuggerState,

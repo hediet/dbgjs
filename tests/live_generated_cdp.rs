@@ -282,6 +282,14 @@ async fn run_heap_snapshot_scenario() {
     file.read_exact(&mut boundary).await.unwrap();
     assert_eq!(boundary[0], b'}');
     assert_eq!(file.metadata().await.unwrap().len(), bytes_written);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            file.metadata().await.unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     let progress = session.heap_snapshot_progress().borrow().clone().unwrap();
     assert_eq!(progress.finished, Some(true));
     assert_eq!(progress.bytes_written, bytes_written);
