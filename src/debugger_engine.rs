@@ -283,6 +283,7 @@ pub enum Effect {
         script: ScriptKey,
         script_version: u64,
         generated_url: String,
+        script_hash: String,
         source_map_url: Option<String>,
     },
     BuildSourceView {
@@ -1118,6 +1119,7 @@ fn schedule_source_hydration(
         script: script.clone(),
         script_version: script_state.version,
         generated_url: script_state.url.clone(),
+        script_hash: script_state.hash.clone(),
         source_map_url: script_state.source_map_url.clone(),
     });
 }

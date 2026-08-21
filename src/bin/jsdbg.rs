@@ -7,8 +7,8 @@ use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, PlaywrightChannel,
-    StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, LogpointSpec,
+    PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +38,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if selection.workspace.as_deref() != Some(context_id) {
                 selection.target = None;
                 selection.watches.clear();
+                selection.log_cursor = 0;
+                selection.log_scope = None;
             }
             selection.workspace = Some(context_id.clone());
             write_selection(&selection_file, &selection)?;
@@ -46,11 +48,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [set, target, selector] if set == "set" && target == "target" => {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
+            if selection.target.as_deref() != Some(selector) {
+                selection.log_cursor = 0;
+                selection.log_scope = None;
+            }
             selection.target = Some(selector.clone());
             let scope = resolve_scope(&client, &selection).await?;
-            rpc(client
-                .get_target(scope.context, scope.connection, selector.clone())
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    selector.clone(),
+                )
                 .await)?;
+            selection.log_cursor = snapshot.logs.last().map_or(0, |message| message.index);
+            selection.log_scope = Some(log_scope(&scope, &snapshot));
             write_selection(&selection_file, &selection)?;
             println!("Target: {selector}");
         }
@@ -66,6 +78,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [log, options @ ..] if log == "log" => {
+            let client = ensure_service(&state_file).await?;
+            let mut selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            let current_scope = log_scope(&scope, &snapshot);
+            let persisted_cursor = if selection.log_scope.as_deref() == Some(current_scope.as_str())
+            {
+                selection.log_cursor
+            } else {
+                0
+            };
+            let (after, limit, explicit_after) = parse_log_options(options, persisted_cursor)?;
+            let next = output.print_logs(&snapshot.logs, after, limit)?;
+            if !explicit_after {
+                selection.log_cursor = next;
+                selection.log_scope = Some(current_scope);
+                write_selection(&selection_file, &selection)?;
+            }
         }
         [target, step, kind, options @ ..] if target == "target" && step == "step" => {
             let client = ensure_service(&state_file).await?;
@@ -133,6 +171,45 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     expression.clone(),
                 )
                 .await)?)?;
+        }
+        [target, logpoint, id, source, line, column, expression]
+            if target == "target" && logpoint == "logpoint" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let snapshot = rpc(client
+                .set_logpoints(
+                    scope.context,
+                    scope.connection,
+                    scope.target.clone(),
+                    vec![parse_logpoint_spec(id, source, line, column, expression)?],
+                )
+                .await)?;
+            output.print_target_with_breakpoint_sources(
+                &snapshot,
+                &scope.target,
+                &[format!("log:{id}")],
+            )?;
+        }
+        [target, logpoints, specifications @ ..]
+            if target == "target" && logpoints == "logpoints" =>
+        {
+            let logpoints = parse_logpoint_specs(specifications)?;
+            let ids = logpoints
+                .iter()
+                .map(|logpoint| format!("log:{}", logpoint.id))
+                .collect::<Vec<_>>();
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let snapshot = rpc(client
+                .set_logpoints(
+                    scope.context,
+                    scope.connection,
+                    scope.target.clone(),
+                    logpoints,
+                )
+                .await)?;
+            output.print_target_with_breakpoint_sources(&snapshot, &scope.target, &ids)?;
         }
         [target, click, selector] if target == "target" && click == "click" => {
             let client = ensure_service(&state_file).await?;
@@ -221,60 +298,109 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print(&rpc(client
-                .take_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    None,
-                    Some(capture_id.clone()),
-                )
-                .await)?)?;
+            output.print_coverage(
+                &rpc(client
+                    .take_coverage(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        None,
+                        Some(capture_id.clone()),
+                    )
+                    .await)?,
+                None,
+            )?;
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print(&rpc(client
-                .stop_coverage(scope.context, scope.connection, scope.target, None)
-                .await)?)?;
+            rpc(client
+                .finish_coverage(scope.context, scope.connection, scope.target, None)
+                .await)?;
+            output.print_coverage_stopped()?;
         }
         [coverage, stop, exclude, capture_id]
             if coverage == "coverage" && stop == "stop" && exclude == "--exclude" =>
         {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print(&rpc(client
-                .stop_coverage(
+            rpc(client
+                .finish_coverage(
                     scope.context,
                     scope.connection,
                     scope.target,
                     Some(capture_id.clone()),
                 )
-                .await)?)?;
+                .await)?;
+            output.print_coverage_stopped()?;
+        }
+        [coverage, show, path_flag, path]
+            if coverage == "coverage" && show == "show" && path_flag == "--path" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print_coverage(
+                &rpc(client
+                    .get_coverage(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        ".".to_owned(),
+                        Some(path.clone()),
+                    )
+                    .await)?,
+                Some(path),
+            )?;
+        }
+        [coverage, show, capture_id, path_flag, path]
+            if coverage == "coverage" && show == "show" && path_flag == "--path" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print_coverage(
+                &rpc(client
+                    .get_coverage(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        capture_id.clone(),
+                        Some(path.clone()),
+                    )
+                    .await)?,
+                Some(path),
+            )?;
         }
         [coverage, show] if coverage == "coverage" && show == "show" => {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print(&rpc(client
-                .get_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    ".".to_owned(),
-                )
-                .await)?)?;
+            output.print_coverage(
+                &rpc(client
+                    .get_coverage(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        ".".to_owned(),
+                        None,
+                    )
+                    .await)?,
+                None,
+            )?;
         }
         [coverage, show, capture_id] if coverage == "coverage" && show == "show" => {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print(&rpc(client
-                .get_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    capture_id.clone(),
-                )
-                .await)?)?;
+            output.print_coverage(
+                &rpc(client
+                    .get_coverage(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        capture_id.clone(),
+                        None,
+                    )
+                    .await)?,
+                None,
+            )?;
         }
         [coverage, operation, context_id, connection_id, target_id]
             if coverage == "coverage"
@@ -301,14 +427,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         None,
                     )
                     .await)?)?,
-                "stop" => output.print(&rpc(client
-                    .stop_coverage(
-                        context_id.clone(),
-                        connection_id.clone(),
-                        target_id.clone(),
-                        None,
-                    )
-                    .await)?)?,
+                "stop" => {
+                    rpc(client
+                        .finish_coverage(
+                            context_id.clone(),
+                            connection_id.clone(),
+                            target_id.clone(),
+                            None,
+                        )
+                        .await)?;
+                    output.print_coverage_stopped()?;
+                }
                 _ => unreachable!(),
             }
         }
@@ -686,7 +815,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     expression.clone(),
                 )
                 .await)?;
-            output.print_target(&snapshot, target_id)?;
+            output.print_target_with_breakpoint_sources(
+                &snapshot,
+                target_id,
+                &[format!("log:{logpoint_id}")],
+            )?;
         }
         _ => {
             return Err(usage().into());
@@ -702,12 +835,23 @@ struct CliSelection {
     target: Option<String>,
     #[serde(default)]
     watches: Vec<String>,
+    #[serde(default)]
+    log_cursor: u64,
+    #[serde(default)]
+    log_scope: Option<String>,
 }
 
 struct ResolvedScope {
     context: String,
     connection: String,
     target: String,
+}
+
+fn log_scope(scope: &ResolvedScope, snapshot: &TargetDebuggerSnapshot) -> String {
+    format!(
+        "{}\0{}\0{}\0{}",
+        scope.context, scope.connection, scope.target, snapshot.connection_generation
+    )
 }
 
 fn load_selection(path: &Path) -> Result<CliSelection, Box<dyn std::error::Error>> {
@@ -894,6 +1038,102 @@ fn parse_step_kind(value: &str) -> Result<StepKind, io::Error> {
     }
 }
 
+fn parse_log_options(
+    options: &[String],
+    default_after: u64,
+) -> Result<(u64, usize, bool), io::Error> {
+    let mut after = default_after;
+    let mut limit = 20_usize;
+    let mut explicit_after = false;
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--after" => {
+                index += 1;
+                after = options
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "--after requires a cursor")
+                    })?
+                    .parse()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid log cursor: {error}"),
+                        )
+                    })?;
+                explicit_after = true;
+            }
+            "--limit" => {
+                index += 1;
+                limit = options
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "--limit requires a value")
+                    })?
+                    .parse::<usize>()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid log limit: {error}"),
+                        )
+                    })?
+                    .clamp(1, 100);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown log option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok((after, limit, explicit_after))
+}
+
+fn parse_logpoint_specs(values: &[String]) -> Result<Vec<LogpointSpec>, io::Error> {
+    const FIELDS: usize = 5;
+    if values.is_empty() || !values.len().is_multiple_of(FIELDS) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "logpoints require repeated groups: <id> <source> <line> <column> <expression>",
+        ));
+    }
+    values
+        .chunks_exact(FIELDS)
+        .map(|fields| {
+            parse_logpoint_spec(&fields[0], &fields[1], &fields[2], &fields[3], &fields[4])
+        })
+        .collect()
+}
+
+fn parse_logpoint_spec(
+    id: &str,
+    source_url: &str,
+    line: &str,
+    column: &str,
+    expression: &str,
+) -> Result<LogpointSpec, io::Error> {
+    Ok(LogpointSpec {
+        id: id.to_owned(),
+        source_url: source_url.to_owned(),
+        line: line.parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid logpoint line: {error}"),
+            )
+        })?,
+        column: column.parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid logpoint column: {error}"),
+            )
+        })?,
+        expression: expression.to_owned(),
+    })
+}
+
 async fn put_breakpoint(
     context_id: &str,
     breakpoint_id: &str,
@@ -940,7 +1180,11 @@ async fn put_breakpoint(
             )
             .await
         {
-            Ok(snapshot) => output.print_target(&snapshot, &target.target_type)?,
+            Ok(snapshot) => output.print_target_with_breakpoint_sources(
+                &snapshot,
+                &target.target_type,
+                &[breakpoint_id.to_owned()],
+            )?,
             Err(_) => output.print(&context)?,
         }
     } else {
@@ -1091,6 +1335,9 @@ commands:
   jsdbg target resume [--epoch <epoch>]
   jsdbg target step into|over|out [--epoch <epoch>]
   jsdbg target eval|watch <expression>
+  jsdbg target logpoint <id> <source> <line> <column> <expression>
+  jsdbg target logpoints (<id> <source> <line> <column> <expression>)+
+  jsdbg log [--after <cursor>] [--limit <count>]
   jsdbg target click <css-selector>
   jsdbg target key <chord>
   jsdbg target type <text>
@@ -1099,6 +1346,7 @@ commands:
   jsdbg coverage capture [--id <name>]
   jsdbg coverage stop [--exclude <name>]
   jsdbg coverage show [<name>]
+  jsdbg coverage show [<name>] --path <source-prefix>
   jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]

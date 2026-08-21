@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::content_store::ContentStore;
 use crate::debugger_engine::{
@@ -30,7 +31,16 @@ struct RetainedView {
     generated_url: String,
     generated_content: Arc<str>,
     generated_index: GeneratedOffsetIndex,
+    projection_cache: Mutex<BTreeMap<u32, Option<ProjectedOffset>>>,
+    symbol_indexes: Mutex<BTreeMap<String, Option<crate::language_intelligence::SymbolIndex>>>,
     view: Arc<ResolvedSourceView>,
+}
+
+#[derive(Clone)]
+struct ProjectedOffset {
+    source_url: String,
+    position: Position,
+    content: Arc<str>,
 }
 
 pub struct SourceEffectInterpreter {
@@ -177,6 +187,8 @@ impl SourceEffectInterpreter {
                         generated_url: generated_url.clone(),
                         generated_content: content.clone(),
                         generated_index: GeneratedOffsetIndex::new(content),
+                        projection_cache: Mutex::new(BTreeMap::new()),
+                        symbol_indexes: Mutex::new(BTreeMap::new()),
                         view: Arc::new(view),
                     },
                 );
@@ -263,6 +275,17 @@ impl SourceEffectInterpreter {
             return None;
         };
         let retained = self.views.get(&source_state.view_id)?;
+        if let Some(cached) = retained
+            .projection_cache
+            .lock()
+            .unwrap()
+            .get(&utf16_offset)
+            .cloned()
+        {
+            return cached
+                .map(|projected| (projected.source_url, projected.position, projected.content));
+        }
+
         let mapped = [
             retained
                 .generated_index
@@ -279,9 +302,67 @@ impl SourceEffectInterpreter {
                 .into_iter()
                 .next()
         })?;
-        let authored = retained.view.files().get(&mapped.source_url)?;
-        let authored_content = self.store.get(authored.primary.content)?;
-        Some((mapped.source_url, mapped.position, authored_content))
+        let projected = retained
+            .view
+            .files()
+            .get(&mapped.source_url)
+            .and_then(|authored| self.store.get(authored.primary.content))
+            .map(|content| ProjectedOffset {
+                source_url: mapped.source_url,
+                position: mapped.position,
+                content,
+            });
+        retained
+            .projection_cache
+            .lock()
+            .unwrap()
+            .insert(utf16_offset, projected.clone());
+        projected.map(|projected| (projected.source_url, projected.position, projected.content))
+    }
+
+    pub fn generated_position(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        utf16_offset: u32,
+    ) -> Option<Position> {
+        let ScriptSourceState::Resolved(source_state) = &state.scripts.get(script_key)?.source
+        else {
+            return None;
+        };
+        let retained = self.views.get(&source_state.view_id)?;
+        Some(
+            retained
+                .generated_index
+                .utf16_position(&retained.generated_content, utf16_offset),
+        )
+    }
+
+    pub fn breadcrumb(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        source_url: &str,
+        line: u32,
+        column: u32,
+        content: &str,
+    ) -> Option<String> {
+        let ScriptSourceState::Resolved(source_state) = &state.scripts.get(script_key)?.source
+        else {
+            return None;
+        };
+        let retained = self.views.get(&source_state.view_id)?;
+        let mut indexes = retained.symbol_indexes.lock().unwrap();
+        if !indexes.contains_key(source_url) {
+            indexes.insert(
+                source_url.to_owned(),
+                crate::language_intelligence::SymbolIndex::new(source_url, content),
+            );
+        }
+        indexes
+            .get(source_url)
+            .and_then(Option::as_ref)
+            .and_then(|index| index.breadcrumb(content, line, column))
     }
 
     pub fn logical_source_content(

@@ -15,7 +15,8 @@ pub struct DebuggerDriver {
     session: CdpDebuggerSession,
     sources: SourceEffectInterpreter,
     recording: DebuggerRecording,
-    console_messages: Vec<Vec<String>>,
+    console_messages: VecDeque<(u64, Vec<String>)>,
+    next_console_index: u64,
 }
 
 impl DebuggerDriver {
@@ -29,7 +30,8 @@ impl DebuggerDriver {
             session,
             sources,
             recording: DebuggerRecording::default(),
-            console_messages: Vec::new(),
+            console_messages: VecDeque::new(),
+            next_console_index: 1,
         }
     }
 
@@ -45,7 +47,7 @@ impl DebuggerDriver {
         &self.recording
     }
 
-    pub fn console_messages(&self) -> &[Vec<String>] {
+    pub fn console_messages(&self) -> &VecDeque<(u64, Vec<String>)> {
         &self.console_messages
     }
 
@@ -65,6 +67,22 @@ impl DebuggerDriver {
     ) -> Option<(String, crate::source_view::Position, Arc<str>)> {
         self.sources
             .project_generated_offset(&self.state, script, utf16_offset)
+    }
+
+    pub fn source_effects(&self) -> &SourceEffectInterpreter {
+        &self.sources
+    }
+
+    pub fn breadcrumb(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+        source_url: &str,
+        line: u32,
+        column: u32,
+        content: &str,
+    ) -> Option<String> {
+        self.sources
+            .breadcrumb(&self.state, script, source_url, line, column, content)
     }
 
     pub async fn apply(&mut self, input: Input) -> Result<(), DebuggerDriverError> {
@@ -95,9 +113,12 @@ impl DebuggerDriver {
         if let CdpRuntimeEvent::Console { params, .. } = &event {
             const MAX_CONSOLE_MESSAGES: usize = 100;
             if self.console_messages.len() == MAX_CONSOLE_MESSAGES {
-                self.console_messages.remove(0);
+                self.console_messages.pop_front();
             }
-            self.console_messages.push(
+            let index = self.next_console_index;
+            self.next_console_index = self.next_console_index.saturating_add(1);
+            self.console_messages.push_back((
+                index,
                 params
                     .args
                     .iter()
@@ -114,7 +135,7 @@ impl DebuggerDriver {
                             .unwrap_or_else(|| "undefined".to_owned())
                     })
                     .collect(),
-            );
+            ));
             return Ok(false);
         }
         let Some(input) = event.into_input(pause_epoch)? else {

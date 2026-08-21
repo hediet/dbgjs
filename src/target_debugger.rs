@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rayon::prelude::*;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::cdp::{
@@ -113,9 +114,18 @@ impl TargetDebuggerHandle {
         context_revision: u64,
         breakpoint: TargetBreakpointSpec,
     ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
-        self.command(|response| TargetCommand::SetBreakpoint {
+        self.set_breakpoints(context_revision, vec![breakpoint])
+            .await
+    }
+
+    pub async fn set_breakpoints(
+        &self,
+        context_revision: u64,
+        breakpoints: Vec<TargetBreakpointSpec>,
+    ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
+        self.command(|response| TargetCommand::SetBreakpoints {
             context_revision,
-            breakpoint,
+            breakpoints,
             response,
         })
         .await
@@ -225,6 +235,29 @@ impl TargetDebuggerHandle {
         &self,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
+        self.stop_coverage_with_projection(exclude_capture_id).await
+    }
+
+    pub async fn finish_coverage(
+        &self,
+        exclude_capture_id: Option<String>,
+    ) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::FinishCoverage {
+                exclude_capture_id,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)??;
+        Ok(())
+    }
+
+    async fn stop_coverage_with_projection(
+        &self,
+        exclude_capture_id: Option<String>,
+    ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::StopCoverage {
@@ -239,11 +272,13 @@ impl TargetDebuggerHandle {
     pub async fn get_coverage(
         &self,
         capture_id: String,
+        source_path: Option<String>,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::GetCoverage {
                 capture_id,
+                source_path,
                 response,
             })
             .await
@@ -330,9 +365,9 @@ impl TargetDebuggerHandle {
 type CommandResponse = oneshot::Sender<Result<TargetDebuggerSnapshot, TargetDebuggerError>>;
 
 enum TargetCommand {
-    SetBreakpoint {
+    SetBreakpoints {
         context_revision: u64,
-        breakpoint: TargetBreakpointSpec,
+        breakpoints: Vec<TargetBreakpointSpec>,
         response: CommandResponse,
     },
     Resume {
@@ -374,8 +409,13 @@ enum TargetCommand {
         exclude_capture_id: Option<String>,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
+    FinishCoverage {
+        exclude_capture_id: Option<String>,
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
     GetCoverage {
         capture_id: String,
+        source_path: Option<String>,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
 }
@@ -394,6 +434,7 @@ async fn run_target(
     let mut breakpoint_revisions = BTreeMap::<String, u64>::new();
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
+    let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
     loop {
         enum Next {
             Command(Option<TargetCommand>),
@@ -405,38 +446,85 @@ async fn run_target(
             event = driver.process_next_event() => Next::Event(event),
         };
         match next {
-            Next::Command(Some(TargetCommand::SetBreakpoint {
+            Next::Command(Some(TargetCommand::SetBreakpoints {
                 context_revision,
-                breakpoint,
+                breakpoints,
                 response,
             })) => {
-                if breakpoint_revisions
-                    .get(&breakpoint.id)
-                    .is_some_and(|current| *current > context_revision)
-                {
-                    let _ = response.send(Ok(snapshot_from_driver(
+                let result = async {
+                    let mut applied = Vec::new();
+                    for breakpoint in breakpoints {
+                        if breakpoint_revisions
+                            .get(&breakpoint.id)
+                            .is_some_and(|current| *current > context_revision)
+                        {
+                            continue;
+                        }
+                        let previous_revision = breakpoint_revisions.get(&breakpoint.id).copied();
+                        let previous = breakpoint_spec(
+                            driver.state(),
+                            &BreakpointKey {
+                                client_id: context_id.clone(),
+                                breakpoint_id: breakpoint.id.clone(),
+                            },
+                        );
+                        breakpoint_revisions.insert(breakpoint.id.clone(), context_revision);
+                        let breakpoint_id = breakpoint.id.clone();
+                        applied.push((breakpoint_id.clone(), previous, previous_revision));
+                        if let Err(install) =
+                            apply_breakpoint(&mut driver, &context_id, breakpoint).await
+                        {
+                            let mut rollback_failures = Vec::new();
+                            for (applied_id, prior, prior_revision) in applied.into_iter().rev() {
+                                let rollback = match prior {
+                                    Some(prior) => {
+                                        apply_breakpoint(&mut driver, &context_id, prior).await
+                                    }
+                                    None => {
+                                        remove_breakpoint(&mut driver, &context_id, &applied_id)
+                                            .await
+                                    }
+                                };
+                                match prior_revision {
+                                    Some(revision) => {
+                                        breakpoint_revisions.insert(applied_id.clone(), revision);
+                                    }
+                                    None => {
+                                        breakpoint_revisions.remove(&applied_id);
+                                    }
+                                }
+                                if let Err(rollback) = rollback {
+                                    rollback_failures.push(format!("{applied_id}: {rollback}"));
+                                }
+                            }
+                            match previous_revision {
+                                Some(revision) => {
+                                    breakpoint_revisions.insert(breakpoint_id, revision);
+                                }
+                                None => {
+                                    breakpoint_revisions.remove(&breakpoint_id);
+                                }
+                            }
+                            return if rollback_failures.is_empty() {
+                                Err(install)
+                            } else {
+                                Err(TargetDebuggerError::BatchRollback {
+                                    install: install.to_string(),
+                                    rollback: rollback_failures.join("; "),
+                                })
+                            };
+                        }
+                    }
+                    Ok(snapshot_from_driver(
                         &context_id,
                         &connection_id,
                         &target_id,
                         connection_generation,
                         &session_key,
                         &driver,
-                    )));
-                    continue;
+                    ))
                 }
-                breakpoint_revisions.insert(breakpoint.id.clone(), context_revision);
-                let result = apply_breakpoint(&mut driver, &context_id, breakpoint)
-                    .await
-                    .map(|()| {
-                        snapshot_from_driver(
-                            &context_id,
-                            &connection_id,
-                            &target_id,
-                            connection_generation,
-                            &session_key,
-                            &driver,
-                        )
-                    });
+                .await;
                 if let Ok(snapshot) = &result {
                     snapshots.send_replace(snapshot.clone());
                 }
@@ -552,7 +640,7 @@ async fn run_target(
                 let result = if coverage.is_some() {
                     Err(TargetDebuggerError::CoverageAlreadyActive)
                 } else {
-                    start_coverage(&driver).await.map(|()| {
+                    start_coverage(&mut driver, &session_key).await.map(|()| {
                         coverage = Some(CoverageRecording::default());
                     })
                 };
@@ -574,19 +662,27 @@ async fn run_target(
                         ))
                     }
                     Some(recording) => {
-                        let project = capture_id.is_none();
-                        let snapshot =
-                            take_coverage(&mut driver, &session_key, recording, project).await;
+                        let snapshot = take_coverage(&driver, recording).await;
                         let snapshot = snapshot.and_then(|snapshot| match exclude_capture_id {
                             Some(capture_id) => recording
                                 .captures
                                 .get(&capture_id)
                                 .map(|baseline| {
-                                    CoverageRecording::subtract_coverage(snapshot, baseline)
+                                    CoverageRecording::exclude_coverage(snapshot, baseline)
                                 })
                                 .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id)),
                             None => Ok(snapshot),
                         });
+                        let mut snapshot = snapshot;
+                        if capture_id.is_none()
+                            && let Ok(snapshot) = &mut snapshot
+                            && let Err(error) =
+                                project_coverage(&mut driver, &session_key, snapshot, None).await
+                        {
+                            snapshot.sources.clear();
+                            let _ = response.send(Err(error));
+                            continue;
+                        }
                         if let (Ok(snapshot), Some(capture_id)) = (&snapshot, capture_id) {
                             recording.captures.insert(capture_id, snapshot.clone());
                         }
@@ -604,40 +700,86 @@ async fn run_target(
                     let recording = coverage
                         .as_mut()
                         .ok_or(TargetDebuggerError::CoverageNotActive)?;
-                    let snapshot =
-                        take_coverage(&mut driver, &session_key, recording, true).await?;
+                    let snapshot = take_coverage(&driver, recording).await?;
                     let snapshot = match exclude_capture_id {
                         Some(capture_id) => {
                             let baseline =
                                 recording.captures.get(&capture_id).ok_or_else(|| {
                                     TargetDebuggerError::CoverageCaptureNotFound(capture_id.clone())
                                 })?;
-                            CoverageRecording::subtract_coverage(snapshot, baseline)
+                            CoverageRecording::exclude_coverage(snapshot, baseline)
                         }
                         None => snapshot,
                     };
+                    let stored = snapshot.clone();
+                    let mut snapshot = snapshot;
+                    project_coverage(&mut driver, &session_key, &mut snapshot, None).await?;
                     driver
                         .client()
                         .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
                         .await
                         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
                     coverage = None;
-                    Ok(snapshot)
+                    Ok((snapshot, stored))
                 }
                 .await;
-                if let Ok(snapshot) = &result {
-                    coverage_objects.insert(".".to_owned(), snapshot.clone());
+                if let Ok((_, stored)) = &result {
+                    coverage_objects.insert(".".to_owned(), stored.clone());
                 }
+                let _ = response.send(result.map(|(snapshot, _)| snapshot));
+            }
+            Next::Command(Some(TargetCommand::FinishCoverage {
+                exclude_capture_id,
+                response,
+            })) => {
+                let result = async {
+                    let recording = coverage
+                        .as_mut()
+                        .ok_or(TargetDebuggerError::CoverageNotActive)?;
+                    update_coverage(&driver, recording).await?;
+                    let mut completed = recording.clone();
+                    if let Some(capture_id) = exclude_capture_id {
+                        let baseline = recording
+                            .captures
+                            .get(&capture_id)
+                            .cloned()
+                            .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))?;
+                        completed.exclude_baseline(&baseline);
+                    }
+                    driver
+                        .client()
+                        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
+                        .await
+                        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+                    completed_recordings.insert(".".to_owned(), completed);
+                    coverage = None;
+                    Ok(())
+                }
+                .await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::GetCoverage {
                 capture_id,
+                source_path,
                 response,
             })) => {
-                let result = coverage_objects
-                    .get(&capture_id)
-                    .cloned()
-                    .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id));
+                let result = async {
+                    let mut snapshot = match completed_recordings.get(&capture_id) {
+                        Some(recording) => recording.snapshot(),
+                        None => coverage_objects.get(&capture_id).cloned().ok_or_else(|| {
+                            TargetDebuggerError::CoverageCaptureNotFound(capture_id.clone())
+                        })?,
+                    };
+                    project_coverage(
+                        &mut driver,
+                        &session_key,
+                        &mut snapshot,
+                        source_path.as_deref(),
+                    )
+                    .await?;
+                    Ok(snapshot)
+                }
+                .await;
                 let _ = response.send(result);
             }
             Next::Command(None) => break,
@@ -745,7 +887,10 @@ async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerE
     Ok(())
 }
 
-async fn start_coverage(driver: &DebuggerDriver) -> Result<(), TargetDebuggerError> {
+async fn start_coverage(
+    driver: &mut DebuggerDriver,
+    _session_key: &SessionKey,
+) -> Result<(), TargetDebuggerError> {
     driver
         .client()
         .profiler_enable(ProfilerEnableParams::new())
@@ -763,11 +908,17 @@ async fn start_coverage(driver: &DebuggerDriver) -> Result<(), TargetDebuggerErr
 }
 
 async fn take_coverage(
-    driver: &mut DebuggerDriver,
-    session_key: &SessionKey,
+    driver: &DebuggerDriver,
     recording: &mut CoverageRecording,
-    project: bool,
 ) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    update_coverage(driver, recording).await?;
+    Ok(recording.snapshot())
+}
+
+async fn update_coverage(
+    driver: &DebuggerDriver,
+    recording: &mut CoverageRecording,
+) -> Result<(), TargetDebuggerError> {
     let coverage = driver
         .client()
         .profiler_take_precise_coverage(ProfilerTakePreciseCoverageParams::new())
@@ -777,47 +928,253 @@ async fn take_coverage(
     for script in coverage.result {
         recording.merge(script);
     }
-    if project {
-        let mut positive_scripts = recording
-            .scripts
-            .iter()
-            .filter_map(|(script_id, script)| {
-                let count = script
-                    .functions
-                    .values()
-                    .flat_map(BTreeMap::values)
-                    .sum::<u64>();
-                let key = ScriptKey {
-                    session: session_key.clone(),
-                    script_id: script_id.clone(),
-                };
-                let eligible = driver.state().scripts.get(&key).is_some_and(|state| {
-                    state.source_map_url.is_some()
-                        && matches!(state.source, ScriptSourceState::Unresolved)
-                });
-                (count > 0 && eligible).then_some((count, script_id.clone()))
-            })
-            .collect::<Vec<_>>();
-        positive_scripts.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
-        for (_, script_id) in positive_scripts.into_iter().take(1) {
-            let script = ScriptKey {
-                session: session_key.clone(),
-                script_id,
-            };
-            driver.apply(Input::RequestScriptSource { script }).await?;
-        }
-    }
-    Ok(recording.snapshot(driver, session_key, project))
+    Ok(())
 }
 
-#[derive(Default)]
+fn effective_coverage_ranges(ranges: &[CoverageRangeSnapshot]) -> Vec<CoverageRangeSnapshot> {
+    let mut boundaries = ranges
+        .iter()
+        .flat_map(|range| [range.start_offset, range.end_offset])
+        .collect::<Vec<_>>();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut effective = Vec::<CoverageRangeSnapshot>::new();
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start == end {
+            continue;
+        }
+        let Some(range) = ranges
+            .iter()
+            .filter(|range| range.start_offset <= start && range.end_offset >= end)
+            .min_by_key(|range| range.end_offset.saturating_sub(range.start_offset))
+        else {
+            continue;
+        };
+        if range.count == 0 {
+            continue;
+        }
+        if let Some(previous) = effective.last_mut()
+            && previous.end_offset == start
+            && previous.count == range.count
+        {
+            previous.end_offset = end;
+            continue;
+        }
+        effective.push(CoverageRangeSnapshot {
+            start_offset: start,
+            end_offset: end,
+            count: range.count,
+            authored_start: None,
+            authored_end: None,
+        });
+    }
+    effective
+}
+
+async fn project_coverage(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    snapshot: &mut CoverageSnapshot,
+    source_path: Option<&str>,
+) -> Result<(), TargetDebuggerError> {
+    let source_already_resolved = source_path.is_some_and(|path| {
+        driver
+            .state()
+            .scripts
+            .keys()
+            .filter(|key| key.session == *session_key)
+            .any(|script| script_contains_source(driver, script, path))
+    });
+    let mut candidates = snapshot
+        .sources
+        .iter()
+        .filter_map(|source| {
+            let count = source
+                .functions
+                .iter()
+                .flat_map(|function| &function.ranges)
+                .map(|range| range.count)
+                .sum::<u64>();
+            let key = ScriptKey {
+                session: session_key.clone(),
+                script_id: source.script_id.clone(),
+            };
+            let eligible = driver.state().scripts.get(&key).is_some_and(|state| {
+                state.source_map_url.is_some()
+                    && matches!(state.source, ScriptSourceState::Unresolved)
+            });
+            (count > 0 && eligible).then_some((count, key))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
+    if !source_already_resolved {
+        for (_, script) in candidates {
+            driver
+                .apply(Input::RequestScriptSource {
+                    script: script.clone(),
+                })
+                .await?;
+            if source_path.is_none_or(|path| script_contains_source(driver, &script, path)) {
+                break;
+            }
+        }
+    }
+
+    let state = driver.state().clone();
+    let source_effects = driver.source_effects();
+    snapshot.sources.par_iter_mut().for_each(|source| {
+        let script_key = ScriptKey {
+            session: session_key.clone(),
+            script_id: source.script_id.clone(),
+        };
+        source.associated_authored_source =
+            state
+                .scripts
+                .get(&script_key)
+                .and_then(|state| match &state.source {
+                    ScriptSourceState::Resolved(view) if view.logical_sources.len() == 1 => {
+                        view.logical_sources.keys().next().cloned()
+                    }
+                    _ => None,
+                });
+        source.functions.par_iter_mut().for_each(|function| {
+            function.generated_location = source_effects
+                .generated_position(&state, &script_key, function.root_start_offset)
+                .map(|position| {
+                    source_location(source.generated_url.clone(), position.line, position.column)
+                });
+            for range in &mut function.ranges {
+                let start = source_effects.project_generated_offset(
+                    &state,
+                    &script_key,
+                    range.start_offset,
+                );
+                let end = source_effects.project_generated_offset(
+                    &state,
+                    &script_key,
+                    range.end_offset.saturating_sub(1),
+                );
+                if let Some((source_url, position, content)) = start {
+                    let location = source_location(source_url, position.line, position.column);
+                    range.authored_start = Some(location);
+                    let _ = content;
+                }
+                if let Some((source_url, position, _)) = end {
+                    range.authored_end =
+                        Some(source_location(source_url, position.line, position.column));
+                }
+            }
+            function.effective_ranges = effective_coverage_ranges(&function.ranges);
+            let mut first_projected = None;
+            for range in &mut function.effective_ranges {
+                if let Some((source_url, position, content)) =
+                    source_effects.project_generated_offset(&state, &script_key, range.start_offset)
+                {
+                    let location = source_location(source_url, position.line, position.column);
+                    range.authored_start = Some(location.clone());
+                    first_projected.get_or_insert((location, content));
+                }
+                if let Some((source_url, position, _)) = source_effects.project_generated_offset(
+                    &state,
+                    &script_key,
+                    range.end_offset.saturating_sub(1),
+                ) {
+                    range.authored_end =
+                        Some(source_location(source_url, position.line, position.column));
+                }
+            }
+            if let Some((location, content)) = first_projected {
+                function.authored_location = Some(location.clone());
+                let _ = content;
+            }
+        });
+    });
+    let mut file_lines = BTreeMap::<String, BTreeSet<u32>>::new();
+    for range in snapshot
+        .sources
+        .iter()
+        .flat_map(|source| &source.functions)
+        .flat_map(|function| &function.effective_ranges)
+    {
+        if let (Some(start), Some(end)) = (&range.authored_start, &range.authored_end)
+            && start.source_url == end.source_url
+        {
+            file_lines
+                .entry(start.source_url.clone())
+                .or_default()
+                .extend(start.line..=end.line.max(start.line));
+        }
+    }
+    let mut ranked_files = file_lines.into_iter().collect::<Vec<_>>();
+    ranked_files.sort_by_key(|(_, lines)| std::cmp::Reverse(lines.len()));
+    let enriched_files = ranked_files
+        .into_iter()
+        .take(20)
+        .map(|(source, _)| source)
+        .collect::<BTreeSet<_>>();
+    snapshot.sources.par_iter_mut().for_each(|source| {
+        let script_key = ScriptKey {
+            session: session_key.clone(),
+            script_id: source.script_id.clone(),
+        };
+        source.functions.par_iter_mut().for_each(|function| {
+            let Some(location) = &function.authored_location else {
+                return;
+            };
+            if function.name == "(anonymous)" || !enriched_files.contains(&location.source_url) {
+                return;
+            }
+            let Some((_, _, content)) = source_effects.project_generated_offset(
+                &state,
+                &script_key,
+                function.ranges[0].start_offset,
+            ) else {
+                return;
+            };
+            function.breadcrumb = source_effects.breadcrumb(
+                &state,
+                &script_key,
+                &location.source_url,
+                location.line,
+                location.column,
+                &content,
+            );
+        });
+    });
+    Ok(())
+}
+
+fn script_contains_source(driver: &DebuggerDriver, script: &ScriptKey, source_path: &str) -> bool {
+    let source_path = normalize_source_path(source_path);
+    driver
+        .state()
+        .scripts
+        .get(script)
+        .and_then(|state| match &state.source {
+            ScriptSourceState::Resolved(view) => Some(&view.logical_sources),
+            _ => None,
+        })
+        .is_some_and(|sources| {
+            sources
+                .keys()
+                .any(|source| normalize_source_path(source).starts_with(&source_path))
+        })
+}
+
+fn normalize_source_path(path: &str) -> &str {
+    path.trim_start_matches("../").trim_start_matches("./")
+}
+
+#[derive(Clone, Default)]
 struct CoverageRecording {
     timestamp_micros: u64,
     scripts: BTreeMap<String, AccumulatedScriptCoverage>,
     captures: BTreeMap<String, CoverageSnapshot>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AccumulatedScriptCoverage {
     url: String,
     functions: BTreeMap<(String, bool, u32, u32), BTreeMap<(u32, u32), u64>>,
@@ -863,7 +1220,7 @@ impl CoverageRecording {
         }
     }
 
-    fn subtract_coverage(
+    fn exclude_coverage(
         mut selected: CoverageSnapshot,
         baseline: &CoverageSnapshot,
     ) -> CoverageSnapshot {
@@ -895,106 +1252,76 @@ impl CoverageRecording {
                 }) else {
                     continue;
                 };
-                for range in &mut function.ranges {
-                    if let Some(baseline_range) =
-                        baseline_function.ranges.iter().find(|candidate| {
-                            candidate.start_offset == range.start_offset
-                                && candidate.end_offset == range.end_offset
-                        })
-                    {
-                        range.count = range.count.saturating_sub(baseline_range.count);
-                    }
-                }
+                function.ranges.retain(|range| {
+                    !baseline_function.ranges.iter().any(|candidate| {
+                        candidate.start_offset == range.start_offset
+                            && candidate.end_offset == range.end_offset
+                            && candidate.count > 0
+                    })
+                });
             }
+
+            source
+                .functions
+                .retain(|function| !function.ranges.is_empty());
         }
+        selected
+            .sources
+            .retain(|source| !source.functions.is_empty());
         selected
     }
 
-    fn snapshot(
-        &self,
-        driver: &DebuggerDriver,
-        session_key: &SessionKey,
-        project: bool,
-    ) -> CoverageSnapshot {
+    fn exclude_baseline(&mut self, baseline: &CoverageSnapshot) {
+        for source in baseline.sources.iter() {
+            let Some(script) = self.scripts.get_mut(&source.script_id) else {
+                continue;
+            };
+            for function in &source.functions {
+                let Some(root) = function.ranges.first() else {
+                    continue;
+                };
+                let key = (
+                    function.name.clone(),
+                    function.block_coverage,
+                    root.start_offset,
+                    root.end_offset,
+                );
+                let Some(ranges) = script.functions.get_mut(&key) else {
+                    continue;
+                };
+                for range in &function.ranges {
+                    if range.count > 0 {
+                        ranges.remove(&(range.start_offset, range.end_offset));
+                    }
+                }
+            }
+            script.functions.retain(|_, ranges| !ranges.is_empty());
+        }
+        self.scripts
+            .retain(|_, script| !script.functions.is_empty());
+    }
+
+    fn snapshot(&self) -> CoverageSnapshot {
         CoverageSnapshot {
             timestamp_micros: self.timestamp_micros,
             sources: self
                 .scripts
                 .iter()
                 .filter_map(|(script_id, script)| {
-                    let script_key = ScriptKey {
-                        session: session_key.clone(),
-                        script_id: script_id.clone(),
-                    };
                     let functions = script
                         .functions
                         .iter()
-                        .map(|((name, block_coverage, root_start, _), ranges)| {
+                        .map(|((name, block_coverage, root_start, root_end), ranges)| {
                             let ranges = ranges
                                 .iter()
-                                .map(|((start, end), count)| {
-                                    let authored_start = (project && *count > 0)
-                                        .then(|| {
-                                            driver.project_generated_offset(&script_key, *start)
-                                        })
-                                        .flatten()
-                                        .map(|(source_url, position, _)| {
-                                            source_location(
-                                                source_url,
-                                                position.line,
-                                                position.column,
-                                            )
-                                        });
-                                    let authored_end = (project && *count > 0)
-                                        .then(|| {
-                                            driver.project_generated_offset(
-                                                &script_key,
-                                                end.saturating_sub(1),
-                                            )
-                                        })
-                                        .flatten()
-                                        .map(|(source_url, position, _)| {
-                                            source_location(
-                                                source_url,
-                                                position.line,
-                                                position.column,
-                                            )
-                                        });
-                                    CoverageRangeSnapshot {
-                                        start_offset: *start,
-                                        end_offset: *end,
-                                        count: *count,
-                                        authored_start,
-                                        authored_end,
-                                    }
+                                .map(|((start, end), count)| CoverageRangeSnapshot {
+                                    start_offset: *start,
+                                    end_offset: *end,
+                                    count: *count,
+                                    authored_start: None,
+                                    authored_end: None,
                                 })
                                 .collect::<Vec<_>>();
-                            let executed = ranges.iter().any(|range| range.count > 0);
-                            let projected = (project && executed)
-                                .then(|| {
-                                    ranges
-                                        .iter()
-                                        .find_map(|range| {
-                                            [range.start_offset, range.end_offset.saturating_sub(1)]
-                                                .into_iter()
-                                                .find_map(|offset| {
-                                                    driver.project_generated_offset(
-                                                        &script_key,
-                                                        offset,
-                                                    )
-                                                })
-                                        })
-                                        .or_else(|| {
-                                            driver
-                                                .project_generated_offset(&script_key, *root_start)
-                                        })
-                                })
-                                .flatten();
-                            let authored_location = projected.map(|(source_url, position, _)| {
-                                let location =
-                                    source_location(source_url, position.line, position.column);
-                                location
-                            });
                             CoverageFunctionSnapshot {
                                 name: if name.is_empty() {
                                     "(anonymous)".to_owned()
@@ -1002,32 +1329,23 @@ impl CoverageRecording {
                                     name.clone()
                                 },
                                 block_coverage: *block_coverage,
+                                root_start_offset: *root_start,
+                                root_end_offset: *root_end,
                                 ranges,
-                                authored_location,
+                                effective_ranges: Vec::new(),
+                                authored_location: None,
                                 breadcrumb: None,
+                                generated_location: None,
                             }
                         })
                         .collect::<Vec<_>>();
                     if functions.is_empty() {
                         return None;
                     }
-                    let associated_authored_source = driver
-                        .state()
-                        .scripts
-                        .iter()
-                        .find(|(key, _)| key.session == *session_key && key.script_id == *script_id)
-                        .and_then(|(_, state)| match &state.source {
-                            ScriptSourceState::Resolved(view)
-                                if view.logical_sources.len() == 1 =>
-                            {
-                                view.logical_sources.keys().next().cloned()
-                            }
-                            _ => None,
-                        });
                     Some(CoverageSourceSnapshot {
                         script_id: script_id.clone(),
                         generated_url: script.url.clone(),
-                        associated_authored_source,
+                        associated_authored_source: None,
                         functions,
                     })
                 })
@@ -1062,6 +1380,35 @@ async fn apply_breakpoint(
         })
         .await?;
     Ok(())
+}
+
+async fn remove_breakpoint(
+    driver: &mut DebuggerDriver,
+    client_id: &str,
+    breakpoint_id: &str,
+) -> Result<(), TargetDebuggerError> {
+    driver
+        .apply(Input::RemoveBreakpoint {
+            key: BreakpointKey {
+                client_id: client_id.to_owned(),
+                breakpoint_id: breakpoint_id.to_owned(),
+            },
+        })
+        .await?;
+    Ok(())
+}
+
+fn breakpoint_spec(state: &DebuggerState, key: &BreakpointKey) -> Option<TargetBreakpointSpec> {
+    state
+        .breakpoints
+        .get(key)
+        .map(|breakpoint| TargetBreakpointSpec {
+            id: key.breakpoint_id.clone(),
+            source_url: breakpoint.source_url.clone(),
+            line: breakpoint.position.line.saturating_add(1),
+            column: breakpoint.position.column.saturating_add(1),
+            condition: breakpoint.condition.clone(),
+        })
 }
 
 async fn resume(
@@ -1245,10 +1592,37 @@ fn snapshot_from_driver(
     result.logs = driver
         .console_messages()
         .iter()
-        .map(|values| ConsoleMessageSnapshot {
+        .map(|(index, values)| ConsoleMessageSnapshot {
+            index: *index,
             values: values.clone(),
         })
         .collect();
+    for result_breakpoint in &mut result.breakpoints {
+        let Some((_, breakpoint)) = driver.state().breakpoints.iter().find(|(key, _)| {
+            key.client_id == context_id && key.breakpoint_id == result_breakpoint.id
+        }) else {
+            continue;
+        };
+        result_breakpoint.source = breakpoint.bindings.keys().find_map(|physical| {
+            driver
+                .logical_source_content(&physical.script, &breakpoint.source_url)
+                .map(|content| {
+                    let location = SourceLocation {
+                        source_url: breakpoint.source_url.clone(),
+                        line: breakpoint.position.line.saturating_add(1),
+                        column: breakpoint.position.column.saturating_add(1),
+                    };
+                    let breadcrumb = driver.breadcrumb(
+                        &physical.script,
+                        &breakpoint.source_url,
+                        location.line,
+                        location.column,
+                        &content,
+                    );
+                    source_excerpt(&breakpoint.source_url, &location, &content, breadcrumb)
+                })
+        });
+    }
     if let Some(pause) = result.pause.as_mut()
         && let Some(raw_pause) = driver
             .state()
@@ -1295,11 +1669,14 @@ fn source_excerpt(
     let utf16_column = location.column.saturating_sub(1) as usize;
     let (byte_column, display_column) = utf16_to_byte_and_display(current_text, utf16_column);
     let remainder = current_text.get(byte_column..).unwrap_or("");
-    let highlight_length = remainder
+    let raw_highlight_length = remainder
         .chars()
         .take_while(|character| character.is_alphanumeric() || *character == '_')
         .count()
         .max(1) as u32;
+    let (current_excerpt, highlight_start, available_highlight) =
+        window_highlighted_line(current_text, display_column, 200);
+    let highlight_length = raw_highlight_length.min(available_highlight.max(1));
     SourceExcerpt {
         source_url: source_url.to_owned(),
         breadcrumb,
@@ -1307,12 +1684,37 @@ fn source_excerpt(
         lines: (start..end)
             .map(|index| SourceExcerptLine {
                 line: (index + 1) as u32,
-                text: truncate_line(lines[index], 200),
+                text: if index == current {
+                    current_excerpt.clone()
+                } else {
+                    truncate_line(lines[index], 200)
+                },
             })
             .collect(),
-        highlight_start: display_column.saturating_add(1) as u32,
+        highlight_start,
         highlight_length,
     }
+}
+
+fn window_highlighted_line(
+    line: &str,
+    display_column: usize,
+    maximum: usize,
+) -> (String, u32, u32) {
+    let start = display_column.saturating_sub(maximum / 2);
+    let prefix = if start > 0 { "..." } else { "" };
+    let visible = line
+        .chars()
+        .skip(start)
+        .take(maximum.saturating_sub(prefix.len()))
+        .collect::<String>();
+    let highlight = prefix.len() + display_column.saturating_sub(start);
+    let available = maximum.saturating_sub(highlight);
+    (
+        format!("{prefix}{visible}"),
+        highlight.saturating_add(1) as u32,
+        available as u32,
+    )
 }
 
 fn utf16_to_byte_and_display(line: &str, utf16_column: usize) -> (usize, usize) {
@@ -1419,6 +1821,7 @@ fn snapshot(
                 line: breakpoint.position.line.saturating_add(1),
                 column: breakpoint.position.column.saturating_add(1),
                 status,
+                source: None,
             }
         })
         .collect();
@@ -1556,6 +1959,37 @@ pub enum TargetDebuggerError {
     WaitTimedOut,
     #[error("debugger command did not settle within 200ms")]
     SettlementTimedOut,
+    #[error("batch installation failed ({install}) and rollback also failed ({rollback})")]
+    BatchRollback { install: String, rollback: String },
     #[error("target wait timeout must be between 1ms and 5 minutes")]
     InvalidTimeout,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_coverage_ranges;
+    use crate::service_api::CoverageRangeSnapshot;
+
+    fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
+        CoverageRangeSnapshot {
+            start_offset,
+            end_offset,
+            count,
+            authored_start: None,
+            authored_end: None,
+        }
+    }
+
+    #[test]
+    fn effective_ranges_respect_nested_zero_and_positive_overrides() {
+        let effective =
+            effective_coverage_ranges(&[range(0, 100, 1), range(20, 80, 0), range(40, 60, 1)]);
+        assert_eq!(
+            effective
+                .iter()
+                .map(|range| (range.start_offset, range.end_offset))
+                .collect::<Vec<_>>(),
+            vec![(0, 20), (40, 60), (80, 100)]
+        );
+    }
 }

@@ -12,8 +12,8 @@ import { expect, test } from "@playwright/test";
 import { run } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/jsdbg${executableSuffix}`);
+const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-typing-coverage.md");
 const expectedDurationMs = 120_000;
 const hardTimeoutMs = Math.ceil(expectedDurationMs * 1.2);
@@ -23,7 +23,7 @@ let stepNumber = 0;
 test("reports vscode.dev code executed by typing one character", async () => {
 	test.setTimeout(hardTimeoutMs);
 	const startedAt = Date.now();
-	const build = await run("cargo", ["build", "--bins"], {}, { timeoutMs: commandTimeoutMs });
+	const build = await run("cargo", ["build", "--release", "--bins"], {}, { timeoutMs: commandTimeoutMs });
 	expect(build.code, build.output).toBe(0);
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
@@ -33,9 +33,12 @@ test("reports vscode.dev code executed by typing one character", async () => {
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-coverage-"));
 	const stateFile = join(stateDirectory, "service.json");
+	const sourceMapCache = join(tmpdir(), "jsdbg-vscode-source-map-cache");
+	await mkdir(sourceMapCache, { recursive: true });
 	const environment = {
 		JSDBG_SERVICE_EXE: service,
 		JSDBG_SERVICE_STATE: stateFile,
+		JSDBG_SOURCE_MAP_CACHE: sourceMapCache,
 	};
 	try {
 		await runCli(
@@ -104,14 +107,23 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 		);
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
-		const report = await runCli(
-			"Stop coverage, subtract the background capture, and print functions whose counts increased.",
+		const stoppedCoverage = await runCli(
+			"Stop coverage and freeze the background-excluded immutable capture.",
 			["coverage", "stop", "--exclude", "background"],
+			environment,
+		);
+		expect(stoppedCoverage).toContain("Captured .");
+		const report = await runCli(
+			"Analyze the stored capture and render its source-mapped symbol tree.",
+			["coverage", "show", "."],
 			environment,
 			90_000,
 		);
-		expect(report).toMatch(/\.tsx?\s+\d+ weighted LoC/);
-		expect(report).toMatch(/\d+:\d+–\d+:\d+\s+x\d+/);
+		expect(report).toMatch(/\.tsx?\s+\d+ hit LoC/);
+		expect(report).toMatch(/… \[\d+ items, \d+ files, \d+ hit LoC\]/);
+		expect(report).not.toContain("additional files omitted");
+		expect(report).not.toContain("additional hit ranges omitted");
+		expect(report.split("\n").length).toBeLessThan(180);
 		const delta = await runJsonSilent(
 			["coverage", "show", "."],
 			environment,
@@ -122,6 +134,81 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			.filter((range) => range.authoredStart != null);
 		expect(authoredRanges.length).toBeGreaterThan(0);
 		expect(authoredRanges.some((range) => range.count === 1)).toBe(true);
+		const candidate = selectTypingCandidate(delta);
+		expect(candidate).toBeDefined();
+		const sourcePath = candidate.range.authoredStart.sourceUrl;
+		const pathPrefix = sourcePath
+			.replace(/^(\.\.\/)+/, "")
+			.split("/")
+			.slice(0, -1)
+			.join("/");
+		const drilldown = await runCli(
+			`Drill into the measured typing path \`${pathPrefix}\`.`,
+			["coverage", "show", ".", "--path", pathPrefix],
+			environment,
+		);
+		expect(drilldown).not.toContain("additional hit ranges omitted");
+		await runCli(
+			`Install a coverage-guided logpoint in \`${candidate.function.breadcrumb ?? candidate.function.name}\`.`,
+			[
+				"target",
+				"logpoint",
+				"vscode-typing",
+				"browser",
+				"page",
+				"typing-path",
+				sourcePath,
+				String(candidate.range.authoredStart.line),
+				String(candidate.range.authoredStart.column),
+				'"coverage-guided"',
+			],
+			environment,
+		);
+		await runJsonSilent(["log"], environment);
+		await runCli(
+			"Type a second character to revisit the measured path.",
+			["target", "type", "y"],
+			environment,
+		);
+		await new Promise((resolve_) => setTimeout(resolve_, 250));
+		const targetAfterLogpoint = await runCli(
+			"Inspect the target after the second character.",
+			["target", "show"],
+			environment,
+		);
+		expect(targetAfterLogpoint).toContain("typing-path");
+		const newLogs = await runCli(
+			"Read only console entries newer than the CLI-local log cursor.",
+			["log"],
+			environment,
+		);
+		expect(newLogs).toContain("typing-path");
+		expect(newLogs).toContain("coverage-guided");
+		await runCli(
+			"Create a burst of console messages to demonstrate bounded log paging.",
+			[
+				"target",
+				"eval",
+				'void Array.from({ length: 25 }, (_, i) => console.log("burst", i))',
+			],
+			environment,
+		);
+		const boundedLogs = await runCli(
+			"Read the latest 20 log entries; older unseen entries are summarized.",
+			["log", "--limit", "20"],
+			environment,
+		);
+		expect(boundedLogs).toContain("[...skipped 5 entries...]");
+		const editorAfterSecondCharacter = await runCli(
+			"Verify the editor now contains both typed characters.",
+			[
+				"target",
+				"eval",
+				'document.querySelector(".monaco-editor.focused .view-lines")?.textContent ?? document.querySelector(".view-lines")?.textContent',
+			],
+			environment,
+		);
+		expect(editorAfterSecondCharacter).toContain("xy");
 		const editorText = await runCli(
 			"Read the focused editor through CDP and verify the inserted character is present.",
 			[
@@ -284,4 +371,27 @@ function quoteArgument(argument) {
 	return /^[A-Za-z0-9_./:@%+=,#-]+$/.test(argument)
 		? argument
 		: JSON.stringify(argument);
+}
+
+function selectTypingCandidate(snapshot) {
+	const candidates = snapshot.sources.flatMap((source) =>
+		source.functions.flatMap((fn) =>
+			fn.ranges
+				.filter((range) => range.count > 0 && range.authoredStart != null)
+				.map((range) => ({ source, function: fn, range })),
+		),
+	);
+	const score = ({ function: fn, range }) => {
+		const path = range.authoredStart.sourceUrl.toLowerCase();
+		const name = `${fn.breadcrumb ?? ""} ${fn.name}`.toLowerCase();
+		let value = 0;
+		if (path.includes("/cursor/") || path.endsWith("/cursor.ts")) value += 100;
+		if (path.includes("/editor/")) value += 40;
+		if (path.includes("vieweventhandler")) value += 30;
+		if (name.includes("type")) value += 80;
+		if (name.includes("cursor")) value += 60;
+		if (name.includes("change")) value += 20;
+		return value;
+	};
+	return candidates.sort((left, right) => score(right) - score(left))[0];
 }

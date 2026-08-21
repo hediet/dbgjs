@@ -93,21 +93,32 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		expect(breakpoint).toContain(
 			"checkout  ../src/app.ts:8:3  [installed; 1 binding]",
 		);
-		await runCli(
-			"We add a logpoint inside applyDiscount. It records useful runtime data without stopping execution.",
+		expect(breakpoint).toContain(
+			"Breakpoint checkout: ../src/app.ts — CheckoutService.checkout",
+		);
+		const logpoints = await runCli(
+			"We install two logpoints in one batch and inspect both authored source contexts.",
 			[
 				"target",
-				"logpoint",
-				"typescript-e2e",
-				"browser",
-				"page",
+				"logpoints",
 				"discount",
 				authoredSource,
 				"3",
 				"3",
 				"({ total, rate })",
+				"checkout-entry",
+				authoredSource,
+				"10",
+				"3",
+				"finalTotal",
 			],
 			environment,
+		);
+		expect(logpoints).toContain(
+			"Breakpoint log:discount: ../src/app.ts — CheckoutService.applyDiscount",
+		);
+		expect(logpoints).toContain(
+			"Breakpoint log:checkout-entry: ../src/app.ts — CheckoutService.checkout",
 		);
 		await runCli(
 			"We start precise function and block coverage before the interaction.",
@@ -199,8 +210,13 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		);
 		expect(insideDiscount).toContain("CheckoutService.applyDiscount");
 		expect(insideDiscount).toMatch(/>\s+3 \|/);
-		expect(insideDiscount).toContain('discount {"total":50,"rate":0.1}');
 		expect(insideDiscount).toContain("items.length: unavailable in this frame");
+		const discountLog = await runCli(
+			"Read the new discount logpoint event through the cursor-based log stream.",
+			["log"],
+			environment,
+		);
+		expect(discountLog).toContain('discount {"total":50,"rate":0.1}');
 		await runCli(
 			"We inspect the discount rate while inside the helper.",
 			["target", "eval", "rate"],
@@ -247,9 +263,14 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 				.find((fn) => fn.name === "applyDiscount")
 				.ranges.some((range) => range.count > 0),
 		).toBe(true);
-		const coverage = await runCli(
-			"We stop precise coverage, subtract the named background capture, and print only function counts that increased afterwards.",
+		await runCli(
+			"We stop precise coverage and freeze the background-excluded capture.",
 			["coverage", "stop", "--exclude", "background"],
+			environment,
+		);
+		const coverage = await runCli(
+			"We render the stored source-mapped coverage capture.",
+			["coverage", "show", "."],
 			environment,
 		);
 		expect(coverage).toContain("app.ts");

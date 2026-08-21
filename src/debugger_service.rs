@@ -23,7 +23,7 @@ use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    EvaluationSnapshot, LogpointSpec, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
     TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
@@ -711,29 +711,59 @@ impl DebuggerServiceApi for DebuggerService {
         column: u32,
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
-        validate_id("logpoint", &logpoint_id)?;
-        if line == 0 || column == 0 {
-            return Err(invalid_params("logpoint lines and columns are one-based"));
+        self.set_logpoints(
+            _ctx,
+            context_id,
+            connection_id,
+            target_id,
+            vec![LogpointSpec {
+                id: logpoint_id,
+                source_url,
+                line,
+                column,
+                expression,
+            }],
+        )
+        .await
+    }
+
+    async fn set_logpoints(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        logpoints: Vec<LogpointSpec>,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        if logpoints.is_empty() {
+            return Err(invalid_params("at least one logpoint is required"));
         }
+        let breakpoints = logpoints
+            .into_iter()
+            .map(|logpoint| {
+                validate_id("logpoint", &logpoint.id)?;
+                if logpoint.line == 0 || logpoint.column == 0 {
+                    return Err(invalid_params("logpoint lines and columns are one-based"));
+                }
+                Ok(TargetBreakpointSpec {
+                    id: format!("log:{}", logpoint.id),
+                    source_url: logpoint.source_url,
+                    line: logpoint.line,
+                    column: logpoint.column,
+                    condition: Some(format!(
+                        "console.log({}, JSON.stringify(({}))), false",
+                        serde_json::to_string(&logpoint.id)
+                            .map_err(|error| internal_error(error.to_string()))?,
+                        logpoint.expression
+                    )),
+                })
+            })
+            .collect::<Result<Vec<_>, JsonRpcError>>()?;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         debugger
-            .set_breakpoint(
-                u64::MAX,
-                TargetBreakpointSpec {
-                    id: format!("log:{logpoint_id}"),
-                    source_url,
-                    line,
-                    column,
-                    condition: Some(format!(
-                        "console.log({}, JSON.stringify(({}))), false",
-                        serde_json::to_string(&logpoint_id)
-                            .map_err(|error| internal_error(error.to_string()))?,
-                        expression
-                    )),
-                },
-            )
+            .set_breakpoints(u64::MAX, breakpoints)
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -832,6 +862,22 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn finish_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        exclude_capture_id: Option<String>,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .finish_coverage(exclude_capture_id)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
     async fn get_coverage(
         &self,
         _ctx: &CallCtx,
@@ -839,10 +885,11 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
         capture_id: String,
+        source_path: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .get_coverage(capture_id)
+            .get_coverage(capture_id, source_path)
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -1293,6 +1340,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::Evaluation(_)
         | TargetDebuggerError::Interaction(_)
         | TargetDebuggerError::Coverage(_)
+        | TargetDebuggerError::BatchRollback { .. }
         | TargetDebuggerError::DriverFailed(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
     };

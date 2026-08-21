@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
+use std::env;
+use std::fs;
 use std::sync::Arc;
+use std::time::Instant;
 
 use cdp_client::content_store::ContentStore;
 use cdp_client::source_view::{
@@ -8,6 +11,10 @@ use cdp_client::source_view::{
 use sourcemap::SourceMapBuilder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(path) = env::args().nth(1) {
+        return benchmark_map(&path);
+    }
+
     let source = "export const value = 42;\n".repeat(8_000);
     let map = synthetic_map(&source, 50_000)?;
     let store = Arc::new(ContentStore::default());
@@ -24,6 +31,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             source_map: Some(&map),
             minified: false,
         })?;
+    }
+
+    fn benchmark_map(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let started = Instant::now();
+        let map = fs::read(path)?;
+        let read = started.elapsed();
+
+        let started = Instant::now();
+        let decoded = sourcemap::decode_slice(&map)?;
+        let decode = started.elapsed();
+        let (sources, tokens) = match decoded {
+            sourcemap::DecodedMap::Regular(map) => (map.get_source_count(), map.get_token_count()),
+            sourcemap::DecodedMap::Index(index) => {
+                let flattened = index.flatten()?;
+                (flattened.get_source_count(), flattened.get_token_count())
+            }
+            sourcemap::DecodedMap::Hermes(_) => (0, 0),
+        };
+
+        let store = Arc::new(ContentStore::default());
+        let mut view = ResolvedSourceView::new(
+            ResolutionPolicy::PreferSourcesContent,
+            store,
+            BTreeMap::new(),
+        );
+        let started = Instant::now();
+        view.add_generated(GeneratedSourceInput {
+            url: "benchmark.js",
+            content: "",
+            source_map: Some(&map),
+            minified: false,
+        })?;
+        let build = started.elapsed();
+
+        println!(
+            "{} bytes, {sources} sources, {tokens} tokens\nread: {read:.3?}\ndecode: {decode:.3?}\nview: {build:.3?}",
+            map.len()
+        );
+        Ok(())
     }
 
     println!("before reverse index:\n{:#?}", view.memory_report());

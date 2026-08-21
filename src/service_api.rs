@@ -149,6 +149,7 @@ pub struct TargetDebuggerSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsoleMessageSnapshot {
+    pub index: u64,
     pub values: Vec<String>,
 }
 
@@ -169,6 +170,17 @@ pub struct TargetBreakpointSnapshot {
     pub line: u32,
     pub column: u32,
     pub status: TargetBreakpointStatus,
+    pub source: Option<SourceExcerpt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointSpec {
+    pub id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub expression: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -254,9 +266,14 @@ pub struct CoverageSourceSnapshot {
 pub struct CoverageFunctionSnapshot {
     pub name: String,
     pub block_coverage: bool,
+    pub root_start_offset: u32,
+    pub root_end_offset: u32,
     pub ranges: Vec<CoverageRangeSnapshot>,
+    #[serde(default)]
+    pub effective_ranges: Vec<CoverageRangeSnapshot>,
     pub authored_location: Option<SourceLocation>,
     pub breadcrumb: Option<String>,
+    pub generated_location: Option<SourceLocation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -404,6 +421,13 @@ pub trait DebuggerServiceApi {
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
 
+    async fn set_logpoints(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        logpoints: Vec<LogpointSpec>,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
     async fn click_target(
         context_id: String,
         connection_id: String,
@@ -446,11 +470,19 @@ pub trait DebuggerServiceApi {
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
+    async fn finish_coverage(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        exclude_capture_id: Option<String>,
+    ) -> Result<bool, JsonRpcError>;
+
     async fn get_coverage(
         context_id: String,
         connection_id: String,
         target_id: String,
         capture_id: String,
+        source_path: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;

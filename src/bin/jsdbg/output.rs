@@ -1,10 +1,11 @@
 use cdp_client::service_api::{
-    BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
-    CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, PlaywrightChannel, ServiceInfo,
-    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
+    PlaywrightChannel, ServiceInfo, SourceExcerpt, TargetBreakpointStatus, TargetDebuggerPhase,
+    TargetDebuggerSnapshot,
 };
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy)]
 pub enum OutputFormat {
@@ -35,6 +36,31 @@ impl OutputFormat {
             Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
         }
         Ok(())
+    }
+
+    pub fn print_target_with_breakpoint_sources(
+        &self,
+        snapshot: &TargetDebuggerSnapshot,
+        selector: &str,
+        breakpoint_ids: &[String],
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => {
+                print_target_human(snapshot, selector);
+                for breakpoint in snapshot
+                    .breakpoints
+                    .iter()
+                    .filter(|breakpoint| breakpoint_ids.contains(&breakpoint.id))
+                {
+                    if let Some(source) = &breakpoint.source {
+                        println!();
+                        print_source_excerpt(&format!("Breakpoint {}", breakpoint.id), source);
+                    }
+                }
+                Ok(())
+            }
+            Self::Json => self.print(snapshot),
+        }
     }
 
     pub fn print_target_with_watches(
@@ -76,6 +102,61 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_coverage(
+        &self,
+        value: &CoverageSnapshot,
+        path: Option<&str>,
+    ) -> Result<(), serde_json::Error> {
+        let filtered = path.map(|path| filter_coverage_path(value, path));
+        let value = filtered.as_ref().unwrap_or(value);
+        match self {
+            Self::Human => print_coverage_human(value, path.is_some()),
+            Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        }
+        Ok(())
+    }
+
+    pub fn print_logs(
+        &self,
+        logs: &[ConsoleMessageSnapshot],
+        after: u64,
+        limit: usize,
+    ) -> Result<u64, serde_json::Error> {
+        let (skipped, displayed) = page_logs(logs, after, limit);
+        match self {
+            Self::Human => {
+                if skipped > 0 {
+                    println!("[...skipped {skipped} entries...]");
+                }
+                for message in &displayed {
+                    println!("[{}] {}", message.index, message.values.join(" "));
+                }
+            }
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "after": after,
+                    "skipped": skipped,
+                    "messages": displayed,
+                }))?
+            ),
+        }
+        Ok(logs
+            .last()
+            .map_or(after, |message| message.index.max(after)))
+    }
+
+    pub fn print_coverage_stopped(&self) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => println!("Coverage recording stopped. Captured ."),
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "captureId": "." }))?
+            ),
+        }
+        Ok(())
+    }
+
     pub fn print<T>(&self, value: &T) -> Result<(), serde_json::Error>
     where
         T: HumanOutput + Serialize,
@@ -86,6 +167,25 @@ impl OutputFormat {
         }
         Ok(())
     }
+}
+
+fn page_logs(
+    logs: &[ConsoleMessageSnapshot],
+    after: u64,
+    limit: usize,
+) -> (u64, Vec<&ConsoleMessageSnapshot>) {
+    let unseen = logs
+        .iter()
+        .filter(|message| message.index > after)
+        .collect::<Vec<_>>();
+    let evicted = unseen.first().map_or(0, |message| {
+        message.index.saturating_sub(after.saturating_add(1))
+    });
+    let retained_skipped = unseen.len().saturating_sub(limit);
+    (
+        evicted.saturating_add(retained_skipped as u64),
+        unseen.into_iter().skip(retained_skipped).collect(),
+    )
 }
 
 pub trait HumanOutput {
@@ -249,44 +349,12 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
             );
         }
     }
-    if !snapshot.logs.is_empty() {
-        println!("Logs:");
-        for message in &snapshot.logs {
-            println!("  {}", message.values.join(" "));
-        }
-    }
-
     match &snapshot.pause {
         None => println!("  Pause: none"),
         Some(pause) => {
             println!("  Pause: epoch {} ({})", pause.epoch, pause.reason);
             if let Some(source) = &pause.source {
-                match &source.breadcrumb {
-                    Some(breadcrumb) => {
-                        println!("  Source: {} — {}", source.source_url, breadcrumb)
-                    }
-                    None => println!("  Source: {}", source.source_url),
-                }
-                let width = source
-                    .lines
-                    .last()
-                    .map_or(1, |line| line.line.to_string().len());
-                for line in &source.lines {
-                    let marker = if line.line == source.current_line {
-                        ">"
-                    } else {
-                        " "
-                    };
-                    println!("    {marker} {:>width$} | {}", line.line, line.text);
-                    if line.line == source.current_line {
-                        println!(
-                            "      {:width$} | {}{}",
-                            "",
-                            " ".repeat(source.highlight_start.saturating_sub(1) as usize),
-                            "^".repeat(source.highlight_length as usize)
-                        );
-                    }
-                }
+                print_source_excerpt("Source", source);
             }
             println!("  Frames:");
             for frame in &pause.frames {
@@ -328,100 +396,237 @@ impl HumanOutput for EvaluationSnapshot {
 
 impl HumanOutput for CoverageSnapshot {
     fn print_human(&self) {
-        if self.sources.is_empty() {
-            println!("No executed functions captured.");
-            return;
+        print_coverage_human(self, false);
+    }
+}
+
+fn print_coverage_human(snapshot: &CoverageSnapshot, detailed: bool) {
+    if snapshot.sources.is_empty() {
+        println!("No executed functions captured.");
+        return;
+    }
+    let mut files = BTreeMap::<String, Vec<CoverageEntry>>::new();
+    for entry in coverage_entries(snapshot) {
+        files.entry(entry.path.clone()).or_default().push(entry);
+    }
+
+    let mut root = CoverageTree::default();
+    for (path, entries) in files {
+        let mut entries = aggregate_coverage_entries(entries);
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.line_span));
+        let total = effective_file_hit_loc(&entries);
+        root.insert_file(path, total, entries);
+    }
+
+    root.print(detailed);
+}
+
+fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSnapshot {
+    let prefix = normalize_source_path(prefix);
+    let mut filtered = snapshot.clone();
+    for source in &mut filtered.sources {
+        let generated_url = normalize_source_path(&source.generated_url);
+        for function in &mut source.functions {
+            let matches = |range: &cdp_client::service_api::CoverageRangeSnapshot| {
+                range.authored_start.as_ref().is_some_and(|location| {
+                    normalize_source_path(&location.source_url).starts_with(&prefix)
+                }) || (range.authored_start.is_none() && generated_url.starts_with(&prefix))
+            };
+            function.ranges.retain(matches);
+            function.effective_ranges.retain(matches);
         }
-        let mut files = BTreeMap::<String, Vec<CoverageEntry>>::new();
-        for entry in coverage_entries(self) {
-            files.entry(entry.path.clone()).or_default().push(entry);
-        }
-        let mut files = files.into_iter().collect::<Vec<_>>();
-        files.sort_by_key(|(_, entries)| {
-            std::cmp::Reverse(entries.iter().map(|entry| entry.weighted_loc).sum::<u64>())
+        source.functions.retain(|function| {
+            !function.ranges.is_empty() || !function.effective_ranges.is_empty()
         });
-        let omitted_files = files.len().saturating_sub(20);
-        let omitted_ranges = files
-            .iter()
-            .take(20)
-            .map(|(_, entries)| entries.len().saturating_sub(5))
-            .sum::<usize>();
-        let mut root = CoverageTree::default();
-        for (path, mut entries) in files.into_iter().take(20) {
-            entries.sort_by_key(|entry| std::cmp::Reverse(entry.weighted_loc));
-            let total = entries.iter().map(|entry| entry.weighted_loc).sum();
-            root.insert_file(path, total, entries.into_iter().take(5).collect());
-        }
-        root.print();
-        if omitted_ranges > 0 {
-            println!("… {omitted_ranges} additional hit ranges omitted from displayed files");
-        }
-        if omitted_files > 0 {
-            println!("… {omitted_files} additional files omitted");
-        }
+    }
+    filtered
+        .sources
+        .retain(|source| !source.functions.is_empty());
+    filtered
+}
+
+fn effective_file_hit_loc(entries: &[CoverageEntry]) -> u64 {
+    let lines = entries
+        .iter()
+        .flat_map(|entry| entry.lines.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if lines.is_empty() {
+        entries.iter().map(|entry| entry.line_span).sum()
+    } else {
+        lines.len() as u64
     }
 }
 
 struct CoverageEntry {
     path: String,
     function: String,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
-    count: u64,
-    weighted_loc: u64,
+    lines: BTreeSet<u32>,
+    line_span: u64,
+    generated_location: Option<String>,
+}
+
+fn aggregate_coverage_entries(entries: Vec<CoverageEntry>) -> Vec<CoverageEntry> {
+    let mut symbols = BTreeMap::<String, BTreeSet<u32>>::new();
+    let mut unknown = BTreeMap::<String, u64>::new();
+    let mut paths = BTreeMap::<String, String>::new();
+    let mut generated_locations = BTreeMap::<String, String>::new();
+    for entry in entries {
+        paths
+            .entry(entry.function.clone())
+            .or_insert(entry.path.clone());
+        if let Some(location) = entry.generated_location {
+            generated_locations
+                .entry(entry.function.clone())
+                .or_insert(location);
+        }
+        if entry.lines.is_empty() {
+            *unknown.entry(entry.function).or_default() += entry.line_span;
+        } else {
+            symbols
+                .entry(entry.function)
+                .or_default()
+                .extend(entry.lines);
+        }
+    }
+    paths
+        .into_iter()
+        .map(|(function, path)| {
+            let lines = symbols.remove(&function).unwrap_or_default();
+            let line_span = if lines.is_empty() {
+                unknown.remove(&function).unwrap_or(1)
+            } else {
+                lines.len() as u64
+            };
+            let generated_location = generated_locations.remove(&function);
+            CoverageEntry {
+                path,
+                function,
+                lines,
+                line_span,
+                generated_location,
+            }
+        })
+        .collect()
 }
 
 fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
-    snapshot
-        .sources
-        .iter()
-        .flat_map(|source| {
-            source.functions.iter().flat_map(move |function| {
-                function.ranges.iter().filter_map(move |range| {
-                    if range.count == 0 || function.name == "(anonymous)" {
-                        return None;
+    let mut entries = Vec::new();
+    for source in &snapshot.sources {
+        for function in &source.functions {
+            if function.name == "(anonymous)" {
+                continue;
+            }
+            let projected_ranges = if function.effective_ranges.is_empty() {
+                &function.ranges
+            } else {
+                &function.effective_ranges
+            };
+            let mut ranges = projected_ranges.iter().collect::<Vec<_>>();
+            ranges.sort_by_key(|range| {
+                std::cmp::Reverse(range.end_offset.saturating_sub(range.start_offset))
+            });
+            let mut lines_by_path = BTreeMap::<String, BTreeSet<u32>>::new();
+            let mut has_unmapped_hit = false;
+            for range in ranges {
+                match (&range.authored_start, &range.authored_end) {
+                    (Some(start), Some(end)) if start.source_url == end.source_url => {
+                        let lines = lines_by_path
+                            .entry(normalize_source_path(&start.source_url))
+                            .or_default();
+                        for line in start.line..=end.line.max(start.line) {
+                            if range.count > 0 {
+                                lines.insert(line);
+                            } else {
+                                lines.remove(&line);
+                            }
+                        }
                     }
-                    let (path, start_line, start_column, end_line, end_column) =
-                        match (&range.authored_start, &range.authored_end) {
-                            (Some(start), Some(end)) if start.source_url == end.source_url => (
-                                normalize_source_path(&start.source_url),
-                                start.line,
-                                start.column,
-                                end.line,
-                                end.column,
-                            ),
-                            _ => (
-                                source.generated_url.clone(),
-                                0,
-                                range.start_offset,
-                                0,
-                                range.end_offset,
-                            ),
-                        };
-                    let line_span = if start_line > 0 && end_line >= start_line {
-                        u64::from(end_line - start_line + 1)
-                    } else {
-                        1
-                    };
-                    Some(CoverageEntry {
-                        path,
-                        function: function
-                            .breadcrumb
-                            .clone()
-                            .unwrap_or_else(|| function.name.clone()),
-                        start_line,
-                        start_column,
-                        end_line,
-                        end_column,
-                        count: range.count,
-                        weighted_loc: line_span.saturating_mul(range.count),
-                    })
-                })
-            })
-        })
-        .collect()
+                    _ if range.count > 0 => has_unmapped_hit = true,
+                    _ => {}
+                }
+            }
+            let function_name = function
+                .breadcrumb
+                .clone()
+                .unwrap_or_else(|| function.name.clone());
+            let generated_location = (function.breadcrumb.is_none()
+                && looks_minified_identifier(&function.name))
+            .then(|| format_generated_location(source, function));
+            let mut mapped = false;
+            for (path, lines) in lines_by_path {
+                if lines.is_empty() {
+                    continue;
+                }
+                mapped = true;
+                entries.push(CoverageEntry {
+                    path,
+                    function: function_name.clone(),
+                    line_span: lines.len() as u64,
+                    lines,
+                    generated_location: generated_location.clone(),
+                });
+            }
+            if !mapped && has_unmapped_hit {
+                entries.push(CoverageEntry {
+                    path: source.generated_url.clone(),
+                    function: function_name,
+                    lines: BTreeSet::new(),
+                    line_span: 1,
+                    generated_location,
+                });
+            }
+        }
+    }
+    entries
+}
+
+fn format_generated_location(
+    source: &cdp_client::service_api::CoverageSourceSnapshot,
+    function: &cdp_client::service_api::CoverageFunctionSnapshot,
+) -> String {
+    match &function.generated_location {
+        Some(location) => {
+            let source = location
+                .source_url
+                .rsplit('/')
+                .next()
+                .unwrap_or(&location.source_url)
+                .split('?')
+                .next()
+                .unwrap_or(&location.source_url);
+            format!("{}:{}:{}", source, location.line, location.column)
+        }
+        None => {
+            let source = source
+                .generated_url
+                .rsplit('/')
+                .next()
+                .unwrap_or(&source.generated_url)
+                .split('?')
+                .next()
+                .unwrap_or(&source.generated_url);
+            format!("{source}@offset {}", function.root_start_offset)
+        }
+    }
+}
+
+fn looks_minified_identifier(name: &str) -> bool {
+    let name = name
+        .strip_prefix("get ")
+        .or_else(|| name.strip_prefix("set "))
+        .unwrap_or(name);
+    if name.contains('.') || name.contains(' ') {
+        return false;
+    }
+    let length = name.chars().count();
+    length <= 3
+        || (length <= 4
+            && (name.chars().any(|character| character.is_ascii_digit())
+                || name
+                    .chars()
+                    .filter(|character| character.is_ascii_uppercase())
+                    .count()
+                    >= 2))
 }
 
 fn normalize_source_path(path: &str) -> String {
@@ -434,57 +639,147 @@ fn normalize_source_path(path: &str) -> String {
 struct CoverageTree {
     children: BTreeMap<String, CoverageTree>,
     ranges: Vec<CoverageEntry>,
-    weighted_loc: u64,
+    hit_loc: u64,
+    file_count: usize,
 }
 
 impl CoverageTree {
-    fn insert_file(&mut self, path: String, weighted_loc: u64, ranges: Vec<CoverageEntry>) {
+    fn insert_file(&mut self, path: String, hit_loc: u64, ranges: Vec<CoverageEntry>) {
         let components = path
             .split('/')
             .filter(|component| !component.is_empty())
             .collect::<Vec<_>>();
         let mut node = self;
-        node.weighted_loc = node.weighted_loc.saturating_add(weighted_loc);
+        node.hit_loc = node.hit_loc.saturating_add(hit_loc);
+        node.file_count += 1;
         for component in components {
             node = node.children.entry(component.to_owned()).or_default();
-            node.weighted_loc = node.weighted_loc.saturating_add(weighted_loc);
+            node.hit_loc = node.hit_loc.saturating_add(hit_loc);
+            node.file_count += 1;
         }
         node.ranges = ranges;
     }
 
-    fn weighted_loc(&self) -> u64 {
-        self.weighted_loc
+    fn hit_loc(&self) -> u64 {
+        self.hit_loc
     }
 
-    fn print(&self) {
-        self.print_children("");
+    fn print(&self, detailed: bool) {
+        self.print_children("", detailed, 0);
     }
 
-    fn print_children(&self, prefix: &str) {
-        let len = self.children.len();
-        for (index, (name, child)) in self.children.iter().enumerate() {
-            let last = index + 1 == len;
+    fn print_children(&self, prefix: &str, detailed: bool, depth: usize) {
+        const CHILD_LIMIT: usize = 5;
+        const SYMBOL_LIMIT: usize = 3;
+        const MAX_DEPTH: usize = 4;
+
+        if !detailed && depth >= MAX_DEPTH {
+            return;
+        }
+
+        let mut children = self.children.iter().collect::<Vec<_>>();
+        children.sort_by_key(|(_, child)| std::cmp::Reverse(child.hit_loc));
+        let depth_limit = CHILD_LIMIT.saturating_sub(depth / 2).max(3);
+        let visible = if detailed {
+            children.len()
+        } else {
+            children.len().min(depth_limit)
+        };
+        let hidden_items = children.len().saturating_sub(visible);
+        let hidden_files = children[visible..]
+            .iter()
+            .map(|(_, child)| child.file_count)
+            .sum::<usize>();
+        let hidden_loc = children[visible..]
+            .iter()
+            .map(|(_, child)| child.hit_loc)
+            .sum::<u64>();
+        let output_len = visible + usize::from(hidden_items > 0);
+        for (index, (name, child)) in children.into_iter().take(visible).enumerate() {
+            let last = index + 1 == output_len;
             let branch = if last { "└─" } else { "├─" };
-            println!(
-                "{prefix}{branch} {name}  {} weighted LoC",
-                child.weighted_loc()
-            );
-            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            child.print_children(&child_prefix);
-            for entry in &child.ranges {
-                let location = if entry.start_line > 0 {
-                    format!(
-                        "{}:{}–{}:{}",
-                        entry.start_line, entry.start_column, entry.end_line, entry.end_column
-                    )
-                } else {
-                    format!("+{}–+{}", entry.start_column, entry.end_column)
-                };
+            let (label, child) = collapse_tree_label(name, child);
+            if child.ranges.is_empty() {
                 println!(
-                    "{child_prefix}└─ {}  {}  x{}  {} weighted LoC",
-                    entry.function, location, entry.count, entry.weighted_loc
+                    "{prefix}{branch} {label}/  [{} files, {} hit LoC]",
+                    child.file_count,
+                    child.hit_loc()
+                );
+            } else {
+                println!("{prefix}{branch} {label}  {} hit LoC", child.hit_loc());
+            }
+            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
+            child.print_children(&child_prefix, detailed, depth + 1);
+            let range_limit = if detailed {
+                child.ranges.len()
+            } else {
+                child.ranges.len().min(SYMBOL_LIMIT)
+            };
+            for (range_index, entry) in child.ranges.iter().take(range_limit).enumerate() {
+                let has_aggregate = range_limit < child.ranges.len();
+                let range_last = range_index + 1 == range_limit && !has_aggregate;
+                let range_branch = if range_last { "└─" } else { "├─" };
+                println!(
+                    "{child_prefix}{range_branch} {}  {} hit LoC{}",
+                    entry.function,
+                    entry.line_span,
+                    entry
+                        .generated_location
+                        .as_ref()
+                        .map_or_else(String::new, |location| format!("  [generated {location}]"))
                 );
             }
+            if range_limit < child.ranges.len() {
+                let omitted = &child.ranges[range_limit..];
+                println!(
+                    "{child_prefix}└─ … [{} symbols, {} hit LoC]",
+                    omitted.len(),
+                    omitted.iter().map(|entry| entry.line_span).sum::<u64>()
+                );
+            }
+        }
+        if hidden_items > 0 {
+            println!(
+                "{prefix}└─ … [{hidden_items} items, {hidden_files} files, {hidden_loc} hit LoC]",
+            );
+        }
+    }
+}
+
+fn collapse_tree_label<'a>(name: &str, mut node: &'a CoverageTree) -> (String, &'a CoverageTree) {
+    let mut label = name.to_owned();
+    while node.ranges.is_empty() && node.children.len() == 1 {
+        let (child_name, child) = node.children.first_key_value().unwrap();
+        label.push('/');
+        label.push_str(child_name);
+        node = child;
+    }
+    (label, node)
+}
+
+fn print_source_excerpt(label: &str, source: &SourceExcerpt) {
+    match &source.breadcrumb {
+        Some(breadcrumb) => println!("  {label}: {} — {breadcrumb}", source.source_url),
+        None => println!("  {label}: {}", source.source_url),
+    }
+    let width = source
+        .lines
+        .last()
+        .map_or(1, |line| line.line.to_string().len());
+    for line in &source.lines {
+        let marker = if line.line == source.current_line {
+            ">"
+        } else {
+            " "
+        };
+        println!("    {marker} {:>width$} | {}", line.line, line.text);
+        if line.line == source.current_line {
+            println!(
+                "      {:width$} | {}{}",
+                "",
+                " ".repeat(source.highlight_start.saturating_sub(1) as usize),
+                "^".repeat(source.highlight_length as usize)
+            );
         }
     }
 }
@@ -587,5 +882,123 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
             format!("installed; {binding_count} binding{suffix}")
         }
         TargetBreakpointStatus::Failed { message } => format!("failed: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CoverageEntry, aggregate_coverage_entries, coverage_entries, effective_file_hit_loc,
+        looks_minified_identifier, page_logs,
+    };
+    use cdp_client::service_api::{
+        ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
+        CoverageSourceSnapshot, SourceLocation,
+    };
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn identifies_short_mangled_names_without_flagging_readable_symbols() {
+        for name in ["Bbi", "OXe", "cDe", "j0e", "fS"] {
+            assert!(looks_minified_identifier(name), "{name}");
+        }
+        for name in [
+            "next",
+            "rbTreeBase",
+            "get isVisible",
+            "CursorsController.type",
+        ] {
+            assert!(!looks_minified_identifier(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn nested_zero_count_ranges_remove_parent_lines() {
+        let location = |line| SourceLocation {
+            source_url: "src/example.ts".to_owned(),
+            line,
+            column: 1,
+        };
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 0,
+            sources: vec![CoverageSourceSnapshot {
+                script_id: "1".to_owned(),
+                generated_url: "bundle.js".to_owned(),
+                associated_authored_source: None,
+                functions: vec![CoverageFunctionSnapshot {
+                    name: "example".to_owned(),
+                    block_coverage: true,
+                    root_start_offset: 0,
+                    root_end_offset: 100,
+                    ranges: vec![
+                        CoverageRangeSnapshot {
+                            start_offset: 0,
+                            end_offset: 100,
+                            count: 1,
+                            authored_start: Some(location(1)),
+                            authored_end: Some(location(100)),
+                        },
+                        CoverageRangeSnapshot {
+                            start_offset: 49,
+                            end_offset: 60,
+                            count: 0,
+                            authored_start: Some(location(50)),
+                            authored_end: Some(location(60)),
+                        },
+                    ],
+                    effective_ranges: vec![
+                        CoverageRangeSnapshot {
+                            start_offset: 0,
+                            end_offset: 49,
+                            count: 1,
+                            authored_start: Some(location(1)),
+                            authored_end: Some(location(49)),
+                        },
+                        CoverageRangeSnapshot {
+                            start_offset: 60,
+                            end_offset: 100,
+                            count: 1,
+                            authored_start: Some(location(61)),
+                            authored_end: Some(location(100)),
+                        },
+                    ],
+                    authored_location: Some(location(1)),
+                    breadcrumb: Some("example".to_owned()),
+                    generated_location: None,
+                }],
+            }],
+        };
+        let entries = coverage_entries(&snapshot);
+        assert_eq!(entries[0].line_span, 89);
+        assert!(!entries[0].lines.contains(&50));
+        assert!(entries[0].lines.contains(&49));
+        assert!(entries[0].lines.contains(&61));
+    }
+
+    #[test]
+    fn aggregation_preserves_noncontiguous_line_sets() {
+        let entries = aggregate_coverage_entries(vec![CoverageEntry {
+            path: "src/example.ts".to_owned(),
+            function: "example".to_owned(),
+            lines: BTreeSet::from([1, 100]),
+            line_span: 2,
+            generated_location: None,
+        }]);
+        assert_eq!(effective_file_hit_loc(&entries), 2);
+        assert_eq!(entries[0].line_span, 2);
+    }
+
+    #[test]
+    fn log_paging_counts_entries_evicted_before_the_retained_window() {
+        let logs = (50..=149)
+            .map(|index| ConsoleMessageSnapshot {
+                index,
+                values: vec![index.to_string()],
+            })
+            .collect::<Vec<_>>();
+        let (skipped, displayed) = page_logs(&logs, 1, 20);
+        assert_eq!(skipped, 128);
+        assert_eq!(displayed.first().unwrap().index, 130);
+        assert_eq!(displayed.last().unwrap().index, 149);
     }
 }

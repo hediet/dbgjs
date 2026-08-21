@@ -7,40 +7,65 @@ use oxc_ast_visit::{
 use oxc_parser::Parser;
 use oxc_span::{SourceType, Span};
 
+pub struct SymbolIndex {
+    symbols: Vec<Symbol>,
+}
+
+struct Symbol {
+    span: Span,
+    breadcrumb: String,
+}
+
+impl SymbolIndex {
+    pub fn new(source_url: &str, source: &str) -> Option<Self> {
+        let allocator = Allocator::default();
+        let source_type = SourceType::from_path(source_url).unwrap_or_else(|_| SourceType::tsx());
+        let parsed = Parser::new(&allocator, source, source_type).parse();
+        if parsed.panicked {
+            return None;
+        }
+        let mut visitor = SymbolVisitor {
+            stack: Vec::new(),
+            symbols: Vec::new(),
+        };
+        visitor.visit_program(&parsed.program);
+        Some(Self {
+            symbols: visitor.symbols,
+        })
+    }
+
+    pub fn breadcrumb(&self, source: &str, line: u32, utf16_column: u32) -> Option<String> {
+        let offset = u32::try_from(utf16_position_to_byte(source, line, utf16_column)?).ok()?;
+        self.symbols
+            .iter()
+            .filter(|symbol| symbol.span.start <= offset && offset <= symbol.span.end)
+            .max_by_key(|symbol| {
+                (
+                    symbol.breadcrumb.matches('.').count(),
+                    u32::MAX - symbol.span.size(),
+                )
+            })
+            .map(|symbol| symbol.breadcrumb.clone())
+    }
+}
+
 pub fn breadcrumb(source_url: &str, source: &str, line: u32, utf16_column: u32) -> Option<String> {
-    let offset = utf16_position_to_byte(source, line, utf16_column)?;
-    let allocator = Allocator::default();
-    let source_type = SourceType::from_path(source_url).unwrap_or_else(|_| SourceType::tsx());
-    let parsed = Parser::new(&allocator, source, source_type).parse();
-    if parsed.panicked {
-        return None;
-    }
-    let mut visitor = BreadcrumbVisitor {
-        offset: u32::try_from(offset).ok()?,
-        stack: Vec::new(),
-        best: Vec::new(),
-    };
-    visitor.visit_program(&parsed.program);
-    (!visitor.best.is_empty()).then(|| visitor.best.join("."))
+    SymbolIndex::new(source_url, source)?.breadcrumb(source, line, utf16_column)
 }
 
-struct BreadcrumbVisitor {
-    offset: u32,
+struct SymbolVisitor {
     stack: Vec<String>,
-    best: Vec<String>,
+    symbols: Vec<Symbol>,
 }
 
-impl BreadcrumbVisitor {
-    fn contains(&self, span: Span) -> bool {
-        span.start <= self.offset && self.offset <= span.end
-    }
-
-    fn enter(&mut self, name: Option<String>, visit: impl FnOnce(&mut Self)) {
+impl SymbolVisitor {
+    fn enter(&mut self, span: Span, name: Option<String>, visit: impl FnOnce(&mut Self)) {
         if let Some(name) = name {
             self.stack.push(name);
-            if self.stack.len() > self.best.len() {
-                self.best.clone_from(&self.stack);
-            }
+            self.symbols.push(Symbol {
+                span,
+                breadcrumb: self.stack.join("."),
+            });
             visit(self);
             self.stack.pop();
         } else {
@@ -49,33 +74,28 @@ impl BreadcrumbVisitor {
     }
 }
 
-impl<'a> Visit<'a> for BreadcrumbVisitor {
+impl<'a> Visit<'a> for SymbolVisitor {
     fn visit_program(&mut self, program: &oxc_ast::ast::Program<'a>) {
         walk_program(self, program);
     }
 
     fn visit_class(&mut self, class: &Class<'a>) {
-        if !self.contains(class.span) {
-            return;
-        }
         let name = class.id.as_ref().map(|id| id.name.to_string());
-        self.enter(name, |visitor| walk_class(visitor, class));
+        self.enter(class.span, name, |visitor| walk_class(visitor, class));
     }
 
     fn visit_method_definition(&mut self, method: &MethodDefinition<'a>) {
-        if !self.contains(method.span) {
-            return;
-        }
         let name = method.key.static_name().map(|name| name.into_owned());
-        self.enter(name, |visitor| walk_method_definition(visitor, method));
+        self.enter(method.span, name, |visitor| {
+            walk_method_definition(visitor, method)
+        });
     }
 
     fn visit_function(&mut self, function: &Function<'a>, flags: oxc_syntax::scope::ScopeFlags) {
-        if !self.contains(function.span) {
-            return;
-        }
         let name = function.id.as_ref().map(|id| id.name.to_string());
-        self.enter(name, |visitor| walk_function(visitor, function, flags));
+        self.enter(function.span, name, |visitor| {
+            walk_function(visitor, function, flags)
+        });
     }
 }
 
@@ -119,8 +139,9 @@ mod tests {
     fn finds_class_and_method_at_utf16_position() {
         let source =
             "class Cart {\n  checkout(items: number[]) {\n    return items.length;\n  }\n}";
+        let index = SymbolIndex::new("cart.ts", source).unwrap();
         assert_eq!(
-            breadcrumb("cart.ts", source, 3, 12).as_deref(),
+            index.breadcrumb(source, 3, 12).as_deref(),
             Some("Cart.checkout")
         );
     }

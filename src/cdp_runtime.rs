@@ -1,4 +1,8 @@
+use std::env;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -7,6 +11,8 @@ use hubrpc::connection::channel::{Channel, RejectingHandler, RequestHandler};
 use hubrpc::prelude::{JsonRpcError, MuxError};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::cdp::{
@@ -147,6 +153,7 @@ impl CdpDebuggerSession {
                 effect_id,
                 script,
                 generated_url,
+                script_hash,
                 source_map_url,
                 ..
             } if script.session == self.session => {
@@ -159,7 +166,10 @@ impl CdpDebuggerSession {
                     .map_err(CdpRuntimeError::protocol)?;
                 let (source_map, source_map_error) = match source_map_url {
                     Some(source_map_url) => {
-                        match self.load_source_map(generated_url, source_map_url).await {
+                        match self
+                            .load_source_map(generated_url, script_hash, source_map_url)
+                            .await
+                        {
                             Ok(source_map) => (Some(Arc::from(source_map)), None),
                             Err(error) if error.is_source_map_unavailable() => {
                                 (None, Some(error.to_string()))
@@ -260,6 +270,7 @@ impl CdpDebuggerSession {
     async fn load_source_map(
         &self,
         generated_url: &str,
+        script_hash: &str,
         source_map_url: &str,
     ) -> Result<Vec<u8>, CdpRuntimeError> {
         if source_map_url.starts_with("data:") {
@@ -267,6 +278,30 @@ impl CdpDebuggerSession {
         }
 
         let resolved_url = resolve_source_map_url(generated_url, source_map_url)?;
+        let cache_path = source_map_cache_path(script_hash, &resolved_url);
+        if let Some(path) = &cache_path {
+            match tokio::fs::read(path).await {
+                Ok(bytes) => {
+                    if let Some(source_map) = decode_source_map_cache(&bytes) {
+                        return Ok(source_map);
+                    }
+                    eprintln!("ignoring invalid source-map cache entry {}", path.display());
+                    if let Err(error) = tokio::fs::remove_file(path).await {
+                        eprintln!(
+                            "failed to remove invalid source-map cache entry {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => {
+                    eprintln!(
+                        "failed to read source-map cache entry {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
         let cached_frame_id = { self.source_map_frame_id.lock().await.clone() };
         let frame_id = match cached_frame_id {
             Some(frame_id) => frame_id,
@@ -306,7 +341,7 @@ impl CdpDebuggerSession {
             let mut bytes = Vec::new();
             loop {
                 let mut params = IoReadParams::new(stream.clone());
-                params.size = Some(1024 * 1024);
+                params.size = Some(8 * 1024 * 1024);
                 let chunk = self
                     .client
                     .io_read(params)
@@ -334,7 +369,21 @@ impl CdpDebuggerSession {
             .await
             .map_err(CdpRuntimeError::protocol);
         match (read_result, close_result) {
-            (Ok(bytes), Ok(_)) => Ok(bytes),
+            (Ok(bytes), Ok(_)) => {
+                if source_map_is_supported(&bytes) {
+                    if let Some(path) = cache_path
+                        && let Err(error) = write_source_map_cache(&path, &bytes).await
+                    {
+                        eprintln!(
+                            "failed to write source-map cache entry {}: {error}",
+                            path.display()
+                        );
+                    }
+                } else {
+                    eprintln!("not caching invalid or unsupported source map {resolved_url}");
+                }
+                Ok(bytes)
+            }
             (Err(read), Ok(_)) => Err(read),
             (Ok(_), Err(close)) => Err(close),
             (Err(read), Err(close)) => Err(CdpRuntimeError::SourceMapReadAndClose {
@@ -511,6 +560,7 @@ fn resolve_source_map_url(
     if let Ok(url) = url::Url::parse(source_map_url) {
         return Ok(url.into());
     }
+
     let generated =
         url::Url::parse(generated_url).map_err(|source| CdpRuntimeError::InvalidSourceMapUrl {
             generated_url: generated_url.to_owned(),
@@ -525,6 +575,100 @@ fn resolve_source_map_url(
             source_map_url: source_map_url.to_owned(),
             source,
         })
+}
+
+fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBuf> {
+    let directory = if let Some(path) = env::var_os("JSDBG_SOURCE_MAP_CACHE") {
+        PathBuf::from(path)
+    } else if let Some(state_file) = env::var_os("JSDBG_SERVICE_STATE") {
+        PathBuf::from(state_file)
+            .parent()
+            .map(|parent| parent.join("source-map-cache"))?
+    } else if let Some(path) = env::var_os("LOCALAPPDATA") {
+        PathBuf::from(path)
+            .join("hediet")
+            .join("cdp-client")
+            .join("source-map-cache")
+    } else if let Some(path) = env::var_os("XDG_CACHE_HOME") {
+        PathBuf::from(path)
+            .join("hediet")
+            .join("cdp-client")
+            .join("source-map-cache")
+    } else if let Some(path) = env::var_os("HOME") {
+        PathBuf::from(path)
+            .join(".cache")
+            .join("hediet")
+            .join("cdp-client")
+            .join("source-map-cache")
+    } else {
+        return None;
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(script_hash.as_bytes());
+    hasher.update([0]);
+    hasher.update(resolved_url.as_bytes());
+    Some(directory.join(format!("{:x}.map", hasher.finalize())))
+}
+
+async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    const MAGIC: &[u8] = b"jsdbg-source-map-v1\n";
+    static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "source-map cache path has no parent",
+        ));
+    };
+    tokio::fs::create_dir_all(parent).await?;
+    let temporary = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let digest = format!("{:x}\n", Sha256::digest(bytes));
+    let mut file = tokio::fs::File::create(&temporary).await?;
+    file.write_all(MAGIC).await?;
+    file.write_all(digest.as_bytes()).await?;
+    file.write_all(bytes).await?;
+    file.sync_data().await?;
+    drop(file);
+    match tokio::fs::rename(&temporary, path).await {
+        Ok(()) => Ok(()),
+        Err(_error) if path.exists() => {
+            tokio::fs::remove_file(&temporary).await?;
+            Ok(())
+        }
+
+        Err(error) => {
+            if let Err(remove_error) = tokio::fs::remove_file(&temporary).await
+                && remove_error.kind() != ErrorKind::NotFound
+            {
+                eprintln!(
+                    "failed to clean temporary source-map cache entry {}: {remove_error}",
+                    temporary.display()
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn decode_source_map_cache(bytes: &[u8]) -> Option<Vec<u8>> {
+    const MAGIC: &[u8] = b"jsdbg-source-map-v1\n";
+    let remainder = bytes.strip_prefix(MAGIC)?;
+    let newline = remainder.iter().position(|byte| *byte == b'\n')?;
+    let expected = std::str::from_utf8(&remainder[..newline]).ok()?;
+    let source_map = &remainder[newline + 1..];
+    (format!("{:x}", Sha256::digest(source_map)) == expected && source_map_is_supported(source_map))
+        .then(|| source_map.to_vec())
+}
+
+fn source_map_is_supported(bytes: &[u8]) -> bool {
+    match sourcemap::decode_slice(bytes) {
+        Ok(sourcemap::DecodedMap::Regular(_)) => true,
+        Ok(sourcemap::DecodedMap::Index(index)) => index.flatten().is_ok(),
+        Ok(sourcemap::DecodedMap::Hermes(_)) | Err(_) => false,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -615,6 +759,37 @@ mod tests {
             .unwrap(),
             "https://maps.example.com/app.js.map"
         );
+    }
+
+    #[test]
+    fn source_map_cache_identity_includes_script_hash_and_url() {
+        let first = source_map_cache_path("script-a", "https://example.com/app.js.map").unwrap();
+        let changed_script =
+            source_map_cache_path("script-b", "https://example.com/app.js.map").unwrap();
+        let changed_url =
+            source_map_cache_path("script-a", "https://example.com/other.js.map").unwrap();
+        assert_ne!(first, changed_script);
+        assert_ne!(first, changed_url);
+    }
+
+    #[test]
+    fn source_map_cache_payload_is_content_verified() {
+        let source_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        let mut cached = b"jsdbg-source-map-v1\n".to_vec();
+        cached.extend(format!("{:x}\n", Sha256::digest(source_map)).as_bytes());
+        cached.extend(source_map);
+        assert_eq!(
+            decode_source_map_cache(&cached).as_deref(),
+            Some(source_map.as_slice())
+        );
+        *cached.last_mut().unwrap() ^= 1;
+        assert!(decode_source_map_cache(&cached).is_none());
+
+        let invalid = b"<html>temporary CDN error</html>";
+        let mut cached = b"jsdbg-source-map-v1\n".to_vec();
+        cached.extend(format!("{:x}\n", Sha256::digest(invalid)).as_bytes());
+        cached.extend(invalid);
+        assert!(decode_source_map_cache(&cached).is_none());
     }
 }
 

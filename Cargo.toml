@@ -30,6 +30,7 @@ oxc_parser = "0.146.0"
 oxc_span = "0.146.0"
 oxc_ast_visit = "0.146.0"
 oxc_syntax = "0.146.0"
+rayon = "1.12.0"
 
 [build-dependencies]
 hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }
