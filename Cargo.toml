@@ -11,8 +11,9 @@ base64 = "0.22"
 futures-util = "0.3"
 fs2 = "0.4"
 getrandom = "0.3"
-hubrpc = { path = "..\\hubrpc-rust\\crates\\hubrpc" }
-hubrpc-tokio = { path = "..\\hubrpc-rust\\crates\\hubrpc-tokio" }
+hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }
+hubrpc-tokio = { path = "../hubrpc-rust/crates/hubrpc-tokio" }
+libc = "0.2"
 schemars = "1"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -25,7 +26,7 @@ tokio-tungstenite = "0.28"
 url = "2"
 
 [build-dependencies]
-hubrpc = { path = "..\\hubrpc-rust\\crates\\hubrpc" }
+hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }
 serde_json = "1"
 thiserror = "2"
 

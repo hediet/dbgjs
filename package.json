@@ -10,6 +10,7 @@
     "test:e2e": "playwright test",
     "test:e2e:cdp": "playwright test tests/playwright/live-cdp.spec.mjs",
     "test:e2e:cli": "playwright test tests/playwright/cli-service.spec.mjs",
+    "test:e2e:typescript": "playwright test tests/playwright/typescript-cli.spec.mjs",
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "devtools-protocol": "0.0.1677763"
+    "devtools-protocol": "0.0.1677763",
+    "typescript": "5.9.2"
   }
 }

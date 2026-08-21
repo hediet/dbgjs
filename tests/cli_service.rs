@@ -280,6 +280,7 @@ fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -
     let stdout_path = state_file.with_extension(format!("{suffix}.stdout"));
     let stderr_path = state_file.with_extension(format!("{suffix}.stderr"));
     let status = Command::new(cli)
+        .arg("--json")
         .args(arguments)
         .env("JSDBG_SERVICE_EXE", service)
         .env("JSDBG_SERVICE_STATE", state_file)

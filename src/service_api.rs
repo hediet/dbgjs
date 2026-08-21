@@ -2,7 +2,7 @@ use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SERVICE_PROTOCOL_VERSION: u32 = 2;
+pub const SERVICE_PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -38,10 +38,51 @@ pub struct ContextSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionSnapshot {
     pub id: String,
-    pub endpoint: String,
+    pub configuration: ConnectionConfiguration,
     pub generation: u64,
     pub status: ConnectionStatus,
     pub targets: Vec<TargetSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConnectionConfiguration {
+    DirectCdp {
+        endpoint: String,
+    },
+    Playwright {
+        url: String,
+        channel: PlaywrightChannel,
+        headless: bool,
+    },
+}
+
+impl From<&str> for ConnectionConfiguration {
+    fn from(endpoint: &str) -> Self {
+        Self::DirectCdp {
+            endpoint: endpoint.to_owned(),
+        }
+    }
+}
+
+impl From<String> for ConnectionConfiguration {
+    fn from(endpoint: String) -> Self {
+        Self::DirectCdp { endpoint }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaywrightChannel {
+    Bundled,
+    Chrome,
+    ChromeBeta,
+    ChromeDev,
+    ChromeCanary,
+    Msedge,
+    MsedgeBeta,
+    MsedgeDev,
+    MsedgeCanary,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -91,6 +132,106 @@ pub enum BreakpointStatus {
     Unconfirmed,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDebuggerSnapshot {
+    pub context_id: String,
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub revision: u64,
+    pub phase: TargetDebuggerPhase,
+    pub scripts: Vec<TargetScriptSnapshot>,
+    pub breakpoints: Vec<TargetBreakpointSnapshot>,
+    pub pause: Option<PauseSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetDebuggerPhase {
+    Running,
+    Paused { epoch: u64 },
+    Resuming { epoch: u64 },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetBreakpointSnapshot {
+    pub id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub status: TargetBreakpointStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetBreakpointStatus {
+    Pending,
+    Installed { binding_count: u32 },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetScriptSnapshot {
+    pub url: String,
+    pub source_map_url: Option<String>,
+    pub status: TargetScriptStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetScriptStatus {
+    Unresolved,
+    Pending,
+    Resolved { authored_sources: Vec<String> },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PauseSnapshot {
+    pub epoch: u64,
+    pub reason: String,
+    pub frames: Vec<FrameSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSnapshot {
+    pub index: u32,
+    pub function_name: String,
+    pub raw: SourceLocation,
+    pub projected: FrameProjectionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceLocation {
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FrameProjectionSnapshot {
+    Raw,
+    Pending,
+    Resolved { location: SourceLocation },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetWaitPredicate {
+    Running,
+    BreakpointInstalled { breakpoint_id: String },
+    Paused { after_epoch: u64 },
+}
+
 #[hub_rpc_interface(id = "dev.hediet.cdp-debugger")]
 pub trait DebuggerServiceApi {
     async fn service_info() -> Result<ServiceInfo, JsonRpcError>;
@@ -107,7 +248,7 @@ pub trait DebuggerServiceApi {
     async fn put_connection(
         context_id: String,
         connection_id: String,
-        endpoint: String,
+        configuration: ConnectionConfiguration,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 
     async fn connect_connection(
@@ -127,6 +268,33 @@ pub trait DebuggerServiceApi {
         line: u32,
         column: u32,
     ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn attach_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn get_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn wait_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        predicate: TargetWaitPredicate,
+        timeout_ms: u64,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn resume_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;
 }

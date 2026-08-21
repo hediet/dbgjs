@@ -179,12 +179,9 @@ async fn serve_unix_socket(
         persistent_state_file(state_file),
     )?);
     let token = random_token()?;
-    let socket_path = state_file.with_extension(format!("{}-service.sock", std::process::id()));
+    let socket_path = unix_socket_path()?;
     if let Some(parent) = socket_path.parent() {
         ensure_private_directory(parent)?;
-    }
-    if socket_path.exists() {
-        fs::remove_file(&socket_path)?;
     }
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
     restrict_private_file(&socket_path)?;
@@ -217,8 +214,29 @@ async fn serve_unix_socket(
     }
 
     remove_endpoint_if_owned(state_file, &endpoint);
+    let socket_directory = socket_path.parent().map(Path::to_owned);
     let _ = fs::remove_file(socket_path);
+    if let Some(socket_directory) = socket_directory {
+        let _ = fs::remove_dir(socket_directory);
+    }
     Ok(())
+}
+
+#[cfg(unix)]
+fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const CONSERVATIVE_SUN_PATH_LIMIT: usize = 100;
+    let token = random_token()?;
+    let directory_name = format!("jsdbg-{}", &token[..16]);
+    let candidates = [
+        env::temp_dir().join(&directory_name).join("service.sock"),
+        Path::new("/tmp").join(directory_name).join("service.sock"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| path.as_os_str().as_bytes().len() < CONSERVATIVE_SUN_PATH_LIMIT)
+        .ok_or(LocalRpcError::UnixSocketPathTooLong)
 }
 
 pub async fn connect_endpoint(
@@ -502,6 +520,8 @@ pub enum LocalRpcError {
     Persistence(#[from] crate::debugger_service::ServicePersistenceError),
     #[error("local RPC is unsupported on this platform")]
     UnsupportedPlatform,
+    #[error("no temporary directory can hold a Unix socket path within platform limits")]
+    UnixSocketPathTooLong,
     #[error("local service transport is unsupported on this platform: {0:?}")]
     UnsupportedTransport(LocalTransportEndpoint),
 }

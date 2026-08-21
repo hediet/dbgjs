@@ -195,6 +195,14 @@ impl Default for DebuggerState {
     }
 }
 
+impl DebuggerState {
+    pub fn before_connection_generation(generation: u64) -> Self {
+        let mut state = Self::default();
+        state.connection_generation = generation.saturating_sub(1);
+        state
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PendingEffect {
     ConfigureSession {

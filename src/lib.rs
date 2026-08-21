@@ -1,3 +1,4 @@
+pub mod connection_provider;
 pub mod content_store;
 pub mod context_engine;
 pub mod cdp {
@@ -14,4 +15,5 @@ pub mod session_transport;
 pub mod source_effects;
 pub mod source_graph;
 pub mod source_view;
+pub mod target_debugger;
 pub mod websocket_transport;

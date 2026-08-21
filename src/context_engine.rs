@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service_api::{ConnectionStatus, TargetSnapshot};
+use crate::service_api::{ConnectionConfiguration, ConnectionStatus, TargetSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +28,7 @@ impl ContextState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionState {
-    pub endpoint: String,
+    pub configuration: ConnectionConfiguration,
     pub configuration_version: u64,
     pub generation: u64,
     pub status: ConnectionStatus,
@@ -66,7 +66,7 @@ pub enum UserCommand {
     },
     PutConnection {
         connection_id: String,
-        endpoint: String,
+        configuration: ConnectionConfiguration,
     },
     ConnectConnection {
         connection_id: String,
@@ -118,7 +118,7 @@ pub enum EffectCompletion {
 pub enum ContextEffect {
     Connect {
         connection_id: String,
-        endpoint: String,
+        configuration: ConnectionConfiguration,
         attempt: ConnectionAttempt,
     },
     Disconnect {
@@ -241,7 +241,7 @@ fn reduce_user_command(
         }
         UserCommand::PutConnection {
             connection_id,
-            endpoint,
+            configuration,
         } => {
             if previous
                 .connections
@@ -262,7 +262,7 @@ fn reduce_user_command(
             connections.insert(
                 connection_id.clone(),
                 Arc::new(ConnectionState {
-                    endpoint,
+                    configuration,
                     configuration_version,
                     generation,
                     status: ConnectionStatus::Disconnected,
@@ -289,7 +289,7 @@ fn reduce_user_command(
                 configuration_version: connection.configuration_version,
                 generation: connection.generation + 1,
             };
-            let endpoint = connection.endpoint.clone();
+            let configuration = connection.configuration.clone();
             let mut state = (**previous).clone();
             let connections = Arc::make_mut(&mut state.connections);
             let connection = Arc::make_mut(
@@ -305,7 +305,7 @@ fn reduce_user_command(
                 ContextChange::RuntimeOnly,
                 vec![ContextEffect::Connect {
                     connection_id: connection_id.clone(),
-                    endpoint,
+                    configuration,
                     attempt,
                 }],
                 ContextEvent::ConnectionConnecting {
@@ -581,7 +581,7 @@ mod tests {
             &state,
             UserCommand::PutConnection {
                 connection_id: "browser".into(),
-                endpoint: "ws://browser".into(),
+                configuration: "ws://browser".into(),
             },
         );
         transition.state
@@ -675,7 +675,7 @@ mod tests {
             &with_breakpoint.state,
             UserCommand::PutConnection {
                 connection_id: "browser".into(),
-                endpoint: "ws://browser".into(),
+                configuration: "ws://browser".into(),
             },
         );
 
@@ -697,7 +697,7 @@ mod tests {
             }),
             ContextInput::UserCommand(UserCommand::PutConnection {
                 connection_id: "browser".into(),
-                endpoint: "ws://browser".into(),
+                configuration: "ws://browser".into(),
             }),
             ContextInput::UserCommand(UserCommand::ConnectConnection {
                 connection_id: "browser".into(),
