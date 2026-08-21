@@ -123,7 +123,9 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		expect(report).toMatch(/… \[\d+ items, \d+ files, \d+ hit LoC\]/);
 		expect(report).not.toContain("additional files omitted");
 		expect(report).not.toContain("additional hit ranges omitted");
-		expect(report.split("\n").length).toBeLessThan(180);
+		expect(report).toContain("snippet/browser/snippetParser.ts");
+		expect(report).not.toContain("Scanner.next");
+		expect(report.split("\n").length).toBeLessThan(240);
 		const delta = await runJsonSilent(
 			["coverage", "show", "."],
 			environment,
@@ -148,6 +150,7 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 		);
 		expect(drilldown).not.toContain("additional hit ranges omitted");
+		expect(drilldown).toContain("CursorsController.type");
 		await runCli(
 			`Install a coverage-guided logpoint in \`${candidate.function.breadcrumb ?? candidate.function.name}\`.`,
 			[

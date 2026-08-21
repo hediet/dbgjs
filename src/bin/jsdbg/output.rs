@@ -669,9 +669,8 @@ impl CoverageTree {
     }
 
     fn print_children(&self, prefix: &str, detailed: bool, depth: usize) {
-        const CHILD_LIMIT: usize = 5;
-        const SYMBOL_LIMIT: usize = 3;
-        const MAX_DEPTH: usize = 4;
+        const CHILD_LIMIT: usize = 8;
+        const MAX_DEPTH: usize = 6;
 
         if !detailed && depth >= MAX_DEPTH {
             return;
@@ -679,7 +678,7 @@ impl CoverageTree {
 
         let mut children = self.children.iter().collect::<Vec<_>>();
         children.sort_by_key(|(_, child)| std::cmp::Reverse(child.hit_loc));
-        let depth_limit = CHILD_LIMIT.saturating_sub(depth / 2).max(3);
+        let depth_limit = CHILD_LIMIT.saturating_sub(depth / 2).max(5);
         let visible = if detailed {
             children.len()
         } else {
@@ -710,32 +709,22 @@ impl CoverageTree {
             }
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
             child.print_children(&child_prefix, detailed, depth + 1);
-            let range_limit = if detailed {
-                child.ranges.len()
-            } else {
-                child.ranges.len().min(SYMBOL_LIMIT)
-            };
-            for (range_index, entry) in child.ranges.iter().take(range_limit).enumerate() {
-                let has_aggregate = range_limit < child.ranges.len();
-                let range_last = range_index + 1 == range_limit && !has_aggregate;
-                let range_branch = if range_last { "└─" } else { "├─" };
-                println!(
-                    "{child_prefix}{range_branch} {}  {} hit LoC{}",
-                    entry.function,
-                    entry.line_span,
-                    entry
-                        .generated_location
-                        .as_ref()
-                        .map_or_else(String::new, |location| format!("  [generated {location}]"))
-                );
-            }
-            if range_limit < child.ranges.len() {
-                let omitted = &child.ranges[range_limit..];
-                println!(
-                    "{child_prefix}└─ … [{} symbols, {} hit LoC]",
-                    omitted.len(),
-                    omitted.iter().map(|entry| entry.line_span).sum::<u64>()
-                );
+            if detailed {
+                for (range_index, entry) in child.ranges.iter().enumerate() {
+                    let range_last = range_index + 1 == child.ranges.len();
+                    let range_branch = if range_last { "└─" } else { "├─" };
+                    println!(
+                        "{child_prefix}{range_branch} {}  {} hit LoC{}",
+                        entry.function,
+                        entry.line_span,
+                        entry
+                            .generated_location
+                            .as_ref()
+                            .map_or_else(String::new, |location| format!(
+                                "  [generated {location}]"
+                            ))
+                    );
+                }
             }
         }
         if hidden_items > 0 {
