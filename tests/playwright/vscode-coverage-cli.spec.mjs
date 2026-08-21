@@ -15,9 +15,9 @@ const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
 const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-typing-coverage.md");
-const expectedDurationMs = 240_000;
+const expectedDurationMs = 120_000;
 const hardTimeoutMs = Math.ceil(expectedDurationMs * 1.2);
-const commandTimeoutMs = 120_000;
+const commandTimeoutMs = 90_000;
 let stepNumber = 0;
 
 test("reports vscode.dev code executed by typing one character", async () => {
@@ -71,7 +71,7 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			"Wait for the workbench DOM and focus it with a real CDP click.",
 			["target", "click", ".monaco-workbench"],
 			environment,
-			120_000,
+			60_000,
 		);
 		await runCli(
 			"Create an untitled editor using a real Ctrl+N key chord.",
@@ -108,7 +108,7 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			"Stop coverage, subtract the background capture, and print functions whose counts increased.",
 			["coverage", "stop", "--exclude", "background"],
 			environment,
-			180_000,
+			90_000,
 		);
 		expect(report).toMatch(/\.tsx?\s+\d+ weighted LoC/);
 		expect(report).toMatch(/\d+:\d+–\d+:\d+\s+x\d+/);
