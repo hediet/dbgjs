@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::cdp::CdpClient;
 use crate::cdp_runtime::{
     CdpDebuggerSession, CdpRuntimeError, CdpRuntimeEvent, CdpRuntimeEventError,
+    HeapSnapshotStreamProgress, SourceMapCacheStats,
 };
 use crate::debugger_engine::{DebuggerState, Effect, Input, SessionPhase, reduce};
 use crate::source_effects::{SourceEffectError, SourceEffectInterpreter};
@@ -41,6 +43,32 @@ impl DebuggerDriver {
 
     pub fn client(&self) -> &CdpClient<hubrpc::connection::channel::Channel> {
         self.session.client()
+    }
+
+    pub fn heap_snapshot_progress(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Option<HeapSnapshotStreamProgress>> {
+        self.session.heap_snapshot_progress()
+    }
+
+    pub async fn begin_heap_snapshot(&self, destination: PathBuf) -> std::io::Result<()> {
+        self.session.begin_heap_snapshot(destination).await
+    }
+
+    pub async fn finish_heap_snapshot(&self) -> std::io::Result<u64> {
+        self.session.finish_heap_snapshot().await
+    }
+
+    pub async fn abort_heap_snapshot(&self) {
+        self.session.abort_heap_snapshot().await;
+    }
+
+    pub fn set_source_map_cache_enabled(&self, enabled: bool) {
+        self.session.set_source_map_cache_enabled(enabled);
+    }
+
+    pub fn source_map_cache_stats(&self) -> SourceMapCacheStats {
+        self.session.source_map_cache_stats()
     }
 
     pub fn recording(&self) -> &DebuggerRecording {

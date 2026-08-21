@@ -1,17 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::cdp::{
     DebuggerEvaluateOnCallFrameParams, DomGetBoxModelParams, DomGetDocumentParams,
-    DomQuerySelectorParams, InputDispatchKeyEventParams, InputDispatchKeyEventParamsType,
-    InputDispatchMouseEventParams, InputDispatchMouseEventParamsType, InputInsertTextParams,
-    InputMouseButton, ProfilerEnableParams, ProfilerScriptCoverage,
-    ProfilerStartPreciseCoverageParams, ProfilerStopPreciseCoverageParams,
-    ProfilerTakePreciseCoverageParams,
+    DomQuerySelectorParams, HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
+    InputDispatchKeyEventParamsType, InputDispatchMouseEventParams,
+    InputDispatchMouseEventParamsType, InputInsertTextParams, InputMouseButton,
+    ProfilerEnableParams, ProfilerScriptCoverage, ProfilerStartPreciseCoverageParams,
+    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::content_store::ContentStore;
@@ -21,8 +22,9 @@ use crate::debugger_engine::{
     ScriptSourceState, SessionKey, SessionPhase, StepKind,
 };
 use crate::service_api::{
-    ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
-    CoverageSourceSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot,
+    ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
+    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
+    FrameProjectionSnapshot, FrameSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
     TargetScriptStatus, TargetWaitPredicate,
@@ -47,6 +49,7 @@ pub struct TargetDebuggerHandle {
     commands: mpsc::Sender<TargetCommand>,
     snapshots: watch::Receiver<TargetDebuggerSnapshot>,
     session_id: String,
+    heap_snapshot_progress: watch::Receiver<Option<crate::cdp_runtime::HeapSnapshotStreamProgress>>,
 }
 
 impl TargetDebuggerHandle {
@@ -69,6 +72,7 @@ impl TargetDebuggerHandle {
             session,
             sources,
         );
+        let heap_snapshot_progress = driver.heap_snapshot_progress();
         driver.apply(Input::Connected).await?;
         driver
             .apply(Input::SessionAttached {
@@ -102,6 +106,7 @@ impl TargetDebuggerHandle {
             commands,
             snapshots,
             session_id: session_key.session_id,
+            heap_snapshot_progress,
         })
     }
 
@@ -205,6 +210,37 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn take_heap_snapshot(
+        &self,
+        path: String,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+    ) -> Result<HeapSnapshotResult, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::TakeHeapSnapshot {
+                path,
+                capture_numeric_value,
+                expose_internals,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub fn heap_snapshot_progress(&self) -> Option<HeapSnapshotProgress> {
+        self.heap_snapshot_progress
+            .borrow()
+            .clone()
+            .map(|progress| HeapSnapshotProgress {
+                done: progress.done,
+                total: progress.total,
+                finished: progress.finished,
+                bytes_written: progress.bytes_written,
+            })
+    }
+
     pub async fn start_coverage(&self) -> Result<(), TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
@@ -273,12 +309,14 @@ impl TargetDebuggerHandle {
         &self,
         capture_id: String,
         source_path: Option<String>,
+        no_cache: bool,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::GetCoverage {
                 capture_id,
                 source_path,
+                no_cache,
                 response,
             })
             .await
@@ -397,6 +435,12 @@ enum TargetCommand {
         text: String,
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
+    TakeHeapSnapshot {
+        path: String,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+        response: oneshot::Sender<Result<HeapSnapshotResult, TargetDebuggerError>>,
+    },
     StartCoverage {
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
@@ -416,6 +460,7 @@ enum TargetCommand {
     GetCoverage {
         capture_id: String,
         source_path: Option<String>,
+        no_cache: bool,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
 }
@@ -677,7 +722,8 @@ async fn run_target(
                         if capture_id.is_none()
                             && let Ok(snapshot) = &mut snapshot
                             && let Err(error) =
-                                project_coverage(&mut driver, &session_key, snapshot, None).await
+                                project_coverage(&mut driver, &session_key, snapshot, None, false)
+                                    .await
                         {
                             snapshot.sources.clear();
                             let _ = response.send(Err(error));
@@ -713,7 +759,7 @@ async fn run_target(
                     };
                     let stored = snapshot.clone();
                     let mut snapshot = snapshot;
-                    project_coverage(&mut driver, &session_key, &mut snapshot, None).await?;
+                    project_coverage(&mut driver, &session_key, &mut snapshot, None, false).await?;
                     driver
                         .client()
                         .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
@@ -761,6 +807,7 @@ async fn run_target(
             Next::Command(Some(TargetCommand::GetCoverage {
                 capture_id,
                 source_path,
+                no_cache,
                 response,
             })) => {
                 let result = async {
@@ -770,14 +817,63 @@ async fn run_target(
                             TargetDebuggerError::CoverageCaptureNotFound(capture_id.clone())
                         })?,
                     };
+                    let started = Instant::now();
+                    let cache_before = driver.source_map_cache_stats();
                     project_coverage(
                         &mut driver,
                         &session_key,
                         &mut snapshot,
                         source_path.as_deref(),
+                        no_cache,
                     )
                     .await?;
+                    let cache_after = driver.source_map_cache_stats();
+                    snapshot.analysis = Some(CoverageAnalysisSnapshot {
+                        duration_micros: started.elapsed().as_micros() as u64,
+                        source_map_cache_hits: cache_after.hits.saturating_sub(cache_before.hits),
+                        source_map_cache_misses: cache_after
+                            .misses
+                            .saturating_sub(cache_before.misses),
+                        source_map_cache_bypasses: cache_after
+                            .bypasses
+                            .saturating_sub(cache_before.bypasses),
+                    });
                     Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::TakeHeapSnapshot {
+                path,
+                capture_numeric_value,
+                expose_internals,
+                response,
+            })) => {
+                let result = async {
+                    driver
+                        .begin_heap_snapshot(PathBuf::from(&path))
+                        .await
+                        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    let mut params = HeapProfilerTakeHeapSnapshotParams::new();
+                    params.report_progress = Some(true);
+                    params.capture_numeric_value = capture_numeric_value.then_some(true);
+                    params.expose_internals = expose_internals.then_some(true);
+                    if let Err(error) = driver
+                        .client()
+                        .heap_profiler_take_heap_snapshot(params)
+                        .await
+                    {
+                        driver.abort_heap_snapshot().await;
+                        return Err(TargetDebuggerError::HeapSnapshot(format!("{error:?}")));
+                    }
+                    let bytes_written = driver
+                        .finish_heap_snapshot()
+                        .await
+                        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    Ok(HeapSnapshotResult {
+                        path,
+                        bytes_written,
+                    })
                 }
                 .await;
                 let _ = response.send(result);
@@ -978,6 +1074,7 @@ async fn project_coverage(
     session_key: &SessionKey,
     snapshot: &mut CoverageSnapshot,
     source_path: Option<&str>,
+    no_cache: bool,
 ) -> Result<(), TargetDebuggerError> {
     let source_already_resolved = source_path.is_some_and(|path| {
         driver
@@ -1010,16 +1107,24 @@ async fn project_coverage(
         .collect::<Vec<_>>();
     candidates.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
     if !source_already_resolved {
+        driver.set_source_map_cache_enabled(!no_cache);
+        let mut hydration_result = Ok(());
         for (_, script) in candidates {
-            driver
+            hydration_result = driver
                 .apply(Input::RequestScriptSource {
                     script: script.clone(),
                 })
-                .await?;
+                .await
+                .map(|_| ());
+            if hydration_result.is_err() {
+                break;
+            }
             if source_path.is_none_or(|path| script_contains_source(driver, &script, path)) {
                 break;
             }
         }
+        driver.set_source_map_cache_enabled(true);
+        hydration_result?;
     }
 
     let state = driver.state().clone();
@@ -1109,11 +1214,21 @@ async fn project_coverage(
     }
     let mut ranked_files = file_lines.into_iter().collect::<Vec<_>>();
     ranked_files.sort_by_key(|(_, lines)| std::cmp::Reverse(lines.len()));
-    let enriched_files = ranked_files
-        .into_iter()
-        .take(20)
-        .map(|(source, _)| source)
-        .collect::<BTreeSet<_>>();
+    let enriched_files = match source_path {
+        Some(prefix) => {
+            let prefix = normalize_source_path(prefix);
+            ranked_files
+                .into_iter()
+                .map(|(source, _)| source)
+                .filter(|source| normalize_source_path(source).starts_with(prefix))
+                .collect::<BTreeSet<_>>()
+        }
+        None => ranked_files
+            .into_iter()
+            .take(20)
+            .map(|(source, _)| source)
+            .collect::<BTreeSet<_>>(),
+    };
     snapshot.sources.par_iter_mut().for_each(|source| {
         let script_key = ScriptKey {
             session: session_key.clone(),
@@ -1129,7 +1244,7 @@ async fn project_coverage(
             let Some((_, _, content)) = source_effects.project_generated_offset(
                 &state,
                 &script_key,
-                function.ranges[0].start_offset,
+                function.effective_ranges[0].start_offset,
             ) else {
                 return;
             };
@@ -1304,6 +1419,7 @@ impl CoverageRecording {
     fn snapshot(&self) -> CoverageSnapshot {
         CoverageSnapshot {
             timestamp_micros: self.timestamp_micros,
+            analysis: None,
             sources: self
                 .scripts
                 .iter()
@@ -1938,6 +2054,8 @@ pub enum TargetDebuggerError {
     UnsupportedKeyChord(String),
     #[error("coverage failed: {0}")]
     Coverage(String),
+    #[error("heap snapshot failed: {0}")]
+    HeapSnapshot(String),
     #[error("coverage recording is already active")]
     CoverageAlreadyActive,
     #[error("coverage recording is not active")]

@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cdp_client::cdp::{
-    InputDispatchKeyEventParams, InputDispatchKeyEventParamsType, InputInsertTextParams,
-    RuntimeEvaluateParams, RuntimeRemoteObjectType, TargetAttachToTargetParams,
-    TargetCloseTargetParams, TargetCreateTargetParams,
+    HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
+    InputDispatchKeyEventParamsType, InputInsertTextParams, RuntimeEvaluateParams,
+    RuntimeRemoteObjectType, TargetAttachToTargetParams, TargetCloseTargetParams,
+    TargetCreateTargetParams,
 };
 use cdp_client::cdp_runtime::CdpConnection;
 use cdp_client::content_store::ContentStore;
@@ -18,7 +19,7 @@ use cdp_client::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use cdp_client::source_view::Position;
 use serde_json::json;
 use sourcemap::SourceMapBuilder;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout};
 
@@ -36,6 +37,14 @@ async fn generated_client_hits_a_real_breakpoint_in_playwright_chromium() {
     timeout(SCENARIO_TIMEOUT, run_breakpoint_scenario())
         .await
         .expect("live CDP breakpoint scenario timed out");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "launched by Playwright with CDP_WS_ENDPOINT"]
+async fn heap_snapshot_streams_to_a_devtools_compatible_file() {
+    timeout(SCENARIO_TIMEOUT, run_heap_snapshot_scenario())
+        .await
+        .expect("live CDP heap snapshot scenario timed out");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -126,6 +135,7 @@ async fn run_breakpoint_scenario() {
             .await
             .expect("script event processes through reducer");
     }
+
     assert!(driver.state().scripts.values().any(|script| {
         script.url == GENERATED_URL
             && matches!(
@@ -218,6 +228,71 @@ async fn run_breakpoint_scenario() {
     root.target_close_target(TargetCloseTargetParams::new(created.target_id))
         .await
         .expect("Target.closeTarget failed");
+}
+
+async fn run_heap_snapshot_scenario() {
+    let endpoint = env::var("CDP_WS_ENDPOINT").expect("Playwright provides CDP_WS_ENDPOINT");
+    let connection = CdpConnection::connect(&endpoint)
+        .await
+        .expect("connect to Playwright-launched Chromium CDP endpoint");
+    let created = connection
+        .root()
+        .target_create_target(TargetCreateTargetParams::new("about:blank".into()))
+        .await
+        .expect("Target.createTarget failed");
+    let mut attach_params = TargetAttachToTargetParams::new(created.target_id.clone());
+    attach_params.flatten = Some(true);
+    let attached = connection
+        .root()
+        .target_attach_to_target(attach_params)
+        .await
+        .expect("Target.attachToTarget failed");
+    let session = connection
+        .open_session(SessionKey {
+            connection_generation: 1,
+            session_id: attached.session_id,
+        })
+        .expect("child session opens");
+    let destination = env::temp_dir().join(format!(
+        "jsdbg-live-heap-{}-{}.heapsnapshot",
+        std::process::id(),
+        created.target_id
+    ));
+    session
+        .begin_heap_snapshot(destination.clone())
+        .await
+        .expect("heap snapshot output opens");
+    let mut params = HeapProfilerTakeHeapSnapshotParams::new();
+    params.report_progress = Some(true);
+    session
+        .client()
+        .heap_profiler_take_heap_snapshot(params)
+        .await
+        .expect("HeapProfiler.takeHeapSnapshot failed");
+    let bytes_written = session
+        .finish_heap_snapshot()
+        .await
+        .expect("heap snapshot finalizes");
+
+    let mut file = tokio::fs::File::open(&destination).await.unwrap();
+    let mut boundary = [0_u8; 1];
+    file.read_exact(&mut boundary).await.unwrap();
+    assert_eq!(boundary[0], b'{');
+    file.seek(std::io::SeekFrom::End(-1)).await.unwrap();
+    file.read_exact(&mut boundary).await.unwrap();
+    assert_eq!(boundary[0], b'}');
+    assert_eq!(file.metadata().await.unwrap().len(), bytes_written);
+    let progress = session.heap_snapshot_progress().borrow().clone().unwrap();
+    assert_eq!(progress.finished, Some(true));
+    assert_eq!(progress.bytes_written, bytes_written);
+
+    tokio::fs::remove_file(destination).await.unwrap();
+    connection
+        .root()
+        .target_close_target(TargetCloseTargetParams::new(created.target_id))
+        .await
+        .expect("Target.closeTarget failed");
+    connection.close().await;
 }
 
 async fn run_vscode_dev_scenario() {

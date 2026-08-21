@@ -250,6 +250,17 @@ pub struct EvaluationSnapshot {
 pub struct CoverageSnapshot {
     pub timestamp_micros: u64,
     pub sources: Vec<CoverageSourceSnapshot>,
+    #[serde(default)]
+    pub analysis: Option<CoverageAnalysisSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageAnalysisSnapshot {
+    pub duration_micros: u64,
+    pub source_map_cache_hits: u64,
+    pub source_map_cache_misses: u64,
+    pub source_map_cache_bypasses: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -284,6 +295,22 @@ pub struct CoverageRangeSnapshot {
     pub count: u64,
     pub authored_start: Option<SourceLocation>,
     pub authored_end: Option<SourceLocation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSnapshotProgress {
+    pub done: i64,
+    pub total: i64,
+    pub finished: Option<bool>,
+    pub bytes_written: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSnapshotResult {
+    pub path: String,
+    pub bytes_written: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -483,7 +510,23 @@ pub trait DebuggerServiceApi {
         target_id: String,
         capture_id: String,
         source_path: Option<String>,
+        no_cache: bool,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
+
+    async fn take_heap_snapshot(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        path: String,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+    ) -> Result<HeapSnapshotResult, JsonRpcError>;
+
+    async fn get_heap_snapshot_progress(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<Option<HeapSnapshotProgress>, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;
 }

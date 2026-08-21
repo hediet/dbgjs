@@ -1,8 +1,8 @@
 use cdp_client::service_api::{
     BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
     ContextSnapshot, ContextSummary, CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
-    PlaywrightChannel, ServiceInfo, SourceExcerpt, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot,
+    HeapSnapshotProgress, HeapSnapshotResult, PlaywrightChannel, ServiceInfo, SourceExcerpt,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,6 +11,12 @@ use std::collections::{BTreeMap, BTreeSet};
 pub enum OutputFormat {
     Human,
     Json,
+}
+
+pub struct CoverageOutputOptions<'a> {
+    pub path: Option<&'a str>,
+    pub all: bool,
+    pub max_lines: usize,
 }
 
 impl OutputFormat {
@@ -105,12 +111,12 @@ impl OutputFormat {
     pub fn print_coverage(
         &self,
         value: &CoverageSnapshot,
-        path: Option<&str>,
+        options: CoverageOutputOptions<'_>,
     ) -> Result<(), serde_json::Error> {
-        let filtered = path.map(|path| filter_coverage_path(value, path));
+        let filtered = options.path.map(|path| filter_coverage_path(value, path));
         let value = filtered.as_ref().unwrap_or(value);
         match self {
-            Self::Human => print_coverage_human(value, path.is_some()),
+            Self::Human => print_coverage_human(value, options),
             Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
         }
         Ok(())
@@ -167,6 +173,32 @@ impl OutputFormat {
         }
         Ok(())
     }
+
+    pub fn print_heap_snapshot_progress(
+        &self,
+        progress: &HeapSnapshotProgress,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => {
+                if progress.total > 0 {
+                    eprintln!(
+                        "Heap snapshot: {}/{} ({:.1}%), {} bytes",
+                        progress.done,
+                        progress.total,
+                        progress.done as f64 * 100.0 / progress.total as f64,
+                        progress.bytes_written
+                    );
+                } else {
+                    eprintln!(
+                        "Heap snapshot: {}/{} objects, {} bytes",
+                        progress.done, progress.total, progress.bytes_written
+                    );
+                }
+            }
+            Self::Json => eprintln!("{}", serde_json::to_string(progress)?),
+        }
+        Ok(())
+    }
 }
 
 fn page_logs(
@@ -208,6 +240,15 @@ impl HumanOutput for bool {
             } else {
                 "Debugger service did not stop."
             }
+        );
+    }
+}
+
+impl HumanOutput for HeapSnapshotResult {
+    fn print_human(&self) {
+        println!(
+            "Heap snapshot written to {} ({} bytes).",
+            self.path, self.bytes_written
         );
     }
 }
@@ -396,11 +437,18 @@ impl HumanOutput for EvaluationSnapshot {
 
 impl HumanOutput for CoverageSnapshot {
     fn print_human(&self) {
-        print_coverage_human(self, false);
+        print_coverage_human(
+            self,
+            CoverageOutputOptions {
+                path: None,
+                all: false,
+                max_lines: 300,
+            },
+        );
     }
 }
 
-fn print_coverage_human(snapshot: &CoverageSnapshot, detailed: bool) {
+fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOptions<'_>) {
     if snapshot.sources.is_empty() {
         println!("No executed functions captured.");
         return;
@@ -413,12 +461,31 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, detailed: bool) {
     let mut root = CoverageTree::default();
     for (path, entries) in files {
         let mut entries = aggregate_coverage_entries(entries);
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.line_span));
-        let total = effective_file_hit_loc(&entries);
-        root.insert_file(path, total, entries);
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.metrics.hit_lines));
+        let metrics = effective_file_metrics(&entries);
+        root.insert_file(path, metrics, entries);
     }
 
-    root.print(detailed);
+    println!(
+        "{} RL (run lines), {} HL (hit lines)",
+        root.metrics.run_lines, root.metrics.hit_lines
+    );
+    if let Some(analysis) = &snapshot.analysis {
+        println!(
+            "Analysis {:.1}s; source-map cache: {} hit, {} miss, {} bypass",
+            analysis.duration_micros as f64 / 1_000_000.0,
+            analysis.source_map_cache_hits,
+            analysis.source_map_cache_misses,
+            analysis.source_map_cache_bypasses
+        );
+    }
+    root.print(CoverageOutputOptions {
+        path: options.path,
+        all: options.all,
+        max_lines: options
+            .max_lines
+            .saturating_sub(1 + usize::from(snapshot.analysis.is_some())),
+    });
 }
 
 fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSnapshot {
@@ -445,29 +512,53 @@ fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSn
     filtered
 }
 
-fn effective_file_hit_loc(entries: &[CoverageEntry]) -> u64 {
-    let lines = entries
+fn effective_file_metrics(entries: &[CoverageEntry]) -> CoverageMetrics {
+    let hit_lines = entries
         .iter()
-        .flat_map(|entry| entry.lines.iter().copied())
+        .flat_map(|entry| entry.line_counts.keys().copied())
         .collect::<BTreeSet<_>>();
-    if lines.is_empty() {
-        entries.iter().map(|entry| entry.line_span).sum()
+    if hit_lines.is_empty() {
+        CoverageMetrics {
+            hit_lines: entries.iter().map(|entry| entry.metrics.hit_lines).sum(),
+            run_lines: entries.iter().map(|entry| entry.metrics.run_lines).sum(),
+        }
     } else {
-        lines.len() as u64
+        CoverageMetrics {
+            hit_lines: hit_lines.len() as u64,
+            run_lines: entries.iter().map(|entry| entry.metrics.run_lines).sum(),
+        }
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct CoverageMetrics {
+    hit_lines: u64,
+    run_lines: u64,
+}
+
+impl CoverageMetrics {
+    fn add(&mut self, other: Self) {
+        self.hit_lines = self.hit_lines.saturating_add(other.hit_lines);
+        self.run_lines = self.run_lines.saturating_add(other.run_lines);
+    }
+
+    fn compact(self) -> String {
+        format!("{} HL, {} RL", self.hit_lines, self.run_lines)
+    }
+}
+
+#[derive(Clone)]
 struct CoverageEntry {
     path: String,
     function: String,
-    lines: BTreeSet<u32>,
-    line_span: u64,
+    line_counts: BTreeMap<u32, u64>,
+    metrics: CoverageMetrics,
     generated_location: Option<String>,
 }
 
 fn aggregate_coverage_entries(entries: Vec<CoverageEntry>) -> Vec<CoverageEntry> {
-    let mut symbols = BTreeMap::<String, BTreeSet<u32>>::new();
-    let mut unknown = BTreeMap::<String, u64>::new();
+    let mut symbols = BTreeMap::<String, BTreeMap<u32, u64>>::new();
+    let mut unknown = BTreeMap::<String, CoverageMetrics>::new();
     let mut paths = BTreeMap::<String, String>::new();
     let mut generated_locations = BTreeMap::<String, String>::new();
     for entry in entries {
@@ -479,30 +570,42 @@ fn aggregate_coverage_entries(entries: Vec<CoverageEntry>) -> Vec<CoverageEntry>
                 .entry(entry.function.clone())
                 .or_insert(location);
         }
-        if entry.lines.is_empty() {
-            *unknown.entry(entry.function).or_default() += entry.line_span;
-        } else {
-            symbols
+        if entry.line_counts.is_empty() {
+            unknown
                 .entry(entry.function)
                 .or_default()
-                .extend(entry.lines);
+                .add(entry.metrics);
+        } else {
+            let lines = symbols.entry(entry.function).or_default();
+            for (line, count) in entry.line_counts {
+                lines
+                    .entry(line)
+                    .and_modify(|current| *current = (*current).max(count))
+                    .or_insert(count);
+            }
         }
     }
     paths
         .into_iter()
         .map(|(function, path)| {
-            let lines = symbols.remove(&function).unwrap_or_default();
-            let line_span = if lines.is_empty() {
-                unknown.remove(&function).unwrap_or(1)
+            let line_counts = symbols.remove(&function).unwrap_or_default();
+            let metrics = if line_counts.is_empty() {
+                unknown.remove(&function).unwrap_or(CoverageMetrics {
+                    hit_lines: 1,
+                    run_lines: 1,
+                })
             } else {
-                lines.len() as u64
+                CoverageMetrics {
+                    hit_lines: line_counts.len() as u64,
+                    run_lines: line_counts.values().sum(),
+                }
             };
             let generated_location = generated_locations.remove(&function);
             CoverageEntry {
                 path,
                 function,
-                lines,
-                line_span,
+                line_counts,
+                metrics,
                 generated_location,
             }
         })
@@ -516,6 +619,11 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
             if function.name == "(anonymous)" {
                 continue;
             }
+            if function.effective_ranges.is_empty()
+                && !function.ranges.iter().any(|range| range.count > 0)
+            {
+                continue;
+            }
             let projected_ranges = if function.effective_ranges.is_empty() {
                 &function.ranges
             } else {
@@ -525,8 +633,8 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
             ranges.sort_by_key(|range| {
                 std::cmp::Reverse(range.end_offset.saturating_sub(range.start_offset))
             });
-            let mut lines_by_path = BTreeMap::<String, BTreeSet<u32>>::new();
-            let mut has_unmapped_hit = false;
+            let mut lines_by_path = BTreeMap::<String, BTreeMap<u32, u64>>::new();
+            let mut unmapped_run_lines = 0_u64;
             for range in ranges {
                 match (&range.authored_start, &range.authored_end) {
                     (Some(start), Some(end)) if start.source_url == end.source_url => {
@@ -534,14 +642,15 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
                             .entry(normalize_source_path(&start.source_url))
                             .or_default();
                         for line in start.line..=end.line.max(start.line) {
-                            if range.count > 0 {
-                                lines.insert(line);
-                            } else {
-                                lines.remove(&line);
-                            }
+                            lines
+                                .entry(line)
+                                .and_modify(|count| *count = (*count).max(range.count))
+                                .or_insert(range.count);
                         }
                     }
-                    _ if range.count > 0 => has_unmapped_hit = true,
+                    _ if range.count > 0 => {
+                        unmapped_run_lines = unmapped_run_lines.saturating_add(range.count)
+                    }
                     _ => {}
                 }
             }
@@ -553,25 +662,32 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
                 && looks_minified_identifier(&function.name))
             .then(|| format_generated_location(source, function));
             let mut mapped = false;
-            for (path, lines) in lines_by_path {
-                if lines.is_empty() {
+            for (path, line_counts) in lines_by_path {
+                if line_counts.is_empty() {
                     continue;
                 }
                 mapped = true;
+                let metrics = CoverageMetrics {
+                    hit_lines: line_counts.len() as u64,
+                    run_lines: line_counts.values().sum(),
+                };
                 entries.push(CoverageEntry {
                     path,
                     function: function_name.clone(),
-                    line_span: lines.len() as u64,
-                    lines,
+                    line_counts,
+                    metrics,
                     generated_location: generated_location.clone(),
                 });
             }
-            if !mapped && has_unmapped_hit {
+            if !mapped && unmapped_run_lines > 0 {
                 entries.push(CoverageEntry {
                     path: source.generated_url.clone(),
                     function: function_name,
-                    lines: BTreeSet::new(),
-                    line_span: 1,
+                    line_counts: BTreeMap::new(),
+                    metrics: CoverageMetrics {
+                        hit_lines: 1,
+                        run_lines: unmapped_run_lines,
+                    },
                     generated_location,
                 });
             }
@@ -639,100 +755,234 @@ fn normalize_source_path(path: &str) -> String {
 struct CoverageTree {
     children: BTreeMap<String, CoverageTree>,
     ranges: Vec<CoverageEntry>,
-    hit_loc: u64,
+    metrics: CoverageMetrics,
     file_count: usize,
 }
 
 impl CoverageTree {
-    fn insert_file(&mut self, path: String, hit_loc: u64, ranges: Vec<CoverageEntry>) {
+    fn insert_file(&mut self, path: String, metrics: CoverageMetrics, ranges: Vec<CoverageEntry>) {
         let components = path
             .split('/')
             .filter(|component| !component.is_empty())
             .collect::<Vec<_>>();
         let mut node = self;
-        node.hit_loc = node.hit_loc.saturating_add(hit_loc);
+        node.metrics.add(metrics);
         node.file_count += 1;
         for component in components {
             node = node.children.entry(component.to_owned()).or_default();
-            node.hit_loc = node.hit_loc.saturating_add(hit_loc);
+            node.metrics.add(metrics);
             node.file_count += 1;
         }
         node.ranges = ranges;
     }
 
-    fn hit_loc(&self) -> u64 {
-        self.hit_loc
-    }
-
-    fn print(&self, detailed: bool) {
-        self.print_children("", detailed, 0);
-    }
-
-    fn print_children(&self, prefix: &str, detailed: bool, depth: usize) {
-        const CHILD_LIMIT: usize = 8;
-        const MAX_DEPTH: usize = 6;
-
-        if !detailed && depth >= MAX_DEPTH {
-            return;
-        }
-
-        let mut children = self.children.iter().collect::<Vec<_>>();
-        children.sort_by_key(|(_, child)| std::cmp::Reverse(child.hit_loc));
-        let depth_limit = CHILD_LIMIT.saturating_sub(depth / 2).max(5);
-        let visible = if detailed {
-            children.len()
+    fn print(&self, options: CoverageOutputOptions<'_>) {
+        let budget = if options.all {
+            usize::MAX
         } else {
-            children.len().min(depth_limit)
+            options.max_lines
+        };
+        for line in self.render_children("", options.path.is_some() || options.all, budget) {
+            println!("{line}");
+        }
+    }
+
+    fn render_children(&self, prefix: &str, symbols: bool, budget: usize) -> Vec<String> {
+        const LONG_LIST: usize = 24;
+        if budget == 0 {
+            return Vec::new();
+        }
+        let mut children = self.children.iter().collect::<Vec<_>>();
+        children.sort_by_key(|(_, child)| std::cmp::Reverse(child.metrics.hit_lines));
+        let visible = if budget == usize::MAX {
+            children.len()
+        } else if children.len() <= LONG_LIST {
+            children.len().min(budget)
+        } else {
+            children.len().min(budget.saturating_sub(1))
         };
         let hidden_items = children.len().saturating_sub(visible);
         let hidden_files = children[visible..]
             .iter()
             .map(|(_, child)| child.file_count)
             .sum::<usize>();
-        let hidden_loc = children[visible..]
-            .iter()
-            .map(|(_, child)| child.hit_loc)
-            .sum::<u64>();
+        let hidden_metrics =
+            children[visible..]
+                .iter()
+                .fold(CoverageMetrics::default(), |mut total, (_, child)| {
+                    total.add(child.metrics);
+                    total
+                });
         let output_len = visible + usize::from(hidden_items > 0);
+        let descendant_budget = budget.saturating_sub(output_len);
+        let weight = children
+            .iter()
+            .take(visible)
+            .map(|(_, child)| child.expansion_weight(symbols))
+            .sum::<u64>();
+        let mut output = Vec::new();
         for (index, (name, child)) in children.into_iter().take(visible).enumerate() {
             let last = index + 1 == output_len;
             let branch = if last { "└─" } else { "├─" };
             let (label, child) = collapse_tree_label(name, child);
             if child.ranges.is_empty() {
-                println!(
-                    "{prefix}{branch} {label}/  [{} files, {} hit LoC]",
+                output.push(format!(
+                    "{prefix}{branch} {label}/  [{} files, {}]",
                     child.file_count,
-                    child.hit_loc()
-                );
+                    child.metrics.compact()
+                ));
             } else {
-                println!("{prefix}{branch} {label}  {} hit LoC", child.hit_loc());
+                output.push(format!(
+                    "{prefix}{branch} {label}  {}{}",
+                    child.metrics.compact(),
+                    if symbols {
+                        String::new()
+                    } else {
+                        inline_symbol_summary(child, &label, prefix, 120)
+                    }
+                ));
             }
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            child.print_children(&child_prefix, detailed, depth + 1);
-            if detailed {
-                for (range_index, entry) in child.ranges.iter().enumerate() {
-                    let range_last = range_index + 1 == child.ranges.len();
-                    let range_branch = if range_last { "└─" } else { "├─" };
-                    println!(
-                        "{child_prefix}{range_branch} {}  {} hit LoC{}",
-                        entry.function,
-                        entry.line_span,
-                        entry
-                            .generated_location
-                            .as_ref()
-                            .map_or_else(String::new, |location| format!(
-                                "  [generated {location}]"
-                            ))
-                    );
-                }
+            let child_budget = if budget == usize::MAX {
+                usize::MAX
+            } else if weight == 0 {
+                0
+            } else {
+                (((descendant_budget as u128 * child.expansion_weight(symbols) as u128)
+                    / weight as u128) as usize)
+                    .max(1)
+            };
+            output.extend(child.render_children(&child_prefix, symbols, child_budget));
+            if symbols && child.children.is_empty() {
+                output.extend(render_symbol_groups(
+                    &child_prefix,
+                    &child.ranges,
+                    child_budget,
+                ));
             }
         }
         if hidden_items > 0 {
-            println!(
-                "{prefix}└─ … [{hidden_items} items, {hidden_files} files, {hidden_loc} hit LoC]",
-            );
+            output.push(format!(
+                "{prefix}└─ … [{hidden_items} items, {hidden_files} files, {}]",
+                hidden_metrics.compact()
+            ));
+        }
+        if budget != usize::MAX {
+            output.truncate(budget);
+        }
+        output
+    }
+
+    fn expansion_weight(&self, symbols: bool) -> u64 {
+        if self.children.is_empty() && !(symbols && !self.ranges.is_empty()) {
+            return 0;
+        }
+        (self.metrics.hit_lines.max(1) as f64).sqrt().ceil() as u64
+    }
+}
+
+fn inline_symbol_summary(tree: &CoverageTree, label: &str, prefix: &str, maximum: usize) -> String {
+    let resolved = tree
+        .ranges
+        .iter()
+        .filter(|entry| entry.generated_location.is_none())
+        .cloned()
+        .collect::<Vec<_>>();
+    let summaries = symbol_summaries(&resolved);
+    if summaries.is_empty() {
+        return String::new();
+    }
+    let rendered = summaries
+        .iter()
+        .map(|summary| format!("{} {}", summary.name, summary.metrics.compact()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suffix = format!(" [{rendered}]");
+    let base =
+        prefix.chars().count() + label.chars().count() + tree.metrics.compact().chars().count() + 4;
+    (base + suffix.chars().count() <= maximum)
+        .then_some(suffix)
+        .unwrap_or_default()
+}
+
+struct SymbolSummary<'a> {
+    name: String,
+    metrics: CoverageMetrics,
+    entries: Vec<&'a CoverageEntry>,
+}
+
+fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
+    let mut groups = BTreeMap::<String, Vec<&CoverageEntry>>::new();
+    for entry in entries {
+        let name = entry
+            .function
+            .split_once('.')
+            .filter(|(class, method)| {
+                !class.is_empty()
+                    && !method.is_empty()
+                    && class.starts_with(|character: char| character.is_ascii_uppercase())
+            })
+            .map_or_else(|| entry.function.clone(), |(class, _)| class.to_owned());
+        groups.entry(name).or_default().push(entry);
+    }
+    let mut summaries = groups
+        .into_iter()
+        .map(|(name, entries)| SymbolSummary {
+            metrics: effective_file_metrics(&entries.iter().copied().cloned().collect::<Vec<_>>()),
+            name,
+            entries,
+        })
+        .collect::<Vec<_>>();
+    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.metrics.hit_lines));
+    summaries
+}
+
+fn render_symbol_groups(prefix: &str, entries: &[CoverageEntry], budget: usize) -> Vec<String> {
+    let summaries = symbol_summaries(entries);
+    let mut output = Vec::new();
+    for (index, summary) in summaries.iter().enumerate() {
+        if output.len() >= budget {
+            break;
+        }
+        let last = index + 1 == summaries.len();
+        let branch = if last { "└─" } else { "├─" };
+        output.push(format!(
+            "{prefix}{branch} {}  {}{}",
+            summary.name,
+            summary.metrics.compact(),
+            if summary.entries.len() == 1 {
+                summary.entries[0]
+                    .generated_location
+                    .as_ref()
+                    .map_or_else(String::new, |location| format!("  [generated {location}]"))
+            } else {
+                String::new()
+            }
+        ));
+        if summary.entries.len() > 1 {
+            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
+            for (method_index, entry) in summary.entries.iter().enumerate() {
+                if output.len() >= budget {
+                    break;
+                }
+                let method = entry
+                    .function
+                    .split_once('.')
+                    .map_or(entry.function.as_str(), |(_, method)| method);
+                let method_last = method_index + 1 == summary.entries.len();
+                output.push(format!(
+                    "{child_prefix}{} {method}  {}{}",
+                    if method_last { "└─" } else { "├─" },
+                    entry.metrics.compact(),
+                    entry
+                        .generated_location
+                        .as_ref()
+                        .map_or_else(String::new, |location| format!("  [generated {location}]"))
+                ));
+            }
         }
     }
+    output
 }
 
 fn collapse_tree_label<'a>(name: &str, mut node: &'a CoverageTree) -> (String, &'a CoverageTree) {
@@ -877,14 +1127,14 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageEntry, aggregate_coverage_entries, coverage_entries, effective_file_hit_loc,
-        looks_minified_identifier, page_logs,
+        CoverageEntry, CoverageMetrics, aggregate_coverage_entries, coverage_entries,
+        effective_file_metrics, looks_minified_identifier, page_logs,
     };
     use cdp_client::service_api::{
         ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
         CoverageSourceSnapshot, SourceLocation,
     };
-    use std::collections::BTreeSet;
+    use std::collections::BTreeMap;
 
     #[test]
     fn identifies_short_mangled_names_without_flagging_readable_symbols() {
@@ -910,6 +1160,7 @@ mod tests {
         };
         let snapshot = CoverageSnapshot {
             timestamp_micros: 0,
+            analysis: None,
             sources: vec![CoverageSourceSnapshot {
                 script_id: "1".to_owned(),
                 generated_url: "bundle.js".to_owned(),
@@ -958,10 +1209,11 @@ mod tests {
             }],
         };
         let entries = coverage_entries(&snapshot);
-        assert_eq!(entries[0].line_span, 89);
-        assert!(!entries[0].lines.contains(&50));
-        assert!(entries[0].lines.contains(&49));
-        assert!(entries[0].lines.contains(&61));
+        assert_eq!(entries[0].metrics.hit_lines, 89);
+        assert_eq!(entries[0].metrics.run_lines, 89);
+        assert!(!entries[0].line_counts.contains_key(&50));
+        assert!(entries[0].line_counts.contains_key(&49));
+        assert!(entries[0].line_counts.contains_key(&61));
     }
 
     #[test]
@@ -969,12 +1221,55 @@ mod tests {
         let entries = aggregate_coverage_entries(vec![CoverageEntry {
             path: "src/example.ts".to_owned(),
             function: "example".to_owned(),
-            lines: BTreeSet::from([1, 100]),
-            line_span: 2,
+            line_counts: BTreeMap::from([(1, 3), (100, 3)]),
+            metrics: CoverageMetrics {
+                hit_lines: 2,
+                run_lines: 6,
+            },
             generated_location: None,
         }]);
-        assert_eq!(effective_file_hit_loc(&entries), 2);
-        assert_eq!(entries[0].line_span, 2);
+        assert_eq!(effective_file_metrics(&entries).hit_lines, 2);
+        assert_eq!(effective_file_metrics(&entries).run_lines, 6);
+        assert_eq!(entries[0].metrics.hit_lines, 2);
+        assert_eq!(entries[0].metrics.run_lines, 6);
+    }
+
+    #[test]
+    fn run_lines_weight_hit_lines_by_effective_count() {
+        let location = |line| SourceLocation {
+            source_url: "src/example.ts".to_owned(),
+            line,
+            column: 1,
+        };
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 0,
+            analysis: None,
+            sources: vec![CoverageSourceSnapshot {
+                script_id: "1".to_owned(),
+                generated_url: "bundle.js".to_owned(),
+                associated_authored_source: None,
+                functions: vec![CoverageFunctionSnapshot {
+                    name: "example".to_owned(),
+                    block_coverage: true,
+                    root_start_offset: 0,
+                    root_end_offset: 10,
+                    ranges: Vec::new(),
+                    effective_ranges: vec![CoverageRangeSnapshot {
+                        start_offset: 0,
+                        end_offset: 10,
+                        count: 3,
+                        authored_start: Some(location(1)),
+                        authored_end: Some(location(10)),
+                    }],
+                    authored_location: Some(location(1)),
+                    breadcrumb: Some("Example.run".to_owned()),
+                    generated_location: None,
+                }],
+            }],
+        };
+        let entries = coverage_entries(&snapshot);
+        assert_eq!(entries[0].metrics.hit_lines, 10);
+        assert_eq!(entries[0].metrics.run_lines, 30);
     }
 
     #[test]

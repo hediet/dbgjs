@@ -2,7 +2,8 @@ use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -13,13 +14,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::cdp::{
     CdpClient, DebuggerEnableParams, DebuggerGetScriptSourceParams, DebuggerLocation,
     DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
     DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
-    DebuggerStepOutParams, DebuggerStepOverParams, IoCloseParams, IoReadParams,
+    DebuggerStepOutParams, DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
+    HeapProfilerReportHeapSnapshotProgressParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
     RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
 };
@@ -62,6 +64,8 @@ impl CdpConnection {
 
     pub fn open_session(&self, session: SessionKey) -> Result<CdpDebuggerSession, CdpRuntimeError> {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
+        let heap_snapshot = Arc::new(Mutex::new(None));
+        let (heap_snapshot_progress, _) = watch::channel(None);
         let channel = Channel::new(
             Box::new(
                 self.mux
@@ -71,6 +75,8 @@ impl CdpConnection {
             Box::new(CdpEventHandler {
                 session: session.clone(),
                 sender: event_sender,
+                heap_snapshot: heap_snapshot.clone(),
+                heap_snapshot_progress: heap_snapshot_progress.clone(),
             }),
         );
         let client = CdpClient::root(channel.clone());
@@ -80,6 +86,12 @@ impl CdpConnection {
             client,
             events: event_receiver,
             source_map_frame_id: Mutex::new(None),
+            source_map_cache_enabled: AtomicBool::new(true),
+            source_map_cache_hits: AtomicU64::new(0),
+            source_map_cache_misses: AtomicU64::new(0),
+            source_map_cache_bypasses: AtomicU64::new(0),
+            heap_snapshot,
+            heap_snapshot_progress,
         })
     }
 
@@ -103,11 +115,40 @@ impl CdpConnection {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeapSnapshotStreamProgress {
+    pub done: i64,
+    pub total: i64,
+    pub finished: Option<bool>,
+    pub bytes_written: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceMapCacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub bypasses: u64,
+}
+
+struct HeapSnapshotWriter {
+    destination: PathBuf,
+    temporary: PathBuf,
+    file: tokio::fs::File,
+    bytes_written: u64,
+    write_error: Option<std::io::Error>,
+}
+
 pub struct CdpDebuggerSession {
     session: SessionKey,
     client: CdpClient<Channel>,
     events: mpsc::UnboundedReceiver<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
     source_map_frame_id: Mutex<Option<String>>,
+    source_map_cache_enabled: AtomicBool,
+    source_map_cache_hits: AtomicU64,
+    source_map_cache_misses: AtomicU64,
+    source_map_cache_bypasses: AtomicU64,
+    heap_snapshot: Arc<Mutex<Option<HeapSnapshotWriter>>>,
+    heap_snapshot_progress: watch::Sender<Option<HeapSnapshotStreamProgress>>,
 }
 
 impl CdpDebuggerSession {
@@ -117,6 +158,124 @@ impl CdpDebuggerSession {
 
     pub fn client(&self) -> &CdpClient<Channel> {
         &self.client
+    }
+
+    pub fn set_source_map_cache_enabled(&self, enabled: bool) {
+        self.source_map_cache_enabled
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn source_map_cache_stats(&self) -> SourceMapCacheStats {
+        SourceMapCacheStats {
+            hits: self.source_map_cache_hits.load(Ordering::Relaxed),
+            misses: self.source_map_cache_misses.load(Ordering::Relaxed),
+            bypasses: self.source_map_cache_bypasses.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn heap_snapshot_progress(&self) -> watch::Receiver<Option<HeapSnapshotStreamProgress>> {
+        self.heap_snapshot_progress.subscribe()
+    }
+
+    pub async fn begin_heap_snapshot(&self, destination: PathBuf) -> std::io::Result<()> {
+        static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
+
+        let mut snapshot = self.heap_snapshot.lock().await;
+        if snapshot.is_some() {
+            return Err(std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "a heap snapshot is already in progress",
+            ));
+        }
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let file_name = destination
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "heap snapshot destination must name a file",
+                )
+            })?
+            .to_string_lossy();
+        let temporary = destination.with_file_name(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await?;
+        *snapshot = Some(HeapSnapshotWriter {
+            destination,
+            temporary,
+            file,
+            bytes_written: 0,
+            write_error: None,
+        });
+        self.heap_snapshot_progress
+            .send_replace(Some(HeapSnapshotStreamProgress::default()));
+        Ok(())
+    }
+
+    pub async fn finish_heap_snapshot(&self) -> std::io::Result<u64> {
+        let Some(mut snapshot) = self.heap_snapshot.lock().await.take() else {
+            return Err(std::io::Error::new(
+                ErrorKind::NotFound,
+                "no heap snapshot is in progress",
+            ));
+        };
+        if let Some(error) = snapshot.write_error.take() {
+            drop(snapshot.file);
+            remove_temporary_file(&snapshot.temporary).await;
+            return Err(error);
+        }
+        if let Err(error) = snapshot.file.flush().await {
+            drop(snapshot.file);
+            remove_temporary_file(&snapshot.temporary).await;
+            return Err(error);
+        }
+        if let Err(error) = snapshot.file.sync_data().await {
+            drop(snapshot.file);
+            remove_temporary_file(&snapshot.temporary).await;
+            return Err(error);
+        }
+        drop(snapshot.file);
+        if snapshot.bytes_written == 0 {
+            remove_temporary_file(&snapshot.temporary).await;
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "CDP completed the heap snapshot without sending any data",
+            ));
+        }
+        if let Err(error) =
+            replace_file_preserving_previous(&snapshot.temporary, &snapshot.destination).await
+        {
+            remove_temporary_file(&snapshot.temporary).await;
+            return Err(error);
+        }
+        let mut progress = self
+            .heap_snapshot_progress
+            .borrow()
+            .clone()
+            .unwrap_or_default();
+        progress.finished = Some(true);
+        progress.bytes_written = snapshot.bytes_written;
+        self.heap_snapshot_progress.send_replace(Some(progress));
+        Ok(snapshot.bytes_written)
+    }
+
+    pub async fn abort_heap_snapshot(&self) {
+        if let Some(snapshot) = self.heap_snapshot.lock().await.take() {
+            drop(snapshot.file);
+            remove_temporary_file(&snapshot.temporary).await;
+        }
     }
 
     pub async fn next_event(&mut self) -> Option<Result<CdpRuntimeEvent, CdpRuntimeEventError>> {
@@ -278,11 +437,27 @@ impl CdpDebuggerSession {
         }
 
         let resolved_url = resolve_source_map_url(generated_url, source_map_url)?;
-        let cache_path = source_map_cache_path(script_hash, &resolved_url);
+        let cache_enabled = self.source_map_cache_enabled.load(Ordering::Relaxed);
+        if !cache_enabled {
+            self.source_map_cache_bypasses
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        let cache_path = cache_enabled
+            .then(|| source_map_cache_path(script_hash, &resolved_url))
+            .flatten();
         if let Some(path) = &cache_path {
             match tokio::fs::read(path).await {
                 Ok(bytes) => {
                     if let Some(source_map) = decode_source_map_cache(&bytes) {
+                        self.source_map_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        if let Err(error) =
+                            tokio::fs::write(path.with_extension("access"), []).await
+                        {
+                            eprintln!(
+                                "failed to update source-map cache access marker {}: {error}",
+                                path.display()
+                            );
+                        }
                         return Ok(source_map);
                     }
                     eprintln!("ignoring invalid source-map cache entry {}", path.display());
@@ -292,6 +467,7 @@ impl CdpDebuggerSession {
                             path.display()
                         );
                     }
+                    let _ = tokio::fs::remove_file(path.with_extension("access")).await;
                 }
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
                 Err(error) => {
@@ -301,6 +477,9 @@ impl CdpDebuggerSession {
                     );
                 }
             }
+        }
+        if cache_enabled {
+            self.source_map_cache_misses.fetch_add(1, Ordering::Relaxed);
         }
         let cached_frame_id = { self.source_map_frame_id.lock().await.clone() };
         let frame_id = match cached_frame_id {
@@ -476,6 +655,8 @@ impl CdpRuntimeEvent {
 struct CdpEventHandler {
     session: SessionKey,
     sender: mpsc::UnboundedSender<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
+    heap_snapshot: Arc<Mutex<Option<HeapSnapshotWriter>>>,
+    heap_snapshot_progress: watch::Sender<Option<HeapSnapshotStreamProgress>>,
 }
 
 #[async_trait]
@@ -488,6 +669,59 @@ impl RequestHandler for CdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
+        if method == "HeapProfiler.addHeapSnapshotChunk" {
+            match deserialize::<HeapProfilerAddHeapSnapshotChunkParams>(&method, params) {
+                Ok(params) => {
+                    let mut snapshot = self.heap_snapshot.lock().await;
+                    if let Some(snapshot) = snapshot.as_mut()
+                        && snapshot.write_error.is_none()
+                    {
+                        match snapshot.file.write_all(params.chunk.as_bytes()).await {
+                            Ok(()) => {
+                                snapshot.bytes_written = snapshot
+                                    .bytes_written
+                                    .saturating_add(params.chunk.len() as u64);
+                                let mut progress = self
+                                    .heap_snapshot_progress
+                                    .borrow()
+                                    .clone()
+                                    .unwrap_or_default();
+                                progress.bytes_written = snapshot.bytes_written;
+                                self.heap_snapshot_progress.send_replace(Some(progress));
+                            }
+                            Err(error) => snapshot.write_error = Some(error),
+                        }
+                    }
+                }
+                Err(error) => {
+                    record_heap_snapshot_error(&self.heap_snapshot, error.to_string()).await;
+                }
+            }
+            return;
+        }
+        if method == "HeapProfiler.reportHeapSnapshotProgress" {
+            match deserialize::<HeapProfilerReportHeapSnapshotProgressParams>(&method, params) {
+                Ok(params) => {
+                    let bytes_written = self
+                        .heap_snapshot
+                        .lock()
+                        .await
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.bytes_written);
+                    self.heap_snapshot_progress
+                        .send_replace(Some(HeapSnapshotStreamProgress {
+                            done: params.done,
+                            total: params.total,
+                            finished: params.finished,
+                            bytes_written,
+                        }));
+                }
+                Err(error) => {
+                    record_heap_snapshot_error(&self.heap_snapshot, error.to_string()).await;
+                }
+            }
+            return;
+        }
         let event = match method.as_str() {
             "Debugger.scriptParsed" => {
                 deserialize(&method, params).map(|params| CdpRuntimeEvent::ScriptParsed {
@@ -495,6 +729,7 @@ impl RequestHandler for CdpEventHandler {
                     params,
                 })
             }
+
             "Debugger.paused" => {
                 deserialize(&method, params).map(|params| CdpRuntimeEvent::Paused {
                     session: self.session.clone(),
@@ -517,6 +752,79 @@ impl RequestHandler for CdpEventHandler {
             }),
         };
         let _ = self.sender.send(event);
+    }
+}
+
+async fn remove_temporary_file(path: &Path) {
+    if let Err(error) = tokio::fs::remove_file(path).await
+        && error.kind() != ErrorKind::NotFound
+    {
+        eprintln!(
+            "failed to remove temporary heap snapshot {}: {error}",
+            path.display()
+        );
+    }
+}
+
+async fn replace_file_preserving_previous(
+    temporary: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
+    static BACKUP_ID: AtomicU64 = AtomicU64::new(1);
+    match tokio::fs::rename(temporary, destination).await {
+        Ok(()) => return Ok(()),
+        Err(error)
+            if destination.exists()
+                && matches!(
+                    error.kind(),
+                    ErrorKind::AlreadyExists | ErrorKind::PermissionDenied
+                ) => {}
+        Err(error) => return Err(error),
+    }
+
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "heap snapshot destination must name a file",
+            )
+        })?
+        .to_string_lossy();
+    let backup = destination.with_file_name(format!(
+        ".{file_name}.{}.{}.backup",
+        std::process::id(),
+        BACKUP_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    tokio::fs::rename(destination, &backup).await?;
+    match tokio::fs::rename(temporary, destination).await {
+        Ok(()) => {
+            if let Err(error) = tokio::fs::remove_file(&backup).await {
+                eprintln!(
+                    "failed to remove replaced heap snapshot backup {}: {error}",
+                    backup.display()
+                );
+            }
+            Ok(())
+        }
+        Err(replacement_error) => match tokio::fs::rename(&backup, destination).await {
+            Ok(()) => Err(replacement_error),
+            Err(restore_error) => Err(std::io::Error::other(format!(
+                "failed to install heap snapshot ({replacement_error}) and restore the previous snapshot ({restore_error}); previous data remains at {}",
+                backup.display()
+            ))),
+        },
+    }
+}
+
+async fn record_heap_snapshot_error(
+    heap_snapshot: &Mutex<Option<HeapSnapshotWriter>>,
+    message: String,
+) {
+    if let Some(snapshot) = heap_snapshot.lock().await.as_mut()
+        && snapshot.write_error.is_none()
+    {
+        snapshot.write_error = Some(std::io::Error::new(ErrorKind::InvalidData, message));
     }
 }
 
@@ -633,7 +941,16 @@ async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io
     file.sync_data().await?;
     drop(file);
     match tokio::fs::rename(&temporary, path).await {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            if let Err(error) = tokio::fs::write(path.with_extension("access"), []).await {
+                eprintln!(
+                    "failed to create source-map cache access marker {}: {error}",
+                    path.display()
+                );
+            }
+            cleanup_source_map_cache(parent).await;
+            Ok(())
+        }
         Err(_error) if path.exists() => {
             tokio::fs::remove_file(&temporary).await?;
             Ok(())
@@ -649,6 +966,85 @@ async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io
                 );
             }
             Err(error)
+        }
+    }
+}
+
+async fn cleanup_source_map_cache(directory: &Path) {
+    const MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+    const MAX_ENTRIES: usize = 64;
+    const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+    let Ok(mut directory_entries) = tokio::fs::read_dir(directory).await else {
+        return;
+    };
+    let now = SystemTime::now();
+    let mut entries = Vec::new();
+    while let Ok(Some(entry)) = directory_entries.next_entry().await {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "access")
+        {
+            if !path.with_extension("map").exists()
+                && let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != ErrorKind::NotFound
+            {
+                eprintln!(
+                    "failed to remove orphaned source-map access marker {}: {error}",
+                    path.display()
+                );
+            }
+            continue;
+        }
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let access_path = path.with_extension("access");
+        let modified = tokio::fs::metadata(&access_path)
+            .await
+            .and_then(|metadata| metadata.modified())
+            .or_else(|_| metadata.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let expired = now.duration_since(modified).is_ok_and(|age| age > MAX_AGE);
+        let temporary = path.extension().is_some_and(|extension| extension == "tmp");
+        if expired || temporary {
+            if let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != ErrorKind::NotFound
+            {
+                eprintln!(
+                    "failed to remove stale source-map cache entry {}: {error}",
+                    path.display()
+                );
+            }
+            let _ = tokio::fs::remove_file(access_path).await;
+            continue;
+        }
+        entries.push((modified, metadata.len(), path, access_path));
+    }
+    entries.sort_by_key(|(modified, _, _, _)| *modified);
+    let mut total_bytes = entries.iter().map(|(_, size, _, _)| *size).sum::<u64>();
+    let remove_count = entries.len().saturating_sub(MAX_ENTRIES);
+    for (index, (_, size, path, access_path)) in entries.into_iter().enumerate() {
+        if index >= remove_count && total_bytes <= MAX_BYTES {
+            break;
+        }
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {
+                total_bytes = total_bytes.saturating_sub(size);
+                let _ = tokio::fs::remove_file(access_path).await;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                total_bytes = total_bytes.saturating_sub(size);
+                let _ = tokio::fs::remove_file(access_path).await;
+            }
+            Err(error) => eprintln!(
+                "failed to prune source-map cache entry {}: {error}",
+                path.display()
+            ),
         }
     }
 }
@@ -790,6 +1186,131 @@ mod tests {
         cached.extend(format!("{:x}\n", Sha256::digest(invalid)).as_bytes());
         cached.extend(invalid);
         assert!(decode_source_map_cache(&cached).is_none());
+    }
+
+    #[tokio::test]
+    async fn source_map_cache_cleanup_bounds_retained_hashes() {
+        let directory = std::env::temp_dir().join(format!(
+            "jsdbg-source-map-cache-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        for index in 0..65 {
+            tokio::fs::write(directory.join(format!("{index}.map")), [index as u8])
+                .await
+                .unwrap();
+            tokio::fs::write(directory.join(format!("{index}.access")), [])
+                .await
+                .unwrap();
+        }
+        cleanup_source_map_cache(&directory).await;
+        let mut entries = tokio::fs::read_dir(&directory).await.unwrap();
+        let mut maps = 0;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            maps += usize::from(
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "map"),
+            );
+        }
+        assert_eq!(maps, 64);
+        tokio::fs::remove_dir_all(&directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn heap_snapshot_replacement_preserves_complete_new_content() {
+        let directory = std::env::temp_dir().join(format!(
+            "jsdbg-heap-replace-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let destination = directory.join("snapshot.heapsnapshot");
+        let temporary = directory.join("snapshot.tmp");
+        tokio::fs::write(&destination, b"previous").await.unwrap();
+        tokio::fs::write(&temporary, b"replacement").await.unwrap();
+        replace_file_preserving_previous(&temporary, &destination)
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"replacement");
+        assert!(!temporary.exists());
+        tokio::fs::remove_dir_all(&directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn heap_snapshot_notifications_stream_to_disk_and_report_progress() {
+        let path = std::env::temp_dir().join(format!(
+            "jsdbg-heap-stream-{}-{}.tmp",
+            std::process::id(),
+            AtomicU64::new(1).fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = tokio::fs::File::create(&path).await.unwrap();
+        let heap_snapshot = Arc::new(Mutex::new(Some(HeapSnapshotWriter {
+            destination: path.clone(),
+            temporary: path.clone(),
+            file,
+            bytes_written: 0,
+            write_error: None,
+        })));
+        let (heap_snapshot_progress, _) = watch::channel(None);
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let handler = CdpEventHandler {
+            session: SessionKey {
+                connection_generation: 1,
+                session_id: "session".to_owned(),
+            },
+            sender,
+            heap_snapshot: heap_snapshot.clone(),
+            heap_snapshot_progress: heap_snapshot_progress.clone(),
+        };
+
+        handler
+            .handle_notification(
+                "HeapProfiler.addHeapSnapshotChunk".to_owned(),
+                serde_json::json!({ "chunk": "{\"snapshot\":{}}" }),
+            )
+            .await;
+        handler
+            .handle_notification(
+                "HeapProfiler.reportHeapSnapshotProgress".to_owned(),
+                serde_json::json!({ "done": 7, "total": 10, "finished": false }),
+            )
+            .await;
+
+        heap_snapshot
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .file
+            .flush()
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "{\"snapshot\":{}}"
+        );
+        assert_eq!(
+            heap_snapshot_progress.borrow().clone().unwrap(),
+            HeapSnapshotStreamProgress {
+                done: 7,
+                total: 10,
+                finished: Some(false),
+                bytes_written: 15,
+            }
+        );
+        assert!(events.try_recv().is_err());
+
+        drop(heap_snapshot.lock().await.take());
+        tokio::fs::remove_file(path).await.unwrap();
     }
 }
 

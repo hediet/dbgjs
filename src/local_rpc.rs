@@ -16,7 +16,7 @@ use hubrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 use crate::debugger_service::DebuggerService;
 use crate::service_api::{
@@ -240,16 +240,23 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
 pub async fn connect_endpoint(
     endpoint: &LocalServiceEndpoint,
 ) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+    connect_endpoint_with_validation(endpoint, true).await
+}
+
+async fn connect_endpoint_with_validation(
+    endpoint: &LocalServiceEndpoint,
+    validate_interface: bool,
+) -> Result<DebuggerServiceApiClient, LocalRpcError> {
     match &endpoint.transport {
         #[cfg(windows)]
         LocalTransportEndpoint::NamedPipe { pipe_name } => {
             let stream = open_named_pipe(pipe_name).await?;
-            connect_stream(stream, &endpoint.token).await
+            connect_stream(stream, &endpoint.token, validate_interface).await
         }
         #[cfg(unix)]
         LocalTransportEndpoint::UnixSocket { path } => {
             let stream = tokio::net::UnixStream::connect(path).await?;
-            connect_stream(stream, &endpoint.token).await
+            connect_stream(stream, &endpoint.token, validate_interface).await
         }
         _ => Err(LocalRpcError::UnsupportedTransport(
             endpoint.transport.clone(),
@@ -264,7 +271,7 @@ async fn open_named_pipe(
     use tokio::net::windows::named_pipe::ClientOptions;
 
     const ERROR_PIPE_BUSY: i32 = 231;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         match ClientOptions::new().open(pipe_name) {
             Ok(client) => return Ok(client),
@@ -281,6 +288,7 @@ async fn open_named_pipe(
 async fn connect_stream<S>(
     stream: S,
     token: &str,
+    validate_interface: bool,
 ) -> Result<DebuggerServiceApiClient, LocalRpcError>
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -292,25 +300,27 @@ where
     let connection = HubRpcConnection::new(Box::new(transport));
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
-    let expected = debugger_service_api::interface();
-    let directory = DirectoryServiceClient::new(connection.clone());
-    let listing = directory
-        .list(Some(expected.id().to_owned()), None, None, None, None)
-        .await
-        .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-    let Some(actual) = listing
-        .items
-        .iter()
-        .find(|item| item.interface_id == expected.id())
-    else {
-        return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
-    };
-    if actual.interface_hash != expected.schema_hash() {
-        return Err(LocalRpcError::InterfaceHashMismatch {
-            interface_id: expected.id().to_owned(),
-            expected: expected.schema_hash().to_owned(),
-            actual: actual.interface_hash.clone(),
-        });
+    if validate_interface {
+        let expected = debugger_service_api::interface();
+        let directory = DirectoryServiceClient::new(connection.clone());
+        let listing = directory
+            .list(Some(expected.id().to_owned()), None, None, None, None)
+            .await
+            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+        let Some(actual) = listing
+            .items
+            .iter()
+            .find(|item| item.interface_id == expected.id())
+        else {
+            return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
+        };
+        if actual.interface_hash != expected.schema_hash() {
+            return Err(LocalRpcError::InterfaceHashMismatch {
+                interface_id: expected.id().to_owned(),
+                expected: expected.schema_hash().to_owned(),
+                actual: actual.interface_hash.clone(),
+            });
+        }
     }
     Ok(DebuggerServiceApiClient::new(connection))
 }
@@ -362,8 +372,12 @@ pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClien
             Err(error) => return Err(error.into()),
         }
     }
-    if let Ok(client) = connect_existing(state_file).await {
-        return Ok(client);
+    match connect_existing(state_file).await {
+        Ok(client) => return Ok(client),
+        Err(LocalRpcError::InterfaceHashMismatch { .. }) => {
+            shutdown_incompatible_service(state_file).await?;
+        }
+        Err(_) => {}
     }
 
     let startup_error = startup_error_file(state_file);
@@ -384,6 +398,38 @@ pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClien
     Err(LocalRpcError::StartupTimeout {
         last_error: last_error.map(Box::new),
     })
+}
+
+async fn shutdown_incompatible_service(state_file: &Path) -> Result<(), LocalRpcError> {
+    timeout(STARTUP_TIMEOUT, async {
+        let endpoint = read_endpoint(state_file)?;
+        let client = connect_endpoint_with_validation(&endpoint, false).await?;
+        let info = client
+            .service_info()
+            .await
+            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+        if info.process_id != endpoint.process_id {
+            return Err(LocalRpcError::EndpointOwnerChanged {
+                expected: endpoint.process_id,
+                actual: info.process_id,
+            });
+        }
+        client
+            .shutdown()
+            .await
+            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+        loop {
+            if connect_endpoint_with_validation(&endpoint, false)
+                .await
+                .is_err()
+            {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| LocalRpcError::StartupTimeout { last_error: None })?
 }
 
 pub fn read_endpoint(path: &Path) -> Result<LocalServiceEndpoint, LocalRpcError> {

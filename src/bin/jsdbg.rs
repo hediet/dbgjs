@@ -7,15 +7,16 @@ use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, LogpointSpec,
-    PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, HeapSnapshotProgress,
+    LogpointSpec, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
 #[path = "jsdbg/output.rs"]
 mod output;
 
-use output::OutputFormat;
+use output::{CoverageOutputOptions, OutputFormat};
 
 #[tokio::main]
 async fn main() {
@@ -308,7 +309,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Some(capture_id.clone()),
                     )
                     .await)?,
-                None,
+                CoverageOutputOptions {
+                    path: None,
+                    all: false,
+                    max_lines: 300,
+                },
             )?;
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
@@ -334,9 +339,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             output.print_coverage_stopped()?;
         }
-        [coverage, show, path_flag, path]
-            if coverage == "coverage" && show == "show" && path_flag == "--path" =>
-        {
+        [coverage, show, options @ ..] if coverage == "coverage" && show == "show" => {
+            let options = parse_coverage_show_options(options)?;
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
             output.print_coverage(
@@ -345,62 +349,66 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         scope.context,
                         scope.connection,
                         scope.target,
-                        ".".to_owned(),
-                        Some(path.clone()),
+                        options.capture_id,
+                        options.path.clone(),
+                        options.no_cache,
                     )
                     .await)?,
-                Some(path),
+                CoverageOutputOptions {
+                    path: options.path.as_deref(),
+                    all: options.all,
+                    max_lines: options.max_lines,
+                },
             )?;
         }
-        [coverage, show, capture_id, path_flag, path]
-            if coverage == "coverage" && show == "show" && path_flag == "--path" =>
-        {
+        [heap, snapshot, path, options @ ..] if heap == "heap" && snapshot == "snapshot" => {
+            let options = parse_heap_snapshot_options(options)?;
+            let destination = absolute_path(Path::new(path))?;
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print_coverage(
-                &rpc(client
-                    .get_coverage(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        capture_id.clone(),
-                        Some(path.clone()),
-                    )
-                    .await)?,
-                Some(path),
-            )?;
-        }
-        [coverage, show] if coverage == "coverage" && show == "show" => {
-            let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print_coverage(
-                &rpc(client
-                    .get_coverage(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        ".".to_owned(),
-                        None,
-                    )
-                    .await)?,
-                None,
-            )?;
-        }
-        [coverage, show, capture_id] if coverage == "coverage" && show == "show" => {
-            let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
-            output.print_coverage(
-                &rpc(client
-                    .get_coverage(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        capture_id.clone(),
-                        None,
-                    )
-                    .await)?,
-                None,
-            )?;
+            let operation = client.take_heap_snapshot(
+                scope.context.clone(),
+                scope.connection.clone(),
+                scope.target.clone(),
+                destination.to_string_lossy().into_owned(),
+                options.capture_numeric_value,
+                options.expose_internals,
+            );
+            tokio::pin!(operation);
+            let mut last_progress = None::<HeapSnapshotProgress>;
+            let result = loop {
+                tokio::select! {
+                    result = &mut operation => break rpc(result)?,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        let progress = rpc(client
+                            .get_heap_snapshot_progress(
+                                scope.context.clone(),
+                                scope.connection.clone(),
+                                scope.target.clone(),
+                            )
+                            .await)?;
+                        if let Some(progress) = progress
+                            && last_progress.as_ref() != Some(&progress)
+                        {
+                            output.print_heap_snapshot_progress(&progress)?;
+                            last_progress = Some(progress);
+                        }
+                    }
+                }
+            };
+            let progress = rpc(client
+                .get_heap_snapshot_progress(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            if let Some(progress) = progress
+                && last_progress.as_ref() != Some(&progress)
+            {
+                output.print_heap_snapshot_progress(&progress)?;
+            }
+            output.print(&result)?;
         }
         [coverage, operation, context_id, connection_id, target_id]
             if coverage == "coverage"
@@ -1134,6 +1142,121 @@ fn parse_logpoint_spec(
     })
 }
 
+struct CoverageShowOptions {
+    capture_id: String,
+    path: Option<String>,
+    all: bool,
+    max_lines: usize,
+    no_cache: bool,
+}
+
+struct HeapSnapshotOptions {
+    capture_numeric_value: bool,
+    expose_internals: bool,
+}
+
+fn parse_heap_snapshot_options(values: &[String]) -> Result<HeapSnapshotOptions, io::Error> {
+    let mut options = HeapSnapshotOptions {
+        capture_numeric_value: false,
+        expose_internals: false,
+    };
+    for value in values {
+        match value.as_str() {
+            "--capture-numeric-value" => options.capture_numeric_value = true,
+            "--expose-internals" => options.expose_internals = true,
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap snapshot option '{option}'"),
+                ));
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn absolute_path(path: &Path) -> Result<std::path::PathBuf, io::Error> {
+    if path.is_absolute() {
+        Ok(path.to_owned())
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
+}
+
+fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions, io::Error> {
+    let mut capture_id = None;
+    let mut path = None;
+    let mut all = false;
+    let mut max_lines = 300_usize;
+    let mut no_cache = false;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--path" => {
+                index += 1;
+                path = Some(
+                    values
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--path requires a source prefix",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--all" => all = true,
+            "--no-cache" => no_cache = true,
+            "--max-lines" => {
+                index += 1;
+                max_lines = values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--max-lines requires a positive integer",
+                        )
+                    })?
+                    .parse()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid --max-lines value: {error}"),
+                        )
+                    })?;
+                if max_lines == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--max-lines must be positive",
+                    ));
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown coverage show option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected coverage show argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(CoverageShowOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        path,
+        all,
+        max_lines,
+        no_cache,
+    })
+}
+
 async fn put_breakpoint(
     context_id: &str,
     breakpoint_id: &str,
@@ -1345,9 +1468,9 @@ commands:
   jsdbg coverage start
   jsdbg coverage capture [--id <name>]
   jsdbg coverage stop [--exclude <name>]
-  jsdbg coverage show [<name>]
-  jsdbg coverage show [<name>] --path <source-prefix>
+  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache]
   jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
+  jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals]
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
   jsdbg target eval <context-id> <connection-id> <target> <expression>

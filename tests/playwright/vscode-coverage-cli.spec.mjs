@@ -119,13 +119,18 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 			90_000,
 		);
-		expect(report).toMatch(/\.tsx?\s+\d+ hit LoC/);
-		expect(report).toMatch(/… \[\d+ items, \d+ files, \d+ hit LoC\]/);
+		expect(report).toMatch(/^\d+ RL \(run lines\), \d+ HL \(hit lines\)$/m);
+		expect(report).toMatch(/\.tsx?\s+\d+ HL, \d+ RL/);
 		expect(report).not.toContain("additional files omitted");
 		expect(report).not.toContain("additional hit ranges omitted");
 		expect(report).toContain("snippet/browser/snippetParser.ts");
 		expect(report).not.toContain("Scanner.next");
-		expect(report.split("\n").length).toBeLessThan(240);
+		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(300);
+		const bounded = await runTextSilent(
+			["coverage", "show", ".", "--max-lines", "40"],
+			environment,
+		);
+		expect(bounded.trimEnd().split("\n").length).toBeLessThanOrEqual(40);
 		const delta = await runJsonSilent(
 			["coverage", "show", "."],
 			environment,
@@ -150,7 +155,21 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 		);
 		expect(drilldown).not.toContain("additional hit ranges omitted");
-		expect(drilldown).toContain("CursorsController.type");
+		expect(drilldown).toMatch(/CursorsController\s+\d+ HL, \d+ RL[\s\S]*├─ type\s+24 HL, 24 RL/);
+		expect(drilldown).toMatch(/CommandExecutor\s+\d+ HL, \d+ RL/);
+		const exhaustive = await runTextSilent(
+			["coverage", "show", ".", "--path", pathPrefix, "--all"],
+			environment,
+		);
+		expect(exhaustive).toMatch(/CursorsController\s+\d+ HL, \d+ RL[\s\S]*├─ type\s+24 HL, 24 RL/);
+		expect(exhaustive.trimEnd().split("\n").length).toBeGreaterThanOrEqual(
+			drilldown.trimEnd().split("\n").length,
+		);
+		const noCache = await runTextSilent(
+			["coverage", "show", ".", "--max-lines", "5", "--no-cache"],
+			environment,
+		);
+		expect(noCache.trimEnd().split("\n").length).toBeLessThanOrEqual(5);
 		await runCli(
 			`Install a coverage-guided logpoint in \`${candidate.function.breadcrumb ?? candidate.function.name}\`.`,
 			[
@@ -350,6 +369,16 @@ async function runJsonSilent(
 	});
 	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
 	return JSON.parse(result.output);
+}
+
+async function runTextSilent(
+	arguments_,
+	environment,
+	timeoutMs = commandTimeoutMs,
+) {
+	const result = await run(cli, arguments_, environment, { timeoutMs });
+	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
+	return result.output;
 }
 
 async function recordCompleted(explanation, arguments_, result) {

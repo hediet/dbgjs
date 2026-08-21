@@ -274,7 +274,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		expect(coverage).toContain("app.ts");
-		expect(coverage).toContain("applyDiscount");
+		expect(coverage).toContain("CheckoutService");
 
 		const disconnected = await runCli(
 			"After proving the calculation completed, we disconnect cleanly. Runtime facts should disappear while durable intent remains.",

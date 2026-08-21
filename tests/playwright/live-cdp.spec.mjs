@@ -40,6 +40,18 @@ test("generated Rust client hits a real JavaScript breakpoint", async () => {
 		);
 		expect(result.code, result.output).toBe(0);
 		expect(result.output).toContain("1 passed");
+		const heapSnapshot = await run(
+			executable,
+			[
+				"heap_snapshot_streams_to_a_devtools_compatible_file",
+				"--ignored",
+				"--exact",
+				"--nocapture",
+			],
+			{ CDP_WS_ENDPOINT: endpoint },
+		);
+		expect(heapSnapshot.code, heapSnapshot.output).toBe(0);
+		expect(heapSnapshot.output).toContain("1 passed");
 	} finally {
 		await context.close();
 		await rm(userDataDir, { recursive: true, force: true });

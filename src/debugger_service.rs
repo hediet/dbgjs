@@ -23,8 +23,8 @@ use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, LogpointSpec, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
-    TargetSnapshot, TargetWaitPredicate,
+    EvaluationSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec, ServiceInfo,
+    StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -886,12 +886,43 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         capture_id: String,
         source_path: Option<String>,
+        no_cache: bool,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .get_coverage(capture_id, source_path)
+            .get_coverage(capture_id, source_path, no_cache)
             .await
             .map_err(target_debugger_rpc_error)
+    }
+
+    async fn take_heap_snapshot(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        path: String,
+        capture_numeric_value: bool,
+        expose_internals: bool,
+    ) -> Result<HeapSnapshotResult, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .take_heap_snapshot(path, capture_numeric_value, expose_internals)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_heap_snapshot_progress(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<Option<HeapSnapshotProgress>, JsonRpcError> {
+        Ok(self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .heap_snapshot_progress())
     }
 
     async fn shutdown(&self, _ctx: &CallCtx) -> Result<bool, JsonRpcError> {
@@ -1340,6 +1371,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::Evaluation(_)
         | TargetDebuggerError::Interaction(_)
         | TargetDebuggerError::Coverage(_)
+        | TargetDebuggerError::HeapSnapshot(_)
         | TargetDebuggerError::BatchRollback { .. }
         | TargetDebuggerError::DriverFailed(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
