@@ -109,6 +109,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			],
 			environment,
 		);
+		await runCli(
+			"We start precise function and block coverage before the interaction.",
+			["coverage", "start"],
+			environment,
+		);
 
 		const pausedCommand = runCli(
 			"We wait for checkout to pause, then trigger the purchase in the browser.",
@@ -128,19 +133,15 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			"\n> The wait is active. We now trigger checkout in Chromium.\n\n",
 		);
 		await runCli(
-			"We trigger the purchase through CDP evaluation in the running page; no out-of-band test control channel is involved.",
-			[
-				"target",
-				"eval",
-				'setTimeout(() => document.querySelector("#run").click(), 0)',
-			],
+			"We perform a real CDP click: jsdbg resolves the button's DOM box and dispatches mouse press/release input events.",
+			["target", "click", "#run"],
 			environment,
 		);
 		const paused = await pausedCommand;
 		expect(paused).toContain("[paused at epoch 1]");
-		expect(paused).toContain("#0 CheckoutService → checkout");
+		expect(paused).toContain("#0 CheckoutService.checkout");
 		expect(paused).toContain("Source: ../src/app.ts");
-		expect(paused).toContain("CheckoutService → checkout");
+		expect(paused).toContain("CheckoutService.checkout");
 		expect(paused).toMatch(/>\s+8 \|/);
 
 		await runCli(
@@ -153,6 +154,31 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			["target", "watch", "items.length"],
 			environment,
 		);
+		const firstCoverage = await runCli(
+			"We capture the recording so far without stopping it; later coverage must accumulate on top of this immutable snapshot.",
+			["coverage", "capture"],
+			environment,
+		);
+		expect(firstCoverage).toContain("checkout");
+		const firstCoverageJson = await runJsonSilent(["coverage", "capture"], environment);
+		const firstSource = firstCoverageJson.sources.find(
+			(source) => source.associatedAuthoredSource === authoredSource,
+		);
+		expect(firstSource).toBeDefined();
+		expect(firstSource.functions.some((fn) => fn.name === "checkout")).toBe(true);
+		expect(
+			firstSource.functions.flatMap((fn) => fn.ranges).some((range) => range.count === 0),
+		).toBe(true);
+		expect(
+			firstSource.functions.every((fn) =>
+				fn.ranges.every(
+					(range) =>
+						range.startOffset >= 0 &&
+						range.endOffset > range.startOffset &&
+						range.count >= 0,
+				),
+			),
+		).toBe(true);
 
 		const afterOver = await runCli(
 			"We step over the subtotal calculation. Scope and pause epoch are inferred, and the command waits briefly for the next pause.",
@@ -172,7 +198,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			["target", "step", "into"],
 			environment,
 		);
-		expect(insideDiscount).toContain("CheckoutService → applyDiscount");
+		expect(insideDiscount).toContain("CheckoutService.applyDiscount");
 		expect(insideDiscount).toMatch(/>\s+3 \|/);
 		expect(insideDiscount).toContain('discount {"total":50,"rate":0.1}');
 		expect(insideDiscount).toContain("items.length: unavailable in this frame");
@@ -199,6 +225,37 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		await fixtureServer.waitForResult("45");
+		const finalCoverageJson = await runJsonSilent(["coverage", "capture"], environment);
+		const finalSource = finalCoverageJson.sources.find(
+			(source) => source.associatedAuthoredSource === authoredSource,
+		);
+		expect(finalSource).toBeDefined();
+		const functionNames = finalSource.functions.map((fn) => fn.name);
+		expect(functionNames).toContain("checkout");
+		expect(functionNames).toContain("applyDiscount");
+		const functionIdentities = finalSource.functions.map(
+			(fn) =>
+				`${fn.name}:${fn.blockCoverage}:${fn.ranges[0].startOffset}:${fn.ranges[0].endOffset}`,
+		);
+		expect(new Set(functionIdentities).size).toBe(functionIdentities.length);
+		expect(
+			finalSource.functions
+				.find((fn) => fn.name === "checkout")
+				.ranges.some((range) => range.count > 0),
+		).toBe(true);
+		expect(
+			finalSource.functions
+				.find((fn) => fn.name === "applyDiscount")
+				.ranges.some((range) => range.count > 0),
+		).toBe(true);
+		const coverage = await runCli(
+			"We stop precise coverage and print the executed functions grouped under the preferred authored source.",
+			["coverage", "stop"],
+			environment,
+		);
+		expect(coverage).toContain("../src/app.ts");
+		expect(coverage).toContain("checkout");
+		expect(coverage).toContain("applyDiscount");
 
 		const disconnected = await runCli(
 			"After proving the calculation completed, we disconnect cleanly. Runtime facts should disappear while durable intent remains.",
@@ -253,6 +310,12 @@ async function runCli(explanation, arguments_, environment) {
 	const result = await runCliResult(explanation, arguments_, environment);
 	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
 	return result.output;
+}
+
+async function runJsonSilent(arguments_, environment) {
+	const result = await run(cli, ["--json", ...arguments_], environment);
+	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
+	return JSON.parse(result.output);
 }
 
 async function runCliResult(explanation, arguments_, environment) {

@@ -21,7 +21,7 @@ pub fn breadcrumb(source_url: &str, source: &str, line: u32, utf16_column: u32) 
         best: Vec::new(),
     };
     visitor.visit_program(&parsed.program);
-    (!visitor.best.is_empty()).then(|| visitor.best.join(" → "))
+    (!visitor.best.is_empty()).then(|| visitor.best.join("."))
 }
 
 struct BreadcrumbVisitor {
@@ -121,7 +121,7 @@ mod tests {
             "class Cart {\n  checkout(items: number[]) {\n    return items.length;\n  }\n}";
         assert_eq!(
             breadcrumb("cart.ts", source, 3, 12).as_deref(),
-            Some("Cart → checkout")
+            Some("Cart.checkout")
         );
     }
 
@@ -140,7 +140,7 @@ mod tests {
             "class Cart {\r\n  checkout(items: number[]) {\r\n    return items.length;\r\n  }\r\n}";
         assert_eq!(
             breadcrumb("cart.ts", source, 3, 12).as_deref(),
-            Some("Cart → checkout")
+            Some("Cart.checkout")
         );
     }
 }

@@ -134,6 +134,88 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?)?;
         }
+        [target, click, selector] if target == "target" && click == "click" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            rpc(client
+                .click_target(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    selector.clone(),
+                )
+                .await)?;
+            println!("Clicked {selector}");
+        }
+        [
+            target,
+            click,
+            context_id,
+            connection_id,
+            target_id,
+            selector,
+        ] if target == "target" && click == "click" => {
+            let client = ensure_service(&state_file).await?;
+            rpc(client
+                .click_target(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id.clone(),
+                    selector.clone(),
+                )
+                .await)?;
+            println!("Clicked {selector}");
+        }
+        [coverage, start] if coverage == "coverage" && start == "start" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            rpc(client
+                .start_coverage(scope.context, scope.connection, scope.target)
+                .await)?;
+            println!("Coverage recording started.");
+        }
+        [coverage, take]
+            if coverage == "coverage" && matches!(take.as_str(), "take" | "capture") =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .take_coverage(scope.context, scope.connection, scope.target)
+                .await)?)?;
+        }
+        [coverage, stop] if coverage == "coverage" && stop == "stop" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .stop_coverage(scope.context, scope.connection, scope.target)
+                .await)?)?;
+        }
+        [coverage, operation, context_id, connection_id, target_id]
+            if coverage == "coverage"
+                && matches!(operation.as_str(), "start" | "take" | "capture" | "stop") =>
+        {
+            let client = ensure_service(&state_file).await?;
+            match operation.as_str() {
+                "start" => {
+                    rpc(client
+                        .start_coverage(
+                            context_id.clone(),
+                            connection_id.clone(),
+                            target_id.clone(),
+                        )
+                        .await)?;
+                    println!("Coverage recording started.");
+                }
+                "take" | "capture" => output.print(&rpc(client
+                    .take_coverage(context_id.clone(), connection_id.clone(), target_id.clone())
+                    .await)?)?,
+                "stop" => output.print(&rpc(client
+                    .stop_coverage(context_id.clone(), connection_id.clone(), target_id.clone())
+                    .await)?)?,
+                _ => unreachable!(),
+            }
+        }
         [target, watch, expression] if target == "target" && watch == "watch" => {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
@@ -909,6 +991,10 @@ commands:
   jsdbg target resume [--epoch <epoch>]
   jsdbg target step into|over|out [--epoch <epoch>]
   jsdbg target eval|watch <expression>
+  jsdbg target click <css-selector>
+  jsdbg target click <context-id> <connection-id> <target> <css-selector>
+  jsdbg coverage start|capture|stop
+  jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
   jsdbg target eval <context-id> <connection-id> <target> <expression>

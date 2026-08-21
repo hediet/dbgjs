@@ -4,7 +4,13 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::cdp::DebuggerEvaluateOnCallFrameParams;
+use crate::cdp::{
+    DebuggerEvaluateOnCallFrameParams, DomGetBoxModelParams, DomGetDocumentParams,
+    DomQuerySelectorParams, InputDispatchMouseEventParams, InputDispatchMouseEventParamsType,
+    InputMouseButton, ProfilerEnableParams, ProfilerScriptCoverage,
+    ProfilerStartPreciseCoverageParams, ProfilerStopPreciseCoverageParams,
+    ProfilerTakePreciseCoverageParams,
+};
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::content_store::ContentStore;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
@@ -13,7 +19,8 @@ use crate::debugger_engine::{
     SessionKey, SessionPhase, StepKind,
 };
 use crate::service_api::{
-    ConsoleMessageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot,
+    ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
+    CoverageSourceSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot,
     PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
     TargetScriptStatus, TargetWaitPredicate,
@@ -160,6 +167,42 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn click(&self, selector: String) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::Click { selector, response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn start_coverage(&self) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::StartCoverage { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn take_coverage(&self) -> Result<CoverageSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::TakeCoverage { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn stop_coverage(&self) -> Result<CoverageSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::StopCoverage { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn wait(
         &self,
         predicate: TargetWaitPredicate,
@@ -259,6 +302,19 @@ enum TargetCommand {
         expression: String,
         response: oneshot::Sender<Result<EvaluationSnapshot, TargetDebuggerError>>,
     },
+    Click {
+        selector: String,
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
+    StartCoverage {
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
+    TakeCoverage {
+        response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
+    },
+    StopCoverage {
+        response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -273,6 +329,7 @@ async fn run_target(
     snapshots: watch::Sender<TargetDebuggerSnapshot>,
 ) {
     let mut breakpoint_revisions = BTreeMap::<String, u64>::new();
+    let mut coverage = None::<CoverageRecording>;
     loop {
         enum Next {
             Command(Option<TargetCommand>),
@@ -374,6 +431,81 @@ async fn run_target(
                     evaluate(&driver, &session_key, pause_epoch, frame_index, expression).await;
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::Click { selector, response })) => {
+                let prior_epoch = driver
+                    .state()
+                    .sessions
+                    .get(&session_key)
+                    .map_or(0, |session| session.next_pause_epoch.saturating_sub(1));
+                let result = match begin_click(&driver, selector).await {
+                    Err(error) => Err(error),
+                    Ok(mut dispatch) => loop {
+                        tokio::select! {
+                            result = &mut dispatch => {
+                                break result
+                                    .map_err(|error| TargetDebuggerError::Interaction(error.to_string()))
+                                    .and_then(|result| result);
+                            }
+                            event = driver.process_next_event() => {
+                                if let Err(error) = event {
+                                    break Err(error.into());
+                                }
+                                snapshots.send_replace(snapshot_from_driver(
+                                    &context_id,
+                                    &connection_id,
+                                    &target_id,
+                                    connection_generation,
+                                    &session_key,
+                                    &driver,
+                                ));
+                                if matches!(
+                                    driver.state().sessions.get(&session_key).map(|session| &session.phase),
+                                    Some(SessionPhase::Paused { epoch }) if *epoch > prior_epoch
+                                ) {
+                                    dispatch.abort();
+                                    let _ = dispatch.await;
+                                    break Ok(());
+                                }
+                            }
+                        }
+                    },
+                };
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::StartCoverage { response })) => {
+                let result = if coverage.is_some() {
+                    Err(TargetDebuggerError::CoverageAlreadyActive)
+                } else {
+                    start_coverage(&driver).await.map(|()| {
+                        coverage = Some(CoverageRecording::default());
+                    })
+                };
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::TakeCoverage { response })) => {
+                let result = match coverage.as_mut() {
+                    Some(recording) => take_coverage(&driver, &session_key, recording).await,
+                    None => Err(TargetDebuggerError::CoverageNotActive),
+                };
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::StopCoverage { response })) => {
+                let result = async {
+                    let recording = coverage
+                        .as_mut()
+                        .ok_or(TargetDebuggerError::CoverageNotActive)?;
+                    let snapshot = take_coverage(&driver, &session_key, recording).await?;
+                    driver
+                        .client()
+                        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
+                        .await
+                        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+                    coverage = None;
+                    Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
             Next::Command(None) => break,
             Next::Event(Ok(_)) => {
                 snapshots.send_replace(snapshot_from_driver(
@@ -385,6 +517,7 @@ async fn run_target(
                     &driver,
                 ));
             }
+
             Next::Event(Err(error)) => {
                 let mut failed = snapshot_from_driver(
                     &context_id,
@@ -400,6 +533,197 @@ async fn run_target(
                 snapshots.send_replace(failed);
                 break;
             }
+        }
+    }
+}
+
+async fn begin_click(
+    driver: &DebuggerDriver,
+    selector: String,
+) -> Result<tokio::task::JoinHandle<Result<(), TargetDebuggerError>>, TargetDebuggerError> {
+    let document = driver
+        .client()
+        .dom_get_document(DomGetDocumentParams::new())
+        .await
+        .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+    let node = driver
+        .client()
+        .dom_query_selector(DomQuerySelectorParams::new(
+            document.root.node_id,
+            selector.clone(),
+        ))
+        .await
+        .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+    if node.node_id == 0 {
+        return Err(TargetDebuggerError::SelectorNotFound(selector));
+    }
+    let mut box_params = DomGetBoxModelParams::new();
+    box_params.node_id = Some(node.node_id);
+    let model = driver
+        .client()
+        .dom_get_box_model(box_params)
+        .await
+        .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?
+        .model;
+    let x = (model.content[0] + model.content[2] + model.content[4] + model.content[6]) / 4.0;
+    let y = (model.content[1] + model.content[3] + model.content[5] + model.content[7]) / 4.0;
+    let client = driver.client().clone();
+    Ok(tokio::spawn(async move {
+        for kind in [
+            InputDispatchMouseEventParamsType::MouseMoved,
+            InputDispatchMouseEventParamsType::MousePressed,
+            InputDispatchMouseEventParamsType::MouseReleased,
+        ] {
+            let mut event = InputDispatchMouseEventParams::new(kind, x, y);
+            event.button = Some(InputMouseButton::Left);
+            event.click_count = Some(1);
+            client
+                .input_dispatch_mouse_event(event)
+                .await
+                .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+        }
+        Ok(())
+    }))
+}
+
+async fn start_coverage(driver: &DebuggerDriver) -> Result<(), TargetDebuggerError> {
+    driver
+        .client()
+        .profiler_enable(ProfilerEnableParams::new())
+        .await
+        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+    let mut params = ProfilerStartPreciseCoverageParams::new();
+    params.call_count = Some(true);
+    params.detailed = Some(true);
+    driver
+        .client()
+        .profiler_start_precise_coverage(params)
+        .await
+        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+    Ok(())
+}
+
+async fn take_coverage(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    recording: &mut CoverageRecording,
+) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    let coverage = driver
+        .client()
+        .profiler_take_precise_coverage(ProfilerTakePreciseCoverageParams::new())
+        .await
+        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+    recording.timestamp_micros = (coverage.timestamp * 1_000_000.0).max(0.0) as u64;
+    for script in coverage.result {
+        recording.merge(script);
+    }
+    Ok(recording.snapshot(driver, session_key))
+}
+
+#[derive(Default)]
+struct CoverageRecording {
+    timestamp_micros: u64,
+    scripts: BTreeMap<String, AccumulatedScriptCoverage>,
+}
+
+#[derive(Default)]
+struct AccumulatedScriptCoverage {
+    url: String,
+    functions: BTreeMap<(String, bool, u32, u32), BTreeMap<(u32, u32), u64>>,
+}
+
+impl CoverageRecording {
+    fn merge(&mut self, script: ProfilerScriptCoverage) {
+        if script.url.is_empty() {
+            return;
+        }
+        let accumulated = self.scripts.entry(script.script_id).or_default();
+        accumulated.url = script.url;
+        for function in script.functions {
+            let root = function
+                .ranges
+                .first()
+                .and_then(|range| {
+                    Some((
+                        u32::try_from(range.start_offset).ok()?,
+                        u32::try_from(range.end_offset).ok()?,
+                    ))
+                })
+                .unwrap_or((0, 0));
+            let ranges = accumulated
+                .functions
+                .entry((
+                    function.function_name,
+                    function.is_block_coverage,
+                    root.0,
+                    root.1,
+                ))
+                .or_default();
+            for range in function.ranges {
+                let Ok(start) = u32::try_from(range.start_offset) else {
+                    continue;
+                };
+                let Ok(end) = u32::try_from(range.end_offset) else {
+                    continue;
+                };
+                *ranges.entry((start, end)).or_default() += range.count.max(0) as u64;
+            }
+        }
+    }
+
+    fn snapshot(&self, driver: &DebuggerDriver, session_key: &SessionKey) -> CoverageSnapshot {
+        CoverageSnapshot {
+            timestamp_micros: self.timestamp_micros,
+            sources: self
+                .scripts
+                .iter()
+                .filter_map(|(script_id, script)| {
+                    let functions = script
+                        .functions
+                        .iter()
+                        .map(|((name, block_coverage, _, _), ranges)| {
+                            let ranges = ranges
+                                .iter()
+                                .map(|((start, end), count)| CoverageRangeSnapshot {
+                                    start_offset: *start,
+                                    end_offset: *end,
+                                    count: *count,
+                                })
+                                .collect::<Vec<_>>();
+                            CoverageFunctionSnapshot {
+                                name: if name.is_empty() {
+                                    "(anonymous)".to_owned()
+                                } else {
+                                    name.clone()
+                                },
+                                block_coverage: *block_coverage,
+                                ranges,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    if functions.is_empty() {
+                        return None;
+                    }
+                    let associated_authored_source = driver
+                        .state()
+                        .scripts
+                        .iter()
+                        .find(|(key, _)| key.session == *session_key && key.script_id == *script_id)
+                        .and_then(|(_, state)| match &state.source {
+                            ScriptSourceState::Resolved(view)
+                                if view.logical_sources.len() == 1 =>
+                            {
+                                view.logical_sources.keys().next().cloned()
+                            }
+                            _ => None,
+                        });
+                    Some(CoverageSourceSnapshot {
+                        generated_url: script.url.clone(),
+                        associated_authored_source,
+                        functions,
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -895,6 +1219,16 @@ pub enum TargetDebuggerError {
     FrameNotFound(u32),
     #[error("evaluation failed: {0}")]
     Evaluation(String),
+    #[error("interaction failed: {0}")]
+    Interaction(String),
+    #[error("selector '{0}' did not match an element")]
+    SelectorNotFound(String),
+    #[error("coverage failed: {0}")]
+    Coverage(String),
+    #[error("coverage recording is already active")]
+    CoverageAlreadyActive,
+    #[error("coverage recording is not active")]
+    CoverageNotActive,
     #[error("target debugger stopped")]
     Stopped,
     #[error("target debugger failed: {0}")]

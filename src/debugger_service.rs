@@ -22,9 +22,9 @@ use crate::context_engine::{
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
-    ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApi, EvaluationSnapshot,
-    SERVICE_PROTOCOL_VERSION, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
-    TargetSnapshot, TargetWaitPredicate,
+    ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
+    EvaluationSnapshot, SERVICE_PROTOCOL_VERSION, ServiceInfo, StepKind as ApiStepKind,
+    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -739,6 +739,65 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn click_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        selector: String,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .click(selector)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
+    async fn start_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .start_coverage()
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
+    async fn take_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<CoverageSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .take_coverage()
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn stop_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<CoverageSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .stop_coverage()
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn shutdown(&self, _ctx: &CallCtx) -> Result<bool, JsonRpcError> {
         let service = self.clone();
         tokio::spawn(async move {
@@ -1170,6 +1229,9 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         TargetDebuggerError::InvalidBreakpointPosition
         | TargetDebuggerError::StalePause(_)
         | TargetDebuggerError::FrameNotFound(_)
+        | TargetDebuggerError::SelectorNotFound(_)
+        | TargetDebuggerError::CoverageAlreadyActive
+        | TargetDebuggerError::CoverageNotActive
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::SettlementTimedOut
@@ -1177,6 +1239,8 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::SessionMissing
         | TargetDebuggerError::BreakpointFailed { .. }
         | TargetDebuggerError::Evaluation(_)
+        | TargetDebuggerError::Interaction(_)
+        | TargetDebuggerError::Coverage(_)
         | TargetDebuggerError::DriverFailed(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
     };

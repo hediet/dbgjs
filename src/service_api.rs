@@ -2,7 +2,7 @@ use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SERVICE_PROTOCOL_VERSION: u32 = 5;
+pub const SERVICE_PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -234,6 +234,37 @@ pub struct EvaluationSnapshot {
     pub description: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageSnapshot {
+    pub timestamp_micros: u64,
+    pub sources: Vec<CoverageSourceSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageSourceSnapshot {
+    pub generated_url: String,
+    pub associated_authored_source: Option<String>,
+    pub functions: Vec<CoverageFunctionSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageFunctionSnapshot {
+    pub name: String,
+    pub block_coverage: bool,
+    pub ranges: Vec<CoverageRangeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageRangeSnapshot {
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub count: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StepKind {
@@ -368,6 +399,31 @@ pub trait DebuggerServiceApi {
         column: u32,
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn click_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        selector: String,
+    ) -> Result<bool, JsonRpcError>;
+
+    async fn start_coverage(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<bool, JsonRpcError>;
+
+    async fn take_coverage(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<CoverageSnapshot, JsonRpcError>;
+
+    async fn stop_coverage(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;
 }

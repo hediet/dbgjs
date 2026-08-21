@@ -1,6 +1,6 @@
 use cdp_client::service_api::{
     BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
-    EvaluationSnapshot, FrameProjectionSnapshot, PlaywrightChannel, ServiceInfo,
+    CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, PlaywrightChannel, ServiceInfo,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
@@ -288,7 +288,7 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                     FrameProjectionSnapshot::Resolved { location }
                         if location.source_url.is_empty() =>
                     {
-                        "unavailable".to_owned()
+                        runtime_location(&frame.raw)
                     }
                     FrameProjectionSnapshot::Resolved { location } => {
                         format!(
@@ -296,7 +296,7 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                             location.source_url, location.line, location.column
                         )
                     }
-                    FrameProjectionSnapshot::Raw => "not mapped".to_owned(),
+                    FrameProjectionSnapshot::Raw => runtime_location(&frame.raw),
                     FrameProjectionSnapshot::Pending => "mapping".to_owned(),
                     FrameProjectionSnapshot::Failed { message } => {
                         format!("mapping failed ({message})")
@@ -311,6 +311,49 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
 impl HumanOutput for EvaluationSnapshot {
     fn print_human(&self) {
         println!("{}", render_evaluation(self));
+    }
+}
+
+impl HumanOutput for CoverageSnapshot {
+    fn print_human(&self) {
+        if self.sources.is_empty() {
+            println!("No executed functions captured.");
+            return;
+        }
+        for source in &self.sources {
+            match &source.associated_authored_source {
+                Some(authored) => println!(
+                    "{}  [counts measured in generated offsets from {}]",
+                    authored, source.generated_url
+                ),
+                None => println!("{}", source.generated_url),
+            }
+            for function in &source.functions {
+                if function.name != "(anonymous)" {
+                    let count = function.ranges.first().map_or(0, |range| range.count);
+                    println!(
+                        "  {}  x{}  ({} precise range(s))",
+                        function.name,
+                        count,
+                        function.ranges.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn runtime_location(location: &cdp_client::service_api::SourceLocation) -> String {
+    if location.source_url.is_empty() {
+        format!(
+            "runtime (anonymous script):{}:{}",
+            location.line, location.column
+        )
+    } else {
+        format!(
+            "runtime {}:{}:{}",
+            location.source_url, location.line, location.column
+        )
     }
 }
 
