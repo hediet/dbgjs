@@ -15,6 +15,7 @@ pub struct DebuggerDriver {
     session: CdpDebuggerSession,
     sources: SourceEffectInterpreter,
     recording: DebuggerRecording,
+    console_messages: Vec<Vec<String>>,
 }
 
 impl DebuggerDriver {
@@ -28,6 +29,7 @@ impl DebuggerDriver {
             session,
             sources,
             recording: DebuggerRecording::default(),
+            console_messages: Vec::new(),
         }
     }
 
@@ -41,6 +43,10 @@ impl DebuggerDriver {
 
     pub fn recording(&self) -> &DebuggerRecording {
         &self.recording
+    }
+
+    pub fn console_messages(&self) -> &[Vec<String>] {
+        &self.console_messages
     }
 
     pub fn logical_source_content(
@@ -77,6 +83,31 @@ impl DebuggerDriver {
             }
             _ => None,
         };
+        if let CdpRuntimeEvent::Console { params, .. } = &event {
+            const MAX_CONSOLE_MESSAGES: usize = 100;
+            if self.console_messages.len() == MAX_CONSOLE_MESSAGES {
+                self.console_messages.remove(0);
+            }
+            self.console_messages.push(
+                params
+                    .args
+                    .iter()
+                    .map(|argument| {
+                        argument
+                            .value
+                            .as_ref()
+                            .map(|value| match value {
+                                serde_json::Value::String(value) => value.clone(),
+                                value => value.to_string(),
+                            })
+                            .or_else(|| argument.unserializable_value.clone())
+                            .or_else(|| argument.description.clone())
+                            .unwrap_or_else(|| "undefined".to_owned())
+                    })
+                    .collect(),
+            );
+            return Ok(false);
+        }
         let Some(input) = event.into_input(pause_epoch)? else {
             return Ok(false);
         };

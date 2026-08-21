@@ -15,7 +15,7 @@ use crate::cdp::{
     DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
     DebuggerStepOutParams, DebuggerStepOverParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
-    RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
+    RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
 };
 use crate::debugger_engine::{Effect, Input, RawFrame, SessionKey, StepKind};
 use crate::session_transport::CdpSessionMux;
@@ -358,6 +358,10 @@ pub enum CdpRuntimeEvent {
     Resumed {
         session: SessionKey,
     },
+    Console {
+        session: SessionKey,
+        params: RuntimeConsoleApicalledParams,
+    },
     Other {
         session: SessionKey,
         method: String,
@@ -414,6 +418,7 @@ impl CdpRuntimeEvent {
                     pause_epoch,
                 }))
             }
+            Self::Console { .. } => Ok(None),
             Self::Other { .. } => Ok(None),
         }
     }
@@ -450,6 +455,12 @@ impl RequestHandler for CdpEventHandler {
             "Debugger.resumed" => Ok(CdpRuntimeEvent::Resumed {
                 session: self.session.clone(),
             }),
+            "Runtime.consoleAPICalled" => {
+                deserialize(&method, params).map(|params| CdpRuntimeEvent::Console {
+                    session: self.session.clone(),
+                    params,
+                })
+            }
             _ => Ok(CdpRuntimeEvent::Other {
                 session: self.session.clone(),
                 method,

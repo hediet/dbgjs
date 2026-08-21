@@ -689,7 +689,7 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         connection_id: String,
         target_id: String,
-        pause_epoch: u64,
+        pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, JsonRpcError> {
@@ -728,7 +728,7 @@ impl DebuggerServiceApi for DebuggerService {
                     line,
                     column,
                     condition: Some(format!(
-                        "console.log({}, ({})), false",
+                        "console.log({}, JSON.stringify(({}))), false",
                         serde_json::to_string(&logpoint_id)
                             .map_err(|error| internal_error(error.to_string()))?,
                         expression
@@ -1172,6 +1172,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
+        | TargetDebuggerError::SettlementTimedOut
         | TargetDebuggerError::Stopped
         | TargetDebuggerError::SessionMissing
         | TargetDebuggerError::BreakpointFailed { .. }

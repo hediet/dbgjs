@@ -1,10 +1,16 @@
 use std::env;
+use std::fs;
 use std::io;
+use std::io::Write;
+use std::path::Path;
 
+use atomic_write_file::AtomicWriteFile;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetWaitPredicate,
+    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, PlaywrightChannel,
+    StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
 };
+use serde::{Deserialize, Serialize};
 
 #[path = "jsdbg/output.rs"]
 mod output;
@@ -23,7 +29,128 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1).collect::<Vec<_>>();
     let output = OutputFormat::from_arguments(&mut arguments);
     let state_file = default_state_file();
+    let selection_file = state_file.with_extension("selection.json");
     match arguments.as_slice() {
+        [set, workspace, context_id] if set == "set" && workspace == "workspace" => {
+            let client = ensure_service(&state_file).await?;
+            rpc(client.get_context(context_id.clone()).await)?;
+            let mut selection = load_selection(&selection_file)?;
+            if selection.workspace.as_deref() != Some(context_id) {
+                selection.target = None;
+                selection.watches.clear();
+            }
+            selection.workspace = Some(context_id.clone());
+            write_selection(&selection_file, &selection)?;
+            println!("Workspace: {context_id}");
+        }
+        [set, target, selector] if set == "set" && target == "target" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            rpc(client
+                .get_target(scope.context, scope.connection, selector.clone())
+                .await)?;
+            let mut selection = load_selection(&selection_file)?;
+            selection.target = Some(selector.clone());
+            write_selection(&selection_file, &selection)?;
+            println!("Target: {selector}");
+        }
+        [target, show] if target == "target" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [target, step, kind, options @ ..] if target == "target" && step == "step" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            let pause_epoch = resolve_pause_epoch(
+                &client,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
+                options,
+            )
+            .await?;
+            let snapshot = rpc(client
+                .step_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    pause_epoch,
+                    parse_step_kind(kind)?,
+                )
+                .await)?;
+            print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [target, resume, options @ ..] if target == "target" && resume == "resume" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            let pause_epoch = resolve_pause_epoch(
+                &client,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
+                options,
+            )
+            .await?;
+            let snapshot = rpc(client
+                .resume_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    pause_epoch,
+                )
+                .await)?;
+            print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [target, eval, expression] if target == "target" && eval == "eval" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            output.print(&rpc(client
+                .evaluate_target(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    pause_epoch(&snapshot),
+                    0,
+                    expression.clone(),
+                )
+                .await)?)?;
+        }
+        [target, watch, expression] if target == "target" && watch == "watch" => {
+            let client = ensure_service(&state_file).await?;
+            let mut selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection).await?;
+            if !selection.watches.contains(expression) {
+                selection.watches.push(expression.clone());
+                write_selection(&selection_file, &selection)?;
+            }
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
         [service, status] if service == "service" && status == "status" => {
             let client = connect_existing(&state_file).await?;
             output.print(&rpc(client.service_info().await)?)?;
@@ -339,7 +466,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             connection_id,
             target_id,
             expression,
-        ] if target == "target" && matches!(operation.as_str(), "evaluate" | "watch") => {
+        ] if target == "target" && operation == "eval" => {
             let client = ensure_service(&state_file).await?;
             let snapshot = rpc(client
                 .get_target(context_id.clone(), connection_id.clone(), target_id.clone())
@@ -349,7 +476,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     context_id.clone(),
                     connection_id.clone(),
                     target_id.clone(),
-                    current_pause_epoch(&snapshot)?,
+                    pause_epoch(&snapshot),
                     0,
                     expression.clone(),
                 )
@@ -387,6 +514,158 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CliSelection {
+    workspace: Option<String>,
+    target: Option<String>,
+    #[serde(default)]
+    watches: Vec<String>,
+}
+
+struct ResolvedScope {
+    context: String,
+    connection: String,
+    target: String,
+}
+
+fn load_selection(path: &Path) -> Result<CliSelection, Box<dyn std::error::Error>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(CliSelection::default()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_selection(
+    path: &Path,
+    selection: &CliSelection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(&serde_json::to_vec_pretty(selection)?)?;
+    file.commit()?;
+    Ok(())
+}
+
+async fn resolve_scope(
+    client: &DebuggerServiceApiClient,
+    selection: &CliSelection,
+) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
+    let context = match &selection.workspace {
+        Some(context) => context.clone(),
+        None => {
+            let contexts = rpc(client.list_contexts().await)?;
+            match contexts.as_slice() {
+                [context] => context.id.clone(),
+                [] => return Err("no debugger workspace exists; run `jsdbg set workspace`".into()),
+                _ => {
+                    return Err(
+                        "multiple workspaces exist; run `jsdbg set workspace <context>`".into(),
+                    );
+                }
+            }
+        }
+    };
+    let snapshot = rpc(client.get_context(context.clone()).await)?;
+    let connected = snapshot
+        .connections
+        .iter()
+        .filter(|connection| {
+            matches!(
+                connection.status,
+                cdp_client::service_api::ConnectionStatus::Connected { .. }
+            )
+        })
+        .collect::<Vec<_>>();
+    let connection = match connected.as_slice() {
+        [connection] => connection.id.clone(),
+        [] => return Err(format!("workspace '{context}' has no connected connection").into()),
+        _ => {
+            return Err(format!(
+                "workspace '{context}' has multiple connected connections; use an explicit command"
+            )
+            .into());
+        }
+    };
+    let connection_snapshot = connected[0];
+    let target = match &selection.target {
+        Some(target) => target.clone(),
+        None => match connection_snapshot.targets.as_slice() {
+            [target] => target.target_type.clone(),
+            [] => return Err("the connection has no targets".into()),
+            _ => {
+                return Err(
+                    "the connection has multiple targets; run `jsdbg set target <selector>`".into(),
+                );
+            }
+        },
+    };
+    Ok(ResolvedScope {
+        context,
+        connection,
+        target,
+    })
+}
+
+async fn print_target_with_watches(
+    output: &OutputFormat,
+    client: &DebuggerServiceApiClient,
+    selection: &CliSelection,
+    scope: &ResolvedScope,
+    snapshot: &TargetDebuggerSnapshot,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let evaluations = evaluate_watches(client, selection, scope, snapshot).await?;
+    output.print_target_with_watches(snapshot, &scope.target, &evaluations)?;
+    Ok(())
+}
+
+async fn evaluate_watches(
+    client: &DebuggerServiceApiClient,
+    selection: &CliSelection,
+    scope: &ResolvedScope,
+    snapshot: &TargetDebuggerSnapshot,
+) -> Result<Vec<EvaluationSnapshot>, Box<dyn std::error::Error>> {
+    let Some(epoch) = pause_epoch(snapshot) else {
+        return Ok(Vec::new());
+    };
+    let mut evaluations = Vec::new();
+    for expression in &selection.watches {
+        evaluations.push(
+            match client
+                .evaluate_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    Some(epoch),
+                    0,
+                    expression.clone(),
+                )
+                .await
+            {
+                Ok(evaluation) => evaluation,
+                Err(_) => EvaluationSnapshot {
+                    expression: expression.clone(),
+                    kind: "error".to_owned(),
+                    value: None,
+                    unserializable_value: None,
+                    description: Some("unavailable in this frame".to_owned()),
+                },
+            },
+        );
+    }
+    Ok(evaluations)
+}
+
+fn pause_epoch(snapshot: &TargetDebuggerSnapshot) -> Option<u64> {
+    match snapshot.phase {
+        TargetDebuggerPhase::Paused { epoch } => Some(epoch),
+        _ => None,
+    }
 }
 
 async fn resolve_pause_epoch(
@@ -448,7 +727,7 @@ async fn put_breakpoint(
     let line = line.parse::<u32>()?;
     let column = column.parse::<u32>()?;
     let client = ensure_service(state_file).await?;
-    output.print(&rpc(client
+    let context = rpc(client
         .put_breakpoint(
             context_id.to_owned(),
             breakpoint_id.to_owned(),
@@ -456,7 +735,38 @@ async fn put_breakpoint(
             line,
             column,
         )
-        .await)?)?;
+        .await)?;
+    let targets = context
+        .connections
+        .iter()
+        .filter(|connection| {
+            matches!(
+                connection.status,
+                cdp_client::service_api::ConnectionStatus::Connected { .. }
+            )
+        })
+        .flat_map(|connection| {
+            connection
+                .targets
+                .iter()
+                .map(move |target| (connection.id.clone(), target))
+        })
+        .collect::<Vec<_>>();
+    if let [(connection, target)] = targets.as_slice() {
+        match client
+            .get_target(
+                context_id.to_owned(),
+                connection.clone(),
+                target.target_id.clone(),
+            )
+            .await
+        {
+            Ok(snapshot) => output.print_target(&snapshot, &target.target_type)?,
+            Err(_) => output.print(&context)?,
+        }
+    } else {
+        output.print(&context)?;
+    }
     Ok(())
 }
 
@@ -585,16 +895,22 @@ commands:
   jsdbg context list
   jsdbg context create <context-id> [display-name]
   jsdbg context show <context-id>
+  jsdbg set workspace <context-id>
+  jsdbg set target <selector>
   jsdbg connection add <context-id> <connection-id> <ws-endpoint> [--connect]
   jsdbg connection add <context-id> <connection-id> --playwright <url> [--channel <channel>] [--headed] [--connect]
   jsdbg connection connect|disconnect <context-id> <connection-id>
   jsdbg breakpoint set <context-id> <breakpoint-id> <source-url> <line> [column]
-  jsdbg target attach|show <context-id> <connection-id> <target-id>
-  jsdbg target wait <context-id> <connection-id> <target-id> breakpoint-installed <breakpoint-id> [timeout-ms]
-  jsdbg target wait <context-id> <connection-id> <target-id> paused <after-epoch> [timeout-ms]
-  jsdbg target wait <context-id> <connection-id> <target-id> running
+  jsdbg target show
+  jsdbg target attach|show <context-id> <connection-id> <target>
+  jsdbg target wait <context-id> <connection-id> <target> breakpoint-installed <breakpoint-id> [timeout-ms]
+  jsdbg target wait <context-id> <connection-id> <target> paused <after-epoch> [timeout-ms]
+  jsdbg target wait <context-id> <connection-id> <target> running
+  jsdbg target resume [--epoch <epoch>]
+  jsdbg target step into|over|out [--epoch <epoch>]
+  jsdbg target eval|watch <expression>
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
-  jsdbg target evaluate|watch <context-id> <connection-id> <target> <expression>
+  jsdbg target eval <context-id> <connection-id> <target> <expression>
   jsdbg target logpoint <context-id> <connection-id> <target> <id> <source> <line> <column> <expression>"
 }

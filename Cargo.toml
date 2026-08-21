@@ -24,6 +24,12 @@ thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = "0.28"
 url = "2"
+oxc_allocator = "0.146.0"
+oxc_ast = "0.146.0"
+oxc_parser = "0.146.0"
+oxc_span = "0.146.0"
+oxc_ast_visit = "0.146.0"
+oxc_syntax = "0.146.0"
 
 [build-dependencies]
 hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }

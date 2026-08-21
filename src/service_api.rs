@@ -2,7 +2,7 @@ use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SERVICE_PROTOCOL_VERSION: u32 = 4;
+pub const SERVICE_PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -143,7 +143,14 @@ pub struct TargetDebuggerSnapshot {
     pub phase: TargetDebuggerPhase,
     pub scripts: Vec<TargetScriptSnapshot>,
     pub breakpoints: Vec<TargetBreakpointSnapshot>,
+    pub logs: Vec<ConsoleMessageSnapshot>,
     pub pause: Option<PauseSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleMessageSnapshot {
+    pub values: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -203,6 +210,7 @@ pub struct PauseSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct SourceExcerpt {
     pub source_url: String,
+    pub breadcrumb: Option<String>,
     pub current_line: u32,
     pub lines: Vec<SourceExcerptLine>,
     pub highlight_start: u32,
@@ -241,6 +249,7 @@ pub struct FrameSnapshot {
     pub function_name: String,
     pub raw: SourceLocation,
     pub projected: FrameProjectionSnapshot,
+    pub breadcrumb: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -344,7 +353,7 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
-        pause_epoch: u64,
+        pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, JsonRpcError>;

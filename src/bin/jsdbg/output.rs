@@ -36,6 +36,33 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_target_with_watches(
+        &self,
+        value: &TargetDebuggerSnapshot,
+        selector: &str,
+        watches: &[EvaluationSnapshot],
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => {
+                self.print_target(value, selector)?;
+                if !watches.is_empty() {
+                    println!("Watches:");
+                    for watch in watches {
+                        println!("  {}: {}", watch.expression, render_evaluation(watch));
+                    }
+                }
+            }
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "target": value,
+                    "watches": watches,
+                }))?
+            ),
+        }
+        Ok(())
+    }
+
     pub fn print<T>(&self, value: &T) -> Result<(), serde_json::Error>
     where
         T: HumanOutput + Serialize,
@@ -147,9 +174,8 @@ impl HumanOutput for ContextSnapshot {
                             target.target_id.as_str()
                         };
                         println!(
-                            "        {}  {}  {}  {}{}",
+                            "        {}  {}  {}{}",
                             selector,
-                            target.target_type,
                             title,
                             target.url,
                             if target.attached {
@@ -188,11 +214,15 @@ impl HumanOutput for TargetDebuggerSnapshot {
 }
 
 fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
-    println!("Target {}  [{}]", selector, target_phase(&snapshot.phase));
-    println!("  Context: {}", snapshot.context_id);
-    println!("  Connection: {}", snapshot.connection_id);
-    println!("  Generation: {}", snapshot.connection_generation);
-    println!("  Revision: {}", snapshot.revision);
+    println!(
+        "Target {}  [{}]  {}/{}  gen {}  rev {}",
+        selector,
+        target_phase(&snapshot.phase),
+        snapshot.context_id,
+        snapshot.connection_id,
+        snapshot.connection_generation,
+        snapshot.revision
+    );
 
     if !snapshot.breakpoints.is_empty() {
         println!("  Breakpoints:");
@@ -207,13 +237,24 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
             );
         }
     }
+    if !snapshot.logs.is_empty() {
+        println!("Logs:");
+        for message in &snapshot.logs {
+            println!("  {}", message.values.join(" "));
+        }
+    }
 
     match &snapshot.pause {
         None => println!("  Pause: none"),
         Some(pause) => {
             println!("  Pause: epoch {} ({})", pause.epoch, pause.reason);
             if let Some(source) = &pause.source {
-                println!("  Source: {}", source.source_url);
+                match &source.breadcrumb {
+                    Some(breadcrumb) => {
+                        println!("  Source: {} — {}", source.source_url, breadcrumb)
+                    }
+                    None => println!("  Source: {}", source.source_url),
+                }
                 let width = source
                     .lines
                     .last()
@@ -242,23 +283,26 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                 } else {
                     &frame.function_name
                 };
-                println!("    #{} {function_name}", frame.index);
-                match &frame.projected {
+                let function_name = frame.breadcrumb.as_deref().unwrap_or(function_name);
+                let location = match &frame.projected {
                     FrameProjectionSnapshot::Resolved { location }
                         if location.source_url.is_empty() =>
                     {
-                        println!("      Authored: unavailable")
+                        "unavailable".to_owned()
                     }
-                    FrameProjectionSnapshot::Resolved { location } => println!(
-                        "      Authored: {}:{}:{}",
-                        location.source_url, location.line, location.column
-                    ),
-                    FrameProjectionSnapshot::Raw => println!("      Authored: not mapped"),
-                    FrameProjectionSnapshot::Pending => println!("      Authored: mapping"),
+                    FrameProjectionSnapshot::Resolved { location } => {
+                        format!(
+                            "{}:{}:{}",
+                            location.source_url, location.line, location.column
+                        )
+                    }
+                    FrameProjectionSnapshot::Raw => "not mapped".to_owned(),
+                    FrameProjectionSnapshot::Pending => "mapping".to_owned(),
                     FrameProjectionSnapshot::Failed { message } => {
-                        println!("      Authored: mapping failed ({message})")
+                        format!("mapping failed ({message})")
                     }
-                }
+                };
+                println!("    #{} {function_name} — {location}", frame.index);
             }
         }
     }
@@ -266,15 +310,18 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
 
 impl HumanOutput for EvaluationSnapshot {
     fn print_human(&self) {
-        let rendered = self
-            .value
-            .as_ref()
-            .map(format_value)
-            .or_else(|| self.unserializable_value.clone())
-            .or_else(|| self.description.clone())
-            .unwrap_or_else(|| self.kind.clone());
-        println!("{} = {}", self.expression, rendered);
+        println!("{}", render_evaluation(self));
     }
+}
+
+fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
+    evaluation
+        .value
+        .as_ref()
+        .map(format_value)
+        .or_else(|| evaluation.unserializable_value.clone())
+        .or_else(|| evaluation.description.clone())
+        .unwrap_or_else(|| evaluation.kind.clone())
 }
 
 fn format_value(value: &serde_json::Value) -> String {

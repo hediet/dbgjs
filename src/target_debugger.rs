@@ -13,10 +13,10 @@ use crate::debugger_engine::{
     SessionKey, SessionPhase, StepKind,
 };
 use crate::service_api::{
-    EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot, PauseSnapshot, SourceExcerpt,
-    SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus,
-    TargetWaitPredicate,
+    ConsoleMessageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot,
+    PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
+    TargetScriptStatus, TargetWaitPredicate,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -143,7 +143,7 @@ impl TargetDebuggerHandle {
 
     pub async fn evaluate(
         &self,
-        pause_epoch: u64,
+        pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
@@ -254,7 +254,7 @@ enum TargetCommand {
         response: CommandResponse,
     },
     Evaluate {
-        pause_epoch: u64,
+        pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
         response: oneshot::Sender<Result<EvaluationSnapshot, TargetDebuggerError>>,
@@ -325,7 +325,7 @@ async fn run_target(
                 pause_epoch,
                 response,
             })) => {
-                let result = resume(&mut driver, &session_key, pause_epoch)
+                let result = resume_and_settle(&mut driver, &session_key, pause_epoch)
                     .await
                     .map(|()| {
                         snapshot_from_driver(
@@ -347,7 +347,7 @@ async fn run_target(
                 kind,
                 response,
             })) => {
-                let result = step(&mut driver, &session_key, pause_epoch, kind)
+                let result = step_and_settle(&mut driver, &session_key, pause_epoch, kind)
                     .await
                     .map(|()| {
                         snapshot_from_driver(
@@ -472,40 +472,106 @@ async fn step(
     Ok(())
 }
 
+async fn step_and_settle(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+    kind: StepKind,
+) -> Result<(), TargetDebuggerError> {
+    step(driver, session_key, pause_epoch, kind).await?;
+    settle_execution(
+        driver,
+        session_key,
+        |phase| matches!(phase, SessionPhase::Paused { epoch } if *epoch > pause_epoch),
+    )
+    .await
+}
+
+async fn resume_and_settle(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+) -> Result<(), TargetDebuggerError> {
+    resume(driver, session_key, pause_epoch).await?;
+    settle_execution(driver, session_key, |phase| {
+        matches!(phase, SessionPhase::Running)
+    })
+    .await
+}
+
+async fn settle_execution(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    settled: impl Fn(&SessionPhase) -> bool,
+) -> Result<(), TargetDebuggerError> {
+    tokio::time::timeout(Duration::from_millis(200), async {
+        loop {
+            let phase = &driver
+                .state()
+                .sessions
+                .get(session_key)
+                .ok_or(TargetDebuggerError::SessionMissing)?
+                .phase;
+            if settled(phase) {
+                return Ok::<(), TargetDebuggerError>(());
+            }
+            driver.process_next_event().await?;
+        }
+    })
+    .await
+    .map_err(|_| TargetDebuggerError::SettlementTimedOut)?
+}
+
 async fn evaluate(
     driver: &DebuggerDriver,
     session_key: &SessionKey,
-    pause_epoch: u64,
+    pause_epoch: Option<u64>,
     frame_index: u32,
     expression: String,
 ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
-    let pause = require_pause(driver, session_key, pause_epoch)?;
-    let frame = pause
-        .frames
-        .get(frame_index as usize)
-        .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
-    let mut params =
-        DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
-    params.return_by_value = Some(true);
-    params.generate_preview = Some(true);
-    let evaluated = driver
-        .client()
-        .debugger_evaluate_on_call_frame(params)
-        .await
-        .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
-    if let Some(exception) = evaluated.exception_details {
-        return Err(TargetDebuggerError::Evaluation(exception.text));
-    }
-    let kind = serde_json::to_value(&evaluated.result.r#type)
+    let result = if let Some(pause_epoch) = pause_epoch {
+        let pause = require_pause(driver, session_key, pause_epoch)?;
+        let frame = pause
+            .frames
+            .get(frame_index as usize)
+            .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
+        let mut params =
+            DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
+        params.return_by_value = Some(true);
+        params.generate_preview = Some(true);
+        let evaluated = driver
+            .client()
+            .debugger_evaluate_on_call_frame(params)
+            .await
+            .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
+        if let Some(exception) = evaluated.exception_details {
+            return Err(TargetDebuggerError::Evaluation(exception.text));
+        }
+        evaluated.result
+    } else {
+        let mut params = crate::cdp::RuntimeEvaluateParams::new(expression.clone());
+        params.return_by_value = Some(true);
+        params.generate_preview = Some(true);
+        let evaluated = driver
+            .client()
+            .runtime_evaluate(params)
+            .await
+            .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
+        if let Some(exception) = evaluated.exception_details {
+            return Err(TargetDebuggerError::Evaluation(exception.text));
+        }
+        evaluated.result
+    };
+    let kind = serde_json::to_value(&result.r#type)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".to_owned());
     Ok(EvaluationSnapshot {
         expression,
         kind,
-        value: evaluated.result.value,
-        unserializable_value: evaluated.result.unserializable_value,
-        description: evaluated.result.description,
+        value: result.value,
+        unserializable_value: result.unserializable_value,
+        description: result.description,
     })
 }
 
@@ -544,24 +610,51 @@ fn snapshot_from_driver(
         session_key,
         driver.state(),
     );
+    result.logs = driver
+        .console_messages()
+        .iter()
+        .map(|values| ConsoleMessageSnapshot {
+            values: values.clone(),
+        })
+        .collect();
     if let Some(pause) = result.pause.as_mut()
-        && let Some(frame) = pause.frames.first()
-        && let FrameProjectionSnapshot::Resolved { location } = &frame.projected
-        && let Some(raw_frame) = driver
+        && let Some(raw_pause) = driver
             .state()
             .sessions
             .get(session_key)
             .and_then(|session| session.pause.as_ref())
-            .and_then(|pause| pause.frames.first())
-        && let Some(content) =
-            driver.logical_source_content(&raw_frame.raw_script, &location.source_url)
     {
-        pause.source = Some(source_excerpt(&location.source_url, location, &content));
+        for (frame, raw_frame) in pause.frames.iter_mut().zip(raw_pause.frames.iter()) {
+            if let FrameProjectionSnapshot::Resolved { location } = &frame.projected
+                && let Some(content) =
+                    driver.logical_source_content(&raw_frame.raw_script, &location.source_url)
+            {
+                frame.breadcrumb = crate::language_intelligence::breadcrumb(
+                    &location.source_url,
+                    &content,
+                    location.line,
+                    location.column,
+                );
+                if frame.index == 0 {
+                    pause.source = Some(source_excerpt(
+                        &location.source_url,
+                        location,
+                        &content,
+                        frame.breadcrumb.clone(),
+                    ));
+                }
+            }
+        }
     }
     result
 }
 
-fn source_excerpt(source_url: &str, location: &SourceLocation, content: &str) -> SourceExcerpt {
+fn source_excerpt(
+    source_url: &str,
+    location: &SourceLocation,
+    content: &str,
+    breadcrumb: Option<String>,
+) -> SourceExcerpt {
     let lines = content.lines().collect::<Vec<_>>();
     let current = location.line.saturating_sub(1) as usize;
     let start = current.saturating_sub(4);
@@ -577,6 +670,7 @@ fn source_excerpt(source_url: &str, location: &SourceLocation, content: &str) ->
         .max(1) as u32;
     SourceExcerpt {
         source_url: source_url.to_owned(),
+        breadcrumb,
         current_line: location.line,
         lines: (start..end)
             .map(|index| SourceExcerptLine {
@@ -648,6 +742,7 @@ fn snapshot(
             },
             scripts: Vec::new(),
             breakpoints: Vec::new(),
+            logs: Vec::new(),
             pause: None,
         };
     };
@@ -716,48 +811,54 @@ fn snapshot(
             },
         })
         .collect();
-    let pause = session.pause.as_ref().map(|pause| PauseSnapshot {
-        epoch: pause.epoch,
-        reason: pause.reason.clone(),
-        source: None,
-        frames: pause
-            .frames
-            .iter()
-            .enumerate()
-            .map(|(index, frame)| {
-                let raw_url = state
-                    .scripts
-                    .get(&frame.raw_script)
-                    .map_or_else(String::new, |script| script.url.clone());
-                FrameSnapshot {
-                    index: u32::try_from(index).unwrap_or(u32::MAX),
-                    function_name: frame.function_name.clone(),
-                    raw: source_location(
-                        raw_url,
-                        frame.raw_position.line,
-                        frame.raw_position.column,
-                    ),
-                    projected: match &frame.projected {
-                        FrameProjection::Raw => FrameProjectionSnapshot::Raw,
-                        FrameProjection::Pending(_) => FrameProjectionSnapshot::Pending,
-                        FrameProjection::Resolved {
-                            source_url,
-                            position,
-                        } => FrameProjectionSnapshot::Resolved {
-                            location: source_location(
-                                source_url.clone(),
-                                position.line,
-                                position.column,
-                            ),
+    let pause = matches!(session.phase, SessionPhase::Paused { .. })
+        .then(|| session.pause.as_ref())
+        .flatten()
+        .map(|pause| PauseSnapshot {
+            epoch: pause.epoch,
+            reason: pause.reason.clone(),
+            source: None,
+            frames: pause
+                .frames
+                .iter()
+                .enumerate()
+                .map(|(index, frame)| {
+                    let raw_url = state
+                        .scripts
+                        .get(&frame.raw_script)
+                        .map_or_else(String::new, |script| script.url.clone());
+                    FrameSnapshot {
+                        index: u32::try_from(index).unwrap_or(u32::MAX),
+                        function_name: frame.function_name.clone(),
+                        raw: source_location(
+                            raw_url,
+                            frame.raw_position.line,
+                            frame.raw_position.column,
+                        ),
+                        projected: match &frame.projected {
+                            FrameProjection::Raw => FrameProjectionSnapshot::Raw,
+                            FrameProjection::Pending(_) => FrameProjectionSnapshot::Pending,
+                            FrameProjection::Resolved {
+                                source_url,
+                                position,
+                            } => FrameProjectionSnapshot::Resolved {
+                                location: source_location(
+                                    source_url.clone(),
+                                    position.line,
+                                    position.column,
+                                ),
+                            },
+                            FrameProjection::Failed { message } => {
+                                FrameProjectionSnapshot::Failed {
+                                    message: message.clone(),
+                                }
+                            }
                         },
-                        FrameProjection::Failed { message } => FrameProjectionSnapshot::Failed {
-                            message: message.clone(),
-                        },
-                    },
-                }
-            })
-            .collect(),
-    });
+                        breadcrumb: None,
+                    }
+                })
+                .collect(),
+        });
     TargetDebuggerSnapshot {
         context_id: context_id.to_owned(),
         connection_id: connection_id.to_owned(),
@@ -767,6 +868,7 @@ fn snapshot(
         phase,
         scripts,
         breakpoints,
+        logs: Vec::new(),
         pause,
     }
 }
@@ -804,6 +906,8 @@ pub enum TargetDebuggerError {
     },
     #[error("target wait timed out")]
     WaitTimedOut,
+    #[error("debugger command did not settle within 200ms")]
+    SettlementTimedOut,
     #[error("target wait timeout must be between 1ms and 5 minutes")]
     InvalidTimeout,
 }

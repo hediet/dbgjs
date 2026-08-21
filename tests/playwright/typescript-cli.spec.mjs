@@ -53,6 +53,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		serviceStarted = true;
+		await runCli(
+			"We select this workspace once so subsequent debugger commands can stay focused on the investigation.",
+			["set", "workspace", "typescript-e2e"],
+			environment,
+		);
 		const connected = await runCli(
 			"We describe how to launch the debuggee by giving jsdbg a pasteable page URL. The Playwright provider starts bundled Chromium, opens the page, discovers CDP, and connects immediately.",
 			[
@@ -66,33 +71,27 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			],
 			environment,
 		);
-		expect(connected).toContain("page  page");
+		expect(connected).toMatch(/^\s+page\s+127\.0\.0\.1:/m);
 		await runCli(
-			"We set a durable breakpoint where checkout computes its subtotal. The unique selector `page` keeps the command readable.",
+			"There is one page target, so we select the readable `page` alias instead of carrying an opaque protocol ID.",
+			["set", "target", "page"],
+			environment,
+		);
+		const breakpoint = await runCli(
+			"Breakpoint creation waits briefly for live target resolution, so the command itself tells us where it landed.",
 			[
 				"breakpoint",
 				"set",
 				"typescript-e2e",
 				"checkout",
 				authoredSource,
-				"7",
+				"8",
 				"3",
 			],
 			environment,
 		);
-		const attached = await runCli(
-			"Targets are auto-attached on connect. We inspect the uniquely selected page and see that the authored breakpoint is already installed.",
-			[
-				"target",
-				"show",
-				"typescript-e2e",
-				"browser",
-				"page",
-			],
-			environment,
-		);
-		expect(attached).toContain(
-			"checkout  ../src/app.ts:7:3  [installed; 1 binding]",
+		expect(breakpoint).toContain(
+			"checkout  ../src/app.ts:8:3  [installed; 1 binding]",
 		);
 		await runCli(
 			"We add a logpoint inside applyDiscount. It records useful runtime data without stopping execution.",
@@ -104,7 +103,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 				"page",
 				"discount",
 				authoredSource,
-				"2",
+				"3",
 				"3",
 				"({ total, rate })",
 			],
@@ -128,91 +127,75 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		await emitTranscript(
 			"\n> The wait is active. We now trigger checkout in Chromium.\n\n",
 		);
-		fixtureServer.trigger();
+		await runCli(
+			"We trigger the purchase through CDP evaluation in the running page; no out-of-band test control channel is involved.",
+			[
+				"target",
+				"eval",
+				'setTimeout(() => document.querySelector("#run").click(), 0)',
+			],
+			environment,
+		);
 		const paused = await pausedCommand;
 		expect(paused).toContain("[paused at epoch 1]");
-		expect(paused).toContain("#0 checkout");
+		expect(paused).toContain("#0 CheckoutService → checkout");
 		expect(paused).toContain("Source: ../src/app.ts");
-		expect(paused).toMatch(/>\s+7 \|/);
+		expect(paused).toContain("CheckoutService → checkout");
+		expect(paused).toMatch(/>\s+8 \|/);
 
 		await runCli(
 			"We evaluate the current item list in the selected frame.",
-			["target", "evaluate", "typescript-e2e", "browser", "page", "items"],
+			["target", "eval", "items"],
 			environment,
 		);
 		await runCli(
-			"We add a watch-style inspection for the number of items.",
-			["target", "watch", "typescript-e2e", "browser", "page", "items.length"],
+			"We add a watch for the item count. It will be reevaluated and shown after every later pause.",
+			["target", "watch", "items.length"],
 			environment,
 		);
 
-		await runCli(
-			"We step over the subtotal calculation. The current pause epoch is inferred automatically.",
-			[
-				"target",
-				"step",
-				"typescript-e2e",
-				"browser",
-				"page",
-				"over",
-			],
-			environment,
-		);
 		const afterOver = await runCli(
-			"We wait for the next pause and verify that execution advanced to the discount call.",
-			[
-				"target",
-				"wait",
-				"typescript-e2e",
-				"browser",
-				"page",
-				"paused",
-				"1",
-				"30000",
-			],
+			"We step over the subtotal calculation. Scope and pause epoch are inferred, and the command waits briefly for the next pause.",
+			["target", "step", "over"],
 			environment,
 		);
-		expect(afterOver).toMatch(/>\s+8 \|/);
+		expect(afterOver).toMatch(/>\s+9 \|/);
+		expect(afterOver).toContain("items.length: 3");
 		await runCli(
 			"Now that the reduction completed, we inspect the subtotal.",
-			["target", "evaluate", "typescript-e2e", "browser", "page", "subtotal"],
+			["target", "eval", "subtotal"],
 			environment,
 		);
 
-		await runCli(
-			"We step into applyDiscount.",
-			["target", "step", "typescript-e2e", "browser", "page", "into"],
-			environment,
-		);
 		const insideDiscount = await runCli(
-			"We wait for the callee pause; the preferred location is authored TypeScript.",
-			["target", "wait", "typescript-e2e", "browser", "page", "paused", "2", "30000"],
+			"We step into applyDiscount and receive the callee pause directly.",
+			["target", "step", "into"],
 			environment,
 		);
-		expect(insideDiscount).toMatch(/>\s+2 \|/);
+		expect(insideDiscount).toContain("CheckoutService → applyDiscount");
+		expect(insideDiscount).toMatch(/>\s+3 \|/);
+		expect(insideDiscount).toContain('discount {"total":50,"rate":0.1}');
+		expect(insideDiscount).toContain("items.length: unavailable in this frame");
 		await runCli(
 			"We inspect the discount rate while inside the helper.",
-			["target", "evaluate", "typescript-e2e", "browser", "page", "rate"],
+			["target", "eval", "rate"],
 			environment,
 		);
-		await runCli(
-			"We step out to checkout.",
-			["target", "step", "typescript-e2e", "browser", "page", "out"],
+		const afterOut = await runCli(
+			"We step out and receive checkout's next authored pause directly.",
+			["target", "step", "out"],
 			environment,
 		);
-		await runCli(
-			"We wait for checkout to regain control.",
-			["target", "wait", "typescript-e2e", "browser", "page", "paused", "3", "30000"],
-			environment,
-		);
+		expect(afterOut).toMatch(/>\s+10 \|/);
+		expect(afterOut).toContain("items.length: 3");
 		await runCli(
 			"We resume without spelling an epoch; jsdbg safely uses the current pause.",
-			["target", "resume", "typescript-e2e", "browser", "page"],
+			["target", "resume"],
 			environment,
 		);
 		await runCli(
 			"We confirm that execution is running again.",
-			["target", "wait", "typescript-e2e", "browser", "page", "running"],
+			["target", "show"],
 			environment,
 		);
 		await fixtureServer.waitForResult("45");
@@ -240,9 +223,9 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			],
 			environment,
 		);
-		expect(reattached).toContain("Generation: 2");
+		expect(reattached).toContain("gen 2");
 		expect(reattached).toContain(
-			"checkout  ../src/app.ts:7:3  [installed; 1 binding]",
+			"checkout  ../src/app.ts:8:3  [installed; 1 binding]",
 		);
 		await runCli(
 			"The reconnect check is complete; we close the live CDP connection before stopping the service.",
@@ -299,7 +282,6 @@ function quoteArgument(argument) {
 }
 
 async function startFixtureServer() {
-	let triggerRequested = false;
 	let observedResult;
 	let resolveResult;
 	const resultObserved = new Promise((resolve_) => {
@@ -320,13 +302,8 @@ async function startFixtureServer() {
 				case "/":
 					response.setHeader("content-type", "text/html; charset=utf-8");
 					response.end(
-						'<!doctype html><button id="run">Run fixture</button><script src="/dist/app.js"></script><script>setInterval(async () => { if ((await fetch("/trigger")).ok) document.querySelector("#run").click(); }, 25)</script>',
+						'<!doctype html><button id="run">Run fixture</button><script src="/dist/app.js"></script>',
 					);
-					break;
-				case "/trigger":
-					response.statusCode = triggerRequested ? 200 : 404;
-					triggerRequested = false;
-					response.end();
 					break;
 				case "/dist/app.js":
 					response.setHeader("content-type", "text/javascript; charset=utf-8");
@@ -355,9 +332,6 @@ async function startFixtureServer() {
 	}
 	return {
 		origin: `http://127.0.0.1:${address.port}`,
-		trigger: () => {
-			triggerRequested = true;
-		},
 		waitForResult: async (expected) => {
 			if (observedResult !== undefined) {
 				expect(observedResult).toBe(expected);
