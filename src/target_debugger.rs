@@ -4,17 +4,19 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::cdp::DebuggerEvaluateOnCallFrameParams;
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::content_store::ContentStore;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
 use crate::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptSourceState,
-    SessionKey, SessionPhase,
+    SessionKey, SessionPhase, StepKind,
 };
 use crate::service_api::{
-    FrameProjectionSnapshot, FrameSnapshot, PauseSnapshot, SourceLocation,
-    TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate,
+    EvaluationSnapshot, FrameProjectionSnapshot, FrameSnapshot, PauseSnapshot, SourceExcerpt,
+    SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot, TargetBreakpointStatus,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus,
+    TargetWaitPredicate,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -28,6 +30,7 @@ pub struct TargetBreakpointSpec {
     pub source_url: String,
     pub line: u32,
     pub column: u32,
+    pub condition: Option<String>,
 }
 
 #[derive(Clone)]
@@ -66,13 +69,13 @@ impl TargetDebuggerHandle {
                 waiting_for_debugger: false,
             })
             .await?;
-        let initial = snapshot(
+        let initial = snapshot_from_driver(
             &context_id,
             &connection_id,
             &target_id,
             connection_generation,
             &session_key,
-            driver.state(),
+            &driver,
         );
         let (snapshot_sender, snapshots) = watch::channel(initial);
         let (commands, command_receiver) = mpsc::channel(COMMAND_BUFFER);
@@ -123,6 +126,38 @@ impl TargetDebuggerHandle {
             response,
         })
         .await
+    }
+
+    pub async fn step(
+        &self,
+        pause_epoch: u64,
+        kind: StepKind,
+    ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
+        self.command(|response| TargetCommand::Step {
+            pause_epoch,
+            kind,
+            response,
+        })
+        .await
+    }
+
+    pub async fn evaluate(
+        &self,
+        pause_epoch: u64,
+        frame_index: u32,
+        expression: String,
+    ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::Evaluate {
+                pause_epoch,
+                frame_index,
+                expression,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
     pub async fn wait(
@@ -213,6 +248,17 @@ enum TargetCommand {
         pause_epoch: u64,
         response: CommandResponse,
     },
+    Step {
+        pause_epoch: u64,
+        kind: StepKind,
+        response: CommandResponse,
+    },
+    Evaluate {
+        pause_epoch: u64,
+        frame_index: u32,
+        expression: String,
+        response: oneshot::Sender<Result<EvaluationSnapshot, TargetDebuggerError>>,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -247,13 +293,13 @@ async fn run_target(
                     .get(&breakpoint.id)
                     .is_some_and(|current| *current > context_revision)
                 {
-                    let _ = response.send(Ok(snapshot(
+                    let _ = response.send(Ok(snapshot_from_driver(
                         &context_id,
                         &connection_id,
                         &target_id,
                         connection_generation,
                         &session_key,
-                        driver.state(),
+                        &driver,
                     )));
                     continue;
                 }
@@ -261,13 +307,13 @@ async fn run_target(
                 let result = apply_breakpoint(&mut driver, &context_id, breakpoint)
                     .await
                     .map(|()| {
-                        snapshot(
+                        snapshot_from_driver(
                             &context_id,
                             &connection_id,
                             &target_id,
                             connection_generation,
                             &session_key,
-                            driver.state(),
+                            &driver,
                         )
                     });
                 if let Ok(snapshot) = &result {
@@ -282,13 +328,13 @@ async fn run_target(
                 let result = resume(&mut driver, &session_key, pause_epoch)
                     .await
                     .map(|()| {
-                        snapshot(
+                        snapshot_from_driver(
                             &context_id,
                             &connection_id,
                             &target_id,
                             connection_generation,
                             &session_key,
-                            driver.state(),
+                            &driver,
                         )
                     });
                 if let Ok(snapshot) = &result {
@@ -296,25 +342,57 @@ async fn run_target(
                 }
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::Step {
+                pause_epoch,
+                kind,
+                response,
+            })) => {
+                let result = step(&mut driver, &session_key, pause_epoch, kind)
+                    .await
+                    .map(|()| {
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        )
+                    });
+                if let Ok(snapshot) = &result {
+                    snapshots.send_replace(snapshot.clone());
+                }
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::Evaluate {
+                pause_epoch,
+                frame_index,
+                expression,
+                response,
+            })) => {
+                let result =
+                    evaluate(&driver, &session_key, pause_epoch, frame_index, expression).await;
+                let _ = response.send(result);
+            }
             Next::Command(None) => break,
             Next::Event(Ok(_)) => {
-                snapshots.send_replace(snapshot(
+                snapshots.send_replace(snapshot_from_driver(
                     &context_id,
                     &connection_id,
                     &target_id,
                     connection_generation,
                     &session_key,
-                    driver.state(),
+                    &driver,
                 ));
             }
             Next::Event(Err(error)) => {
-                let mut failed = snapshot(
+                let mut failed = snapshot_from_driver(
                     &context_id,
                     &connection_id,
                     &target_id,
                     connection_generation,
                     &session_key,
-                    driver.state(),
+                    &driver,
                 );
                 failed.phase = TargetDebuggerPhase::Failed {
                     message: error.to_string(),
@@ -348,7 +426,7 @@ async fn apply_breakpoint(
                     .checked_sub(1)
                     .ok_or(TargetDebuggerError::InvalidBreakpointPosition)?,
             },
-            condition: None,
+            condition: breakpoint.condition,
         })
         .await?;
     Ok(())
@@ -377,6 +455,161 @@ async fn resume(
     Ok(())
 }
 
+async fn step(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+    kind: StepKind,
+) -> Result<(), TargetDebuggerError> {
+    require_pause(driver, session_key, pause_epoch)?;
+    driver
+        .apply(Input::StepRequested {
+            session: session_key.clone(),
+            pause_epoch,
+            kind,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn evaluate(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+    frame_index: u32,
+    expression: String,
+) -> Result<EvaluationSnapshot, TargetDebuggerError> {
+    let pause = require_pause(driver, session_key, pause_epoch)?;
+    let frame = pause
+        .frames
+        .get(frame_index as usize)
+        .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
+    let mut params =
+        DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
+    params.return_by_value = Some(true);
+    params.generate_preview = Some(true);
+    let evaluated = driver
+        .client()
+        .debugger_evaluate_on_call_frame(params)
+        .await
+        .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
+    if let Some(exception) = evaluated.exception_details {
+        return Err(TargetDebuggerError::Evaluation(exception.text));
+    }
+    let kind = serde_json::to_value(&evaluated.result.r#type)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    Ok(EvaluationSnapshot {
+        expression,
+        kind,
+        value: evaluated.result.value,
+        unserializable_value: evaluated.result.unserializable_value,
+        description: evaluated.result.description,
+    })
+}
+
+fn require_pause<'a>(
+    driver: &'a DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+) -> Result<&'a Arc<crate::debugger_engine::PauseState>, TargetDebuggerError> {
+    let session = driver
+        .state()
+        .sessions
+        .get(session_key)
+        .ok_or(TargetDebuggerError::SessionMissing)?;
+    if !matches!(session.phase, SessionPhase::Paused { epoch } if epoch == pause_epoch) {
+        return Err(TargetDebuggerError::StalePause(pause_epoch));
+    }
+    session
+        .pause
+        .as_ref()
+        .ok_or(TargetDebuggerError::SessionMissing)
+}
+
+fn snapshot_from_driver(
+    context_id: &str,
+    connection_id: &str,
+    target_id: &str,
+    connection_generation: u64,
+    session_key: &SessionKey,
+    driver: &DebuggerDriver,
+) -> TargetDebuggerSnapshot {
+    let mut result = snapshot(
+        context_id,
+        connection_id,
+        target_id,
+        connection_generation,
+        session_key,
+        driver.state(),
+    );
+    if let Some(pause) = result.pause.as_mut()
+        && let Some(frame) = pause.frames.first()
+        && let FrameProjectionSnapshot::Resolved { location } = &frame.projected
+        && let Some(raw_frame) = driver
+            .state()
+            .sessions
+            .get(session_key)
+            .and_then(|session| session.pause.as_ref())
+            .and_then(|pause| pause.frames.first())
+        && let Some(content) =
+            driver.logical_source_content(&raw_frame.raw_script, &location.source_url)
+    {
+        pause.source = Some(source_excerpt(&location.source_url, location, &content));
+    }
+    result
+}
+
+fn source_excerpt(source_url: &str, location: &SourceLocation, content: &str) -> SourceExcerpt {
+    let lines = content.lines().collect::<Vec<_>>();
+    let current = location.line.saturating_sub(1) as usize;
+    let start = current.saturating_sub(4);
+    let end = (current + 5).min(lines.len());
+    let current_text = lines.get(current).copied().unwrap_or("");
+    let utf16_column = location.column.saturating_sub(1) as usize;
+    let (byte_column, display_column) = utf16_to_byte_and_display(current_text, utf16_column);
+    let remainder = current_text.get(byte_column..).unwrap_or("");
+    let highlight_length = remainder
+        .chars()
+        .take_while(|character| character.is_alphanumeric() || *character == '_')
+        .count()
+        .max(1) as u32;
+    SourceExcerpt {
+        source_url: source_url.to_owned(),
+        current_line: location.line,
+        lines: (start..end)
+            .map(|index| SourceExcerptLine {
+                line: (index + 1) as u32,
+                text: truncate_line(lines[index], 200),
+            })
+            .collect(),
+        highlight_start: display_column.saturating_add(1) as u32,
+        highlight_length,
+    }
+}
+
+fn utf16_to_byte_and_display(line: &str, utf16_column: usize) -> (usize, usize) {
+    let mut utf16 = 0;
+    let mut display = 0;
+    for (byte, character) in line.char_indices() {
+        if utf16 >= utf16_column {
+            return (byte, display);
+        }
+        utf16 += character.len_utf16();
+        display += 1;
+    }
+    (line.len(), display)
+}
+
+fn truncate_line(line: &str, maximum: usize) -> String {
+    if line.chars().count() <= maximum {
+        line.to_owned()
+    } else {
+        format!("{}…", line.chars().take(maximum).collect::<String>())
+    }
+}
+
 fn predicate_matches(snapshot: &TargetDebuggerSnapshot, predicate: &TargetWaitPredicate) -> bool {
     match predicate {
         TargetWaitPredicate::Running => {
@@ -388,10 +621,10 @@ fn predicate_matches(snapshot: &TargetDebuggerSnapshot, predicate: &TargetWaitPr
                     && matches!(breakpoint.status, TargetBreakpointStatus::Installed { .. })
             })
         }
-        TargetWaitPredicate::Paused { after_epoch } => snapshot
-            .pause
-            .as_ref()
-            .is_some_and(|pause| pause.epoch > *after_epoch),
+        TargetWaitPredicate::Paused { after_epoch } => matches!(
+            snapshot.phase,
+            TargetDebuggerPhase::Paused { epoch } if epoch > *after_epoch
+        ),
     }
 }
 
@@ -486,6 +719,7 @@ fn snapshot(
     let pause = session.pause.as_ref().map(|pause| PauseSnapshot {
         epoch: pause.epoch,
         reason: pause.reason.clone(),
+        source: None,
         frames: pause
             .frames
             .iter()
@@ -555,6 +789,10 @@ pub enum TargetDebuggerError {
     SessionMissing,
     #[error("pause epoch {0} is stale")]
     StalePause(u64),
+    #[error("frame {0} does not exist in the current pause")]
+    FrameNotFound(u32),
+    #[error("evaluation failed: {0}")]
+    Evaluation(String),
     #[error("target debugger stopped")]
     Stopped,
     #[error("target debugger failed: {0}")]

@@ -324,6 +324,19 @@ pub enum Effect {
         session: SessionKey,
         pause_epoch: u64,
     },
+    Step {
+        effect_id: EffectId,
+        session: SessionKey,
+        pause_epoch: u64,
+        kind: StepKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StepKind {
+    Into,
+    Over,
+    Out,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +410,11 @@ pub enum Input {
     ResumeRequested {
         session: SessionKey,
         pause_epoch: u64,
+    },
+    StepRequested {
+        session: SessionKey,
+        pause_epoch: u64,
+        kind: StepKind,
     },
     Resumed {
         session: SessionKey,
@@ -859,6 +877,44 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 effect_id,
                 session,
                 pause_epoch,
+            });
+        }
+        Input::StepRequested {
+            session,
+            pause_epoch,
+            kind,
+        } => {
+            let Some(session_state) = state.sessions.get(&session) else {
+                invalid(&mut state, format!("step for unknown session {session:?}"));
+                return finish(state, effects);
+            };
+            if !matches!(
+                session_state.phase,
+                SessionPhase::Paused { epoch } if epoch == pause_epoch
+            ) {
+                invalid(
+                    &mut state,
+                    format!("step requested for stale pause epoch {pause_epoch}"),
+                );
+                return finish(state, effects);
+            }
+            Arc::make_mut(&mut state.sessions)
+                .get_mut(&session)
+                .map(Arc::make_mut)
+                .unwrap()
+                .phase = SessionPhase::Resuming { epoch: pause_epoch };
+            let effect_id = allocate_effect(
+                &mut state,
+                PendingEffect::Resume {
+                    session: session.clone(),
+                    pause_epoch,
+                },
+            );
+            effects.push(Effect::Step {
+                effect_id,
+                session,
+                pause_epoch,
+                kind,
             });
         }
         Input::Resumed {

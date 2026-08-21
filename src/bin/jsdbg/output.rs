@@ -1,7 +1,7 @@
 use cdp_client::service_api::{
     BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
-    FrameProjectionSnapshot, PlaywrightChannel, ServiceInfo, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus,
+    EvaluationSnapshot, FrameProjectionSnapshot, PlaywrightChannel, ServiceInfo,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 
@@ -22,6 +22,18 @@ impl OutputFormat {
         } else {
             Self::Human
         }
+    }
+
+    pub fn print_target(
+        &self,
+        value: &TargetDebuggerSnapshot,
+        selector: &str,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => print_target_human(value, selector),
+            Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        }
+        Ok(())
     }
 
     pub fn print<T>(&self, value: &T) -> Result<(), serde_json::Error>
@@ -105,15 +117,38 @@ impl HumanOutput for ContextSnapshot {
                     println!("      Targets: none");
                 } else {
                     println!("      Targets:");
+                    let type_counts = connection.targets.iter().fold(
+                        std::collections::BTreeMap::<&str, usize>::new(),
+                        |mut counts, target| {
+                            *counts.entry(&target.target_type).or_default() += 1;
+                            counts
+                        },
+                    );
+                    let title_counts = connection.targets.iter().fold(
+                        std::collections::BTreeMap::<&str, usize>::new(),
+                        |mut counts, target| {
+                            *counts.entry(&target.title).or_default() += 1;
+                            counts
+                        },
+                    );
                     for target in &connection.targets {
                         let title = if target.title.is_empty() {
                             "(untitled)"
                         } else {
                             &target.title
                         };
+                        let selector = if type_counts[&target.target_type.as_str()] == 1 {
+                            target.target_type.as_str()
+                        } else if !target.title.is_empty()
+                            && title_counts[&target.title.as_str()] == 1
+                        {
+                            target.title.as_str()
+                        } else {
+                            target.target_id.as_str()
+                        };
                         println!(
                             "        {}  {}  {}  {}{}",
-                            target.target_id,
+                            selector,
                             target.target_type,
                             title,
                             target.url,
@@ -148,92 +183,104 @@ impl HumanOutput for ContextSnapshot {
 
 impl HumanOutput for TargetDebuggerSnapshot {
     fn print_human(&self) {
-        println!("Target {}  [{}]", self.target_id, target_phase(&self.phase));
-        println!("  Context: {}", self.context_id);
-        println!("  Connection: {}", self.connection_id);
-        println!("  Generation: {}", self.connection_generation);
-        println!("  Revision: {}", self.revision);
+        print_target_human(self, &self.target_id);
+    }
+}
 
-        let named_scripts = self
-            .scripts
-            .iter()
-            .filter(|script| !script.url.is_empty())
-            .collect::<Vec<_>>();
-        let anonymous_count = self.scripts.len() - named_scripts.len();
-        if named_scripts.is_empty() && anonymous_count == 0 {
-            println!("  Scripts: none observed");
-        } else {
-            println!("  Scripts:");
-            for script in named_scripts {
-                println!("    {}  [{}]", script.url, script_status(&script.status));
-                if let Some(source_map_url) = &script.source_map_url {
-                    println!("      Source map: {source_map_url}");
-                }
-                if let TargetScriptStatus::Resolved { authored_sources } = &script.status {
-                    for source in authored_sources {
-                        println!("      Authored: {source}");
+fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
+    println!("Target {}  [{}]", selector, target_phase(&snapshot.phase));
+    println!("  Context: {}", snapshot.context_id);
+    println!("  Connection: {}", snapshot.connection_id);
+    println!("  Generation: {}", snapshot.connection_generation);
+    println!("  Revision: {}", snapshot.revision);
+
+    if !snapshot.breakpoints.is_empty() {
+        println!("  Breakpoints:");
+        for breakpoint in &snapshot.breakpoints {
+            println!(
+                "    {}  {}:{}:{}  [{}]",
+                breakpoint.id,
+                breakpoint.source_url,
+                breakpoint.line,
+                breakpoint.column,
+                target_breakpoint_status(&breakpoint.status)
+            );
+        }
+    }
+
+    match &snapshot.pause {
+        None => println!("  Pause: none"),
+        Some(pause) => {
+            println!("  Pause: epoch {} ({})", pause.epoch, pause.reason);
+            if let Some(source) = &pause.source {
+                println!("  Source: {}", source.source_url);
+                let width = source
+                    .lines
+                    .last()
+                    .map_or(1, |line| line.line.to_string().len());
+                for line in &source.lines {
+                    let marker = if line.line == source.current_line {
+                        ">"
+                    } else {
+                        " "
+                    };
+                    println!("    {marker} {:>width$} | {}", line.line, line.text);
+                    if line.line == source.current_line {
+                        println!(
+                            "      {:width$} | {}{}",
+                            "",
+                            " ".repeat(source.highlight_start.saturating_sub(1) as usize),
+                            "^".repeat(source.highlight_length as usize)
+                        );
                     }
                 }
             }
-            if anonymous_count > 0 {
-                println!("    {anonymous_count} anonymous runtime script(s)");
-            }
-        }
-
-        if !self.breakpoints.is_empty() {
-            println!("  Breakpoints:");
-            for breakpoint in &self.breakpoints {
-                println!(
-                    "    {}  {}:{}:{}  [{}]",
-                    breakpoint.id,
-                    breakpoint.source_url,
-                    breakpoint.line,
-                    breakpoint.column,
-                    target_breakpoint_status(&breakpoint.status)
-                );
-            }
-        }
-
-        match &self.pause {
-            None => println!("  Pause: none"),
-            Some(pause) => {
-                println!("  Pause: epoch {} ({})", pause.epoch, pause.reason);
-                println!("  Frames:");
-                for frame in &pause.frames {
-                    let function_name = if frame.function_name.is_empty() {
-                        "(anonymous)"
-                    } else {
-                        &frame.function_name
-                    };
-                    println!("    #{} {function_name}", frame.index);
-                    match &frame.projected {
-                        FrameProjectionSnapshot::Resolved { location }
-                            if location.source_url.is_empty() =>
-                        {
-                            println!("      Authored: unavailable")
-                        }
-                        FrameProjectionSnapshot::Resolved { location } => println!(
-                            "      Authored: {}:{}:{}",
-                            location.source_url, location.line, location.column
-                        ),
-                        FrameProjectionSnapshot::Raw => println!("      Authored: not mapped"),
-                        FrameProjectionSnapshot::Pending => println!("      Authored: mapping"),
-                        FrameProjectionSnapshot::Failed { message } => {
-                            println!("      Authored: mapping failed ({message})")
-                        }
+            println!("  Frames:");
+            for frame in &pause.frames {
+                let function_name = if frame.function_name.is_empty() {
+                    "(anonymous)"
+                } else {
+                    &frame.function_name
+                };
+                println!("    #{} {function_name}", frame.index);
+                match &frame.projected {
+                    FrameProjectionSnapshot::Resolved { location }
+                        if location.source_url.is_empty() =>
+                    {
+                        println!("      Authored: unavailable")
                     }
-                    let generated_source = if frame.raw.source_url.is_empty() {
-                        "(anonymous script)"
-                    } else {
-                        &frame.raw.source_url
-                    };
-                    println!(
-                        "      Generated: {}:{}:{}",
-                        generated_source, frame.raw.line, frame.raw.column
-                    );
+                    FrameProjectionSnapshot::Resolved { location } => println!(
+                        "      Authored: {}:{}:{}",
+                        location.source_url, location.line, location.column
+                    ),
+                    FrameProjectionSnapshot::Raw => println!("      Authored: not mapped"),
+                    FrameProjectionSnapshot::Pending => println!("      Authored: mapping"),
+                    FrameProjectionSnapshot::Failed { message } => {
+                        println!("      Authored: mapping failed ({message})")
+                    }
                 }
             }
         }
+    }
+}
+
+impl HumanOutput for EvaluationSnapshot {
+    fn print_human(&self) {
+        let rendered = self
+            .value
+            .as_ref()
+            .map(format_value)
+            .or_else(|| self.unserializable_value.clone())
+            .or_else(|| self.description.clone())
+            .unwrap_or_else(|| self.kind.clone());
+        println!("{} = {}", self.expression, rendered);
+    }
+}
+
+fn format_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => format!("{value:?}"),
+        _ => value.to_string(),
     }
 }
 
@@ -298,14 +345,5 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
             format!("installed; {binding_count} binding{suffix}")
         }
         TargetBreakpointStatus::Failed { message } => format!("failed: {message}"),
-    }
-}
-
-fn script_status(status: &TargetScriptStatus) -> String {
-    match status {
-        TargetScriptStatus::Unresolved => "unresolved".to_owned(),
-        TargetScriptStatus::Pending => "loading".to_owned(),
-        TargetScriptStatus::Resolved { .. } => "source map resolved".to_owned(),
-        TargetScriptStatus::Failed { message } => format!("failed: {message}"),
     }
 }

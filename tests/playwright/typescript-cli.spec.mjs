@@ -66,43 +66,59 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			],
 			environment,
 		);
-		const targetId = pageTargetId(connected);
+		expect(connected).toContain("page  page");
 		await runCli(
-			"We record the authored breakpoint as durable intent. The source identity comes directly from the source map, and the location is one-based.",
+			"We set a durable breakpoint where checkout computes its subtotal. The unique selector `page` keeps the command readable.",
 			[
 				"breakpoint",
 				"set",
 				"typescript-e2e",
-				"calculate",
+				"checkout",
 				authoredSource,
-				"2",
+				"7",
 				"3",
 			],
 			environment,
 		);
 		const attached = await runCli(
-			"We attach jsdbg to the fixture's page target. Unlike Chromium's inventory flag, this creates jsdbg's own flattened debugger session, reducer actor, and script discovery pipeline.",
+			"Targets are auto-attached on connect. We inspect the uniquely selected page and see that the authored breakpoint is already installed.",
 			[
 				"target",
-				"attach",
+				"show",
 				"typescript-e2e",
 				"browser",
-				targetId,
+				"page",
 			],
 			environment,
 		);
 		expect(attached).toContain(
-			"calculate  ../src/app.ts:2:3  [installed; 1 binding]",
+			"checkout  ../src/app.ts:7:3  [installed; 1 binding]",
+		);
+		await runCli(
+			"We add a logpoint inside applyDiscount. It records useful runtime data without stopping execution.",
+			[
+				"target",
+				"logpoint",
+				"typescript-e2e",
+				"browser",
+				"page",
+				"discount",
+				authoredSource,
+				"2",
+				"3",
+				"({ total, rate })",
+			],
+			environment,
 		);
 
 		const pausedCommand = runCli(
-			"Attach returned with the breakpoint installed, so we begin an observable wait for the first pause epoch before triggering application code.",
+			"We wait for checkout to pause, then trigger the purchase in the browser.",
 			[
 				"target",
 				"wait",
 				"typescript-e2e",
 				"browser",
-				targetId,
+				"page",
 				"paused",
 				"0",
 				"30000",
@@ -110,41 +126,96 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		await emitTranscript(
-			"\n> The wait is active. We now click the fixture button in Chromium; execution should stop inside `calculate()` before the handler returns.\n\n",
+			"\n> The wait is active. We now trigger checkout in Chromium.\n\n",
 		);
 		fixtureServer.trigger();
 		const paused = await pausedCommand;
 		expect(paused).toContain("[paused at epoch 1]");
-		expect(paused).toContain("#0 calculate");
-		expect(paused).toMatch(/Authored: \.\.\/src\/app\.ts:2:[1-9][0-9]*/);
-		const pauseEpoch = paused.match(/Pause: epoch ([0-9]+)/)?.[1];
-		expect(pauseEpoch).toBeDefined();
+		expect(paused).toContain("#0 checkout");
+		expect(paused).toContain("Source: ../src/app.ts");
+		expect(paused).toMatch(/>\s+7 \|/);
 
 		await runCli(
-			"The authored frame is correct, so we resume using the exact pause epoch. Supplying the epoch prevents a stale command from resuming a newer pause.",
-			[
-				"target",
-				"resume",
-				"typescript-e2e",
-				"browser",
-				targetId,
-				pauseEpoch,
-			],
+			"We evaluate the current item list in the selected frame.",
+			["target", "evaluate", "typescript-e2e", "browser", "page", "items"],
 			environment,
 		);
 		await runCli(
-			"We wait until the reducer observes Chromium's resumed event; command acceptance alone is not proof that execution continued.",
+			"We add a watch-style inspection for the number of items.",
+			["target", "watch", "typescript-e2e", "browser", "page", "items.length"],
+			environment,
+		);
+
+		await runCli(
+			"We step over the subtotal calculation. The current pause epoch is inferred automatically.",
+			[
+				"target",
+				"step",
+				"typescript-e2e",
+				"browser",
+				"page",
+				"over",
+			],
+			environment,
+		);
+		const afterOver = await runCli(
+			"We wait for the next pause and verify that execution advanced to the discount call.",
 			[
 				"target",
 				"wait",
 				"typescript-e2e",
 				"browser",
-				targetId,
-				"running",
+				"page",
+				"paused",
+				"1",
+				"30000",
 			],
 			environment,
 		);
-		await fixtureServer.waitForResult("41");
+		expect(afterOver).toMatch(/>\s+8 \|/);
+		await runCli(
+			"Now that the reduction completed, we inspect the subtotal.",
+			["target", "evaluate", "typescript-e2e", "browser", "page", "subtotal"],
+			environment,
+		);
+
+		await runCli(
+			"We step into applyDiscount.",
+			["target", "step", "typescript-e2e", "browser", "page", "into"],
+			environment,
+		);
+		const insideDiscount = await runCli(
+			"We wait for the callee pause; the preferred location is authored TypeScript.",
+			["target", "wait", "typescript-e2e", "browser", "page", "paused", "2", "30000"],
+			environment,
+		);
+		expect(insideDiscount).toMatch(/>\s+2 \|/);
+		await runCli(
+			"We inspect the discount rate while inside the helper.",
+			["target", "evaluate", "typescript-e2e", "browser", "page", "rate"],
+			environment,
+		);
+		await runCli(
+			"We step out to checkout.",
+			["target", "step", "typescript-e2e", "browser", "page", "out"],
+			environment,
+		);
+		await runCli(
+			"We wait for checkout to regain control.",
+			["target", "wait", "typescript-e2e", "browser", "page", "paused", "3", "30000"],
+			environment,
+		);
+		await runCli(
+			"We resume without spelling an epoch; jsdbg safely uses the current pause.",
+			["target", "resume", "typescript-e2e", "browser", "page"],
+			environment,
+		);
+		await runCli(
+			"We confirm that execution is running again.",
+			["target", "wait", "typescript-e2e", "browser", "page", "running"],
+			environment,
+		);
+		await fixtureServer.waitForResult("45");
 
 		const disconnected = await runCli(
 			"After proving the calculation completed, we disconnect cleanly. Runtime facts should disappear while durable intent remains.",
@@ -158,22 +229,20 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		expect(reconnected).toContain("generation 2]");
-		const reconnectedTargetId = pageTargetId(reconnected);
-		expect(reconnectedTargetId).not.toBe(targetId);
 		const reattached = await runCli(
-			"We attach the same logical target under generation 2. No session handle from generation 1 may be reused.",
+			"The fresh page was auto-attached. We select it by type and verify that durable breakpoint intent was reinstalled.",
 			[
 				"target",
-				"attach",
+				"show",
 				"typescript-e2e",
 				"browser",
-				reconnectedTargetId,
+				"page",
 			],
 			environment,
 		);
 		expect(reattached).toContain("Generation: 2");
 		expect(reattached).toContain(
-			"calculate  ../src/app.ts:2:3  [installed; 1 binding]",
+			"checkout  ../src/app.ts:7:3  [installed; 1 binding]",
 		);
 		await runCli(
 			"The reconnect check is complete; we close the live CDP connection before stopping the service.",
@@ -227,12 +296,6 @@ function quoteArgument(argument) {
 	return /^[A-Za-z0-9_./:@%+=,-]+$/.test(argument)
 		? argument
 		: JSON.stringify(argument);
-}
-
-function pageTargetId(output) {
-	const targetId = output.match(/^\s+([A-F0-9]{32})\s+page\s+/m)?.[1];
-	expect(targetId, output).toBeDefined();
-	return targetId;
 }
 
 async function startFixtureServer() {

@@ -196,6 +196,42 @@ pub struct PauseSnapshot {
     pub epoch: u64,
     pub reason: String,
     pub frames: Vec<FrameSnapshot>,
+    pub source: Option<SourceExcerpt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceExcerpt {
+    pub source_url: String,
+    pub current_line: u32,
+    pub lines: Vec<SourceExcerptLine>,
+    pub highlight_start: u32,
+    pub highlight_length: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceExcerptLine {
+    pub line: u32,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationSnapshot {
+    pub expression: String,
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+    pub unserializable_value: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StepKind {
+    Into,
+    Over,
+    Out,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -294,6 +330,34 @@ pub trait DebuggerServiceApi {
         connection_id: String,
         target_id: String,
         pause_epoch: u64,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn step_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+        kind: StepKind,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn evaluate_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+        frame_index: u32,
+        expression: String,
+    ) -> Result<EvaluationSnapshot, JsonRpcError>;
+
+    async fn set_logpoint(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        logpoint_id: String,
+        source_url: String,
+        line: u32,
+        column: u32,
+        expression: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;

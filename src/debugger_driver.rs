@@ -43,6 +43,15 @@ impl DebuggerDriver {
         &self.recording
     }
 
+    pub fn logical_source_content(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+        source_url: &str,
+    ) -> Option<Arc<str>> {
+        self.sources
+            .logical_source_content(&self.state, script, source_url)
+    }
+
     pub async fn apply(&mut self, input: Input) -> Result<(), DebuggerDriverError> {
         let effects = self.reduce_recorded(input);
         self.drain_effects(effects).await

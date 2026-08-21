@@ -12,11 +12,12 @@ use tokio::sync::{Mutex, mpsc};
 use crate::cdp::{
     CdpClient, DebuggerEnableParams, DebuggerGetScriptSourceParams, DebuggerLocation,
     DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
-    DebuggerScriptParsedParams, DebuggerSetBreakpointParams, IoCloseParams, IoReadParams,
+    DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
+    DebuggerStepOutParams, DebuggerStepOverParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
     RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
 };
-use crate::debugger_engine::{Effect, Input, RawFrame, SessionKey};
+use crate::debugger_engine::{Effect, Input, RawFrame, SessionKey, StepKind};
 use crate::session_transport::CdpSessionMux;
 use crate::source_view::Position;
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
@@ -218,6 +219,36 @@ impl CdpDebuggerSession {
                     .debugger_resume(DebuggerResumeParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
+                Ok(Some(Input::CommandAccepted {
+                    effect_id: *effect_id,
+                }))
+            }
+            Effect::Step {
+                effect_id,
+                session,
+                kind,
+                ..
+            } if session == &self.session => {
+                match kind {
+                    StepKind::Into => {
+                        self.client
+                            .debugger_step_into(DebuggerStepIntoParams::new())
+                            .await
+                            .map_err(CdpRuntimeError::protocol)?;
+                    }
+                    StepKind::Over => {
+                        self.client
+                            .debugger_step_over(DebuggerStepOverParams::new())
+                            .await
+                            .map_err(CdpRuntimeError::protocol)?;
+                    }
+                    StepKind::Out => {
+                        self.client
+                            .debugger_step_out(DebuggerStepOutParams::new())
+                            .await
+                            .map_err(CdpRuntimeError::protocol)?;
+                    }
+                };
                 Ok(Some(Input::CommandAccepted {
                     effect_id: *effect_id,
                 }))

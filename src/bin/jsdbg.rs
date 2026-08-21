@@ -2,7 +2,9 @@ use std::env;
 use std::io;
 
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
-use cdp_client::service_api::{ConnectionConfiguration, PlaywrightChannel, TargetWaitPredicate};
+use cdp_client::service_api::{
+    ConnectionConfiguration, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetWaitPredicate,
+};
 
 #[path = "jsdbg/output.rs"]
 mod output;
@@ -168,17 +170,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if target == "target" && attach == "attach" =>
         {
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            let snapshot = rpc(client
                 .attach_target(context_id.clone(), connection_id.clone(), target_id.clone())
-                .await)?)?;
+                .await)?;
+            output.print_target(&snapshot, target_id)?;
         }
         [target, show, context_id, connection_id, target_id]
             if target == "target" && show == "show" =>
         {
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            let snapshot = rpc(client
                 .get_target(context_id.clone(), connection_id.clone(), target_id.clone())
-                .await)?)?;
+                .await)?;
+            output.print_target(&snapshot, target_id)?;
         }
         [
             target,
@@ -290,24 +294,146 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             context_id,
             connection_id,
             target_id,
-            pause_epoch,
+            options @ ..,
         ] if target == "target" && resume == "resume" => {
-            let pause_epoch = parse_u64("pause epoch", pause_epoch)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            let pause_epoch =
+                resolve_pause_epoch(&client, context_id, connection_id, target_id, options).await?;
+            let snapshot = rpc(client
                 .resume_target(
                     context_id.clone(),
                     connection_id.clone(),
                     target_id.clone(),
                     pause_epoch,
                 )
+                .await)?;
+            output.print_target(&snapshot, target_id)?;
+        }
+        [
+            target,
+            step,
+            context_id,
+            connection_id,
+            target_id,
+            kind,
+            options @ ..,
+        ] if target == "target" && step == "step" => {
+            let client = ensure_service(&state_file).await?;
+            let pause_epoch =
+                resolve_pause_epoch(&client, context_id, connection_id, target_id, options).await?;
+            let snapshot = rpc(client
+                .step_target(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id.clone(),
+                    pause_epoch,
+                    parse_step_kind(kind)?,
+                )
+                .await)?;
+            output.print_target(&snapshot, target_id)?;
+        }
+        [
+            target,
+            operation,
+            context_id,
+            connection_id,
+            target_id,
+            expression,
+        ] if target == "target" && matches!(operation.as_str(), "evaluate" | "watch") => {
+            let client = ensure_service(&state_file).await?;
+            let snapshot = rpc(client
+                .get_target(context_id.clone(), connection_id.clone(), target_id.clone())
+                .await)?;
+            output.print(&rpc(client
+                .evaluate_target(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id.clone(),
+                    current_pause_epoch(&snapshot)?,
+                    0,
+                    expression.clone(),
+                )
                 .await)?)?;
+        }
+        [
+            target,
+            logpoint,
+            context_id,
+            connection_id,
+            target_id,
+            logpoint_id,
+            source_url,
+            line,
+            column,
+            expression,
+        ] if target == "target" && logpoint == "logpoint" => {
+            let client = ensure_service(&state_file).await?;
+            let snapshot = rpc(client
+                .set_logpoint(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id.clone(),
+                    logpoint_id.clone(),
+                    source_url.clone(),
+                    line.parse()?,
+                    column.parse()?,
+                    expression.clone(),
+                )
+                .await)?;
+            output.print_target(&snapshot, target_id)?;
         }
         _ => {
             return Err(usage().into());
         }
     }
     Ok(())
+}
+
+async fn resolve_pause_epoch(
+    client: &cdp_client::service_api::DebuggerServiceApiClient,
+    context_id: &str,
+    connection_id: &str,
+    target_id: &str,
+    options: &[String],
+) -> Result<u64, Box<dyn std::error::Error>> {
+    match options {
+        [] => {
+            let snapshot = rpc(client
+                .get_target(
+                    context_id.to_owned(),
+                    connection_id.to_owned(),
+                    target_id.to_owned(),
+                )
+                .await)?;
+            Ok(current_pause_epoch(&snapshot)?)
+        }
+        [epoch, value] if epoch == "--epoch" => Ok(parse_u64("pause epoch", value)?),
+        _ => Err("expected no options or --epoch <epoch>".into()),
+    }
+}
+
+fn current_pause_epoch(
+    snapshot: &cdp_client::service_api::TargetDebuggerSnapshot,
+) -> Result<u64, io::Error> {
+    match snapshot.phase {
+        TargetDebuggerPhase::Paused { epoch } => Ok(epoch),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target is not currently paused",
+        )),
+    }
+}
+
+fn parse_step_kind(value: &str) -> Result<StepKind, io::Error> {
+    match value {
+        "into" => Ok(StepKind::Into),
+        "over" => Ok(StepKind::Over),
+        "out" => Ok(StepKind::Out),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "step kind must be into, over, or out",
+        )),
+    }
 }
 
 async fn put_breakpoint(
@@ -425,7 +551,7 @@ async fn wait_target(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let timeout_ms = parse_u64("timeout", timeout_ms)?;
     let client = ensure_service(state_file).await?;
-    output.print(&rpc(client
+    let snapshot = rpc(client
         .wait_target(
             context_id.to_owned(),
             connection_id.to_owned(),
@@ -433,7 +559,8 @@ async fn wait_target(
             predicate,
             timeout_ms,
         )
-        .await)?)?;
+        .await)?;
+    output.print_target(&snapshot, target_id)?;
     Ok(())
 }
 
@@ -466,5 +593,8 @@ commands:
   jsdbg target wait <context-id> <connection-id> <target-id> breakpoint-installed <breakpoint-id> [timeout-ms]
   jsdbg target wait <context-id> <connection-id> <target-id> paused <after-epoch> [timeout-ms]
   jsdbg target wait <context-id> <connection-id> <target-id> running
-  jsdbg target resume <context-id> <connection-id> <target-id> <pause-epoch>"
+  jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
+  jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
+  jsdbg target evaluate|watch <context-id> <connection-id> <target> <expression>
+  jsdbg target logpoint <context-id> <connection-id> <target> <id> <source> <line> <column> <expression>"
 }

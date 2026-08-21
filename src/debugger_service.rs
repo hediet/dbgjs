@@ -19,12 +19,12 @@ use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
     ContextTransitionError, EffectCompletion, RuntimeObservation, UserCommand, reduce_context,
 };
-use crate::debugger_engine::SessionKey;
+use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
-    ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApi,
-    SERVICE_PROTOCOL_VERSION, ServiceInfo, TargetDebuggerSnapshot, TargetSnapshot,
-    TargetWaitPredicate,
+    ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApi, EvaluationSnapshot,
+    SERVICE_PROTOCOL_VERSION, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -302,18 +302,37 @@ impl DebuggerServiceApi for DebuggerService {
             }
         };
         let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
+        let auto_attach_targets = transition
+            .state
+            .connections
+            .get(&connection_id)
+            .map(|connection| {
+                connection
+                    .targets
+                    .values()
+                    .filter(|target| target.target_type == "page")
+                    .map(|target| target.target_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         state.contexts.insert(context_id.clone(), transition.state);
         if let Some(runtime) = runtime {
             state.runtimes.insert(runtime_key, runtime.clone());
             self.supervise_runtime(
-                context_id,
-                connection_id,
+                context_id.clone(),
+                connection_id.clone(),
                 attempt.configuration_version,
                 attempt.generation,
                 runtime,
             );
         } else {
             state.runtimes.remove(&runtime_key);
+        }
+        drop(state);
+        for target_id in auto_attach_targets {
+            let _ = self
+                .attach_target(_ctx, context_id.clone(), connection_id.clone(), target_id)
+                .await;
         }
         Ok(result)
     }
@@ -405,6 +424,7 @@ impl DebuggerServiceApi for DebuggerService {
             source_url: source_path.clone(),
             line,
             column,
+            condition: None,
         };
         let (result, target_debuggers) = {
             let mut state = self.state.lock().await;
@@ -440,7 +460,10 @@ impl DebuggerServiceApi for DebuggerService {
                 .set_breakpoint(result.revision, runtime_breakpoint.clone())
                 .await
             {
-                Ok(_) | Err(TargetDebuggerError::Stopped) => {}
+                Ok(_) => {
+                    debugger.settle(Duration::from_millis(200)).await;
+                }
+                Err(TargetDebuggerError::Stopped) => {}
                 Err(error) => {
                     return Err(internal_error(format!(
                         "breakpoint intent was persisted, but runtime application failed: {error}"
@@ -458,6 +481,9 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let target_id = self
+            .resolve_target_id(&context_id, &connection_id, &target_id)
+            .await?;
         let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
         let (runtime, generation, failed_session) = {
             let mut state = self.state.lock().await;
@@ -571,6 +597,7 @@ impl DebuggerServiceApi for DebuggerService {
                 source_url: breakpoint.source_path.clone(),
                 line: breakpoint.line,
                 column: breakpoint.column,
+                condition: None,
             })
             .collect::<Vec<_>>();
         drop(state);
@@ -633,6 +660,85 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn step_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+        kind: ApiStepKind,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .step(
+                pause_epoch,
+                match kind {
+                    ApiStepKind::Into => StepKind::Into,
+                    ApiStepKind::Over => StepKind::Over,
+                    ApiStepKind::Out => StepKind::Out,
+                },
+            )
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn evaluate_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+        frame_index: u32,
+        expression: String,
+    ) -> Result<EvaluationSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .evaluate(pause_epoch, frame_index, expression)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn set_logpoint(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        logpoint_id: String,
+        source_url: String,
+        line: u32,
+        column: u32,
+        expression: String,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        validate_id("logpoint", &logpoint_id)?;
+        if line == 0 || column == 0 {
+            return Err(invalid_params("logpoint lines and columns are one-based"));
+        }
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        debugger
+            .set_breakpoint(
+                u64::MAX,
+                TargetBreakpointSpec {
+                    id: format!("log:{logpoint_id}"),
+                    source_url,
+                    line,
+                    column,
+                    condition: Some(format!(
+                        "console.log({}, ({})), false",
+                        serde_json::to_string(&logpoint_id)
+                            .map_err(|error| internal_error(error.to_string()))?,
+                        expression
+                    )),
+                },
+            )
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn shutdown(&self, _ctx: &CallCtx) -> Result<bool, JsonRpcError> {
         let service = self.clone();
         tokio::spawn(async move {
@@ -660,6 +766,9 @@ impl DebuggerService {
         connection_id: &str,
         target_id: &str,
     ) -> Result<TargetDebuggerHandle, JsonRpcError> {
+        let target_id = self
+            .resolve_target_id(context_id, connection_id, target_id)
+            .await?;
         self.state
             .lock()
             .await
@@ -667,10 +776,45 @@ impl DebuggerService {
             .get(&(
                 context_id.to_owned(),
                 connection_id.to_owned(),
-                target_id.to_owned(),
+                target_id.clone(),
             ))
             .cloned()
-            .ok_or_else(|| not_found("attached target", target_id))
+            .ok_or_else(|| not_found("attached target", &target_id))
+    }
+
+    async fn resolve_target_id(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        selector: &str,
+    ) -> Result<String, JsonRpcError> {
+        let state = self.state.lock().await;
+        let connection = state
+            .contexts
+            .get(context_id)
+            .ok_or_else(|| not_found("context", context_id))?
+            .connections
+            .get(connection_id)
+            .ok_or_else(|| not_found("connection", connection_id))?;
+        if connection.targets.contains_key(selector) {
+            return Ok(selector.to_owned());
+        }
+        let matches = connection
+            .targets
+            .values()
+            .filter(|target| {
+                target.target_type == selector || target.title == selector || target.url == selector
+            })
+            .map(|target| target.target_id.clone())
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [target_id] => Ok(target_id.clone()),
+            [] => Err(not_found("target selector", selector)),
+            _ => Err(invalid_params(&format!(
+                "target selector '{selector}' is ambiguous across {} targets",
+                matches.len()
+            ))),
+        }
     }
 }
 
@@ -1025,11 +1169,13 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
     let code = match error {
         TargetDebuggerError::InvalidBreakpointPosition
         | TargetDebuggerError::StalePause(_)
+        | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::Stopped
         | TargetDebuggerError::SessionMissing
         | TargetDebuggerError::BreakpointFailed { .. }
+        | TargetDebuggerError::Evaluation(_)
         | TargetDebuggerError::DriverFailed(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
     };

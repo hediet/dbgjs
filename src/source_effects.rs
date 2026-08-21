@@ -152,6 +152,24 @@ impl SourceEffectInterpreter {
         self.views.len()
     }
 
+    pub fn logical_source_content(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        source_url: &str,
+    ) -> Option<Arc<str>> {
+        state
+            .scripts
+            .get(script_key)
+            .and_then(|script| match &script.source {
+                ScriptSourceState::Resolved(view) => view
+                    .logical_sources
+                    .get(source_url)
+                    .and_then(|candidate| self.store.get(candidate.content)),
+                _ => None,
+            })
+    }
+
     fn view_for(
         &self,
         view_id: EffectId,
