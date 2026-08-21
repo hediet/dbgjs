@@ -23,8 +23,8 @@ use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, SERVICE_PROTOCOL_VERSION, ServiceInfo, StepKind as ApiStepKind,
-    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate,
+    EvaluationSnapshot, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -135,7 +135,6 @@ impl DebuggerServiceApi for DebuggerService {
     async fn service_info(&self, _ctx: &CallCtx) -> Result<ServiceInfo, JsonRpcError> {
         Ok(ServiceInfo {
             process_id: std::process::id(),
-            protocol_version: SERVICE_PROTOCOL_VERSION,
             agent_instance_id: self.agent_instance_id.clone(),
         })
     }
@@ -755,6 +754,38 @@ impl DebuggerServiceApi for DebuggerService {
         Ok(true)
     }
 
+    async fn key_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        chord: String,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .key(chord)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
+    async fn type_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        text: String,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .type_text(text)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
     async fn start_coverage(
         &self,
         _ctx: &CallCtx,
@@ -776,10 +807,12 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         connection_id: String,
         target_id: String,
+        capture_id: Option<String>,
+        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .take_coverage()
+            .take_coverage(capture_id, exclude_capture_id)
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -790,10 +823,26 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         connection_id: String,
         target_id: String,
+        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .stop_coverage()
+            .stop_coverage(exclude_capture_id)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+    ) -> Result<CoverageSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_coverage(capture_id)
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -1230,8 +1279,11 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::StalePause(_)
         | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::SelectorNotFound(_)
+        | TargetDebuggerError::UnsupportedKeyChord(_)
         | TargetDebuggerError::CoverageAlreadyActive
         | TargetDebuggerError::CoverageNotActive
+        | TargetDebuggerError::CoverageCaptureNotFound(_)
+        | TargetDebuggerError::CoverageCaptureAlreadyExists(_)
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::SettlementTimedOut

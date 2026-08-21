@@ -6,7 +6,7 @@ use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
 use crate::source_view::{
-    GeneratedSourceInput, ResolutionPolicy, ResolvedSourceView, SourceViewError,
+    GeneratedSourceInput, Position, ResolutionPolicy, ResolvedSourceView, SourceViewError,
 };
 
 pub struct SourceEffectOptions {
@@ -28,6 +28,8 @@ impl Default for SourceEffectOptions {
 struct RetainedView {
     script: ScriptKey,
     generated_url: String,
+    generated_content: Arc<str>,
+    generated_index: GeneratedOffsetIndex,
     view: Arc<ResolvedSourceView>,
 }
 
@@ -35,6 +37,102 @@ pub struct SourceEffectInterpreter {
     options: SourceEffectOptions,
     store: Arc<ContentStore>,
     views: BTreeMap<EffectId, RetainedView>,
+}
+
+struct GeneratedOffsetIndex {
+    checkpoints: Vec<OffsetCheckpoint>,
+}
+
+#[derive(Clone, Copy)]
+struct OffsetCheckpoint {
+    byte: usize,
+    utf16: u32,
+    line: u32,
+    column: u32,
+}
+
+impl GeneratedOffsetIndex {
+    const CHECKPOINT_BYTES: usize = 4096;
+
+    fn new(content: &str) -> Self {
+        let mut checkpoints = vec![OffsetCheckpoint {
+            byte: 0,
+            utf16: 0,
+            line: 0,
+            column: 0,
+        }];
+        let mut utf16 = 0_u32;
+        let mut line = 0_u32;
+        let mut column = 0_u32;
+        let mut next_checkpoint = Self::CHECKPOINT_BYTES;
+        for (byte, character) in content.char_indices() {
+            if byte >= next_checkpoint || character == '\n' {
+                checkpoints.push(OffsetCheckpoint {
+                    byte,
+                    utf16,
+                    line,
+                    column,
+                });
+                next_checkpoint = byte.saturating_add(Self::CHECKPOINT_BYTES);
+            }
+            utf16 = utf16.saturating_add(character.len_utf16() as u32);
+            if character == '\n' {
+                line = line.saturating_add(1);
+                column = 0;
+            } else {
+                column = column.saturating_add(character.len_utf16() as u32);
+            }
+        }
+        Self { checkpoints }
+    }
+
+    fn utf16_position(&self, content: &str, target: u32) -> Position {
+        let checkpoint = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.utf16 <= target)
+            .saturating_sub(1);
+        self.scan(content, self.checkpoints[checkpoint], |state| {
+            state.utf16 >= target
+        })
+    }
+
+    fn byte_position(&self, content: &str, target: u32) -> Position {
+        let target = target as usize;
+        let checkpoint = self
+            .checkpoints
+            .partition_point(|checkpoint| checkpoint.byte <= target)
+            .saturating_sub(1);
+        self.scan(content, self.checkpoints[checkpoint], |state| {
+            state.byte >= target
+        })
+    }
+
+    fn scan(
+        &self,
+        content: &str,
+        mut state: OffsetCheckpoint,
+        done: impl Fn(OffsetCheckpoint) -> bool,
+    ) -> Position {
+        let base = state.byte;
+        for (relative_byte, character) in content[base..].char_indices() {
+            state.byte = base + relative_byte;
+            if done(state) {
+                break;
+            }
+            state.utf16 = state.utf16.saturating_add(character.len_utf16() as u32);
+            if character == '\n' {
+                state.line = state.line.saturating_add(1);
+                state.column = 0;
+            } else {
+                state.column = state.column.saturating_add(character.len_utf16() as u32);
+            }
+            state.byte = base + relative_byte + character.len_utf8();
+        }
+        Position {
+            line: state.line,
+            column: state.column,
+        }
+    }
 }
 
 impl SourceEffectInterpreter {
@@ -77,6 +175,8 @@ impl SourceEffectInterpreter {
                     RetainedView {
                         script: script.clone(),
                         generated_url: generated_url.clone(),
+                        generated_content: content.clone(),
+                        generated_index: GeneratedOffsetIndex::new(content),
                         view: Arc::new(view),
                     },
                 );
@@ -152,6 +252,38 @@ impl SourceEffectInterpreter {
         self.views.len()
     }
 
+    pub fn project_generated_offset(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        utf16_offset: u32,
+    ) -> Option<(String, Position, Arc<str>)> {
+        let ScriptSourceState::Resolved(source_state) = &state.scripts.get(script_key)?.source
+        else {
+            return None;
+        };
+        let retained = self.views.get(&source_state.view_id)?;
+        let mapped = [
+            retained
+                .generated_index
+                .utf16_position(&retained.generated_content, utf16_offset),
+            retained
+                .generated_index
+                .byte_position(&retained.generated_content, utf16_offset),
+        ]
+        .into_iter()
+        .find_map(|position| {
+            retained
+                .view
+                .forward(&retained.generated_url, position)
+                .into_iter()
+                .next()
+        })?;
+        let authored = retained.view.files().get(&mapped.source_url)?;
+        let authored_content = self.store.get(authored.primary.content)?;
+        Some((mapped.source_url, mapped.position, authored_content))
+    }
+
     pub fn logical_source_content(
         &self,
         state: &DebuggerState,
@@ -186,6 +318,7 @@ impl SourceEffectInterpreter {
                 actual: script.clone(),
             });
         }
+
         Ok(retained)
     }
 }
@@ -214,6 +347,24 @@ mod tests {
     use sourcemap::SourceMapBuilder;
 
     use super::*;
+
+    #[test]
+    fn generated_offset_index_maps_utf16_and_byte_offsets() {
+        let content = "a😀b\nsecond";
+        let index = GeneratedOffsetIndex::new(content);
+        assert_eq!(
+            index.utf16_position(content, 3),
+            Position { line: 0, column: 3 }
+        );
+        assert_eq!(
+            index.byte_position(content, 5),
+            Position { line: 0, column: 3 }
+        );
+        assert_eq!(
+            index.utf16_position(content, 5),
+            Position { line: 1, column: 0 }
+        );
+    }
     use crate::debugger_engine::{
         BreakpointBinding, BreakpointKey, Diagnostic, FrameProjection, RawFrame, SessionPhase,
         reduce,

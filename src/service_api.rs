@@ -2,13 +2,10 @@ use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SERVICE_PROTOCOL_VERSION: u32 = 6;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceInfo {
     pub process_id: u32,
-    pub protocol_version: u32,
     pub agent_instance_id: String,
 }
 
@@ -54,6 +51,8 @@ pub enum ConnectionConfiguration {
         url: String,
         channel: PlaywrightChannel,
         headless: bool,
+        #[serde(default)]
+        ignore_https_errors: bool,
     },
 }
 
@@ -244,6 +243,7 @@ pub struct CoverageSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverageSourceSnapshot {
+    pub script_id: String,
     pub generated_url: String,
     pub associated_authored_source: Option<String>,
     pub functions: Vec<CoverageFunctionSnapshot>,
@@ -255,6 +255,8 @@ pub struct CoverageFunctionSnapshot {
     pub name: String,
     pub block_coverage: bool,
     pub ranges: Vec<CoverageRangeSnapshot>,
+    pub authored_location: Option<SourceLocation>,
+    pub breadcrumb: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -263,6 +265,8 @@ pub struct CoverageRangeSnapshot {
     pub start_offset: u32,
     pub end_offset: u32,
     pub count: u64,
+    pub authored_start: Option<SourceLocation>,
+    pub authored_end: Option<SourceLocation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -407,6 +411,20 @@ pub trait DebuggerServiceApi {
         selector: String,
     ) -> Result<bool, JsonRpcError>;
 
+    async fn key_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        chord: String,
+    ) -> Result<bool, JsonRpcError>;
+
+    async fn type_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        text: String,
+    ) -> Result<bool, JsonRpcError>;
+
     async fn start_coverage(
         context_id: String,
         connection_id: String,
@@ -417,12 +435,22 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
+        capture_id: Option<String>,
+        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn stop_coverage(
         context_id: String,
         connection_id: String,
         target_id: String,
+        exclude_capture_id: Option<String>,
+    ) -> Result<CoverageSnapshot, JsonRpcError>;
+
+    async fn get_coverage(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn shutdown() -> Result<bool, JsonRpcError>;

@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
-use hubrpc::prelude::{HubRpcConnection, InterfaceHandler, RegisterOptions};
+use hubrpc::prelude::{
+    DirectoryServiceClient, HubRpcConnection, InterfaceHandler, RegisterOptions,
+};
 use hubrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -18,8 +20,7 @@ use tokio::time::sleep;
 
 use crate::debugger_service::DebuggerService;
 use crate::service_api::{
-    DebuggerServiceApiClient, DebuggerServiceApiServer, SERVICE_PROTOCOL_VERSION,
-    debugger_service_api,
+    DebuggerServiceApiClient, DebuggerServiceApiServer, debugger_service_api,
 };
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -27,7 +28,6 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalServiceEndpoint {
-    pub protocol_version: u32,
     pub process_id: u32,
     pub transport: LocalTransportEndpoint,
     pub token: String,
@@ -131,7 +131,6 @@ async fn serve_named_pipe(
     let pipe_name = format!(r"\\.\pipe\hediet-cdp-client-{}", &pipe_id[..32]);
     let mut server = create_server(&pipe_name, true)?;
     let endpoint = LocalServiceEndpoint {
-        protocol_version: SERVICE_PROTOCOL_VERSION,
         process_id: std::process::id(),
         transport: LocalTransportEndpoint::NamedPipe {
             pipe_name: pipe_name.clone(),
@@ -186,7 +185,6 @@ async fn serve_unix_socket(
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
     restrict_private_file(&socket_path)?;
     let endpoint = LocalServiceEndpoint {
-        protocol_version: SERVICE_PROTOCOL_VERSION,
         process_id: std::process::id(),
         transport: LocalTransportEndpoint::UnixSocket {
             path: socket_path.clone(),
@@ -242,12 +240,6 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
 pub async fn connect_endpoint(
     endpoint: &LocalServiceEndpoint,
 ) -> Result<DebuggerServiceApiClient, LocalRpcError> {
-    if endpoint.protocol_version != SERVICE_PROTOCOL_VERSION {
-        return Err(LocalRpcError::ProtocolVersion {
-            expected: SERVICE_PROTOCOL_VERSION,
-            actual: endpoint.protocol_version,
-        });
-    }
     match &endpoint.transport {
         #[cfg(windows)]
         LocalTransportEndpoint::NamedPipe { pipe_name } => {
@@ -300,6 +292,26 @@ where
     let connection = HubRpcConnection::new(Box::new(transport));
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
+    let expected = debugger_service_api::interface();
+    let directory = DirectoryServiceClient::new(connection.clone());
+    let listing = directory
+        .list(Some(expected.id().to_owned()), None, None, None, None)
+        .await
+        .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+    let Some(actual) = listing
+        .items
+        .iter()
+        .find(|item| item.interface_id == expected.id())
+    else {
+        return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
+    };
+    if actual.interface_hash != expected.schema_hash() {
+        return Err(LocalRpcError::InterfaceHashMismatch {
+            interface_id: expected.id().to_owned(),
+            expected: expected.schema_hash().to_owned(),
+            actual: actual.interface_hash.clone(),
+        });
+    }
     Ok(DebuggerServiceApiClient::new(connection))
 }
 
@@ -495,8 +507,16 @@ pub enum LocalRpcError {
     Connection(#[from] hubrpc::connection::hub_connection::ConnError),
     #[error("local service authentication failed")]
     AuthenticationFailed,
-    #[error("local service protocol version {actual} is incompatible; expected {expected}")]
-    ProtocolVersion { expected: u32, actual: u32 },
+    #[error("local service does not expose required HubRPC interface '{0}'")]
+    InterfaceMissing(String),
+    #[error(
+        "HubRPC interface '{interface_id}' hash mismatch: service has {actual}, client expects {expected}"
+    )]
+    InterfaceHashMismatch {
+        interface_id: String,
+        expected: String,
+        actual: String,
+    },
     #[error("service endpoint changed owner from process {expected} to {actual}")]
     EndpointOwnerChanged { expected: u32, actual: u32 },
     #[error("failed to spawn {executable}: {source}")]

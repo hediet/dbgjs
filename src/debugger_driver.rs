@@ -58,6 +58,15 @@ impl DebuggerDriver {
             .logical_source_content(&self.state, script, source_url)
     }
 
+    pub fn project_generated_offset(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+        utf16_offset: u32,
+    ) -> Option<(String, crate::source_view::Position, Arc<str>)> {
+        self.sources
+            .project_generated_offset(&self.state, script, utf16_offset)
+    }
+
     pub async fn apply(&mut self, input: Input) -> Result<(), DebuggerDriverError> {
         let effects = self.reduce_recorded(input);
         self.drain_effects(effects).await

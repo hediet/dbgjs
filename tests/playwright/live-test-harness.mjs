@@ -69,21 +69,55 @@ export async function readCdpEndpoint(port) {
 	throw new Error(`Chromium did not expose CDP at ${url}: ${lastError}`);
 }
 
-export function run(command, args, extraEnvironment) {
+export function run(command, args, extraEnvironment, options = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd: process.cwd(),
 			env: { ...process.env, ...extraEnvironment },
 			stdio: ["ignore", "pipe", "pipe"],
+			detached: process.platform !== "win32",
 		});
 		let output = "";
+		let timedOut = false;
+		const timer =
+			options.timeoutMs === undefined
+				? undefined
+				: setTimeout(() => {
+						timedOut = true;
+						output += `\nTimed out after ${options.timeoutMs}ms\n`;
+						killProcessTree(child);
+					}, options.timeoutMs);
 		child.stdout.on("data", (chunk) => {
 			output += chunk;
 		});
 		child.stderr.on("data", (chunk) => {
 			output += chunk;
 		});
-		child.once("error", reject);
-		child.once("exit", (code) => resolve({ code, output }));
+		child.once("error", (error) => {
+			if (timer !== undefined) clearTimeout(timer);
+			reject(error);
+		});
+		child.once("exit", (code) => {
+			if (timer !== undefined) clearTimeout(timer);
+			resolve({ code, output, timedOut });
+		});
 	});
+}
+
+function killProcessTree(child) {
+	if (child.pid === undefined) return;
+	if (process.platform === "win32") {
+		const killer = spawn(
+			"taskkill",
+			["/PID", String(child.pid), "/T", "/F"],
+			{ stdio: "ignore" },
+		);
+		killer.unref();
+		return;
+	}
+	try {
+		process.kill(-child.pid, "SIGKILL");
+	} catch {
+		child.kill("SIGKILL");
+	}
 }

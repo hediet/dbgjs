@@ -18,6 +18,7 @@ test("Rust reducer hits an authored vscode.dev typing breakpoint", async () => {
 	const context = await chromium.launchPersistentContext(userDataDir, {
 		...(channel === "bundled" ? {} : { channel }),
 		headless: true,
+		ignoreHTTPSErrors: true,
 		args: [
 			`--remote-debugging-port=${debuggingPort}`,
 			"--remote-allow-origins=*",

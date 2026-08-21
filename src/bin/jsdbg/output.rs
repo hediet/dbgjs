@@ -4,6 +4,7 @@ use cdp_client::service_api::{
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
 pub enum OutputFormat {
@@ -63,6 +64,18 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_coverage_capture(
+        &self,
+        value: &CoverageSnapshot,
+        capture_id: &str,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => println!("Captured {capture_id}."),
+            Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        }
+        Ok(())
+    }
+
     pub fn print<T>(&self, value: &T) -> Result<(), serde_json::Error>
     where
         T: HumanOutput + Serialize,
@@ -83,7 +96,6 @@ impl HumanOutput for ServiceInfo {
     fn print_human(&self) {
         println!("Debugger service is running.");
         println!("  Process: {}", self.process_id);
-        println!("  Protocol: {}", self.protocol_version);
     }
 }
 
@@ -320,24 +332,158 @@ impl HumanOutput for CoverageSnapshot {
             println!("No executed functions captured.");
             return;
         }
-        for source in &self.sources {
-            match &source.associated_authored_source {
-                Some(authored) => println!(
-                    "{}  [counts measured in generated offsets from {}]",
-                    authored, source.generated_url
-                ),
-                None => println!("{}", source.generated_url),
-            }
-            for function in &source.functions {
-                if function.name != "(anonymous)" {
-                    let count = function.ranges.first().map_or(0, |range| range.count);
-                    println!(
-                        "  {}  x{}  ({} precise range(s))",
-                        function.name,
-                        count,
-                        function.ranges.len()
-                    );
-                }
+        let mut files = BTreeMap::<String, Vec<CoverageEntry>>::new();
+        for entry in coverage_entries(self) {
+            files.entry(entry.path.clone()).or_default().push(entry);
+        }
+        let mut files = files.into_iter().collect::<Vec<_>>();
+        files.sort_by_key(|(_, entries)| {
+            std::cmp::Reverse(entries.iter().map(|entry| entry.weighted_loc).sum::<u64>())
+        });
+        let omitted_files = files.len().saturating_sub(20);
+        let omitted_ranges = files
+            .iter()
+            .take(20)
+            .map(|(_, entries)| entries.len().saturating_sub(5))
+            .sum::<usize>();
+        let mut root = CoverageTree::default();
+        for (path, mut entries) in files.into_iter().take(20) {
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.weighted_loc));
+            let total = entries.iter().map(|entry| entry.weighted_loc).sum();
+            root.insert_file(path, total, entries.into_iter().take(5).collect());
+        }
+        root.print();
+        if omitted_ranges > 0 {
+            println!("… {omitted_ranges} additional hit ranges omitted from displayed files");
+        }
+        if omitted_files > 0 {
+            println!("… {omitted_files} additional files omitted");
+        }
+    }
+}
+
+struct CoverageEntry {
+    path: String,
+    function: String,
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    count: u64,
+    weighted_loc: u64,
+}
+
+fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
+    snapshot
+        .sources
+        .iter()
+        .flat_map(|source| {
+            source.functions.iter().flat_map(move |function| {
+                function.ranges.iter().filter_map(move |range| {
+                    if range.count == 0 || function.name == "(anonymous)" {
+                        return None;
+                    }
+                    let (path, start_line, start_column, end_line, end_column) =
+                        match (&range.authored_start, &range.authored_end) {
+                            (Some(start), Some(end)) if start.source_url == end.source_url => (
+                                normalize_source_path(&start.source_url),
+                                start.line,
+                                start.column,
+                                end.line,
+                                end.column,
+                            ),
+                            _ => (
+                                source.generated_url.clone(),
+                                0,
+                                range.start_offset,
+                                0,
+                                range.end_offset,
+                            ),
+                        };
+                    let line_span = if start_line > 0 && end_line >= start_line {
+                        u64::from(end_line - start_line + 1)
+                    } else {
+                        1
+                    };
+                    Some(CoverageEntry {
+                        path,
+                        function: function
+                            .breadcrumb
+                            .clone()
+                            .unwrap_or_else(|| function.name.clone()),
+                        start_line,
+                        start_column,
+                        end_line,
+                        end_column,
+                        count: range.count,
+                        weighted_loc: line_span.saturating_mul(range.count),
+                    })
+                })
+            })
+        })
+        .collect()
+}
+
+fn normalize_source_path(path: &str) -> String {
+    path.trim_start_matches("../")
+        .trim_start_matches("./")
+        .to_owned()
+}
+
+#[derive(Default)]
+struct CoverageTree {
+    children: BTreeMap<String, CoverageTree>,
+    ranges: Vec<CoverageEntry>,
+    weighted_loc: u64,
+}
+
+impl CoverageTree {
+    fn insert_file(&mut self, path: String, weighted_loc: u64, ranges: Vec<CoverageEntry>) {
+        let components = path
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .collect::<Vec<_>>();
+        let mut node = self;
+        node.weighted_loc = node.weighted_loc.saturating_add(weighted_loc);
+        for component in components {
+            node = node.children.entry(component.to_owned()).or_default();
+            node.weighted_loc = node.weighted_loc.saturating_add(weighted_loc);
+        }
+        node.ranges = ranges;
+    }
+
+    fn weighted_loc(&self) -> u64 {
+        self.weighted_loc
+    }
+
+    fn print(&self) {
+        self.print_children("");
+    }
+
+    fn print_children(&self, prefix: &str) {
+        let len = self.children.len();
+        for (index, (name, child)) in self.children.iter().enumerate() {
+            let last = index + 1 == len;
+            let branch = if last { "└─" } else { "├─" };
+            println!(
+                "{prefix}{branch} {name}  {} weighted LoC",
+                child.weighted_loc()
+            );
+            let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
+            child.print_children(&child_prefix);
+            for entry in &child.ranges {
+                let location = if entry.start_line > 0 {
+                    format!(
+                        "{}:{}–{}:{}",
+                        entry.start_line, entry.start_column, entry.end_line, entry.end_column
+                    )
+                } else {
+                    format!("+{}–+{}", entry.start_column, entry.end_column)
+                };
+                println!(
+                    "{child_prefix}└─ {}  {}  x{}  {} weighted LoC",
+                    entry.function, location, entry.count, entry.weighted_loc
+                );
             }
         }
     }
@@ -383,10 +529,16 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
             url,
             channel,
             headless,
+            ignore_https_errors,
         } => format!(
-            "Playwright {}{} opening {url}",
+            "Playwright {}{}{} opening {url}",
             playwright_channel(channel),
-            if *headless { " headless" } else { " headed" }
+            if *headless { " headless" } else { " headed" },
+            if *ignore_https_errors {
+                " (ignoring HTTPS errors)"
+            } else {
+                ""
+            }
         ),
     }
 }

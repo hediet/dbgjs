@@ -11,6 +11,7 @@
     "test:e2e:cdp": "playwright test tests/playwright/live-cdp.spec.mjs",
     "test:e2e:cli": "playwright test tests/playwright/cli-service.spec.mjs",
     "test:e2e:typescript": "playwright test tests/playwright/typescript-cli.spec.mjs",
+    "test:e2e:vscode-coverage": "playwright test tests/playwright/vscode-coverage-cli.spec.mjs",
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",

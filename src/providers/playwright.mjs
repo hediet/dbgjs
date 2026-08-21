@@ -16,6 +16,8 @@ async function main() {
 	const requestedChannel = process.env.JSDBG_PROVIDER_CHANNEL;
 	const mode = process.env.JSDBG_PROVIDER_MODE;
 	const playwrightPackage = process.env.JSDBG_PLAYWRIGHT_PACKAGE;
+	const ignoreHTTPSErrors =
+		process.env.JSDBG_PROVIDER_IGNORE_HTTPS_ERRORS === "true";
 	if (!url || !requestedChannel || !mode) {
 		throw new Error("Playwright provider configuration is incomplete");
 	}
@@ -31,6 +33,7 @@ async function main() {
 		context = await chromium.launchPersistentContext(userDataDir, {
 			...(requestedChannel === "bundled" ? {} : { channel: requestedChannel }),
 			headless: mode === "headless",
+			ignoreHTTPSErrors,
 			args: [
 				`--remote-debugging-port=${port}`,
 				"--remote-allow-origins=*",

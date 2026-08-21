@@ -34,7 +34,8 @@ impl ConnectionRuntime {
                 url,
                 channel,
                 headless,
-            } => launch_playwright(url, channel, *headless).await?,
+                ignore_https_errors,
+            } => launch_playwright(url, channel, *headless, *ignore_https_errors).await?,
         };
         let cdp = match CdpConnection::connect(&endpoint).await {
             Ok(cdp) => Arc::new(cdp),
@@ -113,6 +114,7 @@ async fn launch_playwright(
     url: &str,
     channel: &PlaywrightChannel,
     headless: bool,
+    ignore_https_errors: bool,
 ) -> Result<(String, Option<Child>), ConnectionProviderError> {
     let playwright_package = find_playwright_package()?;
     let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
@@ -127,6 +129,10 @@ async fn launch_playwright(
         .env(
             "JSDBG_PROVIDER_MODE",
             if headless { "headless" } else { "headed" },
+        )
+        .env(
+            "JSDBG_PROVIDER_IGNORE_HTTPS_ERRORS",
+            if ignore_https_errors { "true" } else { "false" },
         )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

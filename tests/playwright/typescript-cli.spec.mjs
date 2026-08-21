@@ -16,7 +16,7 @@ const fixtureDirectory = resolve("tests/fixtures/typescript-browser");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
 const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
-const transcriptPath = resolve("test-results/typescript-cli-transcript.md");
+const transcriptPath = resolve("artifacts/typescript-cli-transcript.md");
 let stepNumber = 0;
 
 test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () => {
@@ -29,7 +29,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		{},
 	);
 	expect(compile.code, compile.output).toBe(0);
-	await mkdir(resolve("test-results"), { recursive: true });
+	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
 		"# Debugging authored TypeScript with `jsdbg`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, Chromium CDP, and source maps.\n",
@@ -154,12 +154,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			["target", "watch", "items.length"],
 			environment,
 		);
-		const firstCoverage = await runCli(
+		await runCli(
 			"We capture the recording so far without stopping it; later coverage must accumulate on top of this immutable snapshot.",
-			["coverage", "capture"],
+			["coverage", "capture", "--id", "background"],
 			environment,
 		);
-		expect(firstCoverage).toContain("checkout");
 		const firstCoverageJson = await runJsonSilent(["coverage", "capture"], environment);
 		const firstSource = firstCoverageJson.sources.find(
 			(source) => source.associatedAuthoredSource === authoredSource,
@@ -249,12 +248,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 				.ranges.some((range) => range.count > 0),
 		).toBe(true);
 		const coverage = await runCli(
-			"We stop precise coverage and print the executed functions grouped under the preferred authored source.",
-			["coverage", "stop"],
+			"We stop precise coverage, subtract the named background capture, and print only function counts that increased afterwards.",
+			["coverage", "stop", "--exclude", "background"],
 			environment,
 		);
-		expect(coverage).toContain("../src/app.ts");
-		expect(coverage).toContain("checkout");
+		expect(coverage).toContain("app.ts");
 		expect(coverage).toContain("applyDiscount");
 
 		const disconnected = await runCli(

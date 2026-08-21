@@ -45,12 +45,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [set, target, selector] if set == "set" && target == "target" => {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let mut selection = load_selection(&selection_file)?;
+            selection.target = Some(selector.clone());
+            let scope = resolve_scope(&client, &selection).await?;
             rpc(client
                 .get_target(scope.context, scope.connection, selector.clone())
                 .await)?;
-            let mut selection = load_selection(&selection_file)?;
-            selection.target = Some(selector.clone());
             write_selection(&selection_file, &selection)?;
             println!("Target: {selector}");
         }
@@ -148,6 +148,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             println!("Clicked {selector}");
         }
+        [target, key, chord] if target == "target" && key == "key" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            rpc(client
+                .key_target(scope.context, scope.connection, scope.target, chord.clone())
+                .await)?;
+            println!("Pressed {chord}");
+        }
+        [target, type_text, text] if target == "target" && type_text == "type" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            rpc(client
+                .type_target(scope.context, scope.connection, scope.target, text.clone())
+                .await)?;
+            println!("Typed {text:?}");
+        }
         [
             target,
             click,
@@ -181,14 +197,83 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
             output.print(&rpc(client
-                .take_coverage(scope.context, scope.connection, scope.target)
+                .take_coverage(scope.context, scope.connection, scope.target, None, None)
+                .await)?)?;
+        }
+        [coverage, capture, id, capture_id]
+            if coverage == "coverage" && capture == "capture" && id == "--id" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let snapshot = rpc(client
+                .take_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    Some(capture_id.clone()),
+                    None,
+                )
+                .await)?;
+            output.print_coverage_capture(&snapshot, capture_id)?;
+        }
+        [coverage, capture, exclude, capture_id]
+            if coverage == "coverage" && capture == "capture" && exclude == "--exclude" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .take_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    None,
+                    Some(capture_id.clone()),
+                )
                 .await)?)?;
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
             let client = ensure_service(&state_file).await?;
             let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
             output.print(&rpc(client
-                .stop_coverage(scope.context, scope.connection, scope.target)
+                .stop_coverage(scope.context, scope.connection, scope.target, None)
+                .await)?)?;
+        }
+        [coverage, stop, exclude, capture_id]
+            if coverage == "coverage" && stop == "stop" && exclude == "--exclude" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .stop_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    Some(capture_id.clone()),
+                )
+                .await)?)?;
+        }
+        [coverage, show] if coverage == "coverage" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .get_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    ".".to_owned(),
+                )
+                .await)?)?;
+        }
+        [coverage, show, capture_id] if coverage == "coverage" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            output.print(&rpc(client
+                .get_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    capture_id.clone(),
+                )
                 .await)?)?;
         }
         [coverage, operation, context_id, connection_id, target_id]
@@ -208,10 +293,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Coverage recording started.");
                 }
                 "take" | "capture" => output.print(&rpc(client
-                    .take_coverage(context_id.clone(), connection_id.clone(), target_id.clone())
+                    .take_coverage(
+                        context_id.clone(),
+                        connection_id.clone(),
+                        target_id.clone(),
+                        None,
+                        None,
+                    )
                     .await)?)?,
                 "stop" => output.print(&rpc(client
-                    .stop_coverage(context_id.clone(), connection_id.clone(), target_id.clone())
+                    .stop_coverage(
+                        context_id.clone(),
+                        connection_id.clone(),
+                        target_id.clone(),
+                        None,
+                    )
                     .await)?)?,
                 _ => unreachable!(),
             }
@@ -313,6 +409,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     url: url.clone(),
                     channel: options.channel,
                     headless: options.headless,
+                    ignore_https_errors: options.ignore_https_errors,
                 },
                 options.connect,
                 &state_file,
@@ -882,6 +979,7 @@ struct PlaywrightOptions {
     channel: PlaywrightChannel,
     headless: bool,
     connect: bool,
+    ignore_https_errors: bool,
 }
 
 fn parse_playwright_options(options: &[String]) -> Result<PlaywrightOptions, io::Error> {
@@ -889,12 +987,14 @@ fn parse_playwright_options(options: &[String]) -> Result<PlaywrightOptions, io:
         channel: PlaywrightChannel::Bundled,
         headless: true,
         connect: false,
+        ignore_https_errors: false,
     };
     let mut index = 0;
     while index < options.len() {
         match options[index].as_str() {
             "--connect" => parsed.connect = true,
             "--headed" => parsed.headless = false,
+            "--ignore-https-errors" => parsed.ignore_https_errors = true,
             "--channel" => {
                 index += 1;
                 let channel = options.get(index).ok_or_else(|| {
@@ -980,7 +1080,7 @@ commands:
   jsdbg set workspace <context-id>
   jsdbg set target <selector>
   jsdbg connection add <context-id> <connection-id> <ws-endpoint> [--connect]
-  jsdbg connection add <context-id> <connection-id> --playwright <url> [--channel <channel>] [--headed] [--connect]
+  jsdbg connection add <context-id> <connection-id> --playwright <url> [--channel <channel>] [--headed] [--ignore-https-errors] [--connect]
   jsdbg connection connect|disconnect <context-id> <connection-id>
   jsdbg breakpoint set <context-id> <breakpoint-id> <source-url> <line> [column]
   jsdbg target show
@@ -992,8 +1092,13 @@ commands:
   jsdbg target step into|over|out [--epoch <epoch>]
   jsdbg target eval|watch <expression>
   jsdbg target click <css-selector>
+  jsdbg target key <chord>
+  jsdbg target type <text>
   jsdbg target click <context-id> <connection-id> <target> <css-selector>
-  jsdbg coverage start|capture|stop
+  jsdbg coverage start
+  jsdbg coverage capture [--id <name>]
+  jsdbg coverage stop [--exclude <name>]
+  jsdbg coverage show [<name>]
   jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
