@@ -69,19 +69,142 @@
         ],
         "configurationAttributes": {
           "launch": {
-            "required": [],
-            "properties": {}
+            "required": [
+              "runtime"
+            ],
+            "properties": {
+              "runtime": {
+                "type": "string",
+                "enum": [
+                  "context",
+                  "node",
+                  "playwright",
+                  "chrome"
+                ],
+                "description": "Runtime to launch, or 'context' to show targets already attached to the workspace context."
+              },
+              "program": {
+                "type": "string",
+                "description": "Node.js entry point. Required for runtime 'node'."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Node.js working directory. Defaults to ${workspaceFolder}."
+              },
+              "runtimeExecutable": {
+                "type": "string",
+                "default": "node",
+                "description": "Node.js executable."
+              },
+              "runtimeArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments passed to Node.js before the inspector and program arguments."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": "Environment overrides for Node.js. Null entries are omitted."
+              },
+              "url": {
+                "type": "string",
+                "description": "Page URL for Playwright or Chrome."
+              },
+              "playwrightPackage": {
+                "type": "string",
+                "description": "Path to playwright/index.mjs. Defaults to workspace node_modules/playwright/index.mjs."
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "bundled",
+                  "chrome",
+                  "chromeBeta",
+                  "chromeDev",
+                  "chromeCanary",
+                  "msedge",
+                  "msedgeBeta",
+                  "msedgeDev",
+                  "msedgeCanary"
+                ],
+                "default": "bundled",
+                "description": "Playwright browser channel."
+              },
+              "headless": {
+                "type": "boolean",
+                "description": "Launch the browser headlessly. Defaults to true for Playwright and false for Chrome."
+              },
+              "ignoreHttpsErrors": {
+                "type": "boolean",
+                "default": false,
+                "description": "Ignore HTTPS errors in the Playwright browser context."
+              },
+              "executablePath": {
+                "type": "string",
+                "description": "Chrome executable. When omitted, the extension searches standard installed Chrome and Chromium locations."
+              },
+              "userDataDir": {
+                "type": "string",
+                "description": "Chrome user data directory. A temporary directory is used when omitted."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Program arguments for Node.js or extra browser arguments for Chrome."
+              }
+            }
           },
           "attach": {
             "required": [],
-            "properties": {}
+            "properties": {
+              "runtime": {
+                "type": "string",
+                "enum": [
+                  "context"
+                ],
+                "default": "context",
+                "description": "Expose targets already attached to the workspace jsdbg context."
+              }
+            }
           }
         },
         "initialConfigurations": [
           {
             "type": "jsdbg",
             "request": "launch",
-            "name": "Debug jsdbg workspace context"
+            "name": "Launch Node.js with jsdbg",
+            "runtime": "node",
+            "program": "${workspaceFolder}/index.js"
+          },
+          {
+            "type": "jsdbg",
+            "request": "launch",
+            "name": "Launch Playwright with jsdbg",
+            "runtime": "playwright",
+            "url": "http://localhost:3000",
+            "headless": true
+          },
+          {
+            "type": "jsdbg",
+            "request": "launch",
+            "name": "Launch Chrome with jsdbg",
+            "runtime": "chrome",
+            "url": "http://localhost:3000"
+          },
+          {
+            "type": "jsdbg",
+            "request": "attach",
+            "name": "Attach to jsdbg workspace context",
+            "runtime": "context"
           }
         ]
       }

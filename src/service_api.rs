@@ -1,6 +1,7 @@
 use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -84,17 +85,41 @@ pub struct ConnectionSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ConnectionConfiguration {
     DirectCdp {
         endpoint: String,
     },
     Playwright {
         url: String,
+        #[serde(default, alias = "playwright_package")]
+        playwright_package: Option<String>,
         channel: PlaywrightChannel,
         headless: bool,
-        #[serde(default)]
+        #[serde(default, alias = "ignore_https_errors")]
         ignore_https_errors: bool,
+    },
+    Chrome {
+        url: String,
+        executable: String,
+        headless: bool,
+        #[serde(default, alias = "user_data_dir")]
+        user_data_dir: Option<String>,
+        args: Vec<String>,
+    },
+    Node {
+        program: String,
+        args: Vec<String>,
+        cwd: String,
+        #[serde(alias = "runtime_executable")]
+        runtime_executable: String,
+        #[serde(default, alias = "runtime_args")]
+        runtime_args: Vec<String>,
+        env: BTreeMap<String, String>,
     },
 }
 

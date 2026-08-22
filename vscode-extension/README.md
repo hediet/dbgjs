@@ -11,6 +11,13 @@ projection over the long-lived Rust `jsdbg-service`.
   hierarchy for its discovered targets.
 - An inline DAP adapter with threads, stack traces, stepping, resume,
   evaluation, breakpoints, loaded sources, and virtual source content.
+- Launch configurations for:
+  - Node.js programs, using a daemon-owned `--inspect-brk` process and a
+    synthetic root debugger target.
+  - Playwright browsers, resolving `playwright/index.mjs` from the workspace's
+    `node_modules` by default.
+  - Installed Chrome or Chromium, discovered from standard platform locations
+    or selected explicitly with `executablePath`.
 - Current-editor overlay tracking with immutable document versions and
   UTF-16 `LengthEdit` records.
 - Unit tests and an Electron integration test that activates the extension
@@ -19,6 +26,48 @@ projection over the long-lived Rust `jsdbg-service`.
 The target explorer is authoritative for the complete context. The DAP adapter
 currently projects attached targets as threads; a later VS Code-specific layer
 can replace this with parent/child debug sessions.
+
+## Launch configurations
+
+```jsonc
+{
+  "type": "jsdbg",
+  "request": "launch",
+  "name": "Node.js",
+  "runtime": "node",
+  "program": "${workspaceFolder}/server.js",
+  "args": ["--port", "3000"],
+  "runtimeArgs": [],
+  "env": { "NODE_ENV": "development" }
+}
+```
+
+```jsonc
+{
+  "type": "jsdbg",
+  "request": "launch",
+  "name": "Playwright",
+  "runtime": "playwright",
+  "url": "http://localhost:3000",
+  "headless": true
+}
+```
+
+```jsonc
+{
+  "type": "jsdbg",
+  "request": "launch",
+  "name": "Chrome",
+  "runtime": "chrome",
+  "url": "http://localhost:3000",
+  "headless": false
+}
+```
+
+Every launched runtime is represented by an ephemeral connection in the
+workspace context. The daemon owns its process tree; DAP disconnect stops the
+process and removes the connection. An `attach` configuration with
+`"runtime": "context"` continues to expose pre-existing context targets.
 
 ## Transport finding
 
@@ -31,7 +80,8 @@ daemon currently expects the older one-line `{"hello":1,"token":"..."}` preamble
 
 - Source APIs are path-based rather than provider-, snapshot-, and
   version-qualified.
-- Runtime scripts expose URLs but no connection/attachment/script incarnation.
+- Runtime scripts expose URLs but no complete
+  connection/attachment/script-incarnation identity.
 - No APIs publish filesystem/editor snapshots or edit projections.
 - No source-presentation revision/delta API.
 - No scope, variable, explicit pause, exception-policy, or structured output
@@ -52,7 +102,7 @@ npm run test:vscode
 ```
 
 The Electron test builds and starts the real Rust daemon, launches VS Code with
-the fixture workspace, launches and attaches a real Playwright browser target,
-verifies context creation, and checks that the inline jsdbg debug session
-exposes the target. On a headless Linux host, run it as
-`xvfb-run -a npm run test:vscode`.
+an isolated fixture workspace, and sequentially launches Node.js, workspace
+Playwright, and Chrome sessions. It verifies that each session exposes an
+attached DAP thread and removes its daemon connection on disconnect. On a
+headless Linux host, run it as `xvfb-run -a npm run test:vscode`.

@@ -9,6 +9,7 @@ import type {
 	TargetSnapshot,
 } from "./apiTypes.js";
 import { targetKey } from "./model.js";
+import { resolveLaunch } from "./launchConfig.js";
 import { SourceRegistry } from "./sourceRegistry.js";
 import type { WorkspaceContextController } from "./workspaceContext.js";
 
@@ -38,10 +39,16 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	private readonly subscriptions: vscode.Disposable[];
 	private sourcePaths = new Set<string>();
 	private disposed = false;
+	private ownedConnectionId: string | undefined;
+	private launchTask: Promise<void> | undefined;
+	private cleanupTask: Promise<void> | undefined;
 
 	public readonly onDidSendMessage = this.messageEmitter.event;
 
-	public constructor(private readonly controller: WorkspaceContextController) {
+	public constructor(
+		private readonly controller: WorkspaceContextController,
+		private readonly debugSessionId: string,
+	) {
 		this.sourceRegistry = new SourceRegistry(controller);
 		this.subscriptions = [
 			controller.onDidChangeSnapshot((snapshot) => {
@@ -66,6 +73,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 
 	public dispose(): void {
 		this.disposed = true;
+		void this.cleanupLaunch(0).catch(() => undefined);
 		for (const observer of this.targetObservers.values()) {
 			observer.cancelled = true;
 		}
@@ -93,6 +101,12 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			case "launch":
 			case "attach":
 				await this.controller.ensureReady();
+				try {
+					await this.startLaunch(request as DebugProtocol.LaunchRequest);
+				} catch (error) {
+					await this.cleanupLaunch(request.seq);
+					throw error;
+				}
 				this.sendResponse(request);
 				this.sendEvent("initialized");
 				await this.refreshSources();
@@ -138,11 +152,122 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				return;
 			case "disconnect":
 			case "terminate":
+				await this.cleanupLaunch(request.seq);
 				this.sendResponse(request);
 				this.sendEvent("terminated");
 				return;
 			default:
 				this.sendError(request, new Error(`DAP request '${request.command}' is not implemented`));
+		}
+	}
+
+	private async startLaunch(request: DebugProtocol.LaunchRequest): Promise<void> {
+		if (this.launchTask !== undefined) {
+			throw new Error("A jsdbg runtime launch is already in progress");
+		}
+		const task = this.configureLaunch(request);
+		this.launchTask = task;
+		try {
+			await task;
+		} finally {
+			if (this.launchTask === task) {
+				this.launchTask = undefined;
+			}
+		}
+	}
+
+	private async configureLaunch(request: DebugProtocol.LaunchRequest): Promise<void> {
+		const launch = await resolveLaunch(request.arguments, this.debugSessionId);
+		if (this.disposed) {
+			throw new Error("jsdbg debug session was disposed during launch");
+		}
+		if (launch.configuration === undefined) {
+			return;
+		}
+		this.ownedConnectionId = launch.connectionId;
+		let snapshot = await this.controller.client.putConnection(
+			this.controller.contextId,
+			launch.connectionId,
+			launch.configuration,
+		);
+		this.controller.adoptSnapshot(snapshot);
+		if (this.disposed) {
+			throw new Error("jsdbg debug session was disposed during launch");
+		}
+		snapshot = await this.controller.client.connectConnection(
+			this.controller.contextId,
+			launch.connectionId,
+		);
+		this.controller.adoptSnapshot(snapshot);
+		if (this.disposed) {
+			throw new Error("jsdbg debug session was disposed during launch");
+		}
+		const connection = snapshot.connections.find(
+			(candidate) => candidate.id === launch.connectionId,
+		);
+		if (connection?.status.kind === "failed") {
+			throw new Error(
+				typeof connection.status.message === "string"
+					? connection.status.message
+					: `jsdbg connection '${launch.connectionId}' failed`,
+			);
+		}
+		await this.waitForAttachedTarget(launch.connectionId);
+	}
+
+	private async waitForAttachedTarget(connectionId: string): Promise<void> {
+		const deadline = Date.now() + 30_000;
+		while (Date.now() < deadline) {
+			await this.controller.refresh();
+			const connection = this.controller.snapshot?.connections.find(
+				(candidate) => candidate.id === connectionId,
+			);
+			if (connection?.targets.some((target) => target.attached)) {
+				return;
+			}
+			if (connection?.status.kind === "failed") {
+				throw new Error(
+					typeof connection.status.message === "string"
+						? connection.status.message
+						: `jsdbg connection '${connectionId}' failed`,
+				);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		throw new Error(`Timed out waiting for jsdbg connection '${connectionId}' to attach a target`);
+	}
+
+	private async cleanupLaunch(requestSequence: number): Promise<void> {
+		if (this.cleanupTask !== undefined) {
+			return this.cleanupTask;
+		}
+		const task = this.runCleanup(requestSequence);
+		this.cleanupTask = task;
+		try {
+			await task;
+		} finally {
+			if (this.cleanupTask === task) {
+				this.cleanupTask = undefined;
+			}
+		}
+	}
+
+	private async runCleanup(requestSequence: number): Promise<void> {
+		await this.launchTask?.catch(() => undefined);
+		const connectionId = this.ownedConnectionId;
+		this.ownedConnectionId = undefined;
+		if (connectionId !== undefined) {
+			const disconnected = await this.controller.client.disconnectConnection(
+				this.controller.contextId,
+				connectionId,
+			);
+			this.controller.adoptSnapshot(disconnected);
+			const deleted = await this.controller.client.deleteConnection(
+				this.controller.contextId,
+				connectionId,
+				`dap:${requestSequence}:delete-connection:${connectionId}`,
+			);
+			this.controller.adoptSnapshot(deleted);
 		}
 	}
 

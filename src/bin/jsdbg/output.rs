@@ -1559,6 +1559,7 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
         }
         ConnectionConfiguration::Playwright {
             url,
+            playwright_package: _,
             channel,
             headless,
             ignore_https_errors,
@@ -1572,6 +1573,20 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
                 ""
             }
         ),
+        ConnectionConfiguration::Chrome {
+            url,
+            executable,
+            headless,
+            ..
+        } => format!(
+            "Chrome at {executable}{} opening {url}",
+            if *headless { " headless" } else { " headed" },
+        ),
+        ConnectionConfiguration::Node {
+            program,
+            runtime_executable,
+            ..
+        } => format!("Node.js at {runtime_executable} running {program}"),
     }
 }
 

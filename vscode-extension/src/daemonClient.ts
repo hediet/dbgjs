@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import {
 	type BreakpointSpec,
+	type ConnectionConfiguration,
 	type ContextSnapshot,
 	type ContextSummary,
 	type EvaluationSnapshot,
@@ -57,6 +58,50 @@ export class DaemonClient {
 
 	public async getContext(contextId: string): Promise<ContextSnapshot> {
 		return parseContextSnapshot(await this.call("get_context", { contextId }));
+	}
+
+	public async putConnection(
+		contextId: string,
+		connectionId: string,
+		configuration: ConnectionConfiguration,
+	): Promise<ContextSnapshot> {
+		return parseContextSnapshot(await this.call("put_connection", {
+			contextId,
+			connectionId,
+			configuration: connectionConfigurationJson(configuration),
+		}));
+	}
+
+	public async connectConnection(
+		contextId: string,
+		connectionId: string,
+	): Promise<ContextSnapshot> {
+		return parseContextSnapshot(await this.call("connect_connection", {
+			contextId,
+			connectionId,
+		}));
+	}
+
+	public async disconnectConnection(
+		contextId: string,
+		connectionId: string,
+	): Promise<ContextSnapshot> {
+		return parseContextSnapshot(await this.call("disconnect_connection", {
+			contextId,
+			connectionId,
+		}));
+	}
+
+	public async deleteConnection(
+		contextId: string,
+		connectionId: string,
+		requestId: string,
+	): Promise<ContextSnapshot> {
+		return parseContextSnapshot(await this.call("delete_connection", {
+			contextId,
+			connectionId,
+			options: { requestId },
+		}));
 	}
 
 	public async observeContext(
@@ -205,6 +250,43 @@ export class DaemonClient {
 			`${debuggerInterface}::${member}`,
 			params,
 		);
+	}
+}
+
+function connectionConfigurationJson(
+	configuration: ConnectionConfiguration,
+): Record<string, JsonValue> {
+	switch (configuration.kind) {
+		case "directCdp":
+			return { kind: configuration.kind, endpoint: configuration.endpoint };
+		case "playwright":
+			return {
+				kind: configuration.kind,
+				url: configuration.url,
+				playwrightPackage: configuration.playwrightPackage ?? null,
+				channel: configuration.channel,
+				headless: configuration.headless,
+				ignoreHttpsErrors: configuration.ignoreHttpsErrors,
+			};
+		case "chrome":
+			return {
+				kind: configuration.kind,
+				url: configuration.url,
+				executable: configuration.executable,
+				headless: configuration.headless,
+				userDataDir: configuration.userDataDir ?? null,
+				args: [...configuration.args],
+			};
+		case "node":
+			return {
+				kind: configuration.kind,
+				program: configuration.program,
+				args: [...configuration.args],
+				cwd: configuration.cwd,
+				runtimeExecutable: configuration.runtimeExecutable,
+				runtimeArgs: [...configuration.runtimeArgs],
+				env: { ...configuration.env },
+			};
 	}
 }
 

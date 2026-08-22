@@ -1,8 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runTests } from "@vscode/test-electron";
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,6 +17,17 @@ if (build.status !== 0) {
 
 const temporaryDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-test-"));
 const stateFile = join(temporaryDirectory, "service.json");
+const workspacePath = join(temporaryDirectory, "workspace");
+await cp(join(extensionRoot, "test", "workspace"), workspacePath, { recursive: true });
+await mkdir(join(workspacePath, "node_modules"), { recursive: true });
+await symlink(
+	join(repositoryRoot, "node_modules", "playwright"),
+	join(workspacePath, "node_modules", "playwright"),
+	"dir",
+);
+const { chromium } = await import(
+	pathToFileURL(join(repositoryRoot, "node_modules", "playwright", "index.mjs")).href
+);
 const executable = join(
 	repositoryRoot,
 	"target",
@@ -38,19 +49,14 @@ try {
 		extensionDevelopmentPath: extensionRoot,
 		extensionTestsPath: join(extensionRoot, "dist", "test", "suite", "index.cjs"),
 		launchArgs: [
-			join(extensionRoot, "test", "workspace"),
+			workspacePath,
 			`--user-data-dir=${join(temporaryDirectory, "user-data")}`,
 			`--extensions-dir=${join(temporaryDirectory, "extensions")}`,
 			"--disable-workspace-trust",
 		],
 		extensionTestsEnv: {
 			JSDBG_SERVICE_STATE: stateFile,
-			JSDBG_TEST_CLI: join(
-				repositoryRoot,
-				"target",
-				"debug",
-				process.platform === "win32" ? "jsdbg.exe" : "jsdbg",
-			),
+			JSDBG_TEST_CHROME: chromium.executablePath(),
 		},
 	});
 } finally {

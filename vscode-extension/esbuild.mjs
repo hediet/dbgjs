@@ -21,6 +21,10 @@ await Promise.all([
 		entryPoints: ["src/test/unit.test.ts"],
 		outfile: "dist/test/unit.test.cjs",
 		format: "cjs",
+		external: [],
+		alias: {
+			vscode: "./src/test/vscodeStub.ts",
+		},
 	}),
 	build({
 		...shared,

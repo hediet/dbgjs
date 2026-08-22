@@ -38,6 +38,7 @@ pub struct CdpConnection {
     mux: CdpSessionMux,
     root: CdpClient<Channel>,
     root_events: Mutex<Option<mpsc::UnboundedReceiver<Result<RootCdpEvent, CdpRuntimeEventError>>>>,
+    root_debugger: std::sync::Mutex<Option<CdpDebuggerSession>>,
     close_reason: Arc<Mutex<Option<String>>>,
 }
 
@@ -62,6 +63,57 @@ impl CdpConnection {
             mux,
             root,
             root_events: Mutex::new(Some(root_event_receiver)),
+            root_debugger: std::sync::Mutex::new(None),
+            close_reason,
+        })
+    }
+
+    pub async fn connect_root_debugger(
+        endpoint: &str,
+        connection_generation: u64,
+    ) -> Result<Self, CdpRuntimeError> {
+        let transport = Arc::new(CdpWebSocketTransport::connect(endpoint).await?);
+        let close_reason = transport.close_reason();
+        let mux = CdpSessionMux::new(transport.clone());
+        let session = SessionKey {
+            connection_generation,
+            session_id: "$cdp-root".to_owned(),
+        };
+        let (event_sender, event_receiver) = mpsc::unbounded_channel();
+        let heap_snapshot = Arc::new(Mutex::new(None));
+        let (heap_snapshot_progress, _) = watch::channel(None);
+        let root_channel = Channel::new(
+            Box::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?),
+            Box::new(CdpEventHandler {
+                session: session.clone(),
+                sender: event_sender,
+                heap_snapshot: heap_snapshot.clone(),
+                heap_snapshot_progress: heap_snapshot_progress.clone(),
+            }),
+        );
+        let root = CdpClient::root(root_channel.clone());
+        let debugger = CdpDebuggerSession {
+            session,
+            client: CdpClient::root(root_channel.clone()),
+            events: event_receiver,
+            source_map_frame_id: Mutex::new(None),
+            source_map_cache_enabled: AtomicBool::new(true),
+            source_map_cache_hits: AtomicU64::new(0),
+            source_map_cache_misses: AtomicU64::new(0),
+            source_map_cache_bypasses: AtomicU64::new(0),
+            heap_snapshot,
+            heap_snapshot_progress,
+        };
+        let mux_loop = mux.clone();
+        tokio::spawn(async move { mux_loop.run().await });
+        tokio::spawn(async move { root_channel.run().await });
+        let (_, root_event_receiver) = mpsc::unbounded_channel();
+        Ok(Self {
+            transport,
+            mux,
+            root,
+            root_events: Mutex::new(Some(root_event_receiver)),
+            root_debugger: std::sync::Mutex::new(Some(debugger)),
             close_reason,
         })
     }
@@ -105,6 +157,10 @@ impl CdpConnection {
 
     pub fn retire_session(&self, session_id: &str) {
         self.mux.retire_session(session_id);
+    }
+
+    pub fn take_root_debugger_session(&self) -> Option<CdpDebuggerSession> {
+        self.root_debugger.lock().unwrap().take()
     }
 
     pub async fn take_root_events(

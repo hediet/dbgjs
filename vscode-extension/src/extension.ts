@@ -39,9 +39,9 @@ export function activate(context: vscode.ExtensionContext): JsdbgExtensionApi {
 			await vscode.env.clipboard.writeText(controller.contextId);
 		}),
 		vscode.debug.registerDebugAdapterDescriptorFactory("jsdbg", {
-			createDebugAdapterDescriptor: () =>
+			createDebugAdapterDescriptor: (session) =>
 				new vscode.DebugAdapterInlineImplementation(
-					new JsdbgDebugAdapter(controller),
+					new JsdbgDebugAdapter(controller, session.id),
 				),
 		}),
 	);

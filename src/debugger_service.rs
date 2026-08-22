@@ -12,9 +12,8 @@ use tokio::sync::{Mutex, watch};
 use tokio::time::{Instant, timeout_at};
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, TargetAttachToTargetParams,
-    TargetDetachFromTargetParams, TargetGetTargetsParams, TargetSetDiscoverTargetsParams,
-    TargetTargetInfo,
+    BrowserGetVersionParams, TargetAttachToTargetParams, TargetDetachFromTargetParams,
+    TargetGetTargetsParams, TargetSetDiscoverTargetsParams, TargetTargetInfo,
 };
 use crate::connection_provider::{ConnectionRuntime, validate_configuration};
 use crate::context_engine::{
@@ -597,7 +596,7 @@ impl DebuggerServiceApi for DebuggerService {
             (configuration, attempt)
         };
 
-        let connected = connect_runtime(&configuration).await;
+        let connected = connect_runtime(&configuration, attempt.generation).await;
         let mut state = self.state.lock().await;
         let context = state
             .contexts
@@ -606,15 +605,15 @@ impl DebuggerServiceApi for DebuggerService {
             .ok_or_else(|| not_found("context", &context_id))?;
         let runtime_key = (context_id.clone(), connection_id.clone());
         let (completion, runtime) = match connected {
-            Ok((runtime, version, targets)) => (
+            Ok((runtime, product, protocol_version, targets)) => (
                 EffectCompletion::ConnectionOpened {
                     connection_id: connection_id.clone(),
                     attempt,
-                    product: version.product,
-                    protocol_version: version.protocol_version,
+                    product,
+                    protocol_version,
                     targets: targets
                         .into_iter()
-                        .map(|target| (target.target_id.clone(), target_snapshot(target)))
+                        .map(|target| (target.target_id.clone(), target))
                         .collect(),
                 },
                 Some(runtime),
@@ -648,7 +647,7 @@ impl DebuggerServiceApi for DebuggerService {
                 connection
                     .targets
                     .values()
-                    .filter(|target| target.target_type == "page")
+                    .filter(|target| matches!(target.target_type.as_str(), "page" | "node"))
                     .map(|target| target.target_id.clone())
                     .collect::<Vec<_>>()
             })
@@ -1304,23 +1303,32 @@ impl DebuggerServiceApi for DebuggerService {
             detach_session(&runtime, &session_id).await;
         }
 
-        let mut attach = TargetAttachToTargetParams::new(target_id.clone());
-        attach.flatten = Some(true);
-        let attached = runtime
-            .root()
-            .target_attach_to_target(attach)
-            .await
-            .map_err(|error| cdp_rpc_error("Target.attachToTarget", error))?;
-        let session_key = SessionKey {
-            connection_generation: generation,
-            session_id: attached.session_id.clone(),
-        };
-        let session = match runtime.open_session(session_key.clone()) {
-            Ok(session) => session,
-            Err(error) => {
-                detach_session(&runtime, &attached.session_id).await;
-                return Err(internal_error(error.to_string()));
-            }
+        let (session, session_key) = if runtime.is_direct_debugger() {
+            let session = runtime
+                .take_root_debugger_session()
+                .ok_or_else(|| invalid_state("direct debugger target is already attached"))?;
+            let key = session.key().clone();
+            (session, key)
+        } else {
+            let mut attach = TargetAttachToTargetParams::new(target_id.clone());
+            attach.flatten = Some(true);
+            let attached = runtime
+                .root()
+                .target_attach_to_target(attach)
+                .await
+                .map_err(|error| cdp_rpc_error("Target.attachToTarget", error))?;
+            let session_key = SessionKey {
+                connection_generation: generation,
+                session_id: attached.session_id.clone(),
+            };
+            let session = match runtime.open_session(session_key.clone()) {
+                Ok(session) => session,
+                Err(error) => {
+                    detach_session(&runtime, &session_key.session_id).await;
+                    return Err(internal_error(error.to_string()));
+                }
+            };
+            (session, session_key)
         };
         let debugger = match TargetDebuggerHandle::start(
             context_id.clone(),
@@ -1328,13 +1336,13 @@ impl DebuggerServiceApi for DebuggerService {
             target_id.clone(),
             generation,
             session,
-            session_key,
+            session_key.clone(),
         )
         .await
         {
             Ok(debugger) => debugger,
             Err(error) => {
-                detach_session(&runtime, &attached.session_id).await;
+                detach_session(&runtime, &session_key.session_id).await;
                 return Err(target_debugger_rpc_error(error));
             }
         };
@@ -1351,7 +1359,7 @@ impl DebuggerServiceApi for DebuggerService {
             .is_some_and(|connection| connection.generation == generation);
         if !runtime_is_current || !generation_is_current {
             drop(state);
-            detach_session(&runtime, &attached.session_id).await;
+            detach_session(&runtime, &session_key.session_id).await;
             return Err(invalid_state(
                 "connection changed while the target was being attached",
             ));
@@ -1359,7 +1367,7 @@ impl DebuggerServiceApi for DebuggerService {
         if let Some(existing) = state.target_debuggers.get(&debugger_key) {
             let snapshot = existing.snapshot();
             drop(state);
-            detach_session(&runtime, &attached.session_id).await;
+            detach_session(&runtime, &session_key.session_id).await;
             return Ok(snapshot);
         }
         state
@@ -1405,7 +1413,7 @@ impl DebuggerServiceApi for DebuggerService {
                     state.target_debuggers.remove(&debugger_key);
                 }
                 drop(state);
-                detach_session(&runtime, &attached.session_id).await;
+                detach_session(&runtime, &session_key.session_id).await;
                 return Err(target_debugger_rpc_error(error));
             }
         }
@@ -1841,6 +1849,9 @@ impl DebuggerService {
 }
 
 async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
+    if runtime.is_direct_debugger() {
+        return;
+    }
     runtime.retire_session(session_id);
     let mut detach = TargetDetachFromTargetParams::new();
     detach.session_id = Some(session_id.to_owned());
@@ -1849,17 +1860,32 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
 
 async fn connect_runtime(
     configuration: &ConnectionConfiguration,
-) -> Result<
-    (
-        Arc<ConnectionRuntime>,
-        BrowserGetVersionResult,
-        Vec<TargetTargetInfo>,
-    ),
-    String,
-> {
-    let connection = ConnectionRuntime::connect(configuration)
+    connection_generation: u64,
+) -> Result<(Arc<ConnectionRuntime>, String, String, Vec<TargetSnapshot>), String> {
+    let connection = ConnectionRuntime::connect(configuration, connection_generation)
         .await
         .map_err(|error| error.to_string())?;
+    if connection.is_direct_debugger() {
+        return Ok((
+            connection,
+            "Node.js".to_owned(),
+            "1.3".to_owned(),
+            vec![TargetSnapshot {
+                target_id: "$node-root".to_owned(),
+                target_type: "node".to_owned(),
+                title: "Node.js".to_owned(),
+                url: match configuration {
+                    ConnectionConfiguration::Node { program, .. } => program.clone(),
+                    _ => String::new(),
+                },
+                attached: true,
+                parent_id: None,
+                opener_id: None,
+                browser_context_id: None,
+                subtype: None,
+            }],
+        ));
+    }
     let version = match connection
         .root()
         .browser_get_version(BrowserGetVersionParams::new())
@@ -1890,7 +1916,12 @@ async fn connect_runtime(
             return Err(format!("Target.getTargets failed: {error:?}"));
         }
     };
-    Ok((connection, version, targets))
+    Ok((
+        connection,
+        version.product,
+        version.protocol_version,
+        targets.into_iter().map(target_snapshot).collect(),
+    ))
 }
 
 fn target_snapshot(target: TargetTargetInfo) -> TargetSnapshot {

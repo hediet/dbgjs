@@ -648,6 +648,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 connection_id,
                 ConnectionConfiguration::Playwright {
                     url: url.clone(),
+                    playwright_package: None,
                     channel: options.channel,
                     headless: options.headless,
                     ignore_https_errors: options.ignore_https_errors,

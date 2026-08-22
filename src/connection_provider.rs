@@ -18,26 +18,110 @@ use crate::service_api::{ConnectionConfiguration, PlaywrightChannel};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("providers/playwright.mjs");
+const CHROME_HELPER: &str = include_str!("providers/chrome.mjs");
+const NODE_HELPER: &str = include_str!("providers/node.mjs");
 
 pub struct ConnectionRuntime {
     cdp: Arc<CdpConnection>,
     provider: Option<Mutex<Child>>,
+    direct_debugger: bool,
 }
 
 impl ConnectionRuntime {
     pub async fn connect(
         configuration: &ConnectionConfiguration,
+        connection_generation: u64,
     ) -> Result<Arc<Self>, ConnectionProviderError> {
-        let (endpoint, provider) = match configuration {
-            ConnectionConfiguration::DirectCdp { endpoint } => (endpoint.clone(), None),
+        let (endpoint, provider, direct_debugger) = match configuration {
+            ConnectionConfiguration::DirectCdp { endpoint } => (endpoint.clone(), None, false),
             ConnectionConfiguration::Playwright {
                 url,
+                playwright_package,
                 channel,
                 headless,
                 ignore_https_errors,
-            } => launch_playwright(url, channel, *headless, *ignore_https_errors).await?,
+            } => {
+                let (endpoint, provider) = launch_playwright(
+                    url,
+                    playwright_package.as_deref(),
+                    channel,
+                    *headless,
+                    *ignore_https_errors,
+                )
+                .await?;
+                (endpoint, provider, false)
+            }
+            ConnectionConfiguration::Chrome {
+                url,
+                executable,
+                headless,
+                user_data_dir,
+                args,
+            } => {
+                let (endpoint, provider) = launch_provider(
+                    CHROME_HELPER,
+                    "Chrome",
+                    [
+                        ("JSDBG_PROVIDER_URL", url.clone()),
+                        ("JSDBG_CHROME_EXECUTABLE", executable.clone()),
+                        (
+                            "JSDBG_PROVIDER_MODE",
+                            if *headless { "headless" } else { "headed" }.to_owned(),
+                        ),
+                        (
+                            "JSDBG_CHROME_USER_DATA_DIR",
+                            user_data_dir.clone().unwrap_or_default(),
+                        ),
+                        (
+                            "JSDBG_CHROME_ARGS",
+                            serde_json::to_string(args).expect("Chrome arguments always serialize"),
+                        ),
+                    ],
+                )
+                .await?;
+                (endpoint, provider, false)
+            }
+            ConnectionConfiguration::Node {
+                program,
+                args,
+                cwd,
+                runtime_executable,
+                runtime_args,
+                env,
+            } => {
+                let (endpoint, provider) = launch_provider(
+                    NODE_HELPER,
+                    "Node.js",
+                    [
+                        ("JSDBG_NODE_PROGRAM", program.clone()),
+                        (
+                            "JSDBG_NODE_ARGS",
+                            serde_json::to_string(args)
+                                .expect("Node.js arguments always serialize"),
+                        ),
+                        ("JSDBG_NODE_CWD", cwd.clone()),
+                        ("JSDBG_NODE_EXECUTABLE", runtime_executable.clone()),
+                        (
+                            "JSDBG_NODE_RUNTIME_ARGS",
+                            serde_json::to_string(runtime_args)
+                                .expect("Node.js runtime arguments always serialize"),
+                        ),
+                        (
+                            "JSDBG_NODE_ENV",
+                            serde_json::to_string(env)
+                                .expect("Node.js environment always serializes"),
+                        ),
+                    ],
+                )
+                .await?;
+                (endpoint, provider, true)
+            }
         };
-        let cdp = match CdpConnection::connect(&endpoint).await {
+        let cdp = match if direct_debugger {
+            CdpConnection::connect_root_debugger(&endpoint, connection_generation).await
+        } else {
+            CdpConnection::connect(&endpoint).await
+        } {
             Ok(cdp) => Arc::new(cdp),
             Err(error) => {
                 if let Some(mut provider) = provider {
@@ -49,6 +133,7 @@ impl ConnectionRuntime {
         Ok(Arc::new(Self {
             cdp,
             provider: provider.map(Mutex::new),
+            direct_debugger,
         }))
     }
 
@@ -58,6 +143,14 @@ impl ConnectionRuntime {
 
     pub fn open_session(&self, session: SessionKey) -> Result<CdpDebuggerSession, CdpRuntimeError> {
         self.cdp.open_session(session)
+    }
+
+    pub fn take_root_debugger_session(&self) -> Option<CdpDebuggerSession> {
+        self.cdp.take_root_debugger_session()
+    }
+
+    pub fn is_direct_debugger(&self) -> bool {
+        self.direct_debugger
     }
 
     pub fn retire_session(&self, session_id: &str) {
@@ -104,7 +197,8 @@ pub fn validate_configuration(
                 ));
             }
         }
-        ConnectionConfiguration::Playwright { url, .. } => {
+        ConnectionConfiguration::Playwright { url, .. }
+        | ConnectionConfiguration::Chrome { url, .. } => {
             let parsed = Url::parse(url).map_err(|source| ConnectionProviderError::InvalidUrl {
                 kind: "page URL",
                 value: url.clone(),
@@ -116,17 +210,43 @@ pub fn validate_configuration(
                 ));
             }
         }
+        ConnectionConfiguration::Node {
+            program,
+            cwd,
+            runtime_executable,
+            ..
+        } => {
+            if program.is_empty() {
+                return Err(ConnectionProviderError::EmptyNodeProgram);
+            }
+            if cwd.is_empty() {
+                return Err(ConnectionProviderError::EmptyNodeCwd);
+            }
+            if runtime_executable.is_empty() {
+                return Err(ConnectionProviderError::EmptyNodeExecutable);
+            }
+        }
     }
     Ok(())
 }
 
 async fn launch_playwright(
     url: &str,
+    configured_package: Option<&str>,
     channel: &PlaywrightChannel,
     headless: bool,
     ignore_https_errors: bool,
 ) -> Result<(String, Option<Child>), ConnectionProviderError> {
-    let playwright_package = find_playwright_package()?;
+    let playwright_package = match configured_package {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if !path.is_file() {
+                return Err(ConnectionProviderError::PlaywrightPackageNotFound(path));
+            }
+            path
+        }
+        None => find_playwright_package()?,
+    };
     let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
     let mut command = Command::new(&node);
     command
@@ -165,6 +285,7 @@ async fn launch_playwright(
             terminate_provider(&mut child).await;
             return Err(ConnectionProviderError::StartupTimeout);
         }
+
         Ok(Err(error)) => {
             terminate_provider(&mut child).await;
             return Err(ConnectionProviderError::ProviderIo(error));
@@ -188,7 +309,7 @@ async fn launch_playwright(
         }
     };
     if let Some(error) = ready.error {
-        let _ = child.wait().await;
+        terminate_provider(&mut child).await;
         return Err(ConnectionProviderError::ProviderStartup(error));
     }
     let endpoint = match ready.endpoint {
@@ -198,6 +319,72 @@ async fn launch_playwright(
             return Err(ConnectionProviderError::MissingProviderEndpoint);
         }
     };
+    Ok((endpoint, Some(child)))
+}
+
+async fn launch_provider<const N: usize>(
+    helper: &str,
+    provider_name: &'static str,
+    environment: [(&str, String); N],
+) -> Result<(String, Option<Child>), ConnectionProviderError> {
+    let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
+    let mut command = Command::new(&node);
+    command
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(helper)
+        .envs(environment)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    configure_provider_process(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|source| ConnectionProviderError::Spawn {
+            executable: PathBuf::from(node),
+            source,
+        })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(ConnectionProviderError::MissingProviderStdout)?;
+    let mut lines = BufReader::new(stdout).lines();
+    let line = match timeout(PLAYWRIGHT_STARTUP_TIMEOUT, lines.next_line()).await {
+        Err(_) => {
+            terminate_provider(&mut child).await;
+            return Err(ConnectionProviderError::NamedStartupTimeout(provider_name));
+        }
+        Ok(Err(error)) => {
+            terminate_provider(&mut child).await;
+            return Err(ConnectionProviderError::ProviderIo(error));
+        }
+        Ok(Ok(None)) => {
+            let code = child
+                .try_wait()
+                .ok()
+                .flatten()
+                .and_then(|status| status.code());
+            terminate_provider(&mut child).await;
+            return Err(ConnectionProviderError::NamedProviderExited(
+                provider_name,
+                code,
+            ));
+        }
+        Ok(Ok(Some(line))) => line,
+    };
+    let ready: PlaywrightReady =
+        serde_json::from_str(&line).map_err(ConnectionProviderError::InvalidHandshake)?;
+    if let Some(error) = ready.error {
+        terminate_provider(&mut child).await;
+        return Err(ConnectionProviderError::NamedProviderStartup(
+            provider_name,
+            error,
+        ));
+    }
+    let endpoint = ready
+        .endpoint
+        .ok_or(ConnectionProviderError::MissingProviderEndpoint)?;
     Ok((endpoint, Some(child)))
 }
 
@@ -338,6 +525,18 @@ pub enum ConnectionProviderError {
     ProviderStartup(String),
     #[error("Playwright provider startup handshake did not contain a CDP endpoint")]
     MissingProviderEndpoint,
+    #[error("{0} provider startup timed out")]
+    NamedStartupTimeout(&'static str),
+    #[error("{0} provider exited before reporting its CDP endpoint (code {1:?})")]
+    NamedProviderExited(&'static str, Option<i32>),
+    #[error("{0} provider failed during startup: {1}")]
+    NamedProviderStartup(&'static str, String),
+    #[error("Node.js launch program must not be empty")]
+    EmptyNodeProgram,
+    #[error("Node.js launch cwd must not be empty")]
+    EmptyNodeCwd,
+    #[error("Node.js runtime executable must not be empty")]
+    EmptyNodeExecutable,
     #[error(transparent)]
     Cdp(#[from] CdpRuntimeError),
 }

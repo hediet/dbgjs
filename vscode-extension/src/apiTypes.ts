@@ -18,10 +18,50 @@ export interface ContextSnapshot {
 
 export interface ConnectionSnapshot {
 	readonly id: string;
+	readonly configuration: ConnectionConfiguration;
 	readonly generation: number;
 	readonly status: TaggedValue;
 	readonly targets: readonly TargetSnapshot[];
 }
+
+export type ConnectionConfiguration =
+	| { readonly kind: "directCdp"; readonly endpoint: string; }
+	| {
+			readonly kind: "playwright";
+			readonly url: string;
+			readonly playwrightPackage?: string;
+			readonly channel: PlaywrightChannel;
+			readonly headless: boolean;
+			readonly ignoreHttpsErrors: boolean;
+	  }
+	| {
+			readonly kind: "chrome";
+			readonly url: string;
+			readonly executable: string;
+			readonly headless: boolean;
+			readonly userDataDir?: string;
+			readonly args: readonly string[];
+	  }
+	| {
+			readonly kind: "node";
+			readonly program: string;
+			readonly args: readonly string[];
+			readonly cwd: string;
+			readonly runtimeExecutable: string;
+			readonly runtimeArgs: readonly string[];
+			readonly env: Readonly<Record<string, string>>;
+	  };
+
+export type PlaywrightChannel =
+	| "bundled"
+	| "chrome"
+	| "chromeBeta"
+	| "chromeDev"
+	| "chromeCanary"
+	| "msedge"
+	| "msedgeBeta"
+	| "msedgeDev"
+	| "msedgeCanary";
 
 export interface TargetSnapshot {
 	readonly targetId: string;
@@ -219,10 +259,56 @@ function parseConnection(value: unknown): ConnectionSnapshot {
 	const object = record(value, "connection");
 	return {
 		id: string(object.id, "id"),
+		configuration: parseConnectionConfiguration(object.configuration),
 		generation: number(object.generation, "generation"),
 		status: tagged(object.status, "status"),
 		targets: array(object.targets, "targets").map(parseTarget),
 	};
+}
+
+function parseConnectionConfiguration(value: unknown): ConnectionConfiguration {
+	const object = record(value, "connection configuration");
+	const kind = string(object.kind, "connection configuration kind");
+	switch (kind) {
+		case "directCdp":
+			return { kind, endpoint: string(object.endpoint, "endpoint") };
+		case "playwright":
+			return {
+				kind,
+				url: string(object.url, "url"),
+				...optionalStringProperty(object, "playwrightPackage"),
+				channel: string(object.channel, "channel") as PlaywrightChannel,
+				headless: boolean(object.headless, "headless"),
+				ignoreHttpsErrors: boolean(object.ignoreHttpsErrors, "ignoreHttpsErrors"),
+			};
+		case "chrome":
+			return {
+				kind,
+				url: string(object.url, "url"),
+				executable: string(object.executable, "executable"),
+				headless: boolean(object.headless, "headless"),
+				...optionalStringProperty(object, "userDataDir"),
+				args: array(object.args, "args").map((item) => string(item, "argument")),
+			};
+		case "node": {
+			const envObject = record(object.env, "environment");
+			return {
+				kind,
+				program: string(object.program, "program"),
+				args: array(object.args, "args").map((item) => string(item, "argument")),
+				cwd: string(object.cwd, "cwd"),
+				runtimeExecutable: string(object.runtimeExecutable, "runtimeExecutable"),
+				runtimeArgs: array(object.runtimeArgs, "runtimeArgs")
+					.map((item) => string(item, "runtime argument")),
+				env: Object.fromEntries(
+					Object.entries(envObject)
+						.map(([key, item]) => [key, string(item, `environment '${key}'`)]),
+				),
+			};
+		}
+		default:
+			throw new Error(`Unsupported connection configuration kind: ${kind}`);
+	}
 }
 
 function parseTarget(value: unknown): TargetSnapshot {
