@@ -26,6 +26,7 @@ pub struct HeapClassOutputOptions {
     pub all: bool,
     pub max_lines: usize,
     pub instances: bool,
+    pub sort_by_instances: bool,
 }
 
 impl OutputFormat {
@@ -702,6 +703,10 @@ fn render_heap_classes_human(
     if snapshot.classes.is_empty() {
         return output;
     }
+    if options.sort_by_instances {
+        render_heap_classes_ranked(snapshot, &options, maximum_lines, &mut output);
+        return output;
+    }
     let mut files = BTreeMap::<String, Vec<HeapClassSnapshotEntry>>::new();
     for class in &snapshot.classes {
         files
@@ -740,6 +745,85 @@ fn render_heap_classes_human(
         output.truncate(maximum_lines);
     }
     output
+}
+
+fn render_heap_classes_ranked(
+    snapshot: &HeapClassSnapshot,
+    options: &HeapClassOutputOptions,
+    maximum_lines: usize,
+    output: &mut Vec<String>,
+) {
+    let mut classes = snapshot.classes.iter().collect::<Vec<_>>();
+    classes.sort_by(|left, right| {
+        right
+            .instance_count
+            .cmp(&left.instance_count)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.source_url.cmp(&right.source_url))
+    });
+    let mut rendered_classes = 0;
+    for (index, class) in classes.iter().enumerate() {
+        let remaining_classes = classes.len() - index;
+        if output.len() >= maximum_lines {
+            break;
+        }
+        if maximum_lines != usize::MAX
+            && remaining_classes > 1
+            && output.len().saturating_add(1) >= maximum_lines
+        {
+            break;
+        }
+        output.push(format!(
+            "{:>4}. {}  {} instances, {}  {}:{}:{}",
+            index + 1,
+            class.name,
+            class.instance_count,
+            compact_bytes(class.shallow_size),
+            normalize_source_path(&class.source_url),
+            class.location.line,
+            class.location.column
+        ));
+        rendered_classes += 1;
+        if options.instances {
+            let detail_limit = if maximum_lines == usize::MAX {
+                usize::MAX
+            } else {
+                maximum_lines.saturating_sub(usize::from(remaining_classes > 1))
+            };
+            for instance in &class.instances {
+                if output.len() >= detail_limit {
+                    break;
+                }
+                output.push(format!(
+                    "      {}  id {}  {}",
+                    instance.alias,
+                    instance.heap_object_id,
+                    compact_bytes(instance.shallow_size)
+                ));
+            }
+            if class.omitted_instance_count > 0 && output.len() < detail_limit {
+                output.push(format!(
+                    "      ... {} instances omitted",
+                    class.omitted_instance_count
+                ));
+            }
+        }
+    }
+    if rendered_classes < classes.len() && output.len() < maximum_lines {
+        let omitted = &classes[rendered_classes..];
+        output.push(format!(
+            "... {} classes omitted ({} instances, {})",
+            omitted.len(),
+            omitted
+                .iter()
+                .map(|class| class.instance_count)
+                .sum::<u64>(),
+            compact_bytes(omitted.iter().map(|class| class.shallow_size).sum::<u64>())
+        ));
+    }
+    if maximum_lines != usize::MAX {
+        output.truncate(maximum_lines);
+    }
 }
 
 fn compact_bytes(bytes: u64) -> String {
@@ -1533,6 +1617,7 @@ mod tests {
                 all: false,
                 max_lines: 300,
                 instances: false,
+                sort_by_instances: false,
             },
         );
         assert!(lines.iter().any(|line| {
@@ -1551,6 +1636,7 @@ mod tests {
                 all: false,
                 max_lines: 8,
                 instances: true,
+                sort_by_instances: false,
             },
         );
         assert!(lines.len() <= 8, "{lines:#?}");
@@ -1568,9 +1654,31 @@ mod tests {
                 all: false,
                 max_lines: 1,
                 instances: false,
+                sort_by_instances: false,
             },
         );
         assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn heap_classes_rank_by_instances_across_source_files() {
+        let mut least = heap_class("Least", 2);
+        least.source_url = "src/z.ts".to_owned();
+        least.location.source_url = least.source_url.clone();
+        let mut most = heap_class("Most", 20);
+        most.source_url = "src/a.ts".to_owned();
+        most.location.source_url = most.source_url.clone();
+        let lines = render_heap_classes_human(
+            &heap_snapshot(vec![least, most]),
+            HeapClassOutputOptions {
+                all: false,
+                max_lines: 10,
+                instances: false,
+                sort_by_instances: true,
+            },
+        );
+        assert!(lines[2].contains("1. Most  20 instances"), "{lines:#?}");
+        assert!(lines[3].contains("2. Least  2 instances"), "{lines:#?}");
     }
 
     #[test]

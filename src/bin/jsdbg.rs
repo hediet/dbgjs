@@ -411,6 +411,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     all: options.all,
                     max_lines: options.max_lines,
                     instances: options.instances,
+                    sort_by_instances: options.sort_by_instances,
                 },
             )?;
         }
@@ -1221,6 +1222,7 @@ struct HeapClassOptions {
     all: bool,
     max_lines: usize,
     instances: bool,
+    sort_by_instances: bool,
     no_cache: bool,
 }
 
@@ -1267,6 +1269,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
     let mut all = false;
     let mut max_lines = 300_usize;
     let mut instances = false;
+    let mut sort_by_instances = false;
     let mut no_cache = false;
     let mut index = 0;
     while index < values.len() {
@@ -1288,6 +1291,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
             }
             "--all" => all = true,
             "--instances" => instances = true,
+            "--sort-by-instances" => sort_by_instances = true,
             "--no-cache" => no_cache = true,
             "--max-lines" => {
                 index += 1;
@@ -1336,6 +1340,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
         all,
         max_lines,
         instances,
+        sort_by_instances,
         no_cache,
     })
 }
@@ -1692,7 +1697,7 @@ commands:
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+
   jsdbg log [--after <cursor>] [--limit <count>]
   jsdbg target click <css-selector>
-  jsdbg target key <chord>
+  jsdbg target key <ctrl+n|enter|accept|arrowup>
   jsdbg target type <text>
   jsdbg target click <context-id> <connection-id> <target> <css-selector>
   jsdbg coverage start
@@ -1701,7 +1706,7 @@ commands:
   jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache]
   jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
   jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals]
-  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--instances] [--max-lines <count>] [--all] [--no-cache]
+  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache]
   jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals]
   jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
   jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
@@ -1738,6 +1743,7 @@ mod tests {
             "--create-snapshot",
             "--filter",
             ".*PieceTree.*",
+            "--sort-by-instances",
             "--instances",
             "--max-lines",
             "42",
@@ -1747,6 +1753,7 @@ mod tests {
         assert_eq!(options.capture_id, "startup");
         assert!(options.capture);
         assert_eq!(options.filter.as_deref(), Some(".*PieceTree.*"));
+        assert!(options.sort_by_instances);
         assert!(options.instances);
         assert_eq!(options.max_lines, 42);
         assert!(options.no_cache);

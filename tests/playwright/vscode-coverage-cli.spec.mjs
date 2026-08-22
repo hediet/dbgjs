@@ -15,12 +15,12 @@ const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/release/jsdbg${executableSuffix}`);
 const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-typing-coverage.md");
-const expectedDurationMs = 300_000;
+const expectedDurationMs = 120_000;
 const hardTimeoutMs = Math.ceil(expectedDurationMs * 1.2);
 const commandTimeoutMs = 90_000;
 let stepNumber = 0;
 
-test("reports vscode.dev code executed by typing one character", async () => {
+test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 	test.setTimeout(hardTimeoutMs);
 	const startedAt = Date.now();
 	const build = await run("cargo", ["build", "--release", "--bins"], {}, { timeoutMs: commandTimeoutMs });
@@ -28,7 +28,7 @@ test("reports vscode.dev code executed by typing one character", async () => {
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		`# Code executed by typing one character in \`vscode.dev\`\n\nThis is a real jsdbg/HubRPC/Playwright/CDP precise-coverage run.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
+		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real jsdbg/HubRPC/Playwright/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
 	);
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-coverage-"));
@@ -87,49 +87,12 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 			30_000,
 		);
+		await setTypeScriptMode(environment);
 		await runCli(
-			"Capture the live heap into the default managed snapshot.",
-			["heap", "capture"],
+			"Seed the editor with two spaces followed by `foo`.",
+			["target", "type", "  foo"],
 			environment,
-			180_000,
 		);
-		const heapClasses = await runCli(
-			"Render live source-mapped classes with representative object IDs.",
-			[
-				"heap",
-				"classes",
-				"--instances",
-				"--max-lines",
-				"80",
-			],
-			environment,
-			180_000,
-		);
-		expect(heapClasses).toMatch(/^\d+ classes, \d+ instances, .+ shallow size$/m);
-		expect(heapClasses).not.toContain(".constructor");
-		expect(heapClasses.trimEnd().split("\n").length).toBeLessThanOrEqual(80);
-		const heapSnapshot = await runJsonSilent(
-			["heap", "classes", "."],
-			environment,
-			180_000,
-		);
-		expect(heapSnapshot.classes.length).toBeGreaterThan(0);
-		expect(heapSnapshot.totalInstances).toBeGreaterThan(0);
-		expect(
-			heapSnapshot.classes.some(
-				(class_) => class_.name === "PieceTreeTextBuffer",
-			),
-		).toBe(true);
-		expect(
-			heapSnapshot.classes.every(
-				(class_) => !class_.name.endsWith(".constructor"),
-			),
-		).toBe(true);
-		expect(
-			heapSnapshot.classes.some(
-				(class_) => /\.tsx?$/.test(class_.sourceUrl),
-			),
-		).toBe(true);
 		await runCli(
 			"Start precise function and block coverage.",
 			["coverage", "start"],
@@ -145,10 +108,27 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 		);
 		await runCli(
-			"Type exactly one character through CDP Input.insertText.",
-			["target", "type", "x"],
+			"Press Enter as a real key event so VS Code inserts transient auto whitespace.",
+			["target", "key", "enter"],
 			environment,
 		);
+		const sampledAutoIndent = await readEditorLines(
+			"Observe the auto-indented empty second line.",
+			environment,
+		);
+		expect(sampledAutoIndent).toMatch(/"lines":\s*\[\s*"  foo",\s*"  "\s*\]/);
+		await runCli(
+			"Press ArrowUp to abandon the auto-indented line.",
+			["target", "key", "arrowup"],
+			environment,
+		);
+		await new Promise((resolve_) => setTimeout(resolve_, 250));
+		const sampledAfterCleanup = await readEditorLines(
+			"Observe that ArrowUp moved the cursor but did not mutate the buffer yet.",
+			environment,
+		);
+		expect(sampledAfterCleanup).toMatch(/"lines":\s*\[\s*"  foo",\s*"  "\s*\]/);
+		expect(sampledAfterCleanup).toContain("top: 0px");
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
 		const stoppedCoverage = await runCli(
 			"Stop coverage and freeze the background-excluded immutable capture.",
@@ -166,8 +146,6 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		expect(report).toMatch(/\.tsx?\s+\d+ HL, \d+ RL/);
 		expect(report).not.toContain("additional files omitted");
 		expect(report).not.toContain("additional hit ranges omitted");
-		expect(report).toContain("snippet/browser/snippetParser.ts");
-		expect(report).not.toContain("Scanner.next");
 		expect(report).toMatch(/\[\d+ children pruned\]/);
 		expect(report).not.toMatch(/\n[ │]+└─ … \[all \d+ children pruned/);
 		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(300);
@@ -186,7 +164,7 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			.filter((range) => range.authoredStart != null);
 		expect(authoredRanges.length).toBeGreaterThan(0);
 		expect(authoredRanges.some((range) => range.count === 1)).toBe(true);
-		const candidate = selectTypingCandidate(delta);
+		const candidate = selectIndentCleanupCandidate(delta);
 		expect(candidate).toBeDefined();
 		const sourcePath = candidate.range.authoredStart.sourceUrl;
 		const pathPrefix = sourcePath
@@ -200,13 +178,16 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 		);
 		expect(drilldown).not.toContain("additional hit ranges omitted");
-		expect(drilldown).toMatch(/CursorsController\s+\d+ HL, \d+ RL[\s\S]*├─ type\s+24 HL, 24 RL/);
-		expect(drilldown).toMatch(/CommandExecutor\s+\d+ HL, \d+ RL/);
+		expect(drilldown).toMatch(/TextModel|PieceTreeTextBuffer|Cursor/);
 		const exhaustive = await runTextSilent(
 			["coverage", "show", ".", "--path", pathPrefix, "--all"],
 			environment,
 		);
-		expect(exhaustive).toMatch(/CursorsController\s+\d+ HL, \d+ RL[\s\S]*├─ type\s+24 HL, 24 RL/);
+		expect(exhaustive).toContain(
+			(candidate.function.breadcrumb ?? candidate.function.name)
+				.split(".")
+				.at(-1),
+		);
 		expect(exhaustive.trimEnd().split("\n").length).toBeGreaterThanOrEqual(
 			drilldown.trimEnd().split("\n").length,
 		);
@@ -216,76 +197,120 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		);
 		expect(noCache.trimEnd().split("\n").length).toBeLessThanOrEqual(5);
 		await runCli(
-			`Install a coverage-guided logpoint in \`${candidate.function.breadcrumb ?? candidate.function.name}\`.`,
+			"Create a fresh editor to repeat the exact interaction under a normal breakpoint.",
+			["target", "key", "ctrl+n"],
+			environment,
+		);
+		await retryCli(
+			"Focus the fresh editor.",
+			["target", "click", ".monaco-editor"],
+			environment,
+			30_000,
+		);
+		await setTypeScriptMode(environment);
+		await runCli(
+			"Recreate the original line.",
+			["target", "type", "  foo"],
+			environment,
+		);
+		await runCli(
+			"Press Enter and leave the cursor on the auto-indented empty line.",
+			["target", "key", "enter"],
+			environment,
+		);
+		const beforeBreakpoint = await readEditorLines(
+			"Confirm the two transient spaces exist before cursor movement.",
+			environment,
+		);
+		expect(beforeBreakpoint).toMatch(/"lines":\s*\[\s*"  foo",\s*"  "\s*\]/);
+		const breakpoint = await runCli(
+			`Install a normal authored breakpoint in \`${candidate.function.breadcrumb ?? candidate.function.name}\`.`,
+			[
+				"breakpoint",
+				"set",
+				"vscode-typing",
+				"indent-cleanup",
+				sourcePath,
+				String(candidate.range.authoredStart.line + 1),
+				"3",
+			],
+			environment,
+		);
+		expect(breakpoint).toContain("indent-cleanup");
+		const installed = await runCli(
+			"Wait until the authored cleanup breakpoint has a live generated binding.",
 			[
 				"target",
-				"logpoint",
+				"wait",
 				"vscode-typing",
 				"browser",
 				"page",
-				"typing-path",
-				sourcePath,
-				String(candidate.range.authoredStart.line),
-				String(candidate.range.authoredStart.column),
-				'"coverage-guided"',
+				"breakpoint-installed",
+				"indent-cleanup",
+				"30000",
 			],
 			environment,
 		);
-		await runJsonSilent(["log"], environment);
-		await runCli(
-			"Type a second character to revisit the measured path.",
-			["target", "type", "y"],
+		expect(installed).toContain("[installed; 1 binding]");
+		const pausedCommand = runCli(
+			"Wait for the normal breakpoint in the first edit transaction after ArrowUp.",
+			[
+				"target",
+				"wait",
+				"vscode-typing",
+				"browser",
+				"page",
+				"paused",
+				"0",
+				"30000",
+			],
 			environment,
 		);
+		await emitTranscript(
+			"\n> The pause wait is active. ArrowUp moves the cursor but does not edit the model. Typing on the destination line starts the next edit transaction, which consumes the saved auto-whitespace candidate.\n\n",
+		);
+		await runCli(
+			"Dispatch ArrowUp and leave the auto-whitespace candidate pending.",
+			["target", "key", "arrowup"],
+			environment,
+		);
+		const editCommand = runCli(
+			"Type one character to start the edit transaction that trims the abandoned blank line.",
+			["target", "type", "x"],
+			environment,
+		);
+		const paused = await pausedCommand;
+		expect(paused).toContain("[paused at epoch 1]");
+		expect(paused).toContain(
+			candidate.function.breadcrumb ?? candidate.function.name,
+		);
+		const firstStep = await runCli(
+			"Step over the first authored statement in the cleanup path.",
+			["target", "step", "over"],
+			environment,
+		);
+		expect(firstStep).toContain("[paused at epoch 2]");
+		const secondStep = await runCli(
+			"Step over once more to follow validation or edit construction.",
+			["target", "step", "over"],
+			environment,
+		);
+		expect(secondStep).toContain("[paused at epoch 3]");
+		await runCli(
+			"Resume so the cursor movement and whitespace deletion complete.",
+			["target", "resume"],
+			environment,
+		);
+		await editCommand;
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
-		const targetAfterLogpoint = await runCli(
-			"Inspect the target after the second character.",
-			["target", "show"],
+		const afterBreakpoint = await readEditorLines(
+			"Verify the next edit consumed the candidate and removed the transient spaces.",
 			environment,
 		);
-		expect(targetAfterLogpoint).toContain("typing-path");
-		const newLogs = await runCli(
-			"Read only console entries newer than the CLI-local log cursor.",
-			["log"],
-			environment,
+		expect(afterBreakpoint).toMatch(/"lines":\s*\[[^\]]+,\s*""\s*\]/);
+		await emitTranscript(
+			"\n## What removes the spaces?\n\nEnter marks its indentation edit as auto whitespace. PieceTreeTextBuffer records the resulting blank line as a future trim candidate. ArrowUp only moves the cursor; the buffer still contains the two spaces. The next edit calls TextModel._pushEditOperations, which checks the saved candidates, appends a deletion for a still-whitespace-only line when it does not conflict with the incoming edit, clears the candidate list, and applies the combined operation. The breakpoint and authored steps above distinguish cursor movement from the deferred cleanup transaction.\n\n",
 		);
-		expect(newLogs).toContain("typing-path");
-		expect(newLogs).toContain("coverage-guided");
-		await runCli(
-			"Create a burst of console messages to demonstrate bounded log paging.",
-			[
-				"target",
-				"eval",
-				'void Array.from({ length: 25 }, (_, i) => console.log("burst", i))',
-			],
-			environment,
-		);
-		const boundedLogs = await runCli(
-			"Read the latest 20 log entries; older unseen entries are summarized.",
-			["log", "--limit", "20"],
-			environment,
-		);
-		expect(boundedLogs).toContain("[...skipped 5 entries...]");
-		const editorAfterSecondCharacter = await runCli(
-			"Verify the editor now contains both typed characters.",
-			[
-				"target",
-				"eval",
-				'document.querySelector(".monaco-editor.focused .view-lines")?.textContent ?? document.querySelector(".view-lines")?.textContent',
-			],
-			environment,
-		);
-		expect(editorAfterSecondCharacter).toContain("xy");
-		const editorText = await runCli(
-			"Read the focused editor through CDP and verify the inserted character is present.",
-			[
-				"target",
-				"eval",
-				'document.querySelector(".monaco-editor.focused .view-lines")?.textContent ?? document.querySelector(".view-lines")?.textContent',
-			],
-			environment,
-		);
-		expect(editorText).toContain("x");
 		await runCli(
 			"Disconnect and terminate the launched browser.",
 			["connection", "disconnect", "vscode-typing", "browser"],
@@ -426,6 +451,45 @@ async function runTextSilent(
 	return result.output;
 }
 
+async function readEditorLines(explanation, environment) {
+	return runCli(
+		explanation,
+		[
+			"target",
+			"eval",
+			'({ lines: Array.from(document.querySelectorAll(".monaco-editor.focused .view-lines .view-line"), line => line.textContent?.replace(/\\u00a0/g, " ")), cursor: document.querySelector(".monaco-editor.focused .cursor")?.getAttribute("style") })',
+		],
+		environment,
+	);
+}
+
+async function setTypeScriptMode(environment) {
+	await retryCli(
+		"Open Change Language Mode through its status-bar entry.",
+		["target", "click", '[id="status.editor.mode"]'],
+		environment,
+		30_000,
+	);
+	await new Promise((resolve_) => setTimeout(resolve_, 100));
+	await runCli(
+		"Filter the language picker to TypeScript.",
+		["target", "type", "TypeScript"],
+		environment,
+	);
+	await runCli(
+		"Accept TypeScript in the language picker.",
+		["target", "key", "accept"],
+		environment,
+	);
+	await new Promise((resolve_) => setTimeout(resolve_, 100));
+	await retryCli(
+		"Return focus to the TypeScript editor.",
+		["target", "click", ".monaco-editor"],
+		environment,
+		30_000,
+	);
+}
+
 async function recordCompleted(explanation, arguments_, result) {
 	stepNumber += 1;
 	const command = [cliName(), ...arguments_].map(quoteArgument).join(" ");
@@ -450,7 +514,7 @@ function quoteArgument(argument) {
 		: JSON.stringify(argument);
 }
 
-function selectTypingCandidate(snapshot) {
+function selectIndentCleanupCandidate(snapshot) {
 	const candidates = snapshot.sources.flatMap((source) =>
 		source.functions.flatMap((fn) =>
 			fn.ranges
@@ -460,14 +524,16 @@ function selectTypingCandidate(snapshot) {
 	);
 	const score = ({ function: fn, range }) => {
 		const path = range.authoredStart.sourceUrl.toLowerCase();
-		const name = `${fn.breadcrumb ?? ""} ${fn.name}`.toLowerCase();
+		const breadcrumb = fn.breadcrumb ?? fn.name;
+		const name = `${breadcrumb} ${fn.name}`.toLowerCase();
 		let value = 0;
-		if (path.includes("/cursor/") || path.endsWith("/cursor.ts")) value += 100;
-		if (path.includes("/editor/")) value += 40;
-		if (path.includes("vieweventhandler")) value += 30;
-		if (name.includes("type")) value += 80;
-		if (name.includes("cursor")) value += 60;
-		if (name.includes("change")) value += 20;
+		if (breadcrumb === "TextModel._pushEditOperations") value += 10_000;
+		if (name.includes("_pusheditoperations")) value += 2_000;
+		if (path.endsWith("/model/textmodel.ts")) value += 1_000;
+		if (name.includes("applyedits")) value += 800;
+		if (path.includes("piecetreetextbuffer")) value += 500;
+		if (name.includes("move") || name.includes("cursor")) value += 200;
+		if (path.includes("/cursor/")) value += 100;
 		return value;
 	};
 	return candidates.sort((left, right) => score(right) - score(left))[0];

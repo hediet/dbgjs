@@ -730,12 +730,42 @@ async fn run_target(
                 let _ = response.send(key(&driver, &chord).await);
             }
             Next::Command(Some(TargetCommand::TypeText { text, response })) => {
-                let result = driver
-                    .client()
-                    .input_insert_text(InputInsertTextParams::new(text))
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")));
+                let prior_epoch = driver
+                    .state()
+                    .sessions
+                    .get(&session_key)
+                    .map_or(0, |session| session.next_pause_epoch.saturating_sub(1));
+                let mut dispatch = begin_type_text(&driver, text);
+                let result = loop {
+                    tokio::select! {
+                        result = &mut dispatch => {
+                            break result
+                                .map_err(|error| TargetDebuggerError::Interaction(error.to_string()))
+                                .and_then(|result| result);
+                        }
+                        event = driver.process_next_event() => {
+                            if let Err(error) = event {
+                                break Err(error.into());
+                            }
+                            snapshots.send_replace(snapshot_from_driver(
+                                &context_id,
+                                &connection_id,
+                                &target_id,
+                                connection_generation,
+                                &session_key,
+                                &driver,
+                            ));
+                            if matches!(
+                                driver.state().sessions.get(&session_key).map(|session| &session.phase),
+                                Some(SessionPhase::Paused { epoch }) if *epoch > prior_epoch
+                            ) {
+                                dispatch.abort();
+                                let _ = dispatch.await;
+                                break Ok(());
+                            }
+                        }
+                    }
+                };
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::StartCoverage { response })) => {
@@ -1399,25 +1429,53 @@ async fn begin_click(
     }))
 }
 
+fn begin_type_text(
+    driver: &DebuggerDriver,
+    text: String,
+) -> tokio::task::JoinHandle<Result<(), TargetDebuggerError>> {
+    let client = driver.client().clone();
+    tokio::spawn(async move {
+        client
+            .input_insert_text(InputInsertTextParams::new(text))
+            .await
+            .map(|_| ())
+            .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))
+    })
+}
+
 async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerError> {
-    let (modifiers, code, key, virtual_key) = match chord.to_ascii_lowercase().as_str() {
-        "ctrl+n" | "control+n" => (2, "KeyN", "n", 78),
+    let keys = match chord.to_ascii_lowercase().as_str() {
+        "ctrl+n" | "control+n" => vec![(2, "KeyN", "n", 78, None)],
+        "enter" => vec![(0, "Enter", "Enter", 13, Some("\r"))],
+        "accept" => vec![(0, "Enter", "Enter", 13, None)],
+        "arrowup" | "up" => vec![(0, "ArrowUp", "ArrowUp", 38, None)],
         _ => return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned())),
     };
-    for kind in [
-        InputDispatchKeyEventParamsType::RawKeyDown,
-        InputDispatchKeyEventParamsType::KeyUp,
-    ] {
-        let mut event = InputDispatchKeyEventParams::new(kind);
-        event.modifiers = Some(modifiers);
-        event.code = Some(code.to_owned());
-        event.key = Some(key.to_owned());
-        event.windows_virtual_key_code = Some(virtual_key);
-        driver
-            .client()
-            .input_dispatch_key_event(event)
-            .await
-            .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+    for (modifiers, code, key, virtual_key, text) in keys {
+        let mut event_types = vec![InputDispatchKeyEventParamsType::RawKeyDown];
+        if text.is_some() {
+            event_types.push(InputDispatchKeyEventParamsType::Char);
+        }
+        event_types.push(InputDispatchKeyEventParamsType::KeyUp);
+        for kind in event_types {
+            let is_key_down = kind == InputDispatchKeyEventParamsType::RawKeyDown;
+            let is_char = kind == InputDispatchKeyEventParamsType::Char;
+            let mut event = InputDispatchKeyEventParams::new(kind);
+            event.modifiers = Some(modifiers);
+            event.code = Some(code.to_owned());
+            event.key = Some(key.to_owned());
+            event.windows_virtual_key_code = Some(virtual_key);
+            event.native_virtual_key_code = Some(virtual_key);
+            if is_key_down || is_char {
+                event.text = text.map(str::to_owned);
+                event.unmodified_text = text.map(str::to_owned);
+            }
+            driver
+                .client()
+                .input_dispatch_key_event(event)
+                .await
+                .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+        }
     }
     Ok(())
 }
