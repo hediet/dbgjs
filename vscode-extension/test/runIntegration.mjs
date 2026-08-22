@@ -59,6 +59,9 @@ try {
 			JSDBG_TEST_CHROME: chromium.executablePath(),
 		},
 	});
+} catch (error) {
+	process.stderr.write(`jsdbg-service stderr:\n${serviceError}\n`);
+	throw error;
 } finally {
 	service.kill();
 	await rm(temporaryDirectory, { recursive: true, force: true });

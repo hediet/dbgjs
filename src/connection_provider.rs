@@ -1,20 +1,21 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::timeout;
 use url::Url;
 
 use crate::cdp::CdpClient;
 use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, RootCdpEvent};
 use crate::debugger_engine::SessionKey;
-use crate::service_api::{ConnectionConfiguration, PlaywrightChannel};
+use crate::service_api::{ConnectionConfiguration, PlaywrightChannel, TargetSnapshot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("providers/playwright.mjs");
@@ -25,6 +26,15 @@ pub struct ConnectionRuntime {
     cdp: Arc<CdpConnection>,
     provider: Option<Mutex<Child>>,
     direct_debugger: bool,
+    direct_debuggers: std::sync::Mutex<BTreeMap<String, Arc<CdpConnection>>>,
+    provider_target_events: Mutex<Option<mpsc::UnboundedReceiver<ProviderTargetEvent>>>,
+    provider_target_sender: mpsc::UnboundedSender<ProviderTargetEvent>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ProviderTargetEvent {
+    Upsert(TargetSnapshot),
+    Removed(String),
 }
 
 impl ConnectionRuntime {
@@ -32,8 +42,10 @@ impl ConnectionRuntime {
         configuration: &ConnectionConfiguration,
         connection_generation: u64,
     ) -> Result<Arc<Self>, ConnectionProviderError> {
-        let (endpoint, provider, direct_debugger) = match configuration {
-            ConnectionConfiguration::DirectCdp { endpoint } => (endpoint.clone(), None, false),
+        let (endpoint, provider, direct_debugger, provider_events) = match configuration {
+            ConnectionConfiguration::DirectCdp { endpoint } => {
+                (endpoint.clone(), None, false, None)
+            }
             ConnectionConfiguration::Playwright {
                 url,
                 playwright_package,
@@ -49,7 +61,7 @@ impl ConnectionRuntime {
                     *ignore_https_errors,
                 )
                 .await?;
-                (endpoint, provider, false)
+                (endpoint, provider, false, None)
             }
             ConnectionConfiguration::Chrome {
                 url,
@@ -58,9 +70,10 @@ impl ConnectionRuntime {
                 user_data_dir,
                 args,
             } => {
-                let (endpoint, provider) = launch_provider(
+                let launch = launch_provider(
                     CHROME_HELPER,
                     "Chrome",
+                    false,
                     [
                         ("JSDBG_PROVIDER_URL", url.clone()),
                         ("JSDBG_CHROME_EXECUTABLE", executable.clone()),
@@ -79,7 +92,7 @@ impl ConnectionRuntime {
                     ],
                 )
                 .await?;
-                (endpoint, provider, false)
+                (launch.endpoint, Some(launch.child), false, None)
             }
             ConnectionConfiguration::Node {
                 program,
@@ -89,9 +102,10 @@ impl ConnectionRuntime {
                 runtime_args,
                 env,
             } => {
-                let (endpoint, provider) = launch_provider(
+                let launch = launch_provider(
                     NODE_HELPER,
                     "Node.js",
+                    true,
                     [
                         ("JSDBG_NODE_PROGRAM", program.clone()),
                         (
@@ -114,11 +128,16 @@ impl ConnectionRuntime {
                     ],
                 )
                 .await?;
-                (endpoint, provider, true)
+                (launch.endpoint, Some(launch.child), true, launch.events)
             }
         };
         let cdp = match if direct_debugger {
-            CdpConnection::connect_root_debugger(&endpoint, connection_generation).await
+            CdpConnection::connect_root_debugger(
+                &endpoint,
+                connection_generation,
+                "$node-root".to_owned(),
+            )
+            .await
         } else {
             CdpConnection::connect(&endpoint).await
         } {
@@ -130,11 +149,19 @@ impl ConnectionRuntime {
                 return Err(error.into());
             }
         };
-        Ok(Arc::new(Self {
+        let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
+        let runtime = Arc::new(Self {
             cdp,
             provider: provider.map(Mutex::new),
             direct_debugger,
-        }))
+            direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
+            provider_target_events: Mutex::new(Some(provider_target_events)),
+            provider_target_sender,
+        });
+        if let Some(events) = provider_events {
+            runtime.supervise_provider_events(events, connection_generation);
+        }
+        Ok(runtime)
     }
 
     pub fn root(&self) -> &CdpClient<hubrpc::connection::channel::Channel> {
@@ -145,8 +172,15 @@ impl ConnectionRuntime {
         self.cdp.open_session(session)
     }
 
-    pub fn take_root_debugger_session(&self) -> Option<CdpDebuggerSession> {
-        self.cdp.take_root_debugger_session()
+    pub fn take_direct_debugger_session(&self, target_id: &str) -> Option<CdpDebuggerSession> {
+        if target_id == "$node-root" {
+            return self.cdp.take_root_debugger_session();
+        }
+        self.direct_debuggers
+            .lock()
+            .unwrap()
+            .get(target_id)
+            .and_then(|connection| connection.take_root_debugger_session())
     }
 
     pub fn is_direct_debugger(&self) -> bool {
@@ -171,12 +205,152 @@ impl ConnectionRuntime {
         self.cdp.take_root_events().await
     }
 
+    pub async fn take_provider_target_events(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<ProviderTargetEvent>> {
+        self.provider_target_events.lock().await.take()
+    }
+
     pub async fn close(&self) {
         self.cdp.close().await;
+        let direct_debuggers = std::mem::take(&mut *self.direct_debuggers.lock().unwrap());
+        for connection in direct_debuggers.into_values() {
+            connection.close().await;
+        }
         if let Some(provider) = &self.provider {
             let mut provider = provider.lock().await;
             terminate_provider(&mut provider).await;
         }
+    }
+
+    fn supervise_provider_events(
+        self: &Arc<Self>,
+        mut events: mpsc::UnboundedReceiver<ProviderEvent>,
+        connection_generation: u64,
+    ) {
+        let runtime = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                let Some(runtime) = runtime.upgrade() else {
+                    return;
+                };
+                match event {
+                    ProviderEvent::NodeTarget {
+                        target_id,
+                        parent_target_id,
+                        title,
+                        url,
+                        endpoint,
+                    } => {
+                        if runtime
+                            .direct_debuggers
+                            .lock()
+                            .unwrap()
+                            .contains_key(&target_id)
+                        {
+                            let _ =
+                                runtime
+                                    .provider_target_sender
+                                    .send(ProviderTargetEvent::Upsert(node_target_snapshot(
+                                        target_id,
+                                        parent_target_id,
+                                        title,
+                                        url,
+                                    )));
+                            continue;
+                        }
+                        let connection = match CdpConnection::connect_root_debugger(
+                            &endpoint,
+                            connection_generation,
+                            target_id.clone(),
+                        )
+                        .await
+                        {
+                            Ok(connection) => Arc::new(connection),
+                            Err(error) => {
+                                eprintln!(
+                                    "failed to connect discovered Node.js target {target_id}: {error}"
+                                );
+                                continue;
+                            }
+                        };
+                        runtime
+                            .direct_debuggers
+                            .lock()
+                            .unwrap()
+                            .insert(target_id.clone(), connection.clone());
+                        let _ = runtime
+                            .provider_target_sender
+                            .send(ProviderTargetEvent::Upsert(node_target_snapshot(
+                                target_id.clone(),
+                                parent_target_id,
+                                title,
+                                url,
+                            )));
+                        supervise_direct_debugger(Arc::downgrade(&runtime), target_id, connection);
+                    }
+                    ProviderEvent::NodeTargetRemoved { target_id } => {
+                        let connection =
+                            runtime.direct_debuggers.lock().unwrap().remove(&target_id);
+                        if let Some(connection) = connection {
+                            connection.close().await;
+                        }
+                        let _ = runtime
+                            .provider_target_sender
+                            .send(ProviderTargetEvent::Removed(target_id));
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn supervise_direct_debugger(
+    runtime: Weak<ConnectionRuntime>,
+    target_id: String,
+    connection: Arc<CdpConnection>,
+) {
+    tokio::spawn(async move {
+        connection.wait_closed().await;
+        let Some(runtime) = runtime.upgrade() else {
+            return;
+        };
+        let removed = {
+            let mut debuggers = runtime.direct_debuggers.lock().unwrap();
+            if debuggers
+                .get(&target_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                debuggers.remove(&target_id);
+                true
+            } else {
+                false
+            }
+        };
+        if removed {
+            let _ = runtime
+                .provider_target_sender
+                .send(ProviderTargetEvent::Removed(target_id));
+        }
+    });
+}
+
+fn node_target_snapshot(
+    target_id: String,
+    parent_id: String,
+    title: String,
+    url: String,
+) -> TargetSnapshot {
+    TargetSnapshot {
+        target_id,
+        target_type: "node".to_owned(),
+        title,
+        url,
+        attached: false,
+        parent_id: Some(parent_id),
+        opener_id: None,
+        browser_context_id: None,
+        subtype: Some("child-process".to_owned()),
     }
 }
 
@@ -325,8 +499,9 @@ async fn launch_playwright(
 async fn launch_provider<const N: usize>(
     helper: &str,
     provider_name: &'static str,
+    capture_events: bool,
     environment: [(&str, String); N],
-) -> Result<(String, Option<Child>), ConnectionProviderError> {
+) -> Result<ProviderLaunch, ConnectionProviderError> {
     let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
     let mut command = Command::new(&node);
     command
@@ -336,7 +511,11 @@ async fn launch_provider<const N: usize>(
         .envs(environment)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if capture_events {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .kill_on_drop(true);
     configure_provider_process(&mut command);
     let mut child = command
@@ -385,7 +564,29 @@ async fn launch_provider<const N: usize>(
     let endpoint = ready
         .endpoint
         .ok_or(ConnectionProviderError::MissingProviderEndpoint)?;
-    Ok((endpoint, Some(child)))
+    let events = capture_events.then(|| {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = lines.next_line().await {
+                match serde_json::from_str::<ProviderEvent>(&line) {
+                    Ok(event) => {
+                        if sender.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("ignored invalid {provider_name} provider event: {error}");
+                    }
+                }
+            }
+        });
+        receiver
+    });
+    Ok(ProviderLaunch {
+        endpoint,
+        child,
+        events,
+    })
 }
 
 fn find_playwright_package() -> Result<PathBuf, ConnectionProviderError> {
@@ -448,6 +649,7 @@ fn playwright_channel(channel: &PlaywrightChannel) -> &'static str {
 }
 
 async fn terminate_provider(child: &mut Child) {
+    let process_id = child.id();
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.shutdown().await;
     }
@@ -455,7 +657,23 @@ async fn terminate_provider(child: &mut Child) {
         terminate_provider_tree(child).await;
         let _ = child.wait().await;
     }
+    terminate_provider_group(process_id).await;
 }
+
+#[cfg(unix)]
+async fn terminate_provider_group(process_id: Option<u32>) {
+    if let Some(process_id) = process_id {
+        unsafe {
+            libc::kill(-(process_id as i32), libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn terminate_provider_group(_process_id: Option<u32>) {}
+
+#[cfg(not(any(unix, windows)))]
+async fn terminate_provider_group(_process_id: Option<u32>) {}
 
 #[cfg(unix)]
 async fn terminate_provider_tree(child: &mut Child) {
@@ -488,6 +706,31 @@ async fn terminate_provider_tree(child: &mut Child) {
 struct PlaywrightReady {
     endpoint: Option<String>,
     error: Option<String>,
+}
+
+struct ProviderLaunch {
+    endpoint: String,
+    child: Child,
+    events: Option<mpsc::UnboundedReceiver<ProviderEvent>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum ProviderEvent {
+    NodeTarget {
+        target_id: String,
+        parent_target_id: String,
+        title: String,
+        url: String,
+        endpoint: String,
+    },
+    NodeTargetRemoved {
+        target_id: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

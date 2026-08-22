@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
+import type { TargetSnapshot } from "../../apiTypes.js";
 import type { JsdbgExtensionApi } from "../../extension.js";
 
 export async function run(): Promise<void> {
@@ -13,13 +14,23 @@ export async function run(): Promise<void> {
 	assert.equal(snapshot.id, api.contextId);
 	assert.match(api.contextId, /^vscode-[0-9a-f]{16}$/);
 
-	await launchAndAssert(api, {
-		type: "jsdbg",
-		request: "launch",
-		name: "jsdbg Node.js integration",
-		runtime: "node",
-		program: "${workspaceFolder}/node-app.js",
-	});
+	const nodeTargets = await launchAndAssert(
+		api,
+		{
+			type: "jsdbg",
+			request: "launch",
+			name: "jsdbg Node.js integration",
+			runtime: "node",
+			program: "${workspaceFolder}/node-app.js",
+		},
+		2,
+	);
+	const childTarget = nodeTargets.find(
+		(target) => target.subtype === "child-process",
+	);
+	assert.ok(childTarget, "spawned Node.js process is modeled as a target");
+	assert.equal(childTarget.parentId, "$node-root");
+	assert.equal(childTarget.attached, true);
 	await launchAndAssert(api, {
 		type: "jsdbg",
 		request: "launch",
@@ -45,17 +56,38 @@ export async function run(): Promise<void> {
 async function launchAndAssert(
 	api: JsdbgExtensionApi,
 	configuration: vscode.DebugConfiguration,
-): Promise<void> {
+	minimumThreads = 1,
+): Promise<readonly TargetSnapshot[]> {
 	const before = new Set(api.getSnapshot()?.connections.map((connection) => connection.id));
 	const started = waitForDebugSession(configuration.name);
 	const launched = await vscode.debug.startDebugging(undefined, configuration);
 	assert.equal(launched, true);
 	const session = await started;
-	const threads = await session.customRequest("threads") as unknown;
-	assertThreadResponse(threads);
+	await waitForThreadCount(session, minimumThreads, api);
+	const targets = api.getSnapshot()?.connections
+		.filter((connection) => !before.has(connection.id))
+		.flatMap((connection) => connection.targets) ?? [];
 	await session.customRequest("disconnect", { terminateDebuggee: true });
 	await vscode.debug.stopDebugging(session);
 	await waitForConnectionCleanup(api, before);
+	return targets;
+}
+
+async function waitForThreadCount(
+	session: vscode.DebugSession,
+	minimumThreads: number,
+	api: JsdbgExtensionApi,
+): Promise<void> {
+	const deadline = Date.now() + 30_000;
+	let last: unknown;
+	while (Date.now() < deadline) {
+		last = await session.customRequest("threads") as unknown;
+		if (threadCount(last) >= minimumThreads) {
+			return;
+		}
+		await delay(50);
+	}
+	assertThreadResponse(last, minimumThreads, api);
 }
 
 function waitForDebugSession(name: string): Promise<vscode.DebugSession> {
@@ -95,10 +127,35 @@ async function waitForConnectionCleanup(
 	);
 }
 
-function assertThreadResponse(value: unknown): void {
+function assertThreadResponse(
+	value: unknown,
+	minimumThreads = 1,
+	api?: JsdbgExtensionApi,
+): void {
 	assert.ok(typeof value === "object" && value !== null);
 	assert.ok("threads" in value && Array.isArray(value.threads));
-	assert.ok(value.threads.length > 0, "attached target is exposed as a DAP thread");
+	assert.ok(
+		value.threads.length >= minimumThreads,
+		`expected at least ${minimumThreads} attached DAP threads; targets: ${
+			JSON.stringify(api?.getSnapshot()?.connections.flatMap((connection) =>
+				connection.targets.map((target) => ({
+					id: target.targetId,
+					parent: target.parentId,
+					attached: target.attached,
+					subtype: target.subtype,
+				}))) ?? [])
+		}`,
+	);
+}
+
+function threadCount(value: unknown): number {
+	if (typeof value !== "object"
+		|| value === null
+		|| !("threads" in value)
+		|| !Array.isArray(value.threads)) {
+		return 0;
+	}
+	return value.threads.length;
 }
 
 function delay(milliseconds: number): Promise<void> {

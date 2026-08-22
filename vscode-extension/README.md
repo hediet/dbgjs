@@ -12,7 +12,7 @@ projection over the long-lived Rust `jsdbg-service`.
 - An inline DAP adapter with threads, stack traces, stepping, resume,
   evaluation, breakpoints, loaded sources, and virtual source content.
 - Launch configurations for:
-  - Node.js programs, using a daemon-owned `--inspect-brk` process and a
+  - Node.js programs, using a daemon-owned inspector process and a
     synthetic root debugger target.
   - Playwright browsers, resolving `playwright/index.mjs` from the workspace's
     `node_modules` by default.
@@ -68,6 +68,13 @@ Every launched runtime is represented by an ephemeral connection in the
 workspace context. The daemon owns its process tree; DAP disconnect stops the
 process and removes the connection. An `attach` configuration with
 `"runtime": "context"` continues to expose pre-existing context targets.
+
+Node launches preload a small discovery hook through `NODE_OPTIONS`. Descendant
+Node processes that inherit the launch environment open loopback inspectors and
+appear as child targets under their spawning process. The daemon connects and
+auto-attaches each reported process, so VS Code exposes it as another DAP
+thread. Processes that discard the inherited environment remain ordinary,
+undiscovered OS processes.
 
 ## Transport finding
 

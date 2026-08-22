@@ -71,13 +71,14 @@ impl CdpConnection {
     pub async fn connect_root_debugger(
         endpoint: &str,
         connection_generation: u64,
+        session_id: String,
     ) -> Result<Self, CdpRuntimeError> {
         let transport = Arc::new(CdpWebSocketTransport::connect(endpoint).await?);
         let close_reason = transport.close_reason();
         let mux = CdpSessionMux::new(transport.clone());
         let session = SessionKey {
             connection_generation,
-            session_id: "$cdp-root".to_owned(),
+            session_id,
         };
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
         let heap_snapshot = Arc::new(Mutex::new(None));

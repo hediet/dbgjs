@@ -214,6 +214,136 @@ impl DebuggerService {
         });
     }
 
+    async fn supervise_provider_target_events(
+        &self,
+        context_id: String,
+        connection_id: String,
+        configuration_version: u64,
+        generation: u64,
+        runtime: Arc<ConnectionRuntime>,
+    ) {
+        let Some(mut events) = runtime.take_provider_target_events().await else {
+            return;
+        };
+        let service = self.clone();
+        tokio::spawn(async move {
+            let attempt = ConnectionAttempt {
+                configuration_version,
+                generation,
+            };
+            while let Some(event) = events.recv().await {
+                let (observation, target_to_attach, target_to_remove) = match event {
+                    crate::connection_provider::ProviderTargetEvent::Upsert(target) => {
+                        let target_id = target.target_id.clone();
+                        (
+                            RuntimeObservation::TargetUpserted {
+                                connection_id: connection_id.clone(),
+                                attempt,
+                                target,
+                            },
+                            Some(target_id),
+                            None,
+                        )
+                    }
+                    crate::connection_provider::ProviderTargetEvent::Removed(target_id) => (
+                        RuntimeObservation::TargetRemoved {
+                            connection_id: connection_id.clone(),
+                            attempt,
+                            target_id: target_id.clone(),
+                        },
+                        None,
+                        Some(target_id),
+                    ),
+                };
+                let mut state = service.state.lock().await;
+                let runtime_is_current = state
+                    .runtimes
+                    .get(&(context_id.clone(), connection_id.clone()))
+                    .is_some_and(|current| Arc::ptr_eq(current, &runtime));
+                let Some(context) = state.contexts.get(&context_id).cloned() else {
+                    break;
+                };
+                if !runtime_is_current {
+                    break;
+                }
+                let transition =
+                    reduce_context(&context, ContextInput::RuntimeObservation(observation))
+                        .expect("provider target observations do not fail");
+                service.commit_context(&mut state, &context_id, transition);
+                if let Some(target_id) = target_to_remove {
+                    state.target_debuggers.remove(&(
+                        context_id.clone(),
+                        connection_id.clone(),
+                        target_id,
+                    ));
+                }
+                drop(state);
+
+                if let Some(target_id) = target_to_attach
+                    && service
+                        .attach_target(
+                            &CallCtx::default(),
+                            context_id.clone(),
+                            connection_id.clone(),
+                            target_id.clone(),
+                        )
+                        .await
+                        .is_ok()
+                {
+                    service
+                        .mark_target_attached(
+                            &context_id,
+                            &connection_id,
+                            target_id,
+                            attempt,
+                            &runtime,
+                        )
+                        .await;
+                }
+            }
+        });
+    }
+
+    async fn mark_target_attached(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: String,
+        attempt: ConnectionAttempt,
+        runtime: &Arc<ConnectionRuntime>,
+    ) {
+        let mut state = self.state.lock().await;
+        if !state
+            .runtimes
+            .get(&(context_id.to_owned(), connection_id.to_owned()))
+            .is_some_and(|current| Arc::ptr_eq(current, runtime))
+        {
+            return;
+        }
+        let Some(context) = state.contexts.get(context_id).cloned() else {
+            return;
+        };
+        let Some(mut target) = context
+            .connections
+            .get(connection_id)
+            .and_then(|connection| connection.targets.get(&target_id))
+            .cloned()
+        else {
+            return;
+        };
+        target.attached = true;
+        let transition = reduce_context(
+            &context,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+                connection_id: connection_id.to_owned(),
+                attempt,
+                target,
+            }),
+        )
+        .expect("provider target attachment observations do not fail");
+        self.commit_context(&mut state, context_id, transition);
+    }
+
     fn commit_context(
         &self,
         state: &mut ServiceState,
@@ -663,6 +793,18 @@ impl DebuggerServiceApi for DebuggerService {
                 runtime,
             );
             self.supervise_target_events(
+                context_id.clone(),
+                connection_id.clone(),
+                attempt.configuration_version,
+                attempt.generation,
+                state
+                    .runtimes
+                    .get(&(context_id.clone(), connection_id.clone()))
+                    .expect("runtime was inserted above")
+                    .clone(),
+            )
+            .await;
+            self.supervise_provider_target_events(
                 context_id.clone(),
                 connection_id.clone(),
                 attempt.configuration_version,
@@ -1305,7 +1447,7 @@ impl DebuggerServiceApi for DebuggerService {
 
         let (session, session_key) = if runtime.is_direct_debugger() {
             let session = runtime
-                .take_root_debugger_session()
+                .take_direct_debugger_session(&target_id)
                 .ok_or_else(|| invalid_state("direct debugger target is already attached"))?;
             let key = session.key().clone();
             (session, key)
