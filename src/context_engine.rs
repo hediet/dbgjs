@@ -41,6 +41,12 @@ pub struct BreakpointState {
     pub source_path: String,
     pub line: u32,
     pub column: u32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub condition: Option<String>,
+    #[serde(default)]
+    pub target_selector: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +74,9 @@ pub enum UserCommand {
         connection_id: String,
         configuration: ConnectionConfiguration,
     },
+    RemoveConnection {
+        connection_id: String,
+    },
     ConnectConnection {
         connection_id: String,
     },
@@ -79,6 +88,12 @@ pub enum UserCommand {
         source_path: String,
         line: u32,
         column: u32,
+        enabled: bool,
+        condition: Option<String>,
+        target_selector: Option<String>,
+    },
+    RemoveBreakpoint {
+        breakpoint_id: String,
     },
 }
 
@@ -89,6 +104,19 @@ pub enum RuntimeObservation {
         connection_id: String,
         attempt: ConnectionAttempt,
         reason: String,
+    },
+    TargetUpserted {
+        connection_id: String,
+        attempt: ConnectionAttempt,
+        target: TargetSnapshot,
+    },
+    TargetRemoved {
+        connection_id: String,
+        attempt: ConnectionAttempt,
+        target_id: String,
+    },
+    BreakpointApplicationsChanged {
+        breakpoint_id: String,
     },
 }
 
@@ -158,6 +186,24 @@ pub enum ContextEvent {
     BreakpointUpdated {
         breakpoint_id: String,
     },
+    BreakpointRemoved {
+        breakpoint_id: String,
+    },
+    ConnectionRemoved {
+        connection_id: String,
+    },
+    TargetCreated {
+        connection_id: String,
+        target_id: String,
+    },
+    TargetChanged {
+        connection_id: String,
+        target_id: String,
+    },
+    TargetDestroyed {
+        connection_id: String,
+        target_id: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +249,8 @@ pub enum ContextTransitionError {
     ConnectionAlreadyActive,
     #[error("connection is already disconnecting")]
     ConnectionAlreadyDisconnecting,
+    #[error("an active connection cannot be removed until it is disconnected")]
+    ActiveConnectionCannotBeRemoved,
     #[error("connection '{connection_id}' changed while the operation was pending")]
     StaleEffectCompletion { connection_id: String },
 }
@@ -274,6 +322,23 @@ fn reduce_user_command(
                 ContextChange::Durable,
                 Vec::new(),
                 ContextEvent::ConnectionConfigured { connection_id },
+            ))
+        }
+        UserCommand::RemoveConnection { connection_id } => {
+            let connection = previous
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| ContextTransitionError::ConnectionNotFound(connection_id.clone()))?;
+            if is_active(&connection.status) {
+                return Err(ContextTransitionError::ActiveConnectionCannotBeRemoved);
+            }
+            let mut state = (**previous).clone();
+            Arc::make_mut(&mut state.connections).remove(&connection_id);
+            Ok(changed(
+                state,
+                ContextChange::Durable,
+                Vec::new(),
+                ContextEvent::ConnectionRemoved { connection_id },
             ))
         }
         UserCommand::ConnectConnection { connection_id } => {
@@ -353,6 +418,9 @@ fn reduce_user_command(
             source_path,
             line,
             column,
+            enabled,
+            condition,
+            target_selector,
         } => {
             let mut state = (**previous).clone();
             Arc::make_mut(&mut state.breakpoints).insert(
@@ -361,6 +429,9 @@ fn reduce_user_command(
                     source_path,
                     line,
                     column,
+                    enabled,
+                    condition,
+                    target_selector,
                 }),
             );
             Ok(changed(
@@ -368,6 +439,19 @@ fn reduce_user_command(
                 ContextChange::Durable,
                 Vec::new(),
                 ContextEvent::BreakpointUpdated { breakpoint_id },
+            ))
+        }
+        UserCommand::RemoveBreakpoint { breakpoint_id } => {
+            if !previous.breakpoints.contains_key(&breakpoint_id) {
+                return Ok(ContextTransition::unchanged(previous));
+            }
+            let mut state = (**previous).clone();
+            Arc::make_mut(&mut state.breakpoints).remove(&breakpoint_id);
+            Ok(changed(
+                state,
+                ContextChange::Durable,
+                Vec::new(),
+                ContextEvent::BreakpointRemoved { breakpoint_id },
             ))
         }
     }
@@ -414,7 +498,84 @@ fn reduce_runtime_observation(
                 },
             ))
         }
+        RuntimeObservation::TargetUpserted {
+            connection_id,
+            attempt: observed_attempt,
+            target,
+        } => {
+            let Some(connection) = previous.connections.get(&connection_id) else {
+                return Ok(ContextTransition::unchanged(previous));
+            };
+            if attempt(connection) != observed_attempt
+                || !matches!(connection.status, ConnectionStatus::Connected { .. })
+            {
+                return Ok(ContextTransition::unchanged(previous));
+            }
+            let target_id = target.target_id.clone();
+            let event = if connection.targets.contains_key(&target_id) {
+                ContextEvent::TargetChanged {
+                    connection_id: connection_id.clone(),
+                    target_id,
+                }
+            } else {
+                ContextEvent::TargetCreated {
+                    connection_id: connection_id.clone(),
+                    target_id,
+                }
+            };
+            let mut state = (**previous).clone();
+            Arc::make_mut(&mut mutable_connection(&mut state, &connection_id).targets)
+                .insert(target.target_id.clone(), target);
+            Ok(changed(
+                state,
+                ContextChange::RuntimeOnly,
+                Vec::new(),
+                event,
+            ))
+        }
+        RuntimeObservation::TargetRemoved {
+            connection_id,
+            attempt: observed_attempt,
+            target_id,
+        } => {
+            let Some(connection) = previous.connections.get(&connection_id) else {
+                return Ok(ContextTransition::unchanged(previous));
+            };
+            if attempt(connection) != observed_attempt
+                || !matches!(connection.status, ConnectionStatus::Connected { .. })
+                || !connection.targets.contains_key(&target_id)
+            {
+                return Ok(ContextTransition::unchanged(previous));
+            }
+            let mut state = (**previous).clone();
+            Arc::make_mut(&mut mutable_connection(&mut state, &connection_id).targets)
+                .remove(&target_id);
+            Ok(changed(
+                state,
+                ContextChange::RuntimeOnly,
+                Vec::new(),
+                ContextEvent::TargetDestroyed {
+                    connection_id,
+                    target_id,
+                },
+            ))
+        }
+        RuntimeObservation::BreakpointApplicationsChanged { breakpoint_id } => {
+            if !previous.breakpoints.contains_key(&breakpoint_id) {
+                return Ok(ContextTransition::unchanged(previous));
+            }
+            Ok(changed(
+                (**previous).clone(),
+                ContextChange::RuntimeOnly,
+                Vec::new(),
+                ContextEvent::BreakpointUpdated { breakpoint_id },
+            ))
+        }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn reduce_effect_completion(
@@ -587,6 +748,32 @@ mod tests {
         transition.state
     }
 
+    fn connected_context() -> (Arc<ContextState>, ConnectionAttempt) {
+        let configured = configured_context();
+        let connecting = command(
+            &configured,
+            UserCommand::ConnectConnection {
+                connection_id: "browser".into(),
+            },
+        );
+        let attempt = match &connecting.effects[0] {
+            ContextEffect::Connect { attempt, .. } => *attempt,
+            effect => panic!("unexpected effect: {effect:?}"),
+        };
+        let connected = reduce_context(
+            &connecting.state,
+            ContextInput::EffectCompletion(EffectCompletion::ConnectionOpened {
+                connection_id: "browser".into(),
+                attempt,
+                product: "Chrome".into(),
+                protocol_version: "1.3".into(),
+                targets: BTreeMap::new(),
+            }),
+        )
+        .unwrap();
+        (connected.state, attempt)
+    }
+
     #[test]
     fn stale_connect_completion_cannot_revive_disconnected_state() {
         let configured = configured_context();
@@ -660,6 +847,122 @@ mod tests {
     }
 
     #[test]
+    fn target_lifecycle_updates_only_the_current_connection_generation() {
+        let (connected, attempt) = connected_context();
+        let target = TargetSnapshot {
+            target_id: "page".into(),
+            target_type: "page".into(),
+            title: "Page".into(),
+            url: "https://example.test".into(),
+            attached: false,
+            parent_id: None,
+            opener_id: None,
+            browser_context_id: None,
+            subtype: None,
+        };
+        let created = reduce_context(
+            &connected,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+                connection_id: "browser".into(),
+                attempt,
+                target,
+            }),
+        )
+        .unwrap();
+        assert!(
+            created.state.connections["browser"]
+                .targets
+                .contains_key("page")
+        );
+        assert!(matches!(
+            created.events[0].event,
+            ContextEvent::TargetCreated { .. }
+        ));
+
+        let stale = reduce_context(
+            &created.state,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetRemoved {
+                connection_id: "browser".into(),
+                attempt: ConnectionAttempt {
+                    generation: attempt.generation + 1,
+                    ..attempt
+                },
+                target_id: "page".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(stale.change, ContextChange::None);
+
+        let removed = reduce_context(
+            &created.state,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetRemoved {
+                connection_id: "browser".into(),
+                attempt,
+                target_id: "page".into(),
+            }),
+        )
+        .unwrap();
+        assert!(removed.state.connections["browser"].targets.is_empty());
+        assert!(matches!(
+            removed.events[0].event,
+            ContextEvent::TargetDestroyed { .. }
+        ));
+    }
+
+    #[test]
+    fn lifecycle_deletion_requires_disconnected_connections() {
+        let (connected, _) = connected_context();
+        assert_eq!(
+            reduce_context(
+                &connected,
+                ContextInput::UserCommand(UserCommand::RemoveConnection {
+                    connection_id: "browser".into(),
+                }),
+            )
+            .unwrap_err(),
+            ContextTransitionError::ActiveConnectionCannotBeRemoved
+        );
+
+        let configured = configured_context();
+        let removed = command(
+            &configured,
+            UserCommand::RemoveConnection {
+                connection_id: "browser".into(),
+            },
+        );
+        assert!(removed.state.connections.is_empty());
+    }
+
+    #[test]
+    fn breakpoint_configuration_and_deletion_are_durable_intent() {
+        let state = ContextState::new("test".into());
+        let configured = command(
+            &state,
+            UserCommand::PutBreakpoint {
+                breakpoint_id: "conditional".into(),
+                source_path: "file:///source.ts".into(),
+                line: 4,
+                column: 2,
+                enabled: false,
+                condition: Some("value > 0".into()),
+                target_selector: Some("page".into()),
+            },
+        );
+        let breakpoint = &configured.state.breakpoints["conditional"];
+        assert!(!breakpoint.enabled);
+        assert_eq!(breakpoint.condition.as_deref(), Some("value > 0"));
+        assert_eq!(breakpoint.target_selector.as_deref(), Some("page"));
+
+        let removed = command(
+            &configured.state,
+            UserCommand::RemoveBreakpoint {
+                breakpoint_id: "conditional".into(),
+            },
+        );
+        assert!(removed.state.breakpoints.is_empty());
+    }
+
+    #[test]
     fn unchanged_nodes_are_reused_between_revisions() {
         let state = ContextState::new("test".into());
         let with_breakpoint = command(
@@ -669,6 +972,9 @@ mod tests {
                 source_path: "file:///source.ts".into(),
                 line: 1,
                 column: 1,
+                enabled: true,
+                condition: None,
+                target_selector: None,
             },
         );
         let configured = command(

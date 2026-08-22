@@ -63,11 +63,12 @@ All milestones must preserve these independent primitives:
    - Attachments, scripts, physical breakpoints, frames, scopes, and remote
      objects are ephemeral applications or runtime facts.
 
-## Completed prototype baseline
+## Implemented baseline
 
-The current uncommitted prototype was built in
-[Rust infrastructure for JS debugger](agent-host-session://copilotcli/f900df48-e1e5-44c8-b4bf-581445fbe510).
-There is no commit link yet because `main` has no commits.
+The prototype has moved beyond its original uncommitted baseline. The repository
+now contains the reducer, service, CLI, source-map, coverage, heap-analysis, and
+live-runtime work described below. Checklist state reflects validated behavior;
+partially implemented architecture remains unchecked.
 
 - [x] Typed CDP schema import and generated HubRPC client interfaces.
 - [x] CDP WebSocket transport and flattened-session multiplexing.
@@ -120,22 +121,21 @@ make the current service state harder to replace.
 
 ### Steps
 
-- :running: Define the immutable context state owned by the reducer
-  ([session](agent-host-session://copilotcli/f900df48-e1e5-44c8-b4bf-581445fbe510)):
+- [x] Define the immutable context state owned by the reducer:
   durable intent, runtime facts, derived knowledge, artifact references,
   progress, and diagnostics.
-- [ ] Define reducer inputs for all currently implemented operations:
+- [x] Define reducer inputs for all currently implemented operations:
   context/connection mutations, connect, disconnect, peer loss, initial target
   enumeration, breakpoint intent, persistence completion, and failures.
-- [ ] Define semantic effects and exact stale-completion identity requirements.
-- [ ] Implement:
+- [x] Define semantic effects and exact stale-completion identity requirements.
+- [x] Implement:
   `reduce(previous, input) -> { state, effects, events }`.
 - [ ] Add a per-context coordinator that serializes inputs, executes effects
   outside the reducer, and publishes only complete revisions.
 - [ ] Move all existing service mutations through the coordinator; prohibit
   direct context-state mutation elsewhere.
-- [ ] Separate durable persistence projection from ephemeral runtime state.
-- [ ] Define publication semantics:
+- [x] Separate durable persistence projection from ephemeral runtime state.
+- [x] Define publication semantics:
   durable state is visible only after atomic persistence succeeds, while
   runtime-only revisions do not require durable writes.
 - [ ] Add deterministic transcript replay for the existing workflows in
@@ -186,20 +186,22 @@ make the current service state harder to replace.
 
 ### Steps
 
-- [ ] Specify the subscription result and cursor model:
+- [x] Specify the subscription result and cursor model:
   `Current` and `After(revision)`.
 - [ ] Extend HubRPC-Rust with server streaming, client cancellation, and
   transport cleanup.
-- [ ] Implement an atomic initial snapshot plus subsequent revision stream.
-- [ ] Store bounded context revision/event history.
-- [ ] Return an explicit `HistoryGap` with a current recovery snapshot or
+- [x] Implement an atomic initial snapshot plus subsequent revision observation.
+  The current transport uses cancellation-safe unary long polling; native
+  HubRPC server streaming remains the next transport step.
+- [x] Store bounded context revision/event history.
+- [x] Return an explicit `HistoryGap` with a current recovery snapshot or
   revision when a cursor is too old.
 - [ ] Define and test slow-consumer behavior without blocking target ingestion.
 - [ ] Derive unary state `get` from the same subscription primitive.
 - [ ] Derive state `watch`, event query/follow, and race-free one-shot `wait`.
 - [ ] Add concurrent-client, cancellation, reconnect, history-gap, and restart
   tests.
-- [ ] Add JSONL CLI rendering without coupling rendering to stored state.
+- [x] Add JSONL CLI rendering without coupling rendering to stored state.
 
 ### Acceptance gate
 
@@ -242,20 +244,21 @@ explicit, generation-safe attachments.
 
 ### Steps
 
-- [ ] Replace the root rejecting handler with typed root CDP event ingestion.
-- [ ] Reconcile `Target.getTargets` with `targetCreated`,
+- [x] Replace the root rejecting handler with typed root CDP event ingestion.
+- [x] Reconcile `Target.getTargets` with `targetCreated`,
   `targetInfoChanged`, and `targetDestroyed`.
-- [ ] Make initial target enumeration race-free by buffering or sequencing
+- [x] Make initial target enumeration race-free by enabling discovery before
+  enumeration and buffering concurrent events.
   concurrent events.
 - [ ] Model generation-qualified target incarnations so reused target IDs
   cannot revive stale facts.
-- [ ] Implement the mechanism to attach and detach exactly one target.
-- [ ] Route flattened sessions through debugger-owned attachment identities.
+- [x] Implement the mechanism to attach and detach exactly one target.
+- [x] Route flattened sessions through debugger-owned attachment identities.
 - [ ] Model attachment loss independently from target destruction and
   connection loss.
 - [ ] Add selector-based attachment policy for matching current and future
   targets without adding separate attachment mechanisms.
-- [ ] Expose target and attachment snapshots through the unified observation
+- [x] Expose target and attachment snapshots through the unified observation
   API.
 - [ ] Add live Chromium tests for pages, workers, OOPIFs, target updates,
   destruction, detach, peer loss, and reconnect.
@@ -300,7 +303,7 @@ one shared graph.
 
 ### Steps
 
-- [ ] Enable `Runtime` and `Debugger` on eligible attachments.
+- [x] Enable `Runtime` and `Debugger` on eligible attachments.
 - [ ] Ingest execution-context and `Debugger.scriptParsed` observations.
 - [ ] Invalidate live script endpoints on attachment or generation loss without
   deleting reusable immutable source knowledge.
@@ -310,11 +313,14 @@ one shared graph.
   loading source content.
 - [ ] Add disconnected providers for workspace files, generated files, and
   inline/external source maps.
-- [ ] Lazily hydrate generated content and source maps through semantic effects.
-- [ ] Reuse the existing proven source-map coordinate algorithms while using the
+- [x] Lazily hydrate generated content and source maps through semantic effects.
+- [x] Reuse the existing proven source-map coordinate algorithms while using the
   graph for topology, routing, and provenance.
-- [ ] Add `source resolve`, `source map`, `source endpoints`, and `source show`
-  HubRPC operations and CLI projections.
+- [ ] Complete context-wide `source resolve`, `source map`, `source endpoints`,
+  and `source show` semantics. HubRPC and CLI projections now expose runtime and
+  authored source listing, generated-to-authored mapping, content display,
+  grep, safe atomic export, and cache eviction; provider-qualified context-wide
+  graph routing and ambiguity reporting remain.
 - [ ] Add explicit ambiguity, stale-version, memory-accounting, and cache
   eviction tests.
 
@@ -588,7 +594,9 @@ source knowledge directly useful.
 These should reuse the established primitives rather than introduce parallel
 state or lifecycle models:
 
-- [ ] Precise coverage values, transforms, comparison, and rendering.
+- [x] Precise coverage values, transforms, comparison, and rendering.
+- [x] Heap snapshot capture, progress reporting, constructor grouping, filtering,
+  and bounded class/instance rendering.
 - [ ] Process launch, endpoint discovery, and PID activation providers.
 - [ ] DOM exploration and screenshot artifact conveniences.
 - [ ] MCP client integration.

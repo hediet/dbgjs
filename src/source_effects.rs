@@ -455,6 +455,29 @@ impl SourceEffectInterpreter {
             })
     }
 
+    pub fn generated_source_content(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+    ) -> Option<Arc<str>> {
+        let script = state.scripts.get(script_key)?;
+        match &script.source {
+            ScriptSourceState::Loaded { content, .. } => Some(content.clone()),
+            ScriptSourceState::Resolved(view) => self
+                .views
+                .get(&view.view_id)
+                .map(|view| view.generated_content.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn clear_caches(&self) {
+        for view in self.views.values() {
+            view.projection_cache.lock().unwrap().clear();
+            view.symbol_indexes.lock().unwrap().clear();
+        }
+    }
+
     fn view_for(
         &self,
         view_id: EffectId,

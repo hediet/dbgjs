@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,10 +9,12 @@ use atomic_write_file::AtomicWriteFile;
 use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, watch};
+use tokio::time::{Instant, timeout_at};
 
 use crate::cdp::{
     BrowserGetVersionParams, BrowserGetVersionResult, TargetAttachToTargetParams,
-    TargetDetachFromTargetParams, TargetGetTargetsParams, TargetTargetInfo,
+    TargetDetachFromTargetParams, TargetGetTargetsParams, TargetSetDiscoverTargetsParams,
+    TargetTargetInfo,
 };
 use crate::connection_provider::{ConnectionRuntime, validate_configuration};
 use crate::context_engine::{
@@ -21,10 +23,12 @@ use crate::context_engine::{
 };
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
-    BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
-    ConnectionStatus, ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapSnapshotProgress,
-    HeapSnapshotResult, LogpointSpec, ServiceInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    BreakpointSnapshot, BreakpointSpec, BreakpointStatus, ConnectionConfiguration,
+    ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi, EvaluationSnapshot,
+    HeapCaptureResult, HeapClassSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec,
+    MutationOptions, ObservationCursor, ObservationResult, ServiceInfo, SourceContentSnapshot,
+    SourceMatchSnapshot, SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
     TargetSnapshot, TargetWaitPredicate,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
@@ -35,6 +39,7 @@ pub struct DebuggerService {
     state: Arc<Mutex<ServiceState>>,
     persistence_path: PathBuf,
     shutdown: watch::Sender<bool>,
+    revision_signal: watch::Sender<u64>,
 }
 
 impl DebuggerService {
@@ -43,11 +48,13 @@ impl DebuggerService {
         persistence_path: PathBuf,
     ) -> Result<Self, ServicePersistenceError> {
         let state = load_state(&persistence_path)?;
+        let (revision_signal, _) = watch::channel(0);
         Ok(Self {
             agent_instance_id: random_instance_id()?,
             state: Arc::new(Mutex::new(state)),
             persistence_path,
             shutdown,
+            revision_signal,
         })
     }
 
@@ -115,12 +122,237 @@ impl DebuggerService {
                         }),
                     )
                     .expect("runtime observations do not fail");
-                    state.contexts.insert(context_id, transition.state);
+                    service.commit_context(&mut state, &context_id, transition);
                 }
             }
             drop(state);
             runtime.close().await;
         });
+    }
+
+    async fn supervise_target_events(
+        &self,
+        context_id: String,
+        connection_id: String,
+        configuration_version: u64,
+        generation: u64,
+        runtime: Arc<ConnectionRuntime>,
+    ) {
+        let Some(mut events) = runtime.take_root_events().await else {
+            return;
+        };
+        let service = self.clone();
+        tokio::spawn(async move {
+            let attempt = ConnectionAttempt {
+                configuration_version,
+                generation,
+            };
+            while let Some(event) = events.recv().await {
+                let observation = match event {
+                    Ok(crate::cdp_runtime::RootCdpEvent::TargetCreated(params)) => {
+                        RuntimeObservation::TargetUpserted {
+                            connection_id: connection_id.clone(),
+                            attempt,
+                            target: target_snapshot(params.target_info),
+                        }
+                    }
+                    Ok(crate::cdp_runtime::RootCdpEvent::TargetChanged(params)) => {
+                        RuntimeObservation::TargetUpserted {
+                            connection_id: connection_id.clone(),
+                            attempt,
+                            target: target_snapshot(params.target_info),
+                        }
+                    }
+                    Ok(crate::cdp_runtime::RootCdpEvent::TargetDestroyed(params)) => {
+                        RuntimeObservation::TargetRemoved {
+                            connection_id: connection_id.clone(),
+                            attempt,
+                            target_id: params.target_id,
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("failed to decode root CDP event: {error}");
+                        continue;
+                    }
+                };
+                let mut state = service.state.lock().await;
+                let runtime_is_current = state
+                    .runtimes
+                    .get(&(context_id.clone(), connection_id.clone()))
+                    .is_some_and(|current| Arc::ptr_eq(current, &runtime));
+                let Some(context) = state.contexts.get(&context_id).cloned() else {
+                    break;
+                };
+                if !runtime_is_current {
+                    break;
+                }
+                let transition =
+                    reduce_context(&context, ContextInput::RuntimeObservation(observation))
+                        .expect("target observations do not fail");
+                if transition.change == crate::context_engine::ContextChange::None {
+                    continue;
+                }
+                let removed_target =
+                    transition
+                        .events
+                        .iter()
+                        .find_map(|event| match &event.event {
+                            crate::context_engine::ContextEvent::TargetDestroyed {
+                                target_id,
+                                ..
+                            } => Some(target_id.clone()),
+                            _ => None,
+                        });
+                service.commit_context(&mut state, &context_id, transition);
+                if let Some(target_id) = removed_target {
+                    state.target_debuggers.remove(&(
+                        context_id.clone(),
+                        connection_id.clone(),
+                        target_id,
+                    ));
+                }
+            }
+        });
+    }
+
+    fn commit_context(
+        &self,
+        state: &mut ServiceState,
+        context_id: &str,
+        transition: crate::context_engine::ContextTransition,
+    ) -> ContextSnapshot {
+        let events = transition
+            .events
+            .iter()
+            .map(context_event_snapshot)
+            .collect::<Vec<_>>();
+        state
+            .contexts
+            .insert(context_id.to_owned(), transition.state);
+        let result = service_snapshot(state, &self.agent_instance_id, context_id)
+            .expect("context was inserted above");
+        let history = state.history.entry(context_id.to_owned()).or_default();
+        history.push_back(ContextObservation {
+            snapshot: result.clone(),
+            events,
+        });
+        while history.len() > 256 {
+            history.pop_front();
+        }
+        self.revision_signal
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        result
+    }
+
+    fn check_mutation_options(
+        &self,
+        state: &ServiceState,
+        context_id: &str,
+        options: &MutationOptions,
+    ) -> Result<Option<ContextSnapshot>, JsonRpcError> {
+        let context = state
+            .contexts
+            .get(context_id)
+            .ok_or_else(|| not_found("context", context_id))?;
+        if let Some(request_id) = &options.request_id
+            && state
+                .completed_requests
+                .contains_key(&(context_id.to_owned(), request_id.clone()))
+        {
+            return Ok(Some(
+                service_snapshot(state, &self.agent_instance_id, context_id)
+                    .expect("context was checked above"),
+            ));
+        }
+        if let Some(expected) = options.expected_revision
+            && expected != context.revision
+        {
+            return Err(JsonRpcError::new(
+                error_codes::INVALID_REQUEST,
+                format!(
+                    "revisionConflict: expected revision {expected}, current revision {}",
+                    context.revision
+                ),
+            ));
+        }
+        Ok(None)
+    }
+
+    fn complete_request(
+        &self,
+        state: &mut ServiceState,
+        context_id: &str,
+        options: &MutationOptions,
+        revision: u64,
+    ) {
+        if let Some(request_id) = &options.request_id {
+            state
+                .completed_requests
+                .insert((context_id.to_owned(), request_id.clone()), revision);
+        }
+    }
+
+    async fn publish_breakpoint_application(&self, context_id: &str, breakpoint_id: &str) {
+        let mut state = self.state.lock().await;
+        let Some(context) = state.contexts.get(context_id).cloned() else {
+            return;
+        };
+        let transition = reduce_context(
+            &context,
+            ContextInput::RuntimeObservation(RuntimeObservation::BreakpointApplicationsChanged {
+                breakpoint_id: breakpoint_id.to_owned(),
+            }),
+        )
+        .expect("breakpoint application observations do not fail");
+        self.commit_context(&mut state, context_id, transition);
+    }
+}
+
+fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> ContextEventSnapshot {
+    use crate::context_engine::ContextEvent;
+    let (kind, subject_id) = match &event.event {
+        ContextEvent::ContextUpdated => ("context.updated", None),
+        ContextEvent::ConnectionConfigured { connection_id } => {
+            ("connection.configured", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionConnecting { connection_id, .. } => {
+            ("connection.connecting", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionConnected { connection_id, .. } => {
+            ("connection.connected", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionFailed { connection_id, .. } => {
+            ("connection.failed", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionDisconnecting { connection_id, .. } => {
+            ("connection.disconnecting", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionDisconnected { connection_id, .. } => {
+            ("connection.disconnected", Some(connection_id.clone()))
+        }
+        ContextEvent::ConnectionRemoved { connection_id } => {
+            ("connection.removed", Some(connection_id.clone()))
+        }
+        ContextEvent::BreakpointUpdated { breakpoint_id } => {
+            ("breakpoint.updated", Some(breakpoint_id.clone()))
+        }
+        ContextEvent::BreakpointRemoved { breakpoint_id } => {
+            ("breakpoint.removed", Some(breakpoint_id.clone()))
+        }
+        ContextEvent::TargetCreated { target_id, .. } => {
+            ("target.created", Some(target_id.clone()))
+        }
+        ContextEvent::TargetChanged { target_id, .. } => {
+            ("target.changed", Some(target_id.clone()))
+        }
+        ContextEvent::TargetDestroyed { target_id, .. } => {
+            ("target.destroyed", Some(target_id.clone()))
+        }
+    };
+    ContextEventSnapshot {
+        revision: event.revision,
+        kind: kind.to_owned(),
+        subject_id,
     }
 }
 
@@ -129,6 +361,8 @@ struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
     target_debuggers: BTreeMap<(String, String, String), TargetDebuggerHandle>,
+    history: BTreeMap<String, VecDeque<ContextObservation>>,
+    completed_requests: BTreeMap<(String, String), u64>,
 }
 
 #[async_trait::async_trait]
@@ -175,8 +409,7 @@ impl DebuggerServiceApi for DebuggerService {
             ContextInput::UserCommand(UserCommand::PutContext { display_name }),
         )
         .map_err(transition_rpc_error)?;
-        let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
-        state.contexts.insert(context_id.clone(), transition.state);
+        let result = self.commit_context(&mut state, &context_id, transition);
         self.persist_or_restore(&mut state, previous)?;
         Ok(result)
     }
@@ -187,11 +420,117 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
     ) -> Result<ContextSnapshot, JsonRpcError> {
         let state = self.state.lock().await;
-        let context = state
-            .contexts
-            .get(&context_id)
-            .ok_or_else(|| not_found("context", &context_id))?;
-        Ok(snapshot(&self.agent_instance_id, &context_id, context))
+        if !state.contexts.contains_key(&context_id) {
+            return Err(not_found("context", &context_id));
+        }
+        Ok(
+            service_snapshot(&state, &self.agent_instance_id, &context_id)
+                .expect("context was checked above"),
+        )
+    }
+
+    async fn observe_context(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        cursor: ObservationCursor,
+        timeout_ms: u64,
+    ) -> Result<ObservationResult, JsonRpcError> {
+        let requested_revision = match cursor {
+            ObservationCursor::Current => None,
+            ObservationCursor::After { revision } => Some(revision),
+        };
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let mut signal = self.revision_signal.subscribe();
+        loop {
+            {
+                let state = self.state.lock().await;
+                if !state.contexts.contains_key(&context_id) {
+                    return Err(not_found("context", &context_id));
+                }
+                if requested_revision.is_none() {
+                    return Ok(ObservationResult::Items {
+                        items: vec![ContextObservation {
+                            snapshot: service_snapshot(
+                                &state,
+                                &self.agent_instance_id,
+                                &context_id,
+                            )
+                            .expect("context was checked above"),
+                            events: Vec::new(),
+                        }],
+                    });
+                }
+                let requested = requested_revision.expect("checked above");
+                let current = service_snapshot(&state, &self.agent_instance_id, &context_id)
+                    .expect("context was checked above");
+                let history = state.history.get(&context_id);
+                let oldest_available = history
+                    .and_then(|history| history.front())
+                    .map(|observation| observation.snapshot.revision);
+                let history_gap = oldest_available
+                    .is_some_and(|oldest| requested.saturating_add(1) < oldest)
+                    || (oldest_available.is_none() && requested < current.revision);
+                if history_gap {
+                    return Ok(ObservationResult::HistoryGap {
+                        requested_revision: requested,
+                        oldest_available_revision: oldest_available.unwrap_or(current.revision),
+                        current,
+                    });
+                }
+                let items = history
+                    .into_iter()
+                    .flatten()
+                    .filter(|item| item.snapshot.revision > requested)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !items.is_empty() || timeout_ms == 0 {
+                    return Ok(ObservationResult::Items { items });
+                }
+            }
+            if timeout_at(deadline, signal.changed()).await.is_err() {
+                return Ok(ObservationResult::Items { items: Vec::new() });
+            }
+        }
+    }
+
+    async fn delete_context(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        options: MutationOptions,
+    ) -> Result<bool, JsonRpcError> {
+        let mut state = self.state.lock().await;
+        if options.request_id.as_ref().is_some_and(|request_id| {
+            state
+                .completed_requests
+                .contains_key(&(context_id.clone(), request_id.clone()))
+        }) {
+            return Ok(true);
+        }
+        if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+            return Ok(existing.id == context_id);
+        }
+        if state
+            .runtimes
+            .keys()
+            .any(|(candidate_context, _)| candidate_context == &context_id)
+        {
+            return Err(invalid_state(
+                "all context connections must be disconnected before deletion",
+            ));
+        }
+        let previous = state.clone();
+        if state.contexts.remove(&context_id).is_none() {
+            return Err(not_found("context", &context_id));
+        }
+        self.complete_request(&mut state, &context_id, &options, 0);
+        state.history.remove(&context_id);
+        state
+            .target_debuggers
+            .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(true)
     }
 
     async fn put_connection(
@@ -219,8 +558,7 @@ impl DebuggerServiceApi for DebuggerService {
             }),
         )
         .map_err(transition_rpc_error)?;
-        let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
-        state.contexts.insert(context_id.clone(), transition.state);
+        let result = self.commit_context(&mut state, &context_id, transition);
         self.persist_or_restore(&mut state, previous)?;
         Ok(result)
     }
@@ -255,7 +593,7 @@ impl DebuggerServiceApi for DebuggerService {
                 ] => (configuration.clone(), *attempt),
                 effects => panic!("connect command emitted unexpected effects: {effects:?}"),
             };
-            state.contexts.insert(context_id.clone(), transition.state);
+            self.commit_context(&mut state, &context_id, transition);
             (configuration, attempt)
         };
 
@@ -315,7 +653,7 @@ impl DebuggerServiceApi for DebuggerService {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        state.contexts.insert(context_id.clone(), transition.state);
+        self.commit_context(&mut state, &context_id, transition);
         if let Some(runtime) = runtime {
             state.runtimes.insert(runtime_key, runtime.clone());
             self.supervise_runtime(
@@ -325,6 +663,18 @@ impl DebuggerServiceApi for DebuggerService {
                 attempt.generation,
                 runtime,
             );
+            self.supervise_target_events(
+                context_id.clone(),
+                connection_id.clone(),
+                attempt.configuration_version,
+                attempt.generation,
+                state
+                    .runtimes
+                    .get(&(context_id.clone(), connection_id.clone()))
+                    .expect("runtime was inserted above")
+                    .clone(),
+            )
+            .await;
         } else {
             state.runtimes.remove(&runtime_key);
         }
@@ -368,7 +718,7 @@ impl DebuggerServiceApi for DebuggerService {
                 [ContextEffect::Disconnect { attempt, .. }] => *attempt,
                 effects => panic!("disconnect command emitted unexpected effects: {effects:?}"),
             };
-            state.contexts.insert(context_id.clone(), transition.state);
+            self.commit_context(&mut state, &context_id, transition);
             let runtime = state
                 .runtimes
                 .remove(&(context_id.clone(), connection_id.clone()));
@@ -398,8 +748,42 @@ impl DebuggerServiceApi for DebuggerService {
             }),
         )
         .map_err(transition_rpc_error)?;
-        let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
-        state.contexts.insert(context_id.clone(), transition.state);
+        let result = self.commit_context(&mut state, &context_id, transition);
+        Ok(result)
+    }
+
+    async fn delete_connection(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        let mut state = self.state.lock().await;
+        if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+            return Ok(existing);
+        }
+        let previous = state.clone();
+        let context = state
+            .contexts
+            .get(&context_id)
+            .cloned()
+            .ok_or_else(|| not_found("context", &context_id))?;
+        let transition = reduce_context(
+            &context,
+            ContextInput::UserCommand(UserCommand::RemoveConnection {
+                connection_id: connection_id.clone(),
+            }),
+        )
+        .map_err(transition_rpc_error)?;
+        let result = self.commit_context(&mut state, &context_id, transition);
+        self.complete_request(&mut state, &context_id, &options, result.revision);
+        state
+            .target_debuggers
+            .retain(|(candidate_context, candidate_connection, _), _| {
+                candidate_context != &context_id || candidate_connection != &connection_id
+            });
+        self.persist_or_restore(&mut state, previous)?;
         Ok(result)
     }
 
@@ -441,11 +825,13 @@ impl DebuggerServiceApi for DebuggerService {
                     source_path,
                     line,
                     column,
+                    enabled: true,
+                    condition: None,
+                    target_selector: None,
                 }),
             )
             .map_err(transition_rpc_error)?;
-            let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
-            state.contexts.insert(context_id.clone(), transition.state);
+            let result = self.commit_context(&mut state, &context_id, transition);
             self.persist_or_restore(&mut state, previous)?;
             let target_debuggers = state
                 .target_debuggers
@@ -455,6 +841,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .collect::<Vec<_>>();
             (result, target_debuggers)
         };
+        let has_target_debuggers = !target_debuggers.is_empty();
         for debugger in target_debuggers {
             match debugger
                 .set_breakpoint(result.revision, runtime_breakpoint.clone())
@@ -471,7 +858,401 @@ impl DebuggerServiceApi for DebuggerService {
                 }
             }
         }
+        if has_target_debuggers {
+            self.publish_breakpoint_application(&context_id, &runtime_breakpoint.id)
+                .await;
+        }
+        let state = self.state.lock().await;
+        Ok(
+            service_snapshot(&state, &self.agent_instance_id, &context_id)
+                .expect("context still exists after breakpoint application"),
+        )
+    }
+
+    async fn put_breakpoint_spec(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        breakpoint_id: String,
+        specification: BreakpointSpec,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        validate_id("breakpoint", &breakpoint_id)?;
+        validate_breakpoint_spec(&specification)?;
+        let runtime_breakpoint = TargetBreakpointSpec {
+            id: breakpoint_id.clone(),
+            source_url: specification.source_path.clone(),
+            line: specification.line,
+            column: specification.column,
+            condition: specification.condition.clone(),
+        };
+        let (result, target_debuggers) = {
+            let mut state = self.state.lock().await;
+            if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+                return Ok(existing);
+            }
+            let previous = state.clone();
+            let context = state
+                .contexts
+                .get(&context_id)
+                .cloned()
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let transition = reduce_context(
+                &context,
+                ContextInput::UserCommand(UserCommand::PutBreakpoint {
+                    breakpoint_id,
+                    source_path: specification.source_path,
+                    line: specification.line,
+                    column: specification.column,
+                    enabled: specification.enabled,
+                    condition: specification.condition,
+                    target_selector: specification.target_selector.clone(),
+                }),
+            )
+            .map_err(transition_rpc_error)?;
+            let result = self.commit_context(&mut state, &context_id, transition);
+            self.complete_request(&mut state, &context_id, &options, result.revision);
+            self.persist_or_restore(&mut state, previous)?;
+            let target_debuggers = state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|((_, _, target_id), debugger)| (target_id.clone(), debugger.clone()))
+                .collect::<Vec<_>>();
+            (result, target_debuggers)
+        };
+        let has_target_debuggers = !target_debuggers.is_empty();
+        for (target_id, debugger) in target_debuggers {
+            let applies_to_target = specification.enabled
+                && specification
+                    .target_selector
+                    .as_ref()
+                    .is_none_or(|selector| selector == &target_id);
+            if applies_to_target {
+                debugger
+                    .set_breakpoint(result.revision, runtime_breakpoint.clone())
+                    .await
+                    .map_err(target_debugger_rpc_error)?;
+            } else {
+                debugger
+                    .remove_breakpoint(result.revision, runtime_breakpoint.id.clone())
+                    .await
+                    .map_err(target_debugger_rpc_error)?;
+            }
+        }
+        if has_target_debuggers {
+            self.publish_breakpoint_application(&context_id, &runtime_breakpoint.id)
+                .await;
+        }
+        let state = self.state.lock().await;
+        Ok(
+            service_snapshot(&state, &self.agent_instance_id, &context_id)
+                .expect("context still exists after breakpoint application"),
+        )
+    }
+
+    async fn delete_breakpoint(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        breakpoint_id: String,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        let (result, target_debuggers) = {
+            let mut state = self.state.lock().await;
+            if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+                return Ok(existing);
+            }
+            let previous = state.clone();
+            let context = state
+                .contexts
+                .get(&context_id)
+                .cloned()
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let transition = reduce_context(
+                &context,
+                ContextInput::UserCommand(UserCommand::RemoveBreakpoint {
+                    breakpoint_id: breakpoint_id.clone(),
+                }),
+            )
+            .map_err(transition_rpc_error)?;
+            let result = self.commit_context(&mut state, &context_id, transition);
+            self.complete_request(&mut state, &context_id, &options, result.revision);
+            self.persist_or_restore(&mut state, previous)?;
+            let target_debuggers = state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|(_, debugger)| debugger.clone())
+                .collect::<Vec<_>>();
+            (result, target_debuggers)
+        };
+        for debugger in target_debuggers {
+            debugger
+                .remove_breakpoint(result.revision, breakpoint_id.clone())
+                .await
+                .map_err(target_debugger_rpc_error)?;
+        }
         Ok(result)
+    }
+
+    async fn list_sources(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        path: Option<String>,
+    ) -> Result<Vec<SourceSnapshotInfo>, JsonRpcError> {
+        let state = self.state.lock().await;
+        if !state.contexts.contains_key(&context_id) {
+            return Err(not_found("context", &context_id));
+        }
+        let mut sources = BTreeMap::new();
+        for ((candidate_context, connection_id, target_id), debugger) in &state.target_debuggers {
+            if candidate_context != &context_id {
+                continue;
+            }
+            for script in debugger.snapshot().scripts {
+                if path.as_ref().is_some_and(|path| !script.url.contains(path)) {
+                    continue;
+                }
+                let authored_sources = match &script.status {
+                    crate::service_api::TargetScriptStatus::Resolved { authored_sources } => {
+                        authored_sources.clone()
+                    }
+                    _ => Vec::new(),
+                };
+                sources.insert(
+                    (script.url.clone(), connection_id.clone(), target_id.clone()),
+                    SourceSnapshotInfo {
+                        path: script.url,
+                        kind: "runtime".into(),
+                        status: format!("{:?}", script.status),
+                        connection_id: Some(connection_id.clone()),
+                        target_id: Some(target_id.clone()),
+                        source_map_url: script.source_map_url,
+                    },
+                );
+                for authored in authored_sources {
+                    sources.insert(
+                        (authored.clone(), connection_id.clone(), target_id.clone()),
+                        SourceSnapshotInfo {
+                            path: authored,
+                            kind: "authored".into(),
+                            status: "resolved".into(),
+                            connection_id: Some(connection_id.clone()),
+                            target_id: Some(target_id.clone()),
+                            source_map_url: None,
+                        },
+                    );
+                }
+            }
+        }
+        if let Some(context) = state.contexts.get(&context_id) {
+            for breakpoint in context.breakpoints.values() {
+                if path
+                    .as_ref()
+                    .is_some_and(|path| !breakpoint.source_path.contains(path))
+                {
+                    continue;
+                }
+                sources
+                    .entry((breakpoint.source_path.clone(), String::new(), String::new()))
+                    .or_insert_with(|| SourceSnapshotInfo {
+                        path: breakpoint.source_path.clone(),
+                        kind: "intent".into(),
+                        status: "known".into(),
+                        connection_id: None,
+                        target_id: None,
+                        source_map_url: None,
+                    });
+            }
+        }
+        Ok(sources.into_values().collect())
+    }
+
+    async fn show_source(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        path: String,
+    ) -> Result<SourceContentSnapshot, JsonRpcError> {
+        let debuggers = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|(_, debugger)| debugger.clone())
+                .collect::<Vec<_>>()
+        };
+        for debugger in debuggers {
+            if let Some(content) = debugger
+                .source_content(path.clone())
+                .await
+                .map_err(target_debugger_rpc_error)?
+            {
+                return Ok(content);
+            }
+        }
+        let file_path = source_file_path(&path)?;
+        let content = fs::read_to_string(&file_path).map_err(|error| {
+            internal_error(format!(
+                "failed to read source '{}': {error}",
+                file_path.display()
+            ))
+        })?;
+        Ok(SourceContentSnapshot { path, content })
+    }
+
+    async fn grep_sources(
+        &self,
+        ctx: &CallCtx,
+        context_id: String,
+        pattern: String,
+    ) -> Result<Vec<SourceMatchSnapshot>, JsonRpcError> {
+        if pattern.is_empty() {
+            return Err(invalid_params("source grep pattern must not be empty"));
+        }
+        let sources = self.list_sources(ctx, context_id.clone(), None).await?;
+        let mut matches = Vec::new();
+        for source in sources {
+            let Ok(content) = self
+                .show_source(ctx, context_id.clone(), source.path.clone())
+                .await
+            else {
+                continue;
+            };
+            for (line_index, line) in content.content.lines().enumerate() {
+                for (column, _) in line.match_indices(&pattern) {
+                    matches.push(SourceMatchSnapshot {
+                        path: source.path.clone(),
+                        line: line_index as u32 + 1,
+                        column: column as u32 + 1,
+                        text: line.to_owned(),
+                    });
+                }
+            }
+        }
+        Ok(matches)
+    }
+
+    async fn map_source(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        path: String,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<crate::service_api::SourceLocation>, JsonRpcError> {
+        if line == 0 || column == 0 {
+            return Err(invalid_params("source locations are one-based"));
+        }
+        let debuggers = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|(_, debugger)| debugger.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut locations = Vec::new();
+        for debugger in debuggers {
+            locations.extend(
+                debugger
+                    .map_source(path.clone(), line, column)
+                    .await
+                    .map_err(target_debugger_rpc_error)?,
+            );
+        }
+        locations.sort_by(|left, right| {
+            (&left.source_url, left.line, left.column).cmp(&(
+                &right.source_url,
+                right.line,
+                right.column,
+            ))
+        });
+        locations.dedup();
+        Ok(locations)
+    }
+
+    async fn evict_source_caches(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+    ) -> Result<u32, JsonRpcError> {
+        let debuggers = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|(_, debugger)| debugger.clone())
+                .collect::<Vec<_>>()
+        };
+        for debugger in &debuggers {
+            debugger
+                .evict_source_caches()
+                .await
+                .map_err(target_debugger_rpc_error)?;
+        }
+        Ok(debuggers.len() as u32)
+    }
+
+    async fn export_sources(
+        &self,
+        ctx: &CallCtx,
+        context_id: String,
+        destination: String,
+    ) -> Result<Vec<String>, JsonRpcError> {
+        let destination = PathBuf::from(destination);
+        fs::create_dir_all(&destination).map_err(|error| {
+            internal_error(format!(
+                "failed to create source export directory '{}': {error}",
+                destination.display()
+            ))
+        })?;
+        let sources = self.list_sources(ctx, context_id.clone(), None).await?;
+        let mut exported = Vec::new();
+        for source in sources {
+            let Ok(content) = self
+                .show_source(ctx, context_id.clone(), source.path.clone())
+                .await
+            else {
+                continue;
+            };
+            let source_path = source_file_path(&source.path).unwrap_or_else(|_| {
+                PathBuf::from(source.path.rsplit('/').next().unwrap_or("source.js"))
+            });
+            let name = format!(
+                "{:016x}-{}",
+                stable_name_hash(&source.path),
+                sanitize_file_name(
+                    source_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("source.js")
+                )
+            );
+            let output = destination.join(name);
+            let mut file = AtomicWriteFile::open(&output)
+                .map_err(|error| internal_error(error.to_string()))?;
+            file.write_all(content.content.as_bytes())
+                .map_err(|error| internal_error(error.to_string()))?;
+            file.commit()
+                .map_err(|error| internal_error(error.to_string()))?;
+            exported.push(output.to_string_lossy().into_owned());
+        }
+        Ok(exported)
     }
 
     async fn attach_target(
@@ -592,28 +1373,48 @@ impl DebuggerServiceApi for DebuggerService {
         let breakpoints = context
             .breakpoints
             .iter()
+            .filter(|(_, breakpoint)| breakpoint.enabled)
+            .filter(|(_, breakpoint)| {
+                breakpoint
+                    .target_selector
+                    .as_ref()
+                    .is_none_or(|selector| selector == &target_id)
+            })
             .map(|(id, breakpoint)| TargetBreakpointSpec {
                 id: id.clone(),
                 source_url: breakpoint.source_path.clone(),
                 line: breakpoint.line,
                 column: breakpoint.column,
-                condition: None,
+                condition: breakpoint.condition.clone(),
             })
+            .collect::<Vec<_>>();
+        let breakpoint_ids = breakpoints
+            .iter()
+            .map(|breakpoint| breakpoint.id.clone())
             .collect::<Vec<_>>();
         drop(state);
 
         for breakpoint in breakpoints {
             if let Err(error) = debugger.set_breakpoint(context_revision, breakpoint).await {
-                self.state
-                    .lock()
-                    .await
+                let mut state = self.state.lock().await;
+                if state
                     .target_debuggers
-                    .remove(&debugger_key);
+                    .get(&debugger_key)
+                    .is_some_and(|current| current.same_instance(&debugger))
+                {
+                    state.target_debuggers.remove(&debugger_key);
+                }
+                drop(state);
                 detach_session(&runtime, &attached.session_id).await;
                 return Err(target_debugger_rpc_error(error));
             }
         }
-        Ok(debugger.settle(Duration::from_millis(200)).await)
+        let snapshot = debugger.settle(Duration::from_millis(200)).await;
+        for breakpoint_id in breakpoint_ids {
+            self.publish_breakpoint_application(&context_id, &breakpoint_id)
+                .await;
+        }
+        Ok(snapshot)
     }
 
     async fn get_target(
@@ -1070,6 +1871,14 @@ async fn connect_runtime(
             return Err(format!("Browser.getVersion failed: {error:?}"));
         }
     };
+    if let Err(error) = connection
+        .root()
+        .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+        .await
+    {
+        connection.close().await;
+        return Err(format!("Target.setDiscoverTargets failed: {error:?}"));
+    }
     let targets = match connection
         .root()
         .target_get_targets(TargetGetTargetsParams::new())
@@ -1123,10 +1932,87 @@ fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> Contex
                 source_path: breakpoint.source_path.clone(),
                 line: breakpoint.line,
                 column: breakpoint.column,
-                status: BreakpointStatus::Unconfirmed,
+                status: if breakpoint.enabled {
+                    BreakpointStatus::Pending
+                } else {
+                    BreakpointStatus::Disabled
+                },
+                enabled: breakpoint.enabled,
+                condition: breakpoint.condition.clone(),
+                target_selector: breakpoint.target_selector.clone(),
             })
             .collect(),
     }
+}
+
+fn service_snapshot(
+    state: &ServiceState,
+    agent_instance_id: &str,
+    id: &str,
+) -> Option<ContextSnapshot> {
+    let context = state.contexts.get(id)?;
+    let mut result = snapshot(agent_instance_id, id, context);
+    for breakpoint in &mut result.breakpoints {
+        let specification = context
+            .breakpoints
+            .get(&breakpoint.id)
+            .expect("snapshot breakpoint originates from context state");
+        if !specification.enabled {
+            breakpoint.status = BreakpointStatus::Disabled;
+            continue;
+        }
+        let applications = state
+            .target_debuggers
+            .iter()
+            .filter(|((candidate_context, _, target_id), _)| {
+                candidate_context == id
+                    && specification
+                        .target_selector
+                        .as_ref()
+                        .is_none_or(|selector| selector == target_id)
+            })
+            .filter_map(|(_, debugger)| {
+                debugger
+                    .snapshot()
+                    .breakpoints
+                    .into_iter()
+                    .find(|candidate| candidate.id == breakpoint.id)
+            })
+            .collect::<Vec<_>>();
+        let installed = applications
+            .iter()
+            .filter(|application| {
+                matches!(
+                    application.status,
+                    crate::service_api::TargetBreakpointStatus::Installed { .. }
+                )
+            })
+            .count() as u32;
+        breakpoint.status = if applications.is_empty() {
+            BreakpointStatus::Pending
+        } else if installed == applications.len() as u32 {
+            BreakpointStatus::Bound {
+                application_count: installed,
+            }
+        } else if installed > 0 {
+            BreakpointStatus::PartiallyBound {
+                application_count: installed,
+            }
+        } else if let Some(message) = applications
+            .iter()
+            .find_map(|application| match &application.status {
+                crate::service_api::TargetBreakpointStatus::Failed { message } => {
+                    Some(message.clone())
+                }
+                _ => None,
+            })
+        {
+            BreakpointStatus::Failed { message }
+        } else {
+            BreakpointStatus::Pending
+        };
+    }
+    Some(result)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1134,6 +2020,16 @@ fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> Contex
 struct StoredServiceState {
     schema_version: u32,
     contexts: BTreeMap<String, StoredContextState>,
+    #[serde(default)]
+    completed_requests: Vec<StoredCompletedRequest>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCompletedRequest {
+    context_id: String,
+    request_id: String,
+    revision: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1158,6 +2054,12 @@ struct StoredBreakpointState {
     source_path: String,
     line: u32,
     column: u32,
+    #[serde(default = "stored_default_true")]
+    enabled: bool,
+    #[serde(default)]
+    condition: Option<String>,
+    #[serde(default)]
+    target_selector: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1218,6 +2120,9 @@ impl From<&ServiceState> for StoredServiceState {
                                             source_path: breakpoint.source_path.clone(),
                                             line: breakpoint.line,
                                             column: breakpoint.column,
+                                            enabled: breakpoint.enabled,
+                                            condition: breakpoint.condition.clone(),
+                                            target_selector: breakpoint.target_selector.clone(),
                                         },
                                     )
                                 })
@@ -1225,6 +2130,17 @@ impl From<&ServiceState> for StoredServiceState {
                         },
                     )
                 })
+                .collect(),
+            completed_requests: state
+                .completed_requests
+                .iter()
+                .map(
+                    |((context_id, request_id), revision)| StoredCompletedRequest {
+                        context_id: context_id.clone(),
+                        request_id: request_id.clone(),
+                        revision: *revision,
+                    },
+                )
                 .collect(),
         }
     }
@@ -1244,6 +2160,11 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         2 => serde_json::from_slice(&bytes)?,
         version => return Err(ServicePersistenceError::UnsupportedSchema(version as u32)),
     };
+    let completed_requests = stored
+        .completed_requests
+        .into_iter()
+        .map(|request| ((request.context_id, request.request_id), request.revision))
+        .collect();
     Ok(ServiceState {
         contexts: stored
             .contexts
@@ -1283,6 +2204,9 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                                             source_path: breakpoint.source_path,
                                             line: breakpoint.line,
                                             column: breakpoint.column,
+                                            enabled: breakpoint.enabled,
+                                            condition: breakpoint.condition,
+                                            target_selector: breakpoint.target_selector,
                                         }),
                                     )
                                 })
@@ -1294,7 +2218,13 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             .collect(),
         runtimes: BTreeMap::new(),
         target_debuggers: BTreeMap::new(),
+        history: BTreeMap::new(),
+        completed_requests,
     })
+}
+
+fn stored_default_true() -> bool {
+    true
 }
 
 fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
@@ -1327,6 +2257,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
                 )
             })
             .collect(),
+        completed_requests: Vec::new(),
     }
 }
 
@@ -1368,6 +2299,52 @@ fn validate_connection_configuration(
     configuration: &ConnectionConfiguration,
 ) -> Result<(), JsonRpcError> {
     validate_configuration(configuration).map_err(|error| invalid_params(&error.to_string()))
+}
+
+fn validate_breakpoint_spec(specification: &BreakpointSpec) -> Result<(), JsonRpcError> {
+    if specification.source_path.is_empty() {
+        return Err(invalid_params("source path must not be empty"));
+    }
+    if specification.line == 0 || specification.column == 0 {
+        return Err(invalid_params("breakpoint lines and columns are one-based"));
+    }
+    if specification.condition.as_deref() == Some("") {
+        return Err(invalid_params("breakpoint condition must not be empty"));
+    }
+    Ok(())
+}
+
+fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
+    if let Ok(url) = url::Url::parse(path) {
+        if url.scheme() != "file" {
+            return Err(invalid_params(
+                "source content is currently available only for local file sources",
+            ));
+        }
+        return url
+            .to_file_path()
+            .map_err(|_| invalid_params("source file URL is invalid"));
+    }
+    Ok(PathBuf::from(path))
+}
+
+fn stable_name_hash(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+fn sanitize_file_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || ".-_".contains(character) {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn invalid_params(message: &str) -> JsonRpcError {
@@ -1428,6 +2405,7 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
         ContextTransitionError::StaleEffectCompletion { .. } => error_codes::INTERNAL_ERROR,
         ContextTransitionError::ConnectionNotFound(_)
         | ContextTransitionError::ActiveConnectionCannotBeReplaced
+        | ContextTransitionError::ActiveConnectionCannotBeRemoved
         | ContextTransitionError::ConnectionAlreadyActive
         | ContextTransitionError::ConnectionAlreadyDisconnecting => error_codes::INVALID_PARAMS,
     };

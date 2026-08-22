@@ -2,7 +2,8 @@ use cdp_client::service_api::{
     BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
     ContextSnapshot, ContextSummary, CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapSnapshotProgress,
-    HeapSnapshotResult, PlaywrightChannel, ServiceInfo, SourceExcerpt, TargetBreakpointStatus,
+    HeapSnapshotResult, ObservationResult, PlaywrightChannel, ServiceInfo, SourceContentSnapshot,
+    SourceExcerpt, SourceLocation, SourceMatchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
     TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
@@ -266,6 +267,59 @@ impl HumanOutput for bool {
     }
 }
 
+impl HumanOutput for ObservationResult {
+    fn print_human(&self) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(self).expect("serializable")
+        );
+    }
+}
+
+impl HumanOutput for Vec<SourceSnapshotInfo> {
+    fn print_human(&self) {
+        for source in self {
+            println!("{}  [{}:{}]", source.path, source.kind, source.status);
+        }
+    }
+}
+
+impl HumanOutput for SourceContentSnapshot {
+    fn print_human(&self) {
+        print!("{}", self.content);
+    }
+}
+
+impl HumanOutput for Vec<SourceMatchSnapshot> {
+    fn print_human(&self) {
+        for item in self {
+            println!("{}:{}:{}:{}", item.path, item.line, item.column, item.text);
+        }
+    }
+}
+
+impl HumanOutput for Vec<String> {
+    fn print_human(&self) {
+        for item in self {
+            println!("{item}");
+        }
+    }
+}
+
+impl HumanOutput for Vec<SourceLocation> {
+    fn print_human(&self) {
+        for item in self {
+            println!("{}:{}:{}", item.source_url, item.line, item.column);
+        }
+    }
+}
+
+impl HumanOutput for u32 {
+    fn print_human(&self) {
+        println!("{self}");
+    }
+}
+
 impl HumanOutput for HeapSnapshotResult {
     fn print_human(&self) {
         println!(
@@ -383,10 +437,23 @@ impl HumanOutput for ContextSnapshot {
                     breakpoint.source_path,
                     breakpoint.line,
                     breakpoint.column,
-                    match breakpoint.status {
-                        BreakpointStatus::Unconfirmed => "unconfirmed",
-                    }
+                    breakpoint_status(&breakpoint.status)
                 );
+            }
+
+            fn breakpoint_status(status: &BreakpointStatus) -> String {
+                match status {
+                    BreakpointStatus::Unconfirmed => "unconfirmed".into(),
+                    BreakpointStatus::Disabled => "disabled".into(),
+                    BreakpointStatus::Pending => "pending".into(),
+                    BreakpointStatus::PartiallyBound { application_count } => {
+                        format!("partially-bound:{application_count}")
+                    }
+                    BreakpointStatus::Bound { application_count } => {
+                        format!("bound:{application_count}")
+                    }
+                    BreakpointStatus::Failed { message } => format!("failed:{message}"),
+                }
             }
         }
     }

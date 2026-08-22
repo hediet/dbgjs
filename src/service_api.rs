@@ -31,6 +31,48 @@ pub struct ContextSnapshot {
     pub breakpoints: Vec<BreakpointSnapshot>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationOptions {
+    pub expected_revision: Option<u64>,
+    pub request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ObservationCursor {
+    Current,
+    After { revision: u64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextObservation {
+    pub snapshot: ContextSnapshot,
+    pub events: Vec<ContextEventSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextEventSnapshot {
+    pub revision: u64,
+    pub kind: String,
+    pub subject_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ObservationResult {
+    Items {
+        items: Vec<ContextObservation>,
+    },
+    HistoryGap {
+        requested_revision: u64,
+        oldest_available_revision: u64,
+        current: ContextSnapshot,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionSnapshot {
@@ -123,12 +165,58 @@ pub struct BreakpointSnapshot {
     pub line: u32,
     pub column: u32,
     pub status: BreakpointStatus,
+    pub enabled: bool,
+    pub condition: Option<String>,
+    pub target_selector: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum BreakpointStatus {
     Unconfirmed,
+    Disabled,
+    Pending,
+    PartiallyBound { application_count: u32 },
+    Bound { application_count: u32 },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSpec {
+    pub source_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub enabled: bool,
+    pub condition: Option<String>,
+    pub target_selector: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSnapshotInfo {
+    pub path: String,
+    pub kind: String,
+    pub status: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
+    pub source_map_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceContentSnapshot {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMatchSnapshot {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -417,6 +505,17 @@ pub trait DebuggerServiceApi {
 
     async fn get_context(context_id: String) -> Result<ContextSnapshot, JsonRpcError>;
 
+    async fn observe_context(
+        context_id: String,
+        cursor: ObservationCursor,
+        timeout_ms: u64,
+    ) -> Result<ObservationResult, JsonRpcError>;
+
+    async fn delete_context(
+        context_id: String,
+        options: MutationOptions,
+    ) -> Result<bool, JsonRpcError>;
+
     async fn put_connection(
         context_id: String,
         connection_id: String,
@@ -433,6 +532,12 @@ pub trait DebuggerServiceApi {
         connection_id: String,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 
+    async fn delete_connection(
+        context_id: String,
+        connection_id: String,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
     async fn put_breakpoint(
         context_id: String,
         breakpoint_id: String,
@@ -440,6 +545,48 @@ pub trait DebuggerServiceApi {
         line: u32,
         column: u32,
     ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn put_breakpoint_spec(
+        context_id: String,
+        breakpoint_id: String,
+        specification: BreakpointSpec,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn delete_breakpoint(
+        context_id: String,
+        breakpoint_id: String,
+        options: MutationOptions,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn list_sources(
+        context_id: String,
+        path: Option<String>,
+    ) -> Result<Vec<SourceSnapshotInfo>, JsonRpcError>;
+
+    async fn show_source(
+        context_id: String,
+        path: String,
+    ) -> Result<SourceContentSnapshot, JsonRpcError>;
+
+    async fn grep_sources(
+        context_id: String,
+        pattern: String,
+    ) -> Result<Vec<SourceMatchSnapshot>, JsonRpcError>;
+
+    async fn map_source(
+        context_id: String,
+        path: String,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<SourceLocation>, JsonRpcError>;
+
+    async fn evict_source_caches(context_id: String) -> Result<u32, JsonRpcError>;
+
+    async fn export_sources(
+        context_id: String,
+        destination: String,
+    ) -> Result<Vec<String>, JsonRpcError>;
 
     async fn attach_target(
         context_id: String,

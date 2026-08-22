@@ -7,9 +7,10 @@ use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot, HeapCaptureResult,
-    HeapSnapshotProgress, LogpointSpec, PlaywrightChannel, StepKind, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetWaitPredicate,
+    BreakpointSpec, ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot,
+    HeapCaptureResult, HeapSnapshotProgress, LogpointSpec, MutationOptions, ObservationCursor,
+    ObservationResult, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -548,6 +549,55 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client.get_context(context_id.clone()).await)?)?;
         }
+        [context, delete, context_id, options @ ..]
+            if context == "context" && delete == "delete" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .delete_context(context_id.clone(), parse_mutation_options(options)?)
+                .await)?)?;
+        }
+        [state, get, context_id] if state == "state" && get == "get" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.get_context(context_id.clone()).await)?)?;
+        }
+        [state, watch, context_id, options @ ..] if state == "state" && watch == "watch" => {
+            let client = ensure_service(&state_file).await?;
+            let mut cursor = parse_observation_cursor(options)?;
+            loop {
+                match rpc(client
+                    .observe_context(context_id.clone(), cursor.clone(), 30_000)
+                    .await)?
+                {
+                    ObservationResult::Items { items } => {
+                        for item in items {
+                            cursor = ObservationCursor::After {
+                                revision: item.snapshot.revision,
+                            };
+                            println!("{}", serde_json::to_string(&item)?);
+                        }
+                    }
+                    gap @ ObservationResult::HistoryGap { .. } => {
+                        println!("{}", serde_json::to_string(&gap)?);
+                        return Err(io::Error::other("context observation history gap").into());
+                    }
+                }
+            }
+        }
+        [events, context_id, after, revision]
+            if events == "events" && after == "--after-revision" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .observe_context(
+                    context_id.clone(),
+                    ObservationCursor::After {
+                        revision: parse_u64("revision", revision)?,
+                    },
+                    0,
+                )
+                .await)?)?;
+        }
         [
             connection,
             add,
@@ -624,6 +674,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .disconnect_connection(context_id.clone(), connection_id.clone())
                 .await)?)?;
         }
+        [connection, delete, context_id, connection_id, options @ ..]
+            if connection == "connection" && delete == "delete" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .delete_connection(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    parse_mutation_options(options)?,
+                )
+                .await)?)?;
+        }
         [
             breakpoint,
             set,
@@ -642,6 +704,95 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 output,
             )
             .await?;
+        }
+        [
+            breakpoint,
+            configure,
+            context_id,
+            breakpoint_id,
+            source_path,
+            line,
+            column,
+            options @ ..,
+        ] if breakpoint == "breakpoint" && configure == "configure" => {
+            let (specification, mutation) =
+                parse_breakpoint_spec(source_path, line, column, options)?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .put_breakpoint_spec(
+                    context_id.clone(),
+                    breakpoint_id.clone(),
+                    specification,
+                    mutation,
+                )
+                .await)?)?;
+        }
+        [breakpoint, delete, context_id, breakpoint_id, options @ ..]
+            if breakpoint == "breakpoint" && delete == "delete" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .delete_breakpoint(
+                    context_id.clone(),
+                    breakpoint_id.clone(),
+                    parse_mutation_options(options)?,
+                )
+                .await)?)?;
+        }
+        [source, list, context_id] if source == "source" && list == "list" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.list_sources(context_id.clone(), None).await)?)?;
+        }
+        [source, resolve, context_id, path] if source == "source" && resolve == "resolve" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .list_sources(context_id.clone(), Some(path.clone()))
+                .await)?)?;
+        }
+        [source, endpoints, context_id, path] if source == "source" && endpoints == "endpoints" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .list_sources(context_id.clone(), Some(path.clone()))
+                .await)?)?;
+        }
+        [source, show, context_id, path] if source == "source" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .show_source(context_id.clone(), path.clone())
+                .await)?)?;
+        }
+        [source, grep, context_id, pattern] if source == "source" && grep == "grep" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .grep_sources(context_id.clone(), pattern.clone())
+                .await)?)?;
+        }
+        [source, map, context_id, path, line, column] if source == "source" && map == "map" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .map_source(
+                    context_id.clone(),
+                    path.clone(),
+                    parse_u64("line", line)?.try_into().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "line exceeds u32")
+                    })?,
+                    parse_u64("column", column)?.try_into().map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "column exceeds u32")
+                    })?,
+                )
+                .await)?)?;
+        }
+        [source, cache, evict, context_id]
+            if source == "source" && cache == "cache" && evict == "evict" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.evict_source_caches(context_id.clone()).await)?)?;
+        }
+        [source, export, context_id, destination] if source == "source" && export == "export" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .export_sources(context_id.clone(), destination.clone())
+                .await)?)?;
         }
         [
             breakpoint,
@@ -1667,6 +1818,129 @@ fn parse_u64(name: &str, value: &str) -> Result<u64, io::Error> {
     })
 }
 
+fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::Error> {
+    let mut options = MutationOptions::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--expected-revision" => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--expected-revision requires a value",
+                    )
+                })?;
+                options.expected_revision = Some(parse_u64("revision", value)?);
+                index += 2;
+            }
+            "--request-id" => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--request-id requires a value")
+                })?;
+                options.request_id = Some(value.clone());
+                index += 2;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown mutation option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn parse_observation_cursor(arguments: &[String]) -> Result<ObservationCursor, io::Error> {
+    match arguments {
+        [] => Ok(ObservationCursor::Current),
+        [after, revision] if after == "--after-revision" => Ok(ObservationCursor::After {
+            revision: parse_u64("revision", revision)?,
+        }),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "state watch accepts only --after-revision <revision>",
+        )),
+    }
+}
+
+fn parse_breakpoint_spec(
+    source_path: &str,
+    line: &str,
+    column: &str,
+    arguments: &[String],
+) -> Result<(BreakpointSpec, MutationOptions), io::Error> {
+    let mut specification = BreakpointSpec {
+        source_path: source_path.to_owned(),
+        line: parse_u64("line", line)?
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "line exceeds u32"))?,
+        column: parse_u64("column", column)?
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "column exceeds u32"))?,
+        enabled: true,
+        condition: None,
+        target_selector: None,
+    };
+    let mut mutation_arguments = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--disabled" => {
+                specification.enabled = false;
+                index += 1;
+            }
+            "--condition" => {
+                specification.condition = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--condition requires a value",
+                            )
+                        })?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--target" => {
+                specification.target_selector = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "--target requires a value")
+                        })?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--expected-revision" | "--request-id" => {
+                mutation_arguments.push(arguments[index].clone());
+                mutation_arguments.push(
+                    arguments
+                        .get(index + 1)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                format!("{} requires a value", arguments[index]),
+                            )
+                        })?
+                        .clone(),
+                );
+                index += 2;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown breakpoint option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok((specification, parse_mutation_options(&mutation_arguments)?))
+}
+
 fn rpc<T>(result: Result<T, hubrpc::prelude::JsonRpcError>) -> Result<T, io::Error> {
     result.map_err(|error| io::Error::other(format!("{error:?}")))
 }
@@ -1679,12 +1953,25 @@ commands:
   jsdbg context list
   jsdbg context create <context-id> [display-name]
   jsdbg context show <context-id>
+  jsdbg context delete <context-id> [--expected-revision <revision>] [--request-id <id>]
+  jsdbg state get <context-id>
+  jsdbg state watch <context-id> [--after-revision <revision>]
+  jsdbg events <context-id> --after-revision <revision>
   jsdbg set workspace <context-id>
   jsdbg set target <selector>
   jsdbg connection add <context-id> <connection-id> <ws-endpoint> [--connect]
   jsdbg connection add <context-id> <connection-id> --playwright <url> [--channel <channel>] [--headed] [--ignore-https-errors] [--connect]
   jsdbg connection connect|disconnect <context-id> <connection-id>
+  jsdbg connection delete <context-id> <connection-id> [--expected-revision <revision>] [--request-id <id>]
   jsdbg breakpoint set <context-id> <breakpoint-id> <source-url> <line> [column]
+  jsdbg breakpoint configure <context-id> <breakpoint-id> <source-url> <line> <column> [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg breakpoint delete <context-id> <breakpoint-id> [--expected-revision <revision>] [--request-id <id>]
+  jsdbg source list <context-id>
+  jsdbg source resolve|endpoints <context-id> <path>
+  jsdbg source show|grep <context-id> <path-or-pattern>
+  jsdbg source map <context-id> <generated-path> <line> <column>
+  jsdbg source cache evict <context-id>
+  jsdbg source export <context-id> <destination>
   jsdbg target show
   jsdbg target attach|show <context-id> <connection-id> <target>
   jsdbg target wait <context-id> <connection-id> <target> breakpoint-installed <breakpoint-id> [timeout-ms]
@@ -1697,7 +1984,7 @@ commands:
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+
   jsdbg log [--after <cursor>] [--limit <count>]
   jsdbg target click <css-selector>
-  jsdbg target key <ctrl+n|enter|accept|arrowup>
+  jsdbg target key <ctrl+n|ctrl+k,ctrl+m|enter|accept|arrowup>
   jsdbg target type <text>
   jsdbg target click <context-id> <connection-id> <target> <css-selector>
   jsdbg coverage start

@@ -88,6 +88,17 @@ impl DebuggerDriver {
             .logical_source_content(&self.state, script, source_url)
     }
 
+    pub fn generated_source_content(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+    ) -> Option<Arc<str>> {
+        self.sources.generated_source_content(&self.state, script)
+    }
+
+    pub fn clear_source_caches(&self) {
+        self.sources.clear_caches();
+    }
+
     pub fn project_generated_offset(
         &self,
         script: &crate::debugger_engine::ScriptKey,

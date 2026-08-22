@@ -89,12 +89,146 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         snapshot["breakpoints"][0]["sourcePath"],
         "file:///workspace/shared/validation.ts"
     );
-    assert_eq!(snapshot["breakpoints"][0]["status"], "unconfirmed");
+    assert_eq!(snapshot["breakpoints"][0]["status"], "pending");
 
     let stopped = run_json(&cli, &service, &state_file, &["service", "stop"]);
     assert_eq!(stopped, Value::Bool(true));
     wait_until_removed(&state_file);
     cleanup_persistent_state(&state_file);
+    cleanup.disarm();
+}
+
+#[test]
+fn cli_manages_lifecycle_concurrency_and_sources() {
+    let state_file = std::env::temp_dir().join(format!(
+        "jsdbg-cli-management-{}-{}.json",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let source_file = state_file.with_extension("source.ts");
+    fs::write(&source_file, "export const validationValue = 42;\n").unwrap();
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "create", "managed"],
+    );
+    let source = source_file.to_string_lossy();
+    let configured = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "breakpoint",
+            "configure",
+            "managed",
+            "conditional",
+            &source,
+            "1",
+            "1",
+            "--disabled",
+            "--condition",
+            "validationValue > 0",
+            "--expected-revision",
+            "1",
+            "--request-id",
+            "configure-1",
+        ],
+    );
+    assert_eq!(configured["breakpoints"][0]["status"], "disabled");
+    assert_eq!(
+        configured["breakpoints"][0]["condition"],
+        "validationValue > 0"
+    );
+    let observed = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["events", "managed", "--after-revision", "1"],
+    );
+    let observed_items = observed["items"].as_array().unwrap();
+    assert_eq!(observed_items.len(), 1);
+    assert_eq!(observed_items[0]["snapshot"]["revision"], 2);
+    assert_eq!(observed_items[0]["events"][0]["kind"], "breakpoint.updated");
+
+    let repeated = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "breakpoint",
+            "configure",
+            "managed",
+            "conditional",
+            &source,
+            "1",
+            "1",
+            "--request-id",
+            "configure-1",
+        ],
+    );
+    assert_eq!(repeated["revision"], configured["revision"]);
+
+    let matches = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["source", "grep", "managed", "validationValue"],
+    );
+    assert_eq!(matches.as_array().unwrap().len(), 1);
+
+    let configured_revision = configured["revision"].as_u64().unwrap().to_string();
+    let deleted = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "breakpoint",
+            "delete",
+            "managed",
+            "conditional",
+            "--expected-revision",
+            &configured_revision,
+        ],
+    );
+    assert!(deleted["breakpoints"].as_array().unwrap().is_empty());
+    let deleted_revision = deleted["revision"].as_u64().unwrap().to_string();
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "context",
+            "delete",
+            "managed",
+            "--expected-revision",
+            &deleted_revision,
+            "--request-id",
+            "delete-managed",
+        ],
+    );
+    let repeated_delete = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "context",
+            "delete",
+            "managed",
+            "--request-id",
+            "delete-managed",
+        ],
+    );
+    assert_eq!(repeated_delete, Value::Bool(true));
+
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_file(source_file);
     cleanup.disarm();
 }
 
@@ -149,6 +283,15 @@ fn context_intent_survives_service_restart() {
         restored["breakpoints"][0]["sourcePath"],
         "file:///workspace/shared/validation.ts"
     );
+    let history_gap = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["events", "shop", "--after-revision", "0"],
+    );
+    assert_eq!(history_gap["kind"], "historyGap");
+    assert_eq!(history_gap["oldest_available_revision"], 3);
+    assert_eq!(history_gap["current"]["revision"], 3);
 
     run_json(&cli, &service, &state_file, &["service", "stop"]);
     wait_until_removed(&state_file);

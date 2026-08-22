@@ -12,7 +12,7 @@ use tokio::time::timeout;
 use url::Url;
 
 use crate::cdp::CdpClient;
-use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError};
+use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, RootCdpEvent};
 use crate::debugger_engine::SessionKey;
 use crate::service_api::{ConnectionConfiguration, PlaywrightChannel};
 
@@ -66,6 +66,16 @@ impl ConnectionRuntime {
 
     pub async fn wait_closed(&self) -> String {
         self.cdp.wait_closed().await
+    }
+
+    pub async fn take_root_events(
+        &self,
+    ) -> Option<
+        tokio::sync::mpsc::UnboundedReceiver<
+            Result<RootCdpEvent, crate::cdp_runtime::CdpRuntimeEventError>,
+        >,
+    > {
+        self.cdp.take_root_events().await
     }
 
     pub async fn close(&self) {

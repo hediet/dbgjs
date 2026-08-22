@@ -661,7 +661,7 @@ mod tests {
         assert_eq!(with_breakpoint.breakpoints.len(), 1);
         assert_eq!(
             with_breakpoint.breakpoints[0].status,
-            crate::service_api::BreakpointStatus::Unconfirmed
+            crate::service_api::BreakpointStatus::Pending
         );
 
         assert!(client.shutdown().await.unwrap());

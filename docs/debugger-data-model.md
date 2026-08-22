@@ -1621,22 +1621,31 @@ The Rust prototype currently implements important subsets of this model:
 - Content-addressed source storage.
 - Strict reducer recording and replay.
 - Real Chrome and `vscode.dev` end-to-end tests.
+- Durable contexts with named connection configurations, lifecycle state,
+  generation-safe target topology, and restart persistence.
+- Context-wide breakpoint intent with enabled state, conditions, target
+  selectors, removal, and aggregate application assessments.
+- Bounded context revision/event history with atomic snapshot-to-revision
+  observation, long-poll watching, and explicit history-gap recovery.
+- Expected-revision mutation checks and restart-persistent idempotency keys for
+  managed lifecycle and breakpoint operations.
+- Public source listing, generated-to-authored mapping, content display, grep,
+  safe atomic export, and reloadable-cache eviction.
 
 The following target-model pieces are not yet implemented:
 
-- The top-level durable `DebugContext` with a map of named connection
-  configurations and lifecycle states.
-- Multiple simultaneous per-connection target graphs and attachment sets.
-- Context-wide breakpoint application across connections.
-- Breakpoint assessment separate from per-attachment applications.
 - Unconnected HubRPC/DAP breakpoint workflows.
 - Source-map path catalog discovery independent of full source hydration.
 - The shared provider-qualified, versioned source graph with typed projections
   and live endpoints from every connection.
 - Immutable detail artifacts for scopes, properties, and coverage.
-- The unified HubRPC state-observation server stream.
-- Typed separation of all user commands, runtime observations, and effect
-  completions in the Rust types.
+- Native HubRPC server streaming and cancellation. The debugger currently
+  exposes the same cursor semantics through cancellation-safe unary long
+  polling.
+- Explicit attachment-incarnation identities and selector policies spanning
+  related workers and OOPIFs.
+- A standalone per-context coordinator replacing the service-wide serialization
+  lock.
 
 The target model should guide these refactors without requiring the public
 protocol to expose internal CDP or reducer implementation details.

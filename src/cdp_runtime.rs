@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use hubrpc::connection::channel::{Channel, RejectingHandler, RequestHandler};
+use hubrpc::connection::channel::{Channel, RequestHandler};
 use hubrpc::prelude::{JsonRpcError, MuxError};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -26,6 +26,7 @@ use crate::cdp::{
     HeapProfilerReportHeapSnapshotProgressParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
     RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
+    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
 use crate::debugger_engine::{Effect, Input, RawFrame, SessionKey, StepKind};
 use crate::session_transport::CdpSessionMux;
@@ -36,6 +37,7 @@ pub struct CdpConnection {
     transport: Arc<CdpWebSocketTransport>,
     mux: CdpSessionMux,
     root: CdpClient<Channel>,
+    root_events: Mutex<Option<mpsc::UnboundedReceiver<Result<RootCdpEvent, CdpRuntimeEventError>>>>,
     close_reason: Arc<Mutex<Option<String>>>,
 }
 
@@ -44,9 +46,12 @@ impl CdpConnection {
         let transport = Arc::new(CdpWebSocketTransport::connect(endpoint).await?);
         let close_reason = transport.close_reason();
         let mux = CdpSessionMux::new(transport.clone());
+        let (root_event_sender, root_event_receiver) = mpsc::unbounded_channel();
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?),
-            Box::new(RejectingHandler),
+            Box::new(RootCdpEventHandler {
+                sender: root_event_sender,
+            }),
         );
         let root = CdpClient::root(root_channel.clone());
         let mux_loop = mux.clone();
@@ -56,6 +61,7 @@ impl CdpConnection {
             transport,
             mux,
             root,
+            root_events: Mutex::new(Some(root_event_receiver)),
             close_reason,
         })
     }
@@ -101,6 +107,12 @@ impl CdpConnection {
         self.mux.retire_session(session_id);
     }
 
+    pub async fn take_root_events(
+        &self,
+    ) -> Option<mpsc::UnboundedReceiver<Result<RootCdpEvent, CdpRuntimeEventError>>> {
+        self.root_events.lock().await.take()
+    }
+
     pub fn close_reason(&self) -> Arc<Mutex<Option<String>>> {
         self.close_reason.clone()
     }
@@ -114,6 +126,41 @@ impl CdpConnection {
     pub async fn close(&self) {
         self.transport.close().await;
         self.mux.dispose();
+    }
+}
+
+#[derive(Debug)]
+pub enum RootCdpEvent {
+    TargetCreated(TargetTargetCreatedParams),
+    TargetChanged(TargetTargetInfoChangedParams),
+    TargetDestroyed(TargetTargetDestroyedParams),
+}
+
+struct RootCdpEventHandler {
+    sender: mpsc::UnboundedSender<Result<RootCdpEvent, CdpRuntimeEventError>>,
+}
+
+#[async_trait]
+impl RequestHandler for RootCdpEventHandler {
+    async fn handle_request(&self, method: String, _params: Value) -> Result<Value, JsonRpcError> {
+        Err(JsonRpcError::new(
+            -32601,
+            format!("unexpected browser request: {method}"),
+        ))
+    }
+
+    async fn handle_notification(&self, method: String, params: Value) {
+        let event = match method.as_str() {
+            "Target.targetCreated" => deserialize(&method, params).map(RootCdpEvent::TargetCreated),
+            "Target.targetInfoChanged" => {
+                deserialize(&method, params).map(RootCdpEvent::TargetChanged)
+            }
+            "Target.targetDestroyed" => {
+                deserialize(&method, params).map(RootCdpEvent::TargetDestroyed)
+            }
+            _ => return,
+        };
+        let _ = self.sender.send(event);
     }
 }
 

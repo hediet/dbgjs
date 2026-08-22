@@ -29,9 +29,9 @@ use crate::service_api::{
     CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
     FrameProjectionSnapshot, FrameSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot,
     HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapSnapshotProgress,
-    HeapSnapshotResult, PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation,
-    TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate,
+    HeapSnapshotResult, PauseSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
+    SourceLocation, TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase,
+    TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -57,6 +57,10 @@ pub struct TargetDebuggerHandle {
 }
 
 impl TargetDebuggerHandle {
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        self.commands.same_channel(&other.commands)
+    }
+
     pub async fn start(
         context_id: String,
         connection_id: String,
@@ -140,6 +144,19 @@ impl TargetDebuggerHandle {
         .await
     }
 
+    pub async fn remove_breakpoint(
+        &self,
+        context_revision: u64,
+        breakpoint_id: String,
+    ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
+        self.command(|response| TargetCommand::RemoveBreakpoint {
+            context_revision,
+            breakpoint_id,
+            response,
+        })
+        .await
+    }
+
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -182,6 +199,46 @@ impl TargetDebuggerHandle {
                 expression,
                 response,
             })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn source_content(
+        &self,
+        path: String,
+    ) -> Result<Option<SourceContentSnapshot>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::SourceContent { path, response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn map_source(
+        &self,
+        path: String,
+        line: u32,
+        column: u32,
+    ) -> Result<Vec<SourceLocation>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::MapSource {
+                path,
+                line,
+                column,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn evict_source_caches(&self) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::EvictSourceCaches { response })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
@@ -450,6 +507,11 @@ enum TargetCommand {
         breakpoints: Vec<TargetBreakpointSpec>,
         response: CommandResponse,
     },
+    RemoveBreakpoint {
+        context_revision: u64,
+        breakpoint_id: String,
+        response: CommandResponse,
+    },
     Resume {
         pause_epoch: u64,
         response: CommandResponse,
@@ -464,6 +526,19 @@ enum TargetCommand {
         frame_index: u32,
         expression: String,
         response: oneshot::Sender<Result<EvaluationSnapshot, TargetDebuggerError>>,
+    },
+    SourceContent {
+        path: String,
+        response: oneshot::Sender<Result<Option<SourceContentSnapshot>, TargetDebuggerError>>,
+    },
+    MapSource {
+        path: String,
+        line: u32,
+        column: u32,
+        response: oneshot::Sender<Result<Vec<SourceLocation>, TargetDebuggerError>>,
+    },
+    EvictSourceCaches {
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
     Click {
         selector: String,
@@ -631,6 +706,87 @@ async fn run_target(
                     snapshots.send_replace(snapshot.clone());
                 }
                 let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::RemoveBreakpoint {
+                context_revision,
+                breakpoint_id,
+                response,
+            })) => {
+                let result = async {
+                    if breakpoint_revisions
+                        .get(&breakpoint_id)
+                        .is_none_or(|current| *current <= context_revision)
+                    {
+                        remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
+                        breakpoint_revisions.insert(breakpoint_id, context_revision);
+                    }
+                    Ok(snapshot_from_driver(
+                        &context_id,
+                        &connection_id,
+                        &target_id,
+                        connection_generation,
+                        &session_key,
+                        &driver,
+                    ))
+                }
+                .await;
+                if let Ok(snapshot) = &result {
+                    snapshots.send_replace(snapshot.clone());
+                }
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::SourceContent { path, response })) => {
+                let result = driver.state().scripts.iter().find_map(|(key, script)| {
+                    if script.url == path {
+                        return driver.generated_source_content(key).map(|content| {
+                            SourceContentSnapshot {
+                                path: path.clone(),
+                                content: content.to_string(),
+                            }
+                        });
+                    }
+                    driver
+                        .logical_source_content(key, &path)
+                        .map(|content| SourceContentSnapshot {
+                            path: path.clone(),
+                            content: content.to_string(),
+                        })
+                });
+                let _ = response.send(Ok(result));
+            }
+            Next::Command(Some(TargetCommand::MapSource {
+                path,
+                line,
+                column,
+                response,
+            })) => {
+                let position = Position {
+                    line: line.saturating_sub(1),
+                    column: column.saturating_sub(1),
+                };
+                let locations = driver
+                    .state()
+                    .scripts
+                    .iter()
+                    .filter(|(_, script)| script.url == path)
+                    .filter_map(|(key, _)| {
+                        driver.source_effects().project_generated_position(
+                            driver.state(),
+                            key,
+                            position,
+                        )
+                    })
+                    .map(|(source_url, position, _)| SourceLocation {
+                        source_url,
+                        line: position.line + 1,
+                        column: position.column + 1,
+                    })
+                    .collect();
+                let _ = response.send(Ok(locations));
+            }
+            Next::Command(Some(TargetCommand::EvictSourceCaches { response })) => {
+                driver.clear_source_caches();
+                let _ = response.send(Ok(()));
             }
             Next::Command(Some(TargetCommand::Resume {
                 pause_epoch,
@@ -1446,6 +1602,9 @@ fn begin_type_text(
 async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerError> {
     let keys = match chord.to_ascii_lowercase().as_str() {
         "ctrl+n" | "control+n" => vec![(2, "KeyN", "n", 78, None)],
+        "ctrl+k,ctrl+m" | "control+k,control+m" => {
+            vec![(2, "KeyK", "k", 75, None), (2, "KeyM", "m", 77, None)]
+        }
         "enter" => vec![(0, "Enter", "Enter", 13, Some("\r"))],
         "accept" => vec![(0, "Enter", "Enter", 13, None)],
         "arrowup" | "up" => vec![(0, "ArrowUp", "ArrowUp", 38, None)],
