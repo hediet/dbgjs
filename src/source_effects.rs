@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use rayon::prelude::*;
+
 use crate::content_store::ContentStore;
 use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
@@ -387,6 +389,52 @@ impl SourceEffectInterpreter {
             .get(source_url)
             .and_then(Option::as_ref)
             .and_then(|index| index.breadcrumb(content, line, column))
+    }
+
+    pub fn prepare_breadcrumbs(
+        &self,
+        state: &DebuggerState,
+        sources: &[(ScriptKey, String, Arc<str>)],
+    ) {
+        let mut missing = BTreeMap::<(EffectId, String), Arc<str>>::new();
+        for (script, source_url, content) in sources {
+            let Some(ScriptSourceState::Resolved(source_state)) =
+                state.scripts.get(script).map(|script| &script.source)
+            else {
+                continue;
+            };
+            let Some(retained) = self.views.get(&source_state.view_id) else {
+                continue;
+            };
+            if !retained
+                .symbol_indexes
+                .lock()
+                .unwrap()
+                .contains_key(source_url)
+            {
+                missing
+                    .entry((source_state.view_id, source_url.clone()))
+                    .or_insert_with(|| content.clone());
+            }
+        }
+
+        let indexes = missing
+            .into_par_iter()
+            .map(|((view_id, source_url), content)| {
+                let index = crate::language_intelligence::SymbolIndex::new(&source_url, &content);
+                (view_id, source_url, index)
+            })
+            .collect::<Vec<_>>();
+        for (view_id, source_url, index) in indexes {
+            if let Some(retained) = self.views.get(&view_id) {
+                retained
+                    .symbol_indexes
+                    .lock()
+                    .unwrap()
+                    .entry(source_url)
+                    .or_insert(index);
+            }
+        }
     }
 
     pub fn logical_source_content(

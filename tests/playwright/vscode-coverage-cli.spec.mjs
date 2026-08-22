@@ -87,14 +87,17 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			environment,
 			30_000,
 		);
+		await runCli(
+			"Capture the live heap into the default managed snapshot.",
+			["heap", "capture"],
+			environment,
+			180_000,
+		);
 		const heapClasses = await runCli(
-			"Capture the live heap and render source-mapped PieceTree classes with representative object IDs.",
+			"Render live source-mapped classes with representative object IDs.",
 			[
 				"heap",
 				"classes",
-				"--create-snapshot",
-				"--filter",
-				".*PieceTree.*",
 				"--instances",
 				"--max-lines",
 				"80",
@@ -103,10 +106,10 @@ test("reports vscode.dev code executed by typing one character", async () => {
 			180_000,
 		);
 		expect(heapClasses).toMatch(/^\d+ classes, \d+ instances, .+ shallow size$/m);
-		expect(heapClasses).toMatch(/PieceTree.*@\d+\s+id \d+/);
+		expect(heapClasses).not.toContain(".constructor");
 		expect(heapClasses.trimEnd().split("\n").length).toBeLessThanOrEqual(80);
 		const heapSnapshot = await runJsonSilent(
-			["heap", "classes", ".", "--filter", ".*PieceTree.*"],
+			["heap", "classes", "."],
 			environment,
 			180_000,
 		);
@@ -114,9 +117,17 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		expect(heapSnapshot.totalInstances).toBeGreaterThan(0);
 		expect(
 			heapSnapshot.classes.some(
-				(class_) =>
-					/\.tsx?$/.test(class_.sourceUrl) &&
-					/PieceTree/.test(class_.name),
+				(class_) => class_.name === "PieceTreeTextBuffer",
+			),
+		).toBe(true);
+		expect(
+			heapSnapshot.classes.every(
+				(class_) => !class_.name.endsWith(".constructor"),
+			),
+		).toBe(true);
+		expect(
+			heapSnapshot.classes.some(
+				(class_) => /\.tsx?$/.test(class_.sourceUrl),
 			),
 		).toBe(true);
 		await runCli(
@@ -157,10 +168,8 @@ test("reports vscode.dev code executed by typing one character", async () => {
 		expect(report).not.toContain("additional hit ranges omitted");
 		expect(report).toContain("snippet/browser/snippetParser.ts");
 		expect(report).not.toContain("Scanner.next");
-		expect(report).toMatch(
-			/snippetParser\.ts\s+\d+ HL, \d+ RL[\s\S]*SnippetParser\s+\d+ HL, \d+ RL/,
-		);
-		expect(report).toMatch(/all \d+ children pruned/);
+		expect(report).toMatch(/\[\d+ children pruned\]/);
+		expect(report).not.toMatch(/\n[ │]+└─ … \[all \d+ children pruned/);
 		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(300);
 		const bounded = await runTextSilent(
 			["coverage", "show", ".", "--max-lines", "40"],

@@ -670,12 +670,35 @@ fn render_heap_classes_human(
     snapshot: &HeapClassSnapshot,
     options: HeapClassOutputOptions,
 ) -> Vec<String> {
+    let maximum_lines = if options.all {
+        usize::MAX
+    } else {
+        options.max_lines
+    };
     let mut output = vec![format!(
         "{} classes, {} instances, {} shallow size",
         snapshot.classes.len(),
         snapshot.total_instances,
         compact_bytes(snapshot.total_shallow_size)
     )];
+    if output.len() >= maximum_lines {
+        return output;
+    }
+    output.push(format!(
+        "Analysis {:.3}s: parse {:.3}s, projection {:.3}s (source-map hydration {:.3}s; {} constructor groups{})",
+        (snapshot.analysis.parse_duration_micros + snapshot.analysis.projection_duration_micros)
+            as f64
+            / 1_000_000.0,
+        snapshot.analysis.parse_duration_micros as f64 / 1_000_000.0,
+        snapshot.analysis.projection_duration_micros as f64 / 1_000_000.0,
+        snapshot.analysis.source_map_hydration_duration_micros as f64 / 1_000_000.0,
+        snapshot.analysis.constructor_group_count,
+        if snapshot.analysis.used_cached_groups {
+            ", cached"
+        } else {
+            ""
+        }
+    ));
     if snapshot.classes.is_empty() {
         return output;
     }
@@ -707,12 +730,15 @@ fn render_heap_classes_human(
     let budget = if options.all {
         usize::MAX
     } else {
-        options.max_lines.saturating_sub(1)
+        maximum_lines.saturating_sub(output.len())
     };
     let style = HeapClassTreeStyle {
         instances: options.instances,
     };
     output.extend(tree.render(&style, true, budget));
+    if maximum_lines != usize::MAX {
+        output.truncate(maximum_lines);
+    }
     output
 }
 
@@ -1057,6 +1083,13 @@ impl BoundedTreeStyle<CoverageMetrics, Vec<CoverageEntry>> for CoverageTreeStyle
         node: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
         symbols: bool,
     ) -> u64 {
+        if !symbols
+            && node
+                .leaf()
+                .is_some_and(|entries| single_class_summary(entries).is_some())
+        {
+            return 0;
+        }
         let has_class = node
             .leaf()
             .is_some_and(|entries| entries.iter().any(has_resolved_class));
@@ -1071,7 +1104,7 @@ impl BoundedTreeStyle<CoverageMetrics, Vec<CoverageEntry>> for CoverageTreeStyle
         label: &str,
         node: &BoundedTree<CoverageMetrics, Vec<CoverageEntry>>,
         prefix: &str,
-        _symbols: bool,
+        expand_leaves: bool,
     ) -> String {
         match node.leaf() {
             None => format!(
@@ -1079,11 +1112,29 @@ impl BoundedTreeStyle<CoverageMetrics, Vec<CoverageEntry>> for CoverageTreeStyle
                 node.leaf_count(),
                 node.aggregate().compact()
             ),
-            Some(_) => format!(
-                "{label}  {}{}",
-                node.aggregate().compact(),
-                inline_symbol_summary(node, label, prefix, 120)
-            ),
+            Some(entries) => {
+                let collapsed_class = (!expand_leaves)
+                    .then(|| single_class_summary(entries))
+                    .flatten();
+                let label = collapsed_class.as_ref().map_or_else(
+                    || label.to_owned(),
+                    |class| format!("{label}/{}", class.name),
+                );
+                let collapsed_suffix = collapsed_class.as_ref().map_or_else(String::new, |class| {
+                    let inline = inline_method_summary(class, prefix, 120);
+                    if inline.is_empty() {
+                        "  [methods pruned]".to_owned()
+                    } else {
+                        inline
+                    }
+                });
+                format!(
+                    "{label}  {}{}{}",
+                    node.aggregate().compact(),
+                    inline_symbol_summary(node, &label, prefix, 120),
+                    collapsed_suffix
+                )
+            }
         }
     }
 
@@ -1095,7 +1146,11 @@ impl BoundedTreeStyle<CoverageMetrics, Vec<CoverageEntry>> for CoverageTreeStyle
         expand_leaves: bool,
     ) -> Vec<String> {
         node.leaf().map_or_else(Vec::new, |entries| {
-            render_symbol_groups(prefix, entries, budget, expand_leaves)
+            if !expand_leaves && single_class_summary(entries).is_some() {
+                Vec::new()
+            } else {
+                render_symbol_groups(prefix, entries, budget, expand_leaves)
+            }
         })
     }
 
@@ -1177,6 +1232,7 @@ fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
             .map_or_else(|| entry.function.clone(), |(class, _)| class.to_owned());
         groups.entry(name).or_default().push(entry);
     }
+
     let mut summaries = groups
         .into_iter()
         .map(|(name, entries)| SymbolSummary {
@@ -1188,6 +1244,11 @@ fn symbol_summaries(entries: &[CoverageEntry]) -> Vec<SymbolSummary<'_>> {
         .collect::<Vec<_>>();
     summaries.sort_by_key(|summary| std::cmp::Reverse(summary.metrics.hit_lines));
     summaries
+}
+
+fn single_class_summary(entries: &[CoverageEntry]) -> Option<SymbolSummary<'_>> {
+    let mut summaries = symbol_summaries(entries);
+    (summaries.len() == 1 && summaries[0].is_class).then(|| summaries.remove(0))
 }
 
 fn render_symbol_groups(
@@ -1413,14 +1474,14 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoverageEntry, CoverageMetrics, HeapClassOutputOptions, aggregate_coverage_entries,
-        coverage_entries, effective_file_metrics, looks_minified_identifier, page_logs,
-        render_heap_classes_human,
+        BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
+        aggregate_coverage_entries, coverage_entries, effective_file_metrics,
+        looks_minified_identifier, page_logs, render_heap_classes_human,
     };
     use cdp_client::service_api::{
         ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
-        CoverageSourceSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot,
-        SourceLocation,
+        CoverageSourceSnapshot, HeapClassAnalysisSnapshot, HeapClassSnapshot,
+        HeapClassSnapshotEntry, HeapInstanceSnapshot, SourceLocation,
     };
     use std::collections::BTreeMap;
 
@@ -1454,6 +1515,13 @@ mod tests {
             total_instances: classes.iter().map(|class| class.instance_count).sum(),
             total_shallow_size: classes.iter().map(|class| class.shallow_size).sum(),
             classes,
+            analysis: HeapClassAnalysisSnapshot {
+                parse_duration_micros: 0,
+                projection_duration_micros: 0,
+                source_map_hydration_duration_micros: 0,
+                constructor_group_count: 0,
+                used_cached_groups: false,
+            },
         }
     }
 
@@ -1493,10 +1561,24 @@ mod tests {
     }
 
     #[test]
+    fn heap_classes_apply_max_lines_to_headers() {
+        let lines = render_heap_classes_human(
+            &heap_snapshot(vec![heap_class("PieceTreeModel", 2)]),
+            HeapClassOutputOptions {
+                all: false,
+                max_lines: 1,
+                instances: false,
+            },
+        );
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
     fn identifies_short_mangled_names_without_flagging_readable_symbols() {
         for name in ["Bbi", "OXe", "cDe", "j0e", "fS"] {
             assert!(looks_minified_identifier(name), "{name}");
         }
+
         for name in [
             "next",
             "rbTreeBase",
@@ -1505,6 +1587,36 @@ mod tests {
         ] {
             assert!(!looks_minified_identifier(name), "{name}");
         }
+    }
+
+    #[test]
+    fn default_tree_collapses_a_file_with_one_class() {
+        let metrics = CoverageMetrics {
+            hit_lines: 12,
+            run_lines: 20,
+        };
+        let entries = vec![
+            CoverageEntry {
+                path: "workingCopyBackupTracker.ts".to_owned(),
+                function: "WorkingCopyBackupTracker.backup".to_owned(),
+                line_counts: BTreeMap::from([(1, 1)]),
+                metrics,
+                generated_location: None,
+            },
+            CoverageEntry {
+                path: "workingCopyBackupTracker.ts".to_owned(),
+                function: "WorkingCopyBackupTracker.schedule".to_owned(),
+                line_counts: BTreeMap::from([(2, 1)]),
+                metrics,
+                generated_location: None,
+            },
+        ];
+        let mut tree = BoundedTree::default();
+        tree.insert(["workingCopyBackupTracker.ts".to_owned()], metrics, entries);
+        assert!(
+            tree.render(&CoverageTreeStyle, false, 10)[0]
+                .contains("workingCopyBackupTracker.ts/WorkingCopyBackupTracker")
+        );
     }
 
     #[test]

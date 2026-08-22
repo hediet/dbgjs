@@ -86,7 +86,11 @@ where
         if budget == 0 {
             return Vec::new();
         }
-        let mut children = self.children.iter().collect::<Vec<_>>();
+        let mut children = self
+            .children
+            .iter()
+            .map(|(name, child)| collapse_tree_label(name, child))
+            .collect::<Vec<_>>();
         children.sort_by_key(|(_, child)| std::cmp::Reverse(style.sort_weight(child.aggregate())));
         if budget != usize::MAX && children.len() <= LONG_LIST && budget < children.len() {
             let aggregate = children
@@ -127,10 +131,9 @@ where
             .map(|(_, child)| style.expansion_weight(child, expand_leaves))
             .sum::<u64>();
         let mut output = Vec::new();
-        for (index, (name, child)) in children.into_iter().take(visible).enumerate() {
+        for (index, (label, child)) in children.into_iter().take(visible).enumerate() {
             let last = index + 1 == output_len;
             let branch = if last { "└─" } else { "├─" };
-            let (label, child) = collapse_tree_label(name, child);
             let child_budget = if budget == usize::MAX {
                 usize::MAX
             } else if weight == 0 {
@@ -141,18 +144,31 @@ where
             };
             let children_pruned =
                 child_budget == 0 && style.expansion_weight(child, expand_leaves) > 0;
+            let all_children_pruned = child_budget != usize::MAX
+                && !child.children.is_empty()
+                && child.children.len() <= LONG_LIST
+                && child_budget < child.children.len();
             output.push(format!(
                 "{prefix}{branch} {}{}",
                 style.render_node(&label, child, prefix, expand_leaves),
-                if children_pruned {
-                    "  [children pruned]"
+                if all_children_pruned {
+                    format!("  [{} children pruned]", child.children.len())
+                } else if children_pruned {
+                    "  [children pruned]".to_owned()
                 } else {
-                    ""
+                    String::new()
                 }
             ));
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
-            output.extend(child.render_children(style, &child_prefix, expand_leaves, child_budget));
-            if child.children.is_empty() {
+            if !all_children_pruned {
+                output.extend(child.render_children(
+                    style,
+                    &child_prefix,
+                    expand_leaves,
+                    child_budget,
+                ));
+            }
+            if child.children.is_empty() && !all_children_pruned {
                 output.extend(style.render_leaf_children(
                     &child_prefix,
                     child,
@@ -281,7 +297,28 @@ mod tests {
         tree.insert(["dir".to_owned(), "b".to_owned()], Count(1), ());
         assert_eq!(
             tree.render(&Style, false, 1),
-            vec!["└─ dir  [children pruned]"]
+            vec!["└─ dir  [2 children pruned]"]
         );
+    }
+
+    #[test]
+    fn collapsed_zero_weight_paths_do_not_consume_sibling_budget() {
+        let mut tree = BoundedTree::default();
+        tree.insert(
+            [
+                "collapsed".to_owned(),
+                "middle".to_owned(),
+                "leaf".to_owned(),
+            ],
+            Count(1),
+            (),
+        );
+        for leaf in ["a", "b", "c", "d"] {
+            tree.insert(["expand".to_owned(), leaf.to_owned()], Count(1), ());
+        }
+        let rendered = tree.render(&Style, false, 6).join("\n");
+        for leaf in ["a", "b", "c", "d"] {
+            assert!(rendered.contains(leaf), "{rendered}");
+        }
     }
 }

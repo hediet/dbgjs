@@ -327,6 +327,17 @@ pub struct HeapClassSnapshot {
     pub total_instances: u64,
     pub total_shallow_size: u64,
     pub classes: Vec<HeapClassSnapshotEntry>,
+    pub analysis: HeapClassAnalysisSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassAnalysisSnapshot {
+    pub parse_duration_micros: u64,
+    pub projection_duration_micros: u64,
+    pub source_map_hydration_duration_micros: u64,
+    pub constructor_group_count: u64,
+    pub used_cached_groups: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

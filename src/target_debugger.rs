@@ -27,11 +27,11 @@ use crate::heap_snapshot::{HeapConstructorGroup, parse_constructor_groups};
 use crate::service_api::{
     ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
     CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
-    FrameProjectionSnapshot, FrameSnapshot, HeapCaptureResult, HeapClassSnapshot,
-    HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
-    PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation, TargetBreakpointSnapshot,
-    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
-    TargetScriptStatus, TargetWaitPredicate,
+    FrameProjectionSnapshot, FrameSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot,
+    HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapSnapshotProgress,
+    HeapSnapshotResult, PauseSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation,
+    TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -970,6 +970,7 @@ async fn run_target(
                 response,
             })) => {
                 let result = async {
+                    let parse_started = Instant::now();
                     let filter = filter
                         .as_deref()
                         .map(regex::Regex::new)
@@ -977,31 +978,35 @@ async fn run_target(
                         .map_err(|error| {
                             TargetDebuggerError::InvalidHeapFilter(error.to_string())
                         })?;
-                    let groups = match heap_constructor_groups.get(&capture_id).cloned() {
-                        Some(groups) => groups,
-                        None => {
-                            let path =
-                                heap_captures.get(&capture_id).cloned().ok_or_else(|| {
-                                    TargetDebuggerError::HeapCaptureNotFound(capture_id.clone())
-                                })?;
-                            let groups = Arc::new(
-                                tokio::task::spawn_blocking(move || {
-                                    let file = File::open(path)?;
-                                    parse_constructor_groups(file).map_err(std::io::Error::other)
-                                })
-                                .await
-                                .map_err(|error| {
-                                    TargetDebuggerError::HeapSnapshot(error.to_string())
-                                })?
-                                .map_err(|error| {
-                                    TargetDebuggerError::HeapSnapshot(error.to_string())
-                                })?,
-                            );
-                            heap_constructor_groups.insert(capture_id.clone(), groups.clone());
-                            groups
-                        }
-                    };
-                    let snapshot = project_heap_classes(
+                    let (groups, used_cached_groups) =
+                        match heap_constructor_groups.get(&capture_id).cloned() {
+                            Some(groups) => (groups, true),
+                            None => {
+                                let path =
+                                    heap_captures.get(&capture_id).cloned().ok_or_else(|| {
+                                        TargetDebuggerError::HeapCaptureNotFound(capture_id.clone())
+                                    })?;
+                                let groups = Arc::new(
+                                    tokio::task::spawn_blocking(move || {
+                                        let file = File::open(path)?;
+                                        parse_constructor_groups(file)
+                                            .map_err(std::io::Error::other)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        TargetDebuggerError::HeapSnapshot(error.to_string())
+                                    })?
+                                    .map_err(|error| {
+                                        TargetDebuggerError::HeapSnapshot(error.to_string())
+                                    })?,
+                                );
+                                heap_constructor_groups.insert(capture_id.clone(), groups.clone());
+                                (groups, false)
+                            }
+                        };
+                    let parse_duration = parse_started.elapsed();
+                    let projection_started = Instant::now();
+                    let (mut snapshot, source_map_hydration_duration) = project_heap_classes(
                         &mut driver,
                         &session_key,
                         capture_id.clone(),
@@ -1010,6 +1015,15 @@ async fn run_target(
                         no_cache,
                     )
                     .await?;
+                    snapshot.analysis = HeapClassAnalysisSnapshot {
+                        parse_duration_micros: parse_duration.as_micros() as u64,
+                        projection_duration_micros: projection_started.elapsed().as_micros() as u64,
+                        source_map_hydration_duration_micros: source_map_hydration_duration
+                            .as_micros()
+                            as u64,
+                        constructor_group_count: groups.len() as u64,
+                        used_cached_groups,
+                    };
                     heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
                     for class in &snapshot.classes {
                         for instance in &class.instances {
@@ -1124,6 +1138,13 @@ struct ProjectedHeapClass {
     instances: Vec<crate::heap_snapshot::HeapInstanceRecord>,
 }
 
+struct MappedHeapConstructor<'a> {
+    group: &'a HeapConstructorGroup,
+    generated_url: String,
+    generated_location: SourceLocation,
+    mapped: Option<(String, Position, Arc<str>)>,
+}
+
 async fn project_heap_classes(
     driver: &mut DebuggerDriver,
     session_key: &SessionKey,
@@ -1131,7 +1152,7 @@ async fn project_heap_classes(
     groups: &[HeapConstructorGroup],
     filter: Option<&regex::Regex>,
     no_cache: bool,
-) -> Result<HeapClassSnapshot, TargetDebuggerError> {
+) -> Result<(HeapClassSnapshot, Duration), TargetDebuggerError> {
     let scripts = groups
         .iter()
         .map(|group| ScriptKey {
@@ -1140,6 +1161,7 @@ async fn project_heap_classes(
         })
         .collect::<BTreeSet<_>>();
     driver.set_source_map_cache_enabled(!no_cache);
+    let hydration_started = Instant::now();
     let mut hydration_result = Ok(());
     for script in &scripts {
         let eligible = driver.state().scripts.get(script).is_some_and(|state| {
@@ -1159,29 +1181,66 @@ async fn project_heap_classes(
     }
     driver.set_source_map_cache_enabled(true);
     hydration_result?;
+    let source_map_hydration_duration = hydration_started.elapsed();
 
     let state = driver.state().clone();
     let source_effects = driver.source_effects();
+    let mapped_groups = groups
+        .iter()
+        .map(|group| {
+            let script = ScriptKey {
+                session: session_key.clone(),
+                script_id: group.script_id.to_string(),
+            };
+            let generated_url = state.scripts.get(&script).map_or_else(
+                || format!("script:{}", group.script_id),
+                |state| state.url.clone(),
+            );
+            MappedHeapConstructor {
+                group,
+                generated_location: source_location(
+                    generated_url.clone(),
+                    group.line,
+                    group.column,
+                ),
+                mapped: source_effects.project_generated_position(
+                    &state,
+                    &script,
+                    Position {
+                        line: group.line,
+                        column: group.column,
+                    },
+                ),
+                generated_url,
+            }
+        })
+        .collect::<Vec<_>>();
+    source_effects.prepare_breadcrumbs(
+        &state,
+        &mapped_groups
+            .iter()
+            .filter_map(|mapped| {
+                mapped.mapped.as_ref().map(|(source_url, _, content)| {
+                    (
+                        ScriptKey {
+                            session: session_key.clone(),
+                            script_id: mapped.group.script_id.to_string(),
+                        },
+                        source_url.clone(),
+                        content.clone(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>(),
+    );
     let mut projected = BTreeMap::<(String, u32, u32, String), ProjectedHeapClass>::new();
-    for group in groups {
+    for mapped_group in mapped_groups {
+        let group = mapped_group.group;
         let script = ScriptKey {
             session: session_key.clone(),
             script_id: group.script_id.to_string(),
         };
-        let generated_url = state.scripts.get(&script).map_or_else(
-            || format!("script:{}", group.script_id),
-            |state| state.url.clone(),
-        );
-        let generated_location = source_location(generated_url.clone(), group.line, group.column);
-        let mapped = source_effects.project_generated_position(
-            &state,
-            &script,
-            Position {
-                line: group.line,
-                column: group.column,
-            },
-        );
-        let (source_url, location, name) = match mapped {
+        let (source_url, location, name) = match mapped_group.mapped {
             Some((source_url, position, content)) => {
                 let location = source_location(source_url.clone(), position.line, position.column);
                 let name = source_effects
@@ -1193,12 +1252,13 @@ async fn project_heap_classes(
                         location.column,
                         &content,
                     )
+                    .map(|name| heap_class_display_name(&name).to_owned())
                     .unwrap_or_else(|| group.generated_name.clone());
                 (source_url, location, name)
             }
             None => (
-                generated_url,
-                generated_location,
+                mapped_group.generated_url,
+                mapped_group.generated_location,
                 group.generated_name.clone(),
             ),
         };
@@ -1266,12 +1326,26 @@ async fn project_heap_classes(
             }
         })
         .collect();
-    Ok(HeapClassSnapshot {
-        capture_id,
-        total_instances,
-        total_shallow_size,
-        classes,
-    })
+    Ok((
+        HeapClassSnapshot {
+            capture_id,
+            total_instances,
+            total_shallow_size,
+            classes,
+            analysis: HeapClassAnalysisSnapshot {
+                parse_duration_micros: 0,
+                projection_duration_micros: 0,
+                source_map_hydration_duration_micros: 0,
+                constructor_group_count: groups.len() as u64,
+                used_cached_groups: true,
+            },
+        },
+        source_map_hydration_duration,
+    ))
+}
+
+fn heap_class_display_name(name: &str) -> &str {
+    name.strip_suffix(".constructor").unwrap_or(name)
 }
 
 async fn begin_click(
@@ -2475,7 +2549,7 @@ pub enum TargetDebuggerError {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_coverage_ranges, source_excerpt};
+    use super::{effective_coverage_ranges, heap_class_display_name, source_excerpt};
     use crate::service_api::{CoverageRangeSnapshot, SourceLocation};
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
@@ -2486,6 +2560,18 @@ mod tests {
             authored_start: None,
             authored_end: None,
         }
+    }
+
+    #[test]
+    fn heap_class_names_omit_the_constructor_breadcrumb_segment() {
+        assert_eq!(
+            heap_class_display_name("PieceTreeTextBuffer.constructor"),
+            "PieceTreeTextBuffer"
+        );
+        assert_eq!(
+            heap_class_display_name("Namespace.constructorFactory"),
+            "Namespace.constructorFactory"
+        );
     }
 
     #[test]

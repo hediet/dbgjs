@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{BufReader, Read};
 
 use serde::Deserialize;
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 const RETAINED_INSTANCES_PER_CONSTRUCTOR: usize = 20;
+const SNAPSHOT_READ_BUFFER_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeapConstructorGroup {
@@ -27,6 +28,7 @@ pub fn parse_constructor_groups(
     reader: impl Read,
 ) -> Result<Vec<HeapConstructorGroup>, HeapSnapshotParseError> {
     let mut analyzer = HeapSnapshotAnalyzer::default();
+    let reader = BufReader::with_capacity(SNAPSHOT_READ_BUFFER_SIZE, reader);
     let mut deserializer = serde_json::Deserializer::from_reader(reader);
     HeapSnapshotSeed {
         analyzer: &mut analyzer,
@@ -221,7 +223,6 @@ impl<'de> Visitor<'de> for HeapSnapshotVisitor<'_> {
                         groups: &mut self.analyzer.groups,
                     })?;
                     self.analyzer.objects.clear();
-                    self.analyzer.objects.shrink_to_fit();
                 }
                 "strings" => {
                     let needed = self
