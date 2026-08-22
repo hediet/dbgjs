@@ -1,0 +1,345 @@
+export interface ContextSummary {
+	readonly agentInstanceId: string;
+	readonly id: string;
+	readonly displayName: string;
+	readonly revision: number;
+	readonly connectionCount: number;
+	readonly breakpointCount: number;
+}
+
+export interface ContextSnapshot {
+	readonly agentInstanceId: string;
+	readonly id: string;
+	readonly displayName: string;
+	readonly revision: number;
+	readonly connections: readonly ConnectionSnapshot[];
+	readonly breakpoints: readonly BreakpointSnapshot[];
+}
+
+export interface ConnectionSnapshot {
+	readonly id: string;
+	readonly generation: number;
+	readonly status: TaggedValue;
+	readonly targets: readonly TargetSnapshot[];
+}
+
+export interface TargetSnapshot {
+	readonly targetId: string;
+	readonly targetType: string;
+	readonly title: string;
+	readonly url: string;
+	readonly attached: boolean;
+	readonly parentId?: string;
+	readonly openerId?: string;
+	readonly browserContextId?: string;
+	readonly subtype?: string;
+}
+
+export interface BreakpointSnapshot {
+	readonly id: string;
+	readonly sourcePath: string;
+	readonly line: number;
+	readonly column: number;
+	readonly status: TaggedValue;
+	readonly enabled: boolean;
+	readonly condition?: string;
+	readonly targetSelector?: string;
+}
+
+export interface SourceSnapshotInfo {
+	readonly path: string;
+	readonly kind: string;
+	readonly status: string;
+	readonly connectionId?: string;
+	readonly targetId?: string;
+	readonly sourceMapUrl?: string;
+}
+
+export interface SourceContentSnapshot {
+	readonly path: string;
+	readonly content: string;
+}
+
+export interface SourceLocation {
+	readonly sourceUrl: string;
+	readonly line: number;
+	readonly column: number;
+}
+
+export type FrameProjectionSnapshot =
+	| { readonly kind: "raw" | "pending"; }
+	| { readonly kind: "resolved"; readonly location: SourceLocation; }
+	| { readonly kind: "failed"; readonly message: string; };
+
+export interface FrameSnapshot {
+	readonly index: number;
+	readonly functionName: string;
+	readonly raw: SourceLocation;
+	readonly projected: FrameProjectionSnapshot;
+	readonly breadcrumb?: string;
+}
+
+export interface PauseSnapshot {
+	readonly epoch: number;
+	readonly reason: string;
+	readonly frames: readonly FrameSnapshot[];
+}
+
+export interface TargetDebuggerSnapshot {
+	readonly contextId: string;
+	readonly connectionId: string;
+	readonly targetId: string;
+	readonly connectionGeneration: number;
+	readonly revision: number;
+	readonly phase: TaggedValue;
+	readonly pause?: PauseSnapshot;
+}
+
+export interface EvaluationSnapshot {
+	readonly expression: string;
+	readonly kind: string;
+	readonly value?: unknown;
+	readonly unserializableValue?: string;
+	readonly description?: string;
+}
+
+export interface TaggedValue {
+	readonly kind: string;
+	readonly [key: string]: unknown;
+}
+
+export interface ContextObservationResult {
+	readonly snapshot?: ContextSnapshot;
+}
+
+export interface BreakpointSpec {
+	readonly sourcePath: string;
+	readonly line: number;
+	readonly column: number;
+	readonly enabled: boolean;
+	readonly condition?: string;
+	readonly targetSelector?: string;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+export function parseContextSummaries(value: unknown): readonly ContextSummary[] {
+	return array(value, "context summaries").map((item) => {
+		const object = record(item, "context summary");
+		return {
+			agentInstanceId: string(object.agentInstanceId, "agentInstanceId"),
+			id: string(object.id, "id"),
+			displayName: string(object.displayName, "displayName"),
+			revision: number(object.revision, "revision"),
+			connectionCount: number(object.connectionCount, "connectionCount"),
+			breakpointCount: number(object.breakpointCount, "breakpointCount"),
+		};
+	});
+}
+
+export function parseContextSnapshot(value: unknown): ContextSnapshot {
+	const object = record(value, "context snapshot");
+	return {
+		agentInstanceId: string(object.agentInstanceId, "agentInstanceId"),
+		id: string(object.id, "id"),
+		displayName: string(object.displayName, "displayName"),
+		revision: number(object.revision, "revision"),
+		connections: array(object.connections, "connections").map(parseConnection),
+		breakpoints: array(object.breakpoints, "breakpoints").map(parseBreakpoint),
+	};
+}
+
+export function parseObservationResult(value: unknown): ContextObservationResult {
+	const object = record(value, "observation result");
+	const kind = string(object.kind, "kind");
+	if (kind === "historyGap") {
+		return { snapshot: parseContextSnapshot(object.current) };
+	}
+	if (kind !== "items") {
+		throw new Error(`Unsupported observation result kind: ${kind}`);
+	}
+	const items = array(object.items, "items");
+	const last = items.at(-1);
+	if (last === undefined) {
+		return {};
+	}
+	return { snapshot: parseContextSnapshot(record(last, "observation").snapshot) };
+}
+
+export function parseTargetDebuggerSnapshot(value: unknown): TargetDebuggerSnapshot {
+	const object = record(value, "target debugger snapshot");
+	const pauseValue = object.pause;
+	return {
+		contextId: string(object.contextId, "contextId"),
+		connectionId: string(object.connectionId, "connectionId"),
+		targetId: string(object.targetId, "targetId"),
+		connectionGeneration: number(object.connectionGeneration, "connectionGeneration"),
+		revision: number(object.revision, "revision"),
+		phase: tagged(object.phase, "phase"),
+		...(pauseValue === null || pauseValue === undefined
+			? {}
+			: { pause: parsePause(pauseValue) }),
+	};
+}
+
+export function parseSourceInfos(value: unknown): readonly SourceSnapshotInfo[] {
+	return array(value, "sources").map((item) => {
+		const object = record(item, "source");
+		return {
+			path: string(object.path, "path"),
+			kind: string(object.kind, "kind"),
+			status: string(object.status, "status"),
+			...optionalStringProperty(object, "connectionId"),
+			...optionalStringProperty(object, "targetId"),
+			...optionalStringProperty(object, "sourceMapUrl"),
+		};
+	});
+}
+
+export function parseSourceContent(value: unknown): SourceContentSnapshot {
+	const object = record(value, "source content");
+	return {
+		path: string(object.path, "path"),
+		content: string(object.content, "content"),
+	};
+}
+
+export function parseEvaluation(value: unknown): EvaluationSnapshot {
+	const object = record(value, "evaluation");
+	return {
+		expression: string(object.expression, "expression"),
+		kind: string(object.kind, "kind"),
+		...(object.value === undefined || object.value === null ? {} : { value: object.value }),
+		...optionalStringProperty(object, "unserializableValue"),
+		...optionalStringProperty(object, "description"),
+	};
+}
+
+function parseConnection(value: unknown): ConnectionSnapshot {
+	const object = record(value, "connection");
+	return {
+		id: string(object.id, "id"),
+		generation: number(object.generation, "generation"),
+		status: tagged(object.status, "status"),
+		targets: array(object.targets, "targets").map(parseTarget),
+	};
+}
+
+function parseTarget(value: unknown): TargetSnapshot {
+	const object = record(value, "target");
+	return {
+		targetId: string(object.targetId, "targetId"),
+		targetType: string(object.targetType, "targetType"),
+		title: string(object.title, "title"),
+		url: string(object.url, "url"),
+		attached: boolean(object.attached, "attached"),
+		...optionalStringProperty(object, "parentId"),
+		...optionalStringProperty(object, "openerId"),
+		...optionalStringProperty(object, "browserContextId"),
+		...optionalStringProperty(object, "subtype"),
+	};
+}
+
+function parseBreakpoint(value: unknown): BreakpointSnapshot {
+	const object = record(value, "breakpoint");
+	return {
+		id: string(object.id, "id"),
+		sourcePath: string(object.sourcePath, "sourcePath"),
+		line: number(object.line, "line"),
+		column: number(object.column, "column"),
+		status: tagged(object.status, "status"),
+		enabled: boolean(object.enabled, "enabled"),
+		...optionalStringProperty(object, "condition"),
+		...optionalStringProperty(object, "targetSelector"),
+	};
+}
+
+function parsePause(value: unknown): PauseSnapshot {
+	const object = record(value, "pause");
+	return {
+		epoch: number(object.epoch, "epoch"),
+		reason: string(object.reason, "reason"),
+		frames: array(object.frames, "frames").map((frame) => {
+			const value = record(frame, "frame");
+			return {
+				index: number(value.index, "index"),
+				functionName: string(value.functionName, "functionName"),
+				raw: parseLocation(value.raw),
+				projected: parseProjection(value.projected),
+				...optionalStringProperty(value, "breadcrumb"),
+			};
+		}),
+	};
+}
+
+function parseProjection(value: unknown): FrameProjectionSnapshot {
+	const object = record(value, "frame projection");
+	const kind = string(object.kind, "kind");
+	if (kind === "raw" || kind === "pending") {
+		return { kind };
+	}
+	if (kind === "resolved") {
+		return { kind, location: parseLocation(object.location) };
+	}
+	if (kind === "failed") {
+		return { kind, message: string(object.message, "message") };
+	}
+	throw new Error(`Unsupported frame projection kind: ${kind}`);
+}
+
+function parseLocation(value: unknown): SourceLocation {
+	const object = record(value, "source location");
+	return {
+		sourceUrl: string(object.sourceUrl, "sourceUrl"),
+		line: number(object.line, "line"),
+		column: number(object.column, "column"),
+	};
+}
+
+function tagged(value: unknown, label: string): TaggedValue {
+	const object = record(value, label);
+	return { ...object, kind: string(object.kind, `${label}.kind`) };
+}
+
+function optionalStringProperty<TName extends string>(
+	object: JsonRecord,
+	name: TName,
+): Partial<Record<TName, string>> {
+	const value = object[name];
+	return value === undefined || value === null ? {} : { [name]: string(value, name) } as Record<TName, string>;
+}
+
+function record(value: unknown, label: string): JsonRecord {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error(`Expected ${label} to be an object`);
+	}
+	return value as JsonRecord;
+}
+
+function array(value: unknown, label: string): readonly unknown[] {
+	if (!Array.isArray(value)) {
+		throw new Error(`Expected ${label} to be an array`);
+	}
+	return value;
+}
+
+function string(value: unknown, label: string): string {
+	if (typeof value !== "string") {
+		throw new Error(`Expected ${label} to be a string`);
+	}
+	return value;
+}
+
+function number(value: unknown, label: string): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`Expected ${label} to be a finite number`);
+	}
+	return value;
+}
+
+function boolean(value: unknown, label: string): boolean {
+	if (typeof value !== "boolean") {
+		throw new Error(`Expected ${label} to be a boolean`);
+	}
+	return value;
+}

@@ -1,0 +1,108 @@
+{
+  "name": "jsdbg-vscode",
+  "displayName": "jsdbg",
+  "description": "Prototype VS Code client for the jsdbg CDP debugger daemon.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "hediet",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onDebug:jsdbg",
+    "onView:jsdbg.targets",
+    "onCommand:jsdbg.refreshTargets"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "jsdbg.refreshTargets",
+        "title": "jsdbg: Refresh Targets",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "jsdbg.copyContextId",
+        "title": "jsdbg: Copy Workspace Context ID"
+      }
+    ],
+    "configuration": {
+      "title": "jsdbg",
+      "properties": {
+        "jsdbg.serviceStatePath": {
+          "type": "string",
+          "description": "Path to the jsdbg-service endpoint state file. Defaults to JSDBG_SERVICE_STATE or the platform jsdbg cache location."
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "jsdbg.targets",
+          "name": "jsdbg Targets",
+          "contextualTitle": "jsdbg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "jsdbg.refreshTargets",
+          "when": "view == jsdbg.targets",
+          "group": "navigation"
+        }
+      ]
+    },
+    "debuggers": [
+      {
+        "type": "jsdbg",
+        "label": "jsdbg Context",
+        "languages": [
+          "javascript",
+          "typescript",
+          "javascriptreact",
+          "typescriptreact"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {}
+          },
+          "attach": {
+            "required": [],
+            "properties": {}
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "jsdbg",
+            "request": "launch",
+            "name": "Debug jsdbg workspace context"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run compile && node --test dist/test/unit.test.cjs",
+    "test:vscode": "npm run compile && node test/runIntegration.mjs"
+  },
+  "dependencies": {
+    "@vscode/hubrpc": "0.0.2-0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.2"
+  }
+}
