@@ -2206,7 +2206,7 @@ fn parse_source_list_options(values: &[String]) -> Result<Option<String>, io::Er
         match values[index].as_str() {
             "--path" => {
                 index += 1;
-                path = Some(required_option(values, index, "--path")?.to_owned());
+                path = Some(required_source_option(values, index, "--path")?.to_owned());
             }
             option if option.starts_with("--") => {
                 return Err(invalid_option("source list", option));
@@ -2241,14 +2241,14 @@ fn parse_source_show_options(
                 index += 1;
                 line = Some(parse_positive_u32(
                     "--line",
-                    required_option(values, index, "--line")?,
+                    required_source_option(values, index, "--line")?,
                 )?);
             }
             "--context-lines" => {
                 index += 1;
-                context_lines = parse_u32_option(
+                context_lines = parse_u32_value(
                     "--context-lines",
-                    required_option(values, index, "--context-lines")?,
+                    required_source_option(values, index, "--context-lines")?,
                 )?;
             }
             option if option.starts_with("--") => {
@@ -2280,7 +2280,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
         match values[index].as_str() {
             "--path" => {
                 index += 1;
-                path = Some(required_option(values, index, "--path")?.to_owned());
+                path = Some(required_source_option(values, index, "--path")?.to_owned());
             }
             "--regex" => regex = true,
             "--ignore-case" => case_sensitive = false,
@@ -2288,14 +2288,14 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
                 index += 1;
                 max_results = parse_positive_u32(
                     "--max-results",
-                    required_option(values, index, "--max-results")?,
+                    required_source_option(values, index, "--max-results")?,
                 )?;
             }
             "--context-lines" => {
                 index += 1;
-                context_lines = parse_u32_option(
+                context_lines = parse_u32_value(
                     "--context-lines",
-                    required_option(values, index, "--context-lines")?,
+                    required_source_option(values, index, "--context-lines")?,
                 )?;
             }
             option if option.starts_with("--") => {
@@ -2341,7 +2341,7 @@ fn parse_source_map_arguments(values: &[String]) -> Result<(String, u32, u32), i
     ))
 }
 
-fn required_option<'a>(
+fn required_source_option<'a>(
     values: &'a [String],
     index: usize,
     option: &str,
@@ -2355,7 +2355,7 @@ fn required_option<'a>(
 }
 
 fn parse_positive_u32(name: &str, value: &str) -> Result<u32, io::Error> {
-    let parsed = parse_u32_option(name, value)?;
+    let parsed = parse_u32_value(name, value)?;
     if parsed == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -2365,7 +2365,7 @@ fn parse_positive_u32(name: &str, value: &str) -> Result<u32, io::Error> {
     Ok(parsed)
 }
 
-fn parse_u32_option(name: &str, value: &str) -> Result<u32, io::Error> {
+fn parse_u32_value(name: &str, value: &str) -> Result<u32, io::Error> {
     value.parse().map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
