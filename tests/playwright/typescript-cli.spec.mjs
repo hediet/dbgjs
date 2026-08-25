@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import { run } from "./live-test-harness.mjs";
+import {
+	findChromeExecutable,
+	findPageTargetId,
+	run,
+} from "./live-test-harness.mjs";
 
 const fixtureDirectory = resolve("tests/fixtures/typescript-browser");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
@@ -29,10 +33,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		{},
 	);
 	expect(compile.code, compile.output).toBe(0);
+	const chromeExecutable = await findChromeExecutable();
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		"# Debugging authored TypeScript with `jsdbg`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, Chromium CDP, and source maps.\n",
+		"# Debugging authored TypeScript with `jsdbg`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
 	);
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-typescript-e2e-"));
@@ -49,32 +54,43 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 
 		await runCli(
 			"We start with a durable debugging context. It will retain our connection and breakpoint intent across disconnects.",
-			["context", "create", "typescript-e2e"],
+			["context", "create", "--context", "typescript-e2e"],
 			environment,
 		);
 		serviceStarted = true;
 		await runCli(
-			"We select this workspace once so subsequent debugger commands can stay focused on the investigation.",
-			["set", "workspace", "typescript-e2e"],
+			"We select this context once so subsequent debugger commands can stay focused on the investigation.",
+			["set", "context", "--context", "typescript-e2e"],
 			environment,
 		);
 		const connected = await runCli(
-			"We describe how to launch the debuggee by giving jsdbg a pasteable page URL. The Playwright provider starts bundled Chromium, opens the page, discovers CDP, and connects immediately.",
+			"We describe how to launch the debuggee by giving jsdbg a pasteable page URL. The native Chrome provider starts installed Chrome, opens the page, discovers CDP, and connects immediately.",
 			[
 				"connection",
 				"add",
-				"typescript-e2e",
-				"browser",
-				"--playwright",
+				"--chrome",
 				fixtureServer.origin,
+				"--context",
+				"typescript-e2e",
+				"--connection",
+				"browser",
+				"--executable",
+				chromeExecutable,
 				"--connect",
 			],
 			environment,
 		);
 		expect(connected).toMatch(/^\s+page\s+127\.0\.0\.1:/m);
+		const pageTarget = await findPageTargetId(
+			cli,
+			"typescript-e2e",
+			"browser",
+			fixtureServer.origin,
+			environment,
+		);
 		await runCli(
-			"There is one page target, so we select the readable `page` alias instead of carrying an opaque protocol ID.",
-			["set", "target", "page"],
+			"We select the exact fixture page target so later browser-created targets cannot make the selection ambiguous.",
+			["set", "target", "--target", pageTarget],
 			environment,
 		);
 		const breakpoint = await runCli(
@@ -82,11 +98,13 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			[
 				"breakpoint",
 				"set",
-				"typescript-e2e",
 				"checkout",
 				authoredSource,
 				"8",
+				"--column",
 				"3",
+				"--context",
+				"typescript-e2e",
 			],
 			environment,
 		);
@@ -131,12 +149,15 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			[
 				"target",
 				"wait",
-				"typescript-e2e",
-				"browser",
-				"page",
 				"paused",
 				"0",
 				"30000",
+				"--context",
+				"typescript-e2e",
+				"--connection",
+				"browser",
+				"--target",
+				pageTarget,
 			],
 			environment,
 		);
@@ -278,24 +299,48 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 
 		const disconnected = await runCli(
 			"After proving the calculation completed, we disconnect cleanly. Runtime facts should disappear while durable intent remains.",
-			["connection", "disconnect", "typescript-e2e", "browser"],
+			[
+				"connection",
+				"disconnect",
+				"--context",
+				"typescript-e2e",
+				"--connection",
+				"browser",
+			],
 			environment,
 		);
 		expect(disconnected).toContain("browser  [disconnected; generation 1]");
 		const reconnected = await runCli(
 			"We reconnect to exercise generation safety. The provider launches a fresh browser, so both the connection generation and page target identity change.",
-			["connection", "connect", "typescript-e2e", "browser"],
+			[
+				"connection",
+				"connect",
+				"--context",
+				"typescript-e2e",
+				"--connection",
+				"browser",
+			],
 			environment,
 		);
 		expect(reconnected).toContain("generation 2]");
+		const reconnectedPageTarget = await findPageTargetId(
+			cli,
+			"typescript-e2e",
+			"browser",
+			fixtureServer.origin,
+			environment,
+		);
 		const reattached = await runCli(
-			"The fresh page was auto-attached. We select it by type and verify that durable breakpoint intent was reinstalled.",
+			"The fresh page was auto-attached. We select its new exact identity and verify that durable breakpoint intent was reinstalled.",
 			[
 				"target",
 				"show",
+				"--context",
 				"typescript-e2e",
+				"--connection",
 				"browser",
-				"page",
+				"--target",
+				reconnectedPageTarget,
 			],
 			environment,
 		);
@@ -305,7 +350,14 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		);
 		await runCli(
 			"The reconnect check is complete; we close the live CDP connection before stopping the service.",
-			["connection", "disconnect", "typescript-e2e", "browser"],
+			[
+				"connection",
+				"disconnect",
+				"--context",
+				"typescript-e2e",
+				"--connection",
+				"browser",
+			],
 			environment,
 		);
 		await runCli(

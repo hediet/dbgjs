@@ -162,14 +162,17 @@ fn method_schema(
     has_result: bool,
 ) -> Value {
     let mut method = Map::new();
-    method.insert(
-        "params".into(),
-        object_from_fields(raw["parameters"].as_array(), domain_name),
+    let mut params = object_from_fields(
+        raw["parameters"].as_array(),
+        domain_name,
+        compatibility_optional_fields(wire_method),
     );
+    apply_compatibility_overrides(wire_method, &mut params);
+    method.insert("params".into(), params);
     if has_result {
         method.insert(
             "result".into(),
-            object_from_fields(raw["returns"].as_array(), domain_name),
+            object_from_fields(raw["returns"].as_array(), domain_name, &[]),
         );
     }
     for key in ["description", "deprecated"] {
@@ -191,15 +194,43 @@ fn method_schema(
     Value::Object(method)
 }
 
-fn object_from_fields(fields: Option<&Vec<Value>>, domain_name: &str) -> Value {
+fn compatibility_optional_fields(wire_method: &str) -> &'static [&'static str] {
+    match wire_method {
+        "Debugger.scriptParsed" | "Debugger.scriptFailedToParse" => &["buildId"],
+        _ => &[],
+    }
+}
+
+fn apply_compatibility_overrides(wire_method: &str, params: &mut Value) {
+    if wire_method == "Debugger.paused" {
+        params["properties"]["reason"]
+            .as_object_mut()
+            .expect("Debugger.paused.reason is an object schema")
+            .remove("enum");
+    }
+}
+
+fn object_from_fields(
+    fields: Option<&Vec<Value>>,
+    domain_name: &str,
+    compatibility_optional: &[&str],
+) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
     for field in fields.into_iter().flatten() {
         let Some(name) = field["name"].as_str() else {
             continue;
         };
-        properties.insert(name.into(), convert_schema(field, domain_name));
-        if field["optional"] != true {
+        let compatibility_optional = compatibility_optional.contains(&name);
+        let schema = if compatibility_optional {
+            let mut field = field.clone();
+            field["optional"] = Value::Bool(true);
+            convert_schema(&field, domain_name)
+        } else {
+            convert_schema(field, domain_name)
+        };
+        properties.insert(name.into(), schema);
+        if field["optional"] != true && !compatibility_optional {
             required.push(Value::String(name.into()));
         }
     }
@@ -231,7 +262,7 @@ fn convert_schema(raw: &Value, current_domain: &str) -> Value {
             Some("object") => {
                 schema.insert("type".into(), Value::String("object".into()));
                 if let Some(properties) = raw["properties"].as_array() {
-                    let object = object_from_fields(Some(properties), current_domain);
+                    let object = object_from_fields(Some(properties), current_domain, &[]);
                     let object = object.as_object().unwrap();
                     schema.extend(object.clone());
                 } else {
@@ -329,9 +360,9 @@ mod tests {
     use super::*;
 
     const BROWSER_PROTOCOL: &str =
-        include_str!("../node_modules/devtools-protocol/json/browser_protocol.json");
+        include_str!("../../../node_modules/devtools-protocol/json/browser_protocol.json");
     const JS_PROTOCOL: &str =
-        include_str!("../node_modules/devtools-protocol/json/js_protocol.json");
+        include_str!("../../../node_modules/devtools-protocol/json/js_protocol.json");
 
     fn imported() -> Value {
         import_cdp_protocol(BROWSER_PROTOCOL, JS_PROTOCOL).unwrap()
@@ -410,6 +441,32 @@ mod tests {
         let params = &interface["methods"]["Debugger.setBreakpointByUrl"]["params"];
         assert_eq!(params["required"], json!(["lineNumber"]));
         assert!(params["properties"]["url"][CODEGEN_KEY]["optional"] == true);
+    }
+
+    #[test]
+    fn tolerates_build_id_missing_from_older_script_events() {
+        let interface = imported();
+        for method in ["Debugger.scriptParsed", "Debugger.scriptFailedToParse"] {
+            let params = &interface["methods"][method]["params"];
+            assert!(
+                !params["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("buildId"))
+            );
+            assert_eq!(
+                params["properties"]["buildId"][CODEGEN_KEY]["optional"],
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_node_specific_debugger_pause_reasons() {
+        let interface = imported();
+        let reason = &interface["methods"]["Debugger.paused"]["params"]["properties"]["reason"];
+        assert_eq!(reason["type"], "string");
+        assert_eq!(reason["enum"], Value::Null);
     }
 
     #[test]

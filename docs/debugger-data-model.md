@@ -91,6 +91,7 @@ type AttachmentRuleId = Brand<string, "AttachmentRuleId">;
 type BreakpointId = Brand<string, "BreakpointId">;
 type WatchId = Brand<string, "WatchId">;
 type CoverageObjectId = Brand<string, "CoverageObjectId">;
+type CpuProfileId = Brand<string, "CpuProfileId">;
 type DiagnosticId = Brand<string, "DiagnosticId">;
 type EventSequence = Brand<number, "EventSequence">;
 
@@ -189,6 +190,7 @@ interface DebugContextState {
 	readonly watches: ReadonlyMap<WatchId, WatchState>;
 	readonly sources: SourceGraphState;
 	readonly coverage: CoverageState;
+	readonly cpuProfiles: CpuProfileState;
 	readonly policies: DebuggerPolicies;
 	readonly observation: ContextObservationState;
 }
@@ -1061,6 +1063,38 @@ interface CoverageOperations {
 }
 ```
 
+### 11.1 CPU profile state
+
+CPU profile recording is target-scoped live state. Stopping it produces one
+immutable profile; unlike coverage, CDP does not support a non-destructive
+intermediate capture.
+
+```ts
+interface CpuProfileState {
+	readonly recording?: CpuProfileRecordingState;
+	readonly profiles: ReadonlyMap<CpuProfileId, CpuProfileSummary>;
+}
+
+interface CpuProfileRecordingState {
+	readonly status: "starting" | "active" | "stopping" | "failed";
+	readonly target: TargetRef;
+	readonly samplingIntervalMicros?: number;
+	readonly startedAt: StateRef;
+	readonly diagnostic?: DiagnosticId;
+}
+
+interface CpuProfileSummary {
+	readonly id: CpuProfileId;
+	readonly capturedAt: StateRef;
+	readonly target: TargetRef;
+	readonly artifact: CpuProfileArtifactRef;
+}
+```
+
+The artifact preserves the raw node graph, samples, and measured time deltas.
+Source projection, self/total aggregation, rendering, and export are pure
+operations over that immutable value.
+
 ## 12. Immutable artifacts
 
 Large values do not belong directly in the compact state root.
@@ -1079,6 +1113,8 @@ type ScopeListArtifactRef = ArtifactRef<"scope-list">;
 type PropertyListArtifactRef = ArtifactRef<"property-list">;
 type CoverageArtifactRef = ArtifactRef<"coverage">;
 type CoverageProjectionArtifactRef = ArtifactRef<"coverage-projection">;
+type CpuProfileArtifactRef = ArtifactRef<"cpu-profile">;
+type CpuProfileProjectionArtifactRef = ArtifactRef<"cpu-profile-projection">;
 ```
 
 Artifact reading is asynchronous I/O but semantically pure:

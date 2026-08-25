@@ -1,9 +1,15 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-spawn(process.execPath, [new URL("./node-child.js", import.meta.url).pathname], {
+spawn(process.execPath, [fileURLToPath(new URL("./node-child.js", import.meta.url))], {
 	stdio: "inherit",
 });
 
 setInterval(() => {
-	globalThis.counter = (globalThis.counter ?? 0) + 1;
+	const state = {
+		counter: (globalThis.counter ?? 0) + 1,
+		nested: { label: "watch" },
+	};
+	globalThis.counter = state.counter;
+	debugger;
 }, 100);

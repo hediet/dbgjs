@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
-import type { ConnectionSnapshot, TargetSnapshot } from "./apiTypes.js";
-import { buildTargetForest, type TargetNode } from "./model.js";
+import type {
+	ConnectionSnapshot,
+	TargetNodeSnapshot,
+	TargetSnapshot,
+} from "./apiTypes.js";
 import type { WorkspaceContextController } from "./workspaceContext.js";
 
 type TreeElement =
@@ -9,7 +12,7 @@ type TreeElement =
 	| {
 			readonly kind: "target";
 			readonly connection: ConnectionSnapshot;
-			readonly node: TargetNode;
+			readonly node: TargetNodeSnapshot;
 	  }
 	| { readonly kind: "error"; readonly error: Error; };
 
@@ -50,7 +53,10 @@ implements vscode.TreeDataProvider<TreeElement>, vscode.Disposable {
 				return item;
 			}
 			case "target":
-				return targetTreeItem(element.node.target, element.node.children.length > 0);
+				return targetTreeItem(
+					element.node.target,
+					this.targetChildren(element.node).length > 0,
+				);
 			case "error": {
 				const item = new vscode.TreeItem(element.error.message);
 				item.iconPath = new vscode.ThemeIcon("error");
@@ -74,20 +80,33 @@ implements vscode.TreeDataProvider<TreeElement>, vscode.Disposable {
 			}));
 		}
 		if (element.kind === "connection") {
-			return buildTargetForest(element.connection).map((node) => ({
-				kind: "target",
-				connection: element.connection,
-				node,
-			}));
+			return (this.controller.snapshot?.targetForest ?? [])
+				.filter((node) =>
+					node.connectionId === element.connection.id
+					&& node.parentTargetId === undefined
+				)
+				.map((node) => ({
+					kind: "target",
+					connection: element.connection,
+					node,
+				}));
 		}
 		if (element.kind === "target") {
-			return element.node.children.map((node) => ({
+			return this.targetChildren(element.node).map((node) => ({
 				kind: "target",
 				connection: element.connection,
 				node,
 			}));
 		}
 		return [];
+	}
+
+	private targetChildren(node: TargetNodeSnapshot): readonly TargetNodeSnapshot[] {
+		return (this.controller.snapshot?.targetForest ?? []).filter((candidate) =>
+			candidate.connectionId === node.connectionId
+			&& candidate.connectionGeneration === node.connectionGeneration
+			&& candidate.parentTargetId === node.target.targetId
+		);
 	}
 
 	public dispose(): void {

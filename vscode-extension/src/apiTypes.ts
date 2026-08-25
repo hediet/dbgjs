@@ -13,6 +13,7 @@ export interface ContextSnapshot {
 	readonly displayName: string;
 	readonly revision: number;
 	readonly connections: readonly ConnectionSnapshot[];
+	readonly targetForest: readonly TargetNodeSnapshot[];
 	readonly breakpoints: readonly BreakpointSnapshot[];
 }
 
@@ -26,6 +27,9 @@ export interface ConnectionSnapshot {
 
 export type ConnectionConfiguration =
 	| { readonly kind: "directCdp"; readonly endpoint: string; }
+	| { readonly kind: "nodeInspector"; readonly endpoint: string; }
+	| { readonly kind: "process"; readonly processId: number; }
+	| { readonly kind: "processTree"; readonly rootPid: number; }
 	| {
 			readonly kind: "playwright";
 			readonly url: string;
@@ -75,6 +79,13 @@ export interface TargetSnapshot {
 	readonly subtype?: string;
 }
 
+export interface TargetNodeSnapshot {
+	readonly connectionId: string;
+	readonly connectionGeneration: number;
+	readonly target: TargetSnapshot;
+	readonly parentTargetId?: string;
+}
+
 export interface BreakpointSnapshot {
 	readonly id: string;
 	readonly sourcePath: string;
@@ -116,7 +127,14 @@ export interface FrameSnapshot {
 	readonly functionName: string;
 	readonly raw: SourceLocation;
 	readonly projected: FrameProjectionSnapshot;
+	readonly scopes: readonly ScopeSnapshot[];
 	readonly breadcrumb?: string;
+}
+
+export interface ScopeSnapshot {
+	readonly index: number;
+	readonly kind: string;
+	readonly name?: string;
 }
 
 export interface PauseSnapshot {
@@ -132,7 +150,13 @@ export interface TargetDebuggerSnapshot {
 	readonly connectionGeneration: number;
 	readonly revision: number;
 	readonly phase: TaggedValue;
+	readonly logs: readonly ConsoleMessageSnapshot[];
 	readonly pause?: PauseSnapshot;
+}
+
+export interface ConsoleMessageSnapshot {
+	readonly index: number;
+	readonly values: readonly string[];
 }
 
 export interface EvaluationSnapshot {
@@ -141,6 +165,16 @@ export interface EvaluationSnapshot {
 	readonly value?: unknown;
 	readonly unserializableValue?: string;
 	readonly description?: string;
+	readonly objectId?: string;
+}
+
+export interface VariableSnapshot {
+	readonly name: string;
+	readonly kind: string;
+	readonly value?: unknown;
+	readonly unserializableValue?: string;
+	readonly description?: string;
+	readonly objectId?: string;
 }
 
 export interface TaggedValue {
@@ -185,6 +219,7 @@ export function parseContextSnapshot(value: unknown): ContextSnapshot {
 		displayName: string(object.displayName, "displayName"),
 		revision: number(object.revision, "revision"),
 		connections: array(object.connections, "connections").map(parseConnection),
+		targetForest: array(object.targetForest, "targetForest").map(parseTargetNode),
 		breakpoints: array(object.breakpoints, "breakpoints").map(parseBreakpoint),
 	};
 }
@@ -216,6 +251,13 @@ export function parseTargetDebuggerSnapshot(value: unknown): TargetDebuggerSnaps
 		connectionGeneration: number(object.connectionGeneration, "connectionGeneration"),
 		revision: number(object.revision, "revision"),
 		phase: tagged(object.phase, "phase"),
+		logs: array(object.logs, "logs").map((item) => {
+			const log = record(item, "console message");
+			return {
+				index: number(log.index, "index"),
+				values: array(log.values, "values").map((value) => string(value, "console value")),
+			};
+		}),
 		...(pauseValue === null || pauseValue === undefined
 			? {}
 			: { pause: parsePause(pauseValue) }),
@@ -252,7 +294,22 @@ export function parseEvaluation(value: unknown): EvaluationSnapshot {
 		...(object.value === undefined || object.value === null ? {} : { value: object.value }),
 		...optionalStringProperty(object, "unserializableValue"),
 		...optionalStringProperty(object, "description"),
+		...optionalStringProperty(object, "objectId"),
 	};
+}
+
+export function parseVariables(value: unknown): readonly VariableSnapshot[] {
+	return array(value, "variables").map((item) => {
+		const object = record(item, "variable");
+		return {
+			name: string(object.name, "name"),
+			kind: string(object.kind, "kind"),
+			...(object.value === undefined || object.value === null ? {} : { value: object.value }),
+			...optionalStringProperty(object, "unserializableValue"),
+			...optionalStringProperty(object, "description"),
+			...optionalStringProperty(object, "objectId"),
+		};
+	});
 }
 
 function parseConnection(value: unknown): ConnectionSnapshot {
@@ -271,7 +328,12 @@ function parseConnectionConfiguration(value: unknown): ConnectionConfiguration {
 	const kind = string(object.kind, "connection configuration kind");
 	switch (kind) {
 		case "directCdp":
+		case "nodeInspector":
 			return { kind, endpoint: string(object.endpoint, "endpoint") };
+		case "process":
+			return { kind, processId: number(object.processId, "processId") };
+		case "processTree":
+			return { kind, rootPid: number(object.rootPid, "rootPid") };
 		case "playwright":
 			return {
 				kind,
@@ -326,6 +388,16 @@ function parseTarget(value: unknown): TargetSnapshot {
 	};
 }
 
+function parseTargetNode(value: unknown): TargetNodeSnapshot {
+	const object = record(value, "target node");
+	return {
+		connectionId: string(object.connectionId, "connectionId"),
+		connectionGeneration: number(object.connectionGeneration, "connectionGeneration"),
+		target: parseTarget(object.target),
+		...optionalStringProperty(object, "parentTargetId"),
+	};
+}
+
 function parseBreakpoint(value: unknown): BreakpointSnapshot {
 	const object = record(value, "breakpoint");
 	return {
@@ -333,11 +405,32 @@ function parseBreakpoint(value: unknown): BreakpointSnapshot {
 		sourcePath: string(object.sourcePath, "sourcePath"),
 		line: number(object.line, "line"),
 		column: number(object.column, "column"),
-		status: tagged(object.status, "status"),
+		status: parseBreakpointStatus(object.status),
 		enabled: boolean(object.enabled, "enabled"),
 		...optionalStringProperty(object, "condition"),
 		...optionalStringProperty(object, "targetSelector"),
 	};
+}
+
+function parseBreakpointStatus(value: unknown): TaggedValue {
+	if (typeof value === "string") {
+		return { kind: value };
+	}
+	const object = record(value, "breakpoint status");
+	if (object.kind !== undefined) {
+		return tagged(object, "breakpoint status");
+	}
+	const entries = Object.entries(object);
+	if (entries.length !== 1) {
+		throw new Error("Expected breakpoint status to contain one variant");
+	}
+	const entry = entries[0];
+	if (entry === undefined) {
+		throw new Error("Expected breakpoint status to contain one variant");
+	}
+	const [kind, fields] = entry;
+	const payload = record(fields, `breakpoint status '${kind}'`);
+	return { kind, ...payload };
 }
 
 function parsePause(value: unknown): PauseSnapshot {
@@ -352,6 +445,14 @@ function parsePause(value: unknown): PauseSnapshot {
 				functionName: string(value.functionName, "functionName"),
 				raw: parseLocation(value.raw),
 				projected: parseProjection(value.projected),
+				scopes: array(value.scopes, "scopes").map((scope) => {
+					const scopeValue = record(scope, "scope");
+					return {
+						index: number(scopeValue.index, "index"),
+						kind: string(scopeValue.kind, "kind"),
+						...optionalStringProperty(scopeValue, "name"),
+					};
+				}),
 				...optionalStringProperty(value, "breadcrumb"),
 			};
 		}),
@@ -383,6 +484,9 @@ function parseLocation(value: unknown): SourceLocation {
 }
 
 function tagged(value: unknown, label: string): TaggedValue {
+	if (typeof value === "string") {
+		return { kind: value };
+	}
 	const object = record(value, label);
 	return { ...object, kind: string(object.kind, `${label}.kind`) };
 }

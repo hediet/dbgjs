@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import test from "node:test";
-import { join } from "node:path";
-import type { ConnectionSnapshot } from "../apiTypes.js";
-import { parseObservationResult } from "../apiTypes.js";
-import { findInstalledChrome, parseLaunch } from "../launchConfig.js";
-import { buildTargetForest, computeWorkspaceContextId } from "../model.js";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { parseObservationResult, parseTargetDebuggerSnapshot } from "../apiTypes.js";
+import { DaemonClient, parseEndpointFile } from "../daemonClient.js";
+import { resolveDaemonExecutable } from "../daemonProcess.js";
+import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
+import {
+	breakpointId,
+	computeWorkspaceContextId,
+	findTargetNode,
+	targetKey,
+	targetReference,
+} from "../model.js";
 
 test("workspace context identity is stable across folder ordering", () => {
 	const first = computeWorkspaceContextId(["file:///b", "file:///a"]);
@@ -14,38 +25,120 @@ test("workspace context identity is stable across folder ordering", () => {
 	assert.match(first, /^vscode-[0-9a-f]{16}$/);
 });
 
-test("target forest prefers parent and falls back to opener", () => {
-	const connection: ConnectionSnapshot = {
-		id: "browser",
-		configuration: {
-			kind: "directCdp",
-			endpoint: "ws://127.0.0.1/devtools/browser/test",
-		},
-		generation: 1,
-		status: { kind: "connected" },
-		targets: [
-			target("page", "page"),
-			target("worker", "worker", { openerId: "page" }),
-			target("frame", "iframe", { parentId: "page" }),
-			target("orphan", "worker", { parentId: "missing" }),
-		],
-	};
-
-	const forest = buildTargetForest(connection);
-	assert.deepEqual(
-		forest.map((node) => ({
-			id: node.target.targetId,
-			children: node.children.map((child) => child.target.targetId),
-		})),
-		[
-			{ id: "page", children: ["worker", "frame"] },
-			{ id: "orphan", children: [] },
-		],
-	);
-});
-
 test("empty context observations represent idle long-poll timeouts", () => {
 	assert.deepEqual(parseObservationResult({ kind: "items", items: [] }), {});
+});
+
+test("unit enum states parse from their daemon string representation", () => {
+	const observation = parseObservationResult({
+		kind: "historyGap",
+		current: {
+			agentInstanceId: "agent",
+			id: "workspace",
+			displayName: "Workspace",
+			revision: 2,
+			connections: [],
+			targetForest: [],
+			breakpoints: [{
+				id: "breakpoint",
+				sourcePath: "file:///workspace/app.js",
+				line: 1,
+				column: 1,
+				status: "pending",
+				enabled: true,
+			}, {
+				id: "bound-breakpoint",
+				sourcePath: "file:///workspace/app.js",
+				line: 2,
+				column: 1,
+				status: { bound: { application_count: 1 } },
+				enabled: true,
+			}],
+		},
+	});
+	assert.equal(observation.snapshot?.breakpoints[0]?.status.kind, "pending");
+	assert.deepEqual(observation.snapshot?.breakpoints[1]?.status, {
+		kind: "bound",
+		application_count: 1,
+	});
+});
+
+	test("context snapshots preserve target forest edges and generations", () => {
+		const target = (targetId: string) => ({
+			targetId,
+			targetType: "node",
+			title: targetId,
+			url: "",
+			attached: true,
+			parentId: null,
+			openerId: null,
+			browserContextId: null,
+			subtype: null,
+		});
+		const snapshot = parseObservationResult({
+			kind: "historyGap",
+			requestedRevision: 0,
+			oldestAvailableRevision: 1,
+			current: {
+				agentInstanceId: "agent",
+				id: "workspace",
+				displayName: "Workspace",
+				revision: 2,
+				connections: [],
+				targetForest: [{
+					connectionId: "node",
+					connectionGeneration: 3,
+					target: target("parent"),
+					parentTargetId: null,
+				}, {
+					connectionId: "node",
+					connectionGeneration: 3,
+					target: target("child"),
+					parentTargetId: "parent",
+				}],
+				breakpoints: [],
+			},
+		}).snapshot;
+
+		assert.ok(snapshot);
+		const parent = snapshot.targetForest[0];
+		const child = snapshot.targetForest[1];
+		assert.ok(parent);
+		assert.ok(child);
+		assert.equal(
+			targetKey(targetReference("workspace", child)),
+			"workspace\u0000node\u00003\u0000child",
+		);
+		assert.equal(
+			findTargetNode(snapshot.targetForest, targetReference("workspace", child)),
+			child,
+		);
+		assert.equal(findTargetNode(snapshot.targetForest, {
+			...targetReference("workspace", child),
+			connectionGeneration: 4,
+		}), undefined);
+});
+
+test("target snapshots preserve ordered console messages", () => {
+	const snapshot = parseTargetDebuggerSnapshot({
+		contextId: "workspace",
+		connectionId: "node",
+		targetId: "process",
+		connectionGeneration: 1,
+		revision: 2,
+		phase: { kind: "running" },
+		scripts: [],
+		breakpoints: [],
+		logs: [
+			{ index: 1, values: ["hello", "42"] },
+			{ index: 2, values: ["done"] },
+		],
+		pause: null,
+	});
+	assert.deepEqual(snapshot.logs, [
+		{ index: 1, values: ["hello", "42"] },
+		{ index: 2, values: ["done"] },
+	]);
 });
 
 test("Node.js launch configurations preserve runtime and program arguments", () => {
@@ -64,6 +157,27 @@ test("Node.js launch configurations preserve runtime and program arguments", () 
 	});
 });
 
+test("Chrome launch configurations normalize absolute paths to file URLs", async () => {
+	const page = resolve("workspace", "index.html");
+	const launch = await resolveLaunch({
+		runtime: "chrome",
+		url: page,
+		executablePath: process.execPath,
+	}, "session");
+	assert.equal(
+		launch.configuration?.kind === "chrome" ? launch.configuration.url : undefined,
+		pathToFileURL(page).toString(),
+	);
+});
+
+test("DAP breakpoint IDs are stable daemon identifiers", () => {
+	const first = breakpointId("d:\\workspace\\app.js", 3, 1);
+	const second = breakpointId("d:\\workspace\\app.js", 3, 1);
+	assert.equal(first, second);
+	assert.match(first, /^[A-Za-z0-9_.-]+$/);
+	assert.notEqual(first, breakpointId("d:\\workspace\\app.js", 4, 1));
+});
+
 test("installed Chrome discovery searches PATH", async () => {
 	const directory = await mkdtemp(join(process.cwd(), ".jsdbg-chrome-test-"));
 	const executable = join(directory, "google-chrome");
@@ -75,6 +189,133 @@ test("installed Chrome discovery searches PATH", async () => {
 			executable,
 		);
 	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("daemon discovery prefers the extension's bundled executable", async () => {
+	const directory = await mkdtemp(join(process.cwd(), ".jsdbg-daemon-test-"));
+	const executable = join(
+		directory,
+		"bin",
+		process.platform === "win32" ? "jsdbg-service.exe" : "jsdbg-service",
+	);
+	try {
+		await mkdir(join(directory, "bin"));
+		await writeFile(executable, "");
+		assert.equal(
+			await resolveDaemonExecutable({
+				extensionPath: directory,
+				environment: {},
+			}),
+			executable,
+		);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("daemon endpoint parsing accepts the Rust named-pipe shape", () => {
+	assert.deepEqual(
+		parseEndpointFile({
+			process_id: 42,
+			transport: {
+				kind: "namedPipe",
+				pipe_name: "\\\\.\\pipe\\jsdbg-test",
+			},
+			token: "test-token",
+		}),
+		{
+			address: "\\\\.\\pipe\\jsdbg-test",
+			token: "test-token",
+		},
+	);
+});
+
+test("long polls do not block command RPCs", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "jsdbg-rpc-test-"));
+	const stateFile = join(directory, "service.json");
+	const endpoint = process.platform === "win32"
+		? `\\\\.\\pipe\\jsdbg-test-${randomUUID()}`
+		: join(directory, "service.sock");
+	const sockets = new Set<Socket>();
+	let observationReceivedResolve!: () => void;
+	const observationReceived = new Promise<void>((resolve) => {
+		observationReceivedResolve = resolve;
+	});
+	let releaseObservation!: () => void;
+	const observationRelease = new Promise<void>((resolve) => {
+		releaseObservation = resolve;
+	});
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		socket.on("close", () => sockets.delete(socket));
+		let buffer = "";
+		let authenticated = false;
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) {
+					break;
+				}
+				const line = buffer.slice(0, newline).trim();
+				buffer = buffer.slice(newline + 1);
+				if (!line) {
+					continue;
+				}
+				const message = JSON.parse(line) as {
+					hello?: number;
+					token?: string;
+					id?: number;
+					method?: string;
+				};
+				if (!authenticated) {
+					assert.deepEqual(message, { hello: 1, token: "test-token" });
+					authenticated = true;
+					continue;
+				}
+				assert.equal(typeof message.id, "number");
+				if (message.method?.endsWith("::observe_context")) {
+					observationReceivedResolve();
+					void observationRelease.then(() => {
+						sendResult(socket, message.id!, { kind: "items", items: [] });
+					});
+				} else if (message.method?.endsWith("::list_sources")) {
+					sendResult(socket, message.id!, []);
+				} else {
+					sendError(socket, message.id!, `Unexpected method ${message.method}`);
+				}
+			}
+		});
+	});
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(endpoint, resolve);
+	});
+	await writeFile(stateFile, JSON.stringify({
+		process_id: process.pid,
+		transport: { kind: "test", path: endpoint },
+		token: "test-token",
+	}));
+
+	const client = await DaemonClient.connect(stateFile);
+	try {
+		const observation = client.observeContext("workspace", 1, 30_000);
+		await observationReceived;
+		assert.deepEqual(
+			await withTimeout(client.listSources("workspace"), 1_000),
+			[],
+		);
+		releaseObservation();
+		assert.equal(await observation, undefined);
+	} finally {
+		client.close();
+		for (const socket of sockets) {
+			socket.destroy();
+		}
+		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await rm(directory, { recursive: true, force: true });
 	}
 });
@@ -92,4 +333,35 @@ function target(
 		attached: true,
 		...relations,
 	};
+}
+
+function sendResult(socket: Socket, id: number, result: unknown): void {
+	socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+}
+
+function sendError(socket: Socket, id: number, message: string): void {
+	socket.write(`${JSON.stringify({
+		jsonrpc: "2.0",
+		id,
+		error: { code: -32601, message },
+	})}\n`);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(`Timed out after ${timeoutMs} ms`)),
+					timeoutMs,
+				);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+		}
+	}
 }

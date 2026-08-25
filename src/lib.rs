@@ -1,17 +1,19 @@
 pub mod connection_provider;
 pub mod content_store;
 pub mod context_engine;
-pub mod cdp {
-    include!(concat!(env!("OUT_DIR"), "/cdp_generated.rs"));
-}
+pub use cdp_protocol as cdp;
+pub use cdp_protocol::protocol_schema;
 pub mod cdp_runtime;
+pub mod cdp_transport;
 pub mod debugger_driver;
 pub mod debugger_engine;
 pub mod debugger_service;
+pub mod electron_renderer_transport;
+pub mod heap_graph;
 pub mod heap_snapshot;
 pub mod language_intelligence;
 pub mod local_rpc;
-pub mod protocol_schema;
+pub mod process_discovery;
 pub mod service_api;
 pub mod session_transport;
 pub mod source_effects;

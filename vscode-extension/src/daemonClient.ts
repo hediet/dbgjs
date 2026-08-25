@@ -11,6 +11,7 @@ import {
 	type SourceContentSnapshot,
 	type SourceSnapshotInfo,
 	type TargetDebuggerSnapshot,
+	type VariableSnapshot,
 	parseContextSnapshot,
 	parseContextSummaries,
 	parseEvaluation,
@@ -18,6 +19,7 @@ import {
 	parseSourceContent,
 	parseSourceInfos,
 	parseTargetDebuggerSnapshot,
+	parseVariables,
 } from "./apiTypes.js";
 import { connectLegacyHub, type LegacyHubConnection } from "./legacyHubTransport.js";
 
@@ -29,11 +31,11 @@ export class DaemonClient {
 		public readonly stateFile: string,
 	) {}
 
-	public static async connect(stateFile: string): Promise<DaemonClient> {
-		const endpoint = parseEndpointFile(
-			JSON.parse(await readFile(stateFile, "utf8")) as unknown,
-		);
-		const hub = await connectLegacyHub(endpoint.address, endpoint.token);
+	public static async connect(
+		stateFile: string,
+		log?: (message: string) => void,
+	): Promise<DaemonClient> {
+		const hub = await connectDaemonHub(stateFile, "commands", log);
 		return new DaemonClient(hub, stateFile);
 	}
 
@@ -131,6 +133,18 @@ export class DaemonClient {
 		}));
 	}
 
+	public async attachTarget(
+		contextId: string,
+		connectionId: string,
+		targetId: string,
+	): Promise<TargetDebuggerSnapshot> {
+		return parseTargetDebuggerSnapshot(await this.call("attach_target", {
+			contextId,
+			connectionId,
+			targetId,
+		}));
+	}
+
 	public async waitTarget(
 		contextId: string,
 		connectionId: string,
@@ -146,6 +160,35 @@ export class DaemonClient {
 			targetId,
 			predicate,
 			timeoutMs,
+		}));
+	}
+
+	public async observeTarget(
+		contextId: string,
+		connectionId: string,
+		targetId: string,
+		afterRevision: number,
+		timeoutMs: number,
+	): Promise<TargetDebuggerSnapshot | undefined> {
+		const result = await this.call("observe_target", {
+			contextId,
+			connectionId,
+			targetId,
+			afterRevision,
+			timeoutMs,
+		});
+		return result === null ? undefined : parseTargetDebuggerSnapshot(result);
+	}
+
+	public async releaseTarget(
+		contextId: string,
+		connectionId: string,
+		targetId: string,
+	): Promise<TargetDebuggerSnapshot> {
+		return parseTargetDebuggerSnapshot(await this.call("release_target", {
+			contextId,
+			connectionId,
+			targetId,
 		}));
 	}
 
@@ -194,6 +237,40 @@ export class DaemonClient {
 			pauseEpoch: pauseEpoch ?? null,
 			frameIndex,
 			expression,
+		}));
+	}
+
+	public async getScopeVariables(
+		contextId: string,
+		connectionId: string,
+		targetId: string,
+		pauseEpoch: number,
+		frameIndex: number,
+		scopeIndex: number,
+	): Promise<readonly VariableSnapshot[]> {
+		return parseVariables(await this.call("get_scope_variables", {
+			contextId,
+			connectionId,
+			targetId,
+			pauseEpoch,
+			frameIndex,
+			scopeIndex,
+		}));
+	}
+
+	public async getObjectProperties(
+		contextId: string,
+		connectionId: string,
+		targetId: string,
+		pauseEpoch: number | undefined,
+		objectId: string,
+	): Promise<readonly VariableSnapshot[]> {
+		return parseVariables(await this.call("get_object_properties", {
+			contextId,
+			connectionId,
+			targetId,
+			pauseEpoch: pauseEpoch ?? null,
+			objectId,
 		}));
 	}
 
@@ -258,7 +335,11 @@ function connectionConfigurationJson(
 ): Record<string, JsonValue> {
 	switch (configuration.kind) {
 		case "directCdp":
-			return { kind: configuration.kind, endpoint: configuration.endpoint };
+		case "nodeInspector":
+		case "process":
+			return configuration;
+		case "processTree":
+			return configuration;
 		case "playwright":
 			return {
 				kind: configuration.kind,
@@ -315,7 +396,22 @@ interface EndpointFile {
 	readonly token: string;
 }
 
-function parseEndpointFile(value: unknown): EndpointFile {
+async function connectDaemonHub(
+	stateFile: string,
+	purpose: string,
+	log?: (message: string) => void,
+): Promise<LegacyHubConnection> {
+	const scopedLog = log === undefined
+		? undefined
+		: (message: string): void => log(`[${purpose}] ${message}`);
+	scopedLog?.(`Reading daemon endpoint from ${stateFile}`);
+	const endpoint = parseEndpointFile(
+		JSON.parse(await readFile(stateFile, "utf8")) as unknown,
+	);
+	return connectLegacyHub(endpoint.address, endpoint.token, scopedLog);
+}
+
+export function parseEndpointFile(value: unknown): EndpointFile {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new Error("Invalid jsdbg service endpoint file");
 	}
@@ -329,7 +425,9 @@ function parseEndpointFile(value: unknown): EndpointFile {
 		throw new Error("Invalid jsdbg service endpoint");
 	}
 	const transportRecord = transport as Record<string, unknown>;
-	const address = transportRecord.path ?? transportRecord.pipeName;
+	const address = transportRecord.path
+		?? transportRecord.pipeName
+		?? transportRecord.pipe_name;
 	if (typeof address !== "string") {
 		throw new Error("Unsupported jsdbg service transport");
 	}

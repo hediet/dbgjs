@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Install example dependencies",
+			"type": "shell",
+			"command": "npm install --ignore-scripts",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile TypeScript example",
+			"type": "npm",
+			"script": "build:tsc",
+			"dependsOn": "Install example dependencies",
+			"problemMatcher": "$tsc"
+		}
+	]
+}

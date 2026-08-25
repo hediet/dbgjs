@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use base64::Engine as _;
@@ -19,8 +19,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::cdp::{
-    CdpClient, DebuggerEnableParams, DebuggerGetScriptSourceParams, DebuggerLocation,
-    DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
+    CdpClient, DebuggerDisableParams, DebuggerEnableParams, DebuggerGetScriptSourceParams,
+    DebuggerLocation, DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
     DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
     DebuggerStepOutParams, DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
     HeapProfilerReportHeapSnapshotProgressParams, IoCloseParams, IoReadParams,
@@ -28,13 +28,14 @@ use crate::cdp::{
     RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
     TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
-use crate::debugger_engine::{Effect, Input, RawFrame, SessionKey, StepKind};
+use crate::cdp_transport::ManagedCdpTransport;
+use crate::debugger_engine::{Effect, Input, RawFrame, RawScope, SessionKey, StepKind};
 use crate::session_transport::CdpSessionMux;
 use crate::source_view::Position;
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
 
 pub struct CdpConnection {
-    transport: Arc<CdpWebSocketTransport>,
+    transport: Arc<dyn ManagedCdpTransport>,
     mux: CdpSessionMux,
     root: CdpClient<Channel>,
     root_events: Mutex<Option<mpsc::UnboundedReceiver<Result<RootCdpEvent, CdpRuntimeEventError>>>>,
@@ -45,6 +46,13 @@ pub struct CdpConnection {
 impl CdpConnection {
     pub async fn connect(endpoint: &str) -> Result<Self, CdpRuntimeError> {
         let transport = Arc::new(CdpWebSocketTransport::connect(endpoint).await?);
+        Self::connect_transport(transport).await
+    }
+
+    pub async fn connect_transport<T>(transport: Arc<T>) -> Result<Self, CdpRuntimeError>
+    where
+        T: ManagedCdpTransport + 'static,
+    {
         let close_reason = transport.close_reason();
         let mux = CdpSessionMux::new(transport.clone());
         let (root_event_sender, root_event_receiver) = mpsc::unbounded_channel();
@@ -74,6 +82,17 @@ impl CdpConnection {
         session_id: String,
     ) -> Result<Self, CdpRuntimeError> {
         let transport = Arc::new(CdpWebSocketTransport::connect(endpoint).await?);
+        Self::connect_root_debugger_transport(transport, connection_generation, session_id).await
+    }
+
+    pub async fn connect_root_debugger_transport<T>(
+        transport: Arc<T>,
+        connection_generation: u64,
+        session_id: String,
+    ) -> Result<Self, CdpRuntimeError>
+    where
+        T: ManagedCdpTransport + 'static,
+    {
         let close_reason = transport.close_reason();
         let mux = CdpSessionMux::new(transport.clone());
         let session = SessionKey {
@@ -240,8 +259,16 @@ struct HeapSnapshotWriter {
     destination: PathBuf,
     temporary: PathBuf,
     file: tokio::fs::File,
+    started_at: Instant,
+    taking_finished_at: Option<Instant>,
     bytes_written: u64,
     write_error: Option<std::io::Error>,
+}
+
+pub(crate) struct HeapSnapshotWriteResult {
+    pub(crate) bytes_written: u64,
+    pub(crate) taking_duration: Duration,
+    pub(crate) retrieving_duration: Duration,
 }
 
 pub struct CdpDebuggerSession {
@@ -286,6 +313,7 @@ impl CdpDebuggerSession {
     pub async fn begin_heap_snapshot(&self, destination: PathBuf) -> std::io::Result<()> {
         static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
+        let started_at = Instant::now();
         let mut snapshot = self.heap_snapshot.lock().await;
         if snapshot.is_some() {
             return Err(std::io::Error::new(
@@ -297,6 +325,7 @@ impl CdpDebuggerSession {
             .parent()
             .filter(|path| !path.as_os_str().is_empty());
         if let Some(parent) = parent {
+            #[cfg(unix)]
             let existed = parent.exists();
             tokio::fs::create_dir_all(parent).await?;
             #[cfg(unix)]
@@ -327,6 +356,8 @@ impl CdpDebuggerSession {
             destination,
             temporary,
             file,
+            started_at,
+            taking_finished_at: None,
             bytes_written: 0,
             write_error: None,
         });
@@ -335,7 +366,7 @@ impl CdpDebuggerSession {
         Ok(())
     }
 
-    pub async fn finish_heap_snapshot(&self) -> std::io::Result<u64> {
+    pub(crate) async fn finish_heap_snapshot(&self) -> std::io::Result<HeapSnapshotWriteResult> {
         let Some(mut snapshot) = self.heap_snapshot.lock().await.take() else {
             return Err(std::io::Error::new(
                 ErrorKind::NotFound,
@@ -379,7 +410,13 @@ impl CdpDebuggerSession {
         progress.finished = Some(true);
         progress.bytes_written = snapshot.bytes_written;
         self.heap_snapshot_progress.send_replace(Some(progress));
-        Ok(snapshot.bytes_written)
+        let finished_at = Instant::now();
+        let taking_finished_at = snapshot.taking_finished_at.unwrap_or(finished_at);
+        Ok(HeapSnapshotWriteResult {
+            bytes_written: snapshot.bytes_written,
+            taking_duration: taking_finished_at.saturating_duration_since(snapshot.started_at),
+            retrieving_duration: finished_at.saturating_duration_since(taking_finished_at),
+        })
     }
 
     pub async fn abort_heap_snapshot(&self) {
@@ -400,6 +437,15 @@ impl CdpDebuggerSession {
                     .runtime_enable(RuntimeEnableParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
+                if let Err(error) = self
+                    .client
+                    .debugger_disable(DebuggerDisableParams::new())
+                    .await
+                {
+                    eprintln!(
+                        "could not reset the CDP Debugger domain before enabling session replay: {error:?}"
+                    );
+                }
                 self.client
                     .debugger_enable(DebuggerEnableParams::new())
                     .await
@@ -592,6 +638,38 @@ impl CdpDebuggerSession {
         if cache_enabled {
             self.source_map_cache_misses.fetch_add(1, Ordering::Relaxed);
         }
+        let bytes = match self.load_source_map_via_cdp(&resolved_url).await {
+            Ok(bytes) => bytes,
+            Err(cdp_error) if Self::direct_source_map_scheme(&resolved_url) => {
+                Self::load_source_map_direct(&resolved_url)
+                    .await
+                    .map_err(|direct_error| CdpRuntimeError::SourceMapFallbackFailed {
+                        url: resolved_url.to_owned(),
+                        cdp: Box::new(cdp_error),
+                        direct: direct_error,
+                    })?
+            }
+            Err(error) => return Err(error),
+        };
+        if source_map_is_supported(&bytes) {
+            if let Some(path) = cache_path
+                && let Err(error) = write_source_map_cache(&path, &bytes).await
+            {
+                eprintln!(
+                    "failed to write source-map cache entry {}: {error}",
+                    path.display()
+                );
+            }
+        } else {
+            eprintln!("not caching invalid or unsupported source map {resolved_url}");
+        }
+        Ok(bytes)
+    }
+
+    async fn load_source_map_via_cdp(
+        &self,
+        resolved_url: &str,
+    ) -> Result<Vec<u8>, CdpRuntimeError> {
         let cached_frame_id = { self.source_map_frame_id.lock().await.clone() };
         let frame_id = match cached_frame_id {
             Some(frame_id) => frame_id,
@@ -600,14 +678,17 @@ impl CdpDebuggerSession {
                     .client
                     .page_get_frame_tree(PageGetFrameTreeParams::new())
                     .await
-                    .map_err(CdpRuntimeError::protocol)?;
+                    .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+                        url: resolved_url.to_owned(),
+                        source: Box::new(CdpRuntimeError::protocol(error)),
+                    })?;
                 let frame_id = frame_tree.frame_tree.frame.id;
                 *self.source_map_frame_id.lock().await = Some(frame_id.clone());
                 frame_id
             }
         };
         let mut params = NetworkLoadNetworkResourceParams::new(
-            resolved_url.clone(),
+            resolved_url.to_owned(),
             NetworkLoadNetworkResourceOptions::new(false, true),
         );
         params.frame_id = Some(frame_id);
@@ -615,28 +696,32 @@ impl CdpDebuggerSession {
             .client
             .network_load_network_resource(params)
             .await
-            .map_err(CdpRuntimeError::protocol)?
+            .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+                url: resolved_url.to_owned(),
+                source: Box::new(CdpRuntimeError::protocol(error)),
+            })?
             .resource;
         if !loaded.success {
             return Err(CdpRuntimeError::SourceMapLoadFailed {
-                url: resolved_url,
+                url: resolved_url.to_owned(),
                 http_status_code: loaded.http_status_code,
                 net_error_name: loaded.net_error_name,
             });
         }
         let stream = loaded
             .stream
-            .ok_or_else(|| CdpRuntimeError::MissingSourceMapStream(resolved_url.clone()))?;
+            .ok_or_else(|| CdpRuntimeError::MissingSourceMapStream(resolved_url.to_owned()))?;
         let read_result = async {
             let mut bytes = Vec::new();
             loop {
                 let mut params = IoReadParams::new(stream.clone());
                 params.size = Some(8 * 1024 * 1024);
-                let chunk = self
-                    .client
-                    .io_read(params)
-                    .await
-                    .map_err(CdpRuntimeError::protocol)?;
+                let chunk = self.client.io_read(params).await.map_err(|error| {
+                    CdpRuntimeError::SourceMapProtocol {
+                        url: resolved_url.to_owned(),
+                        source: Box::new(CdpRuntimeError::protocol(error)),
+                    }
+                })?;
                 if chunk.base64_encoded.unwrap_or(false) {
                     bytes.extend(
                         BASE64_STANDARD
@@ -657,29 +742,49 @@ impl CdpDebuggerSession {
             .client
             .io_close(IoCloseParams::new(stream))
             .await
-            .map_err(CdpRuntimeError::protocol);
+            .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+                url: resolved_url.to_owned(),
+                source: Box::new(CdpRuntimeError::protocol(error)),
+            });
         match (read_result, close_result) {
-            (Ok(bytes), Ok(_)) => {
-                if source_map_is_supported(&bytes) {
-                    if let Some(path) = cache_path
-                        && let Err(error) = write_source_map_cache(&path, &bytes).await
-                    {
-                        eprintln!(
-                            "failed to write source-map cache entry {}: {error}",
-                            path.display()
-                        );
-                    }
-                } else {
-                    eprintln!("not caching invalid or unsupported source map {resolved_url}");
-                }
-                Ok(bytes)
-            }
+            (Ok(bytes), Ok(_)) => Ok(bytes),
             (Err(read), Ok(_)) => Err(read),
             (Ok(_), Err(close)) => Err(close),
             (Err(read), Err(close)) => Err(CdpRuntimeError::SourceMapReadAndClose {
                 read: Box::new(read),
                 close: Box::new(close),
             }),
+        }
+    }
+
+    fn direct_source_map_scheme(url: &str) -> bool {
+        url::Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "file" | "http" | "https"))
+    }
+
+    async fn load_source_map_direct(url: &str) -> Result<Vec<u8>, String> {
+        let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
+        match parsed.scheme() {
+            "file" => {
+                let path = parsed
+                    .to_file_path()
+                    .map_err(|_| format!("invalid file URL {url}"))?;
+                tokio::fs::read(&path)
+                    .await
+                    .map_err(|error| format!("failed to read {}: {error}", path.display()))
+            }
+            "http" | "https" => {
+                let response = reqwest::get(parsed)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .error_for_status()
+                    .map_err(|error| error.to_string())?;
+                response
+                    .bytes()
+                    .await
+                    .map(|bytes| bytes.to_vec())
+                    .map_err(|error| error.to_string())
+            }
+            scheme => Err(format!("unsupported URL scheme {scheme:?}")),
         }
     }
 }
@@ -722,6 +827,10 @@ impl CdpRuntimeEvent {
                 source_map_url: params.source_map_url.filter(|url| !url.is_empty()),
             })),
             Self::Paused { session, params } => {
+                let hit_breakpoint = params
+                    .hit_breakpoints
+                    .as_ref()
+                    .is_some_and(|breakpoints| !breakpoints.is_empty());
                 let frames = params
                     .call_frames
                     .into_iter()
@@ -737,16 +846,37 @@ impl CdpRuntimeEvent {
                                     frame.location.column_number.unwrap_or(0),
                                 )?,
                             },
+                            scopes: frame
+                                .scope_chain
+                                .into_iter()
+                                .filter_map(|scope| {
+                                    let object_id = scope.object.object_id?;
+                                    let kind = serde_json::to_value(scope.r#type)
+                                        .ok()?
+                                        .as_str()?
+                                        .to_owned();
+                                    Some(RawScope {
+                                        kind,
+                                        name: scope.name,
+                                        object_id,
+                                    })
+                                })
+                                .collect(),
                         })
                     })
                     .collect::<Result<_, CdpRuntimeEventError>>()?;
+                let reason = serde_json::to_value(params.reason)
+                    .map_err(CdpRuntimeEventError::Serialize)?
+                    .as_str()
+                    .unwrap_or("other")
+                    .to_owned();
                 Ok(Some(Input::Paused {
                     session,
-                    reason: serde_json::to_value(params.reason)
-                        .map_err(CdpRuntimeEventError::Serialize)?
-                        .as_str()
-                        .unwrap_or("other")
-                        .to_owned(),
+                    reason: if reason == "Break on start" && hit_breakpoint {
+                        "breakpoint".to_owned()
+                    } else {
+                        reason
+                    },
                     frames,
                 }))
             }
@@ -813,12 +943,17 @@ impl RequestHandler for CdpEventHandler {
         if method == "HeapProfiler.reportHeapSnapshotProgress" {
             match deserialize::<HeapProfilerReportHeapSnapshotProgressParams>(&method, params) {
                 Ok(params) => {
-                    let bytes_written = self
-                        .heap_snapshot
-                        .lock()
-                        .await
+                    let mut snapshot = self.heap_snapshot.lock().await;
+                    let bytes_written = snapshot
                         .as_ref()
                         .map_or(0, |snapshot| snapshot.bytes_written);
+                    if let Some(snapshot) = snapshot.as_mut()
+                        && snapshot.taking_finished_at.is_none()
+                        && (params.finished == Some(true)
+                            || (params.total > 0 && params.done >= params.total))
+                    {
+                        snapshot.taking_finished_at = Some(Instant::now());
+                    }
                     self.heap_snapshot_progress
                         .send_replace(Some(HeapSnapshotStreamProgress {
                             done: params.done,
@@ -834,12 +969,11 @@ impl RequestHandler for CdpEventHandler {
             return;
         }
         let event = match method.as_str() {
-            "Debugger.scriptParsed" => {
-                deserialize(&method, params).map(|params| CdpRuntimeEvent::ScriptParsed {
+            "Debugger.scriptParsed" => deserialize(&method, normalize_script_parsed_params(params))
+                .map(|params| CdpRuntimeEvent::ScriptParsed {
                     session: self.session.clone(),
                     params,
-                })
-            }
+                }),
 
             "Debugger.paused" => {
                 deserialize(&method, params).map(|params| CdpRuntimeEvent::Paused {
@@ -864,6 +998,32 @@ impl RequestHandler for CdpEventHandler {
         };
         let _ = self.sender.send(event);
     }
+}
+
+fn normalize_script_parsed_params(mut params: Value) -> Value {
+    let Some(object) = params.as_object_mut() else {
+        return params;
+    };
+    if let Some(debug_symbols) = object.remove("debugSymbols") {
+        let symbols = match debug_symbols {
+            Value::Object(symbol) if symbol.get("type").and_then(Value::as_str) == Some("None") => {
+                Vec::new()
+            }
+            Value::Object(symbol) => vec![Value::Object(symbol)],
+            Value::Array(symbols) => symbols
+                .into_iter()
+                .filter(|symbol| symbol.get("type").and_then(Value::as_str) != Some("None"))
+                .collect(),
+            other => {
+                object.insert("debugSymbols".to_owned(), other);
+                return params;
+            }
+        };
+        if !symbols.is_empty() {
+            object.insert("debugSymbols".to_owned(), Value::Array(symbols));
+        }
+    }
+    params
 }
 
 async fn remove_temporary_file(path: &Path) {
@@ -1184,6 +1344,8 @@ pub enum CdpRuntimeError {
     WebSocket(#[from] CdpWebSocketError),
     #[error("failed to open CDP session: {0}")]
     OpenSession(MuxError),
+    #[error("CDP transport failed: {0}")]
+    Transport(String),
     #[error("CDP protocol error {code}: {message}")]
     Protocol {
         code: i64,
@@ -1210,6 +1372,19 @@ pub enum CdpRuntimeError {
         http_status_code: Option<f64>,
         net_error_name: Option<String>,
     },
+    #[error("failed to load source map {url} through CDP: {source}")]
+    SourceMapProtocol {
+        url: String,
+        source: Box<CdpRuntimeError>,
+    },
+    #[error(
+        "failed to load source map {url} through CDP ({cdp}) and direct resource loading ({direct})"
+    )]
+    SourceMapFallbackFailed {
+        url: String,
+        cdp: Box<CdpRuntimeError>,
+        direct: String,
+    },
     #[error("CDP returned no stream for successfully loaded source map {0}")]
     MissingSourceMapStream(String),
     #[error("failed to read source map stream ({read}) and close it ({close})")]
@@ -1227,7 +1402,10 @@ impl CdpRuntimeError {
                 | Self::InvalidSourceMapDataUrl(_)
                 | Self::DecodeSourceMapBase64(_)
                 | Self::SourceMapLoadFailed { .. }
+                | Self::SourceMapProtocol { .. }
+                | Self::SourceMapFallbackFailed { .. }
                 | Self::MissingSourceMapStream(_)
+                | Self::SourceMapReadAndClose { .. }
         )
     }
 
@@ -1243,6 +1421,26 @@ impl CdpRuntimeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_node_single_debug_symbols_object() {
+        let params = serde_json::json!({
+            "scriptId": "1",
+            "url": "wasm://wasm/example",
+            "startLine": 0,
+            "startColumn": 0,
+            "endLine": 0,
+            "endColumn": 1,
+            "executionContextId": 1,
+            "hash": "hash",
+            "debugSymbols": { "type": "None" }
+        });
+
+        let parsed: DebuggerScriptParsedParams =
+            serde_json::from_value(normalize_script_parsed_params(params)).unwrap();
+
+        assert!(parsed.debug_symbols.is_none());
+    }
 
     #[test]
     fn resolves_relative_source_maps_against_the_generated_script() {
@@ -1266,6 +1464,36 @@ mod tests {
             .unwrap(),
             "https://maps.example.com/app.js.map"
         );
+    }
+
+    #[test]
+    fn normalizes_backslashes_in_absolute_source_map_urls() {
+        assert_eq!(
+            resolve_source_map_url(
+                "vscode-file://vscode-app/c:/resources/app/out/vs/workbench/workbench.js",
+                "https://main.vscode-cdn.net/sourcemaps/commit/core/vs\\workbench\\workbench.js.map"
+            )
+            .unwrap(),
+            "https://main.vscode-cdn.net/sourcemaps/commit/core/vs/workbench/workbench.js.map"
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_source_maps_directly_from_file_urls() {
+        let path = std::env::temp_dir().join(format!(
+            "jsdbg-direct-source-map-{}.map",
+            std::process::id()
+        ));
+        let source_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        tokio::fs::write(&path, source_map).await.unwrap();
+        let url = url::Url::from_file_path(&path).unwrap();
+
+        let loaded = CdpDebuggerSession::load_source_map_direct(url.as_str())
+            .await
+            .unwrap();
+
+        assert_eq!(loaded, source_map);
+        tokio::fs::remove_file(path).await.unwrap();
     }
 
     #[test]
@@ -1368,6 +1596,8 @@ mod tests {
             destination: path.clone(),
             temporary: path.clone(),
             file,
+            started_at: Instant::now(),
+            taking_finished_at: None,
             bytes_written: 0,
             write_error: None,
         })));
@@ -1419,6 +1649,22 @@ mod tests {
             }
         );
         assert!(events.try_recv().is_err());
+
+        handler
+            .handle_notification(
+                "HeapProfiler.reportHeapSnapshotProgress".to_owned(),
+                serde_json::json!({ "done": 10, "total": 10, "finished": true }),
+            )
+            .await;
+        assert!(
+            heap_snapshot
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .taking_finished_at
+                .is_some()
+        );
 
         drop(heap_snapshot.lock().await.take());
         tokio::fs::remove_file(path).await.unwrap();

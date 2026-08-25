@@ -518,24 +518,39 @@ fn spawn_service(state_file: &Path) -> Result<(), LocalRpcError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    configure_detached(&mut command);
-    command
-        .spawn()
-        .map_err(|source| LocalRpcError::Spawn { executable, source })?;
+    spawn_detached(&mut command).map_err(|source| LocalRpcError::Spawn { executable, source })?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn configure_detached(command: &mut Command) {
+fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io::Error> {
     use std::os::windows::process::CommandExt;
 
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
+    match command.spawn() {
+        Ok(child) => Ok(child),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS);
+            match command.spawn() {
+                Ok(child) => Ok(child),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    command.creation_flags(CREATE_NO_WINDOW);
+                    command.spawn()
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(not(windows))]
-fn configure_detached(_command: &mut Command) {}
+fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io::Error> {
+    command.spawn()
+}
 
 fn random_token() -> Result<String, LocalRpcError> {
     let mut bytes = [0_u8; 32];

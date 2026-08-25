@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ContextSnapshot } from "./apiTypes.js";
 import { DaemonClient, defaultServiceStateFile } from "./daemonClient.js";
+import { ensureDaemonProcess } from "./daemonProcess.js";
 import { computeWorkspaceContextId } from "./model.js";
 
 const contextIdStateKey = "jsdbg.workspaceContextId";
@@ -20,7 +21,10 @@ export class WorkspaceContextController implements vscode.Disposable {
 	public readonly contextId: string;
 	public readonly displayName: string;
 
-	public constructor(private readonly extensionContext: vscode.ExtensionContext) {
+	public constructor(
+		private readonly extensionContext: vscode.ExtensionContext,
+		private readonly log: (message: string) => void,
+	) {
 		const workspaceUris = workspaceIdentityUris();
 		const stored = extensionContext.workspaceState.get<string>(contextIdStateKey);
 		this.contextId = stored ?? computeWorkspaceContextId(workspaceUris);
@@ -81,6 +85,14 @@ export class WorkspaceContextController implements vscode.Disposable {
 		if (snapshot.id !== this.contextId) {
 			throw new Error(`Received context '${snapshot.id}' for '${this.contextId}'`);
 		}
+		if (this.snapshotValue?.agentInstanceId === snapshot.agentInstanceId
+			&& snapshot.revision < this.snapshotValue.revision) {
+			this.log(
+				`Ignoring stale context snapshot revision ${snapshot.revision}; `
+				+ `current revision is ${this.snapshotValue.revision}`,
+			);
+			return;
+		}
 		this.snapshotValue = snapshot;
 		this.errorValue = undefined;
 		this.snapshotEmitter.fire(snapshot);
@@ -100,9 +112,17 @@ export class WorkspaceContextController implements vscode.Disposable {
 			const configured = vscode.workspace
 				.getConfiguration("jsdbg")
 				.get<string>("serviceStatePath");
-			const client = await DaemonClient.connect(
-				configured?.trim() || defaultServiceStateFile(),
-			);
+			const configuredExecutable = vscode.workspace
+				.getConfiguration("jsdbg")
+				.get<string>("serviceExecutable");
+			const stateFile = configured?.trim() || defaultServiceStateFile();
+			await ensureDaemonProcess({
+				extensionPath: this.extensionContext.extensionPath,
+				stateFile,
+				log: this.log,
+				...(configuredExecutable === undefined ? {} : { configuredExecutable }),
+			});
+			const client = await DaemonClient.connect(stateFile, this.log);
 			this.clientValue = client;
 			client.onClose(() => {
 				if (!this.disposed) {
@@ -141,7 +161,9 @@ export class WorkspaceContextController implements vscode.Disposable {
 			}
 		} catch (error) {
 			if (!this.disposed) {
-				this.setError(asError(error));
+				const observationError = asError(error);
+				this.log(`Context observation failed: ${observationError.message}`);
+				this.setError(observationError);
 			}
 		} finally {
 			this.observing = false;

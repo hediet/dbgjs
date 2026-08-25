@@ -13,8 +13,11 @@ use crate::cdp::{
     DomQuerySelectorParams, HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
     InputDispatchKeyEventParamsType, InputDispatchMouseEventParams,
     InputDispatchMouseEventParamsType, InputInsertTextParams, InputMouseButton,
-    ProfilerEnableParams, ProfilerScriptCoverage, ProfilerStartPreciseCoverageParams,
+    PageCaptureScreenshotParams, PageCaptureScreenshotParamsFormat, ProfilerEnableParams,
+    ProfilerProfile, ProfilerScriptCoverage, ProfilerSetSamplingIntervalParams,
+    ProfilerStartParams, ProfilerStartPreciseCoverageParams, ProfilerStopParams,
     ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams,
+    RuntimeGetPropertiesParams, RuntimeRemoteObject,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::content_store::ContentStore;
@@ -23,15 +26,27 @@ use crate::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptKey,
     ScriptSourceState, SessionKey, SessionPhase, StepKind,
 };
+use crate::heap_graph::{
+    AggregateBy, CostPolicy, EdgePolicy, HeapGraph, NodeIndex, NodeSelector, PathDirection,
+    PathOptions, TextMatcher, TraversalDirection, parse_heap_graph,
+};
 use crate::heap_snapshot::{HeapConstructorGroup, parse_constructor_groups};
 use crate::service_api::{
     ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
-    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
-    FrameProjectionSnapshot, FrameSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot,
-    HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapSnapshotProgress,
-    HeapSnapshotResult, PauseSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
-    SourceLocation, TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate,
+    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
+    CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot, CpuProfileNodeSnapshot,
+    CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
+    FrameProjectionSnapshot, FrameSnapshot, HeapAggregateBy, HeapAggregateEntrySnapshot,
+    HeapAggregateSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot, HeapClassSnapshot,
+    HeapClassSnapshotEntry, HeapDiffEntrySnapshot, HeapDiffSnapshot, HeapDominatorSnapshot,
+    HeapEdgePolicy, HeapInstanceSnapshot, HeapNodeLocationSnapshot, HeapNodeSelectionSnapshot,
+    HeapNodeSelector, HeapNodeSnapshot, HeapPathCost, HeapPathDirection, HeapPathOptions,
+    HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection, HeapReferenceSnapshot,
+    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
+    HeapTraversalDirection, PauseSnapshot, ScopeSnapshot, ScreenshotSnapshot,
+    SourceContentSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation,
+    TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -68,6 +83,7 @@ impl TargetDebuggerHandle {
         connection_generation: u64,
         session: CdpDebuggerSession,
         session_key: SessionKey,
+        waiting_for_debugger: bool,
     ) -> Result<Self, TargetDebuggerError> {
         let sources = SourceEffectInterpreter::new(
             SourceEffectOptions::default(),
@@ -87,7 +103,7 @@ impl TargetDebuggerHandle {
                 session_id: session_key.session_id.clone(),
                 target_id: target_id.clone(),
                 parent_session_id: None,
-                waiting_for_debugger: false,
+                waiting_for_debugger,
             })
             .await?;
         let initial = snapshot_from_driver(
@@ -172,6 +188,11 @@ impl TargetDebuggerHandle {
         .await
     }
 
+    pub async fn release_if_waiting(&self) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
+        self.command(|response| TargetCommand::ReleaseIfWaiting { response })
+            .await
+    }
+
     pub async fn step(
         &self,
         pause_epoch: u64,
@@ -197,6 +218,42 @@ impl TargetDebuggerHandle {
                 pause_epoch,
                 frame_index,
                 expression,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn scope_variables(
+        &self,
+        pause_epoch: u64,
+        frame_index: u32,
+        scope_index: u32,
+    ) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::ScopeVariables {
+                pause_epoch,
+                frame_index,
+                scope_index,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn object_properties(
+        &self,
+        pause_epoch: Option<u64>,
+        object_id: String,
+    ) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::ObjectProperties {
+                pause_epoch,
+                object_id,
                 response,
             })
             .await
@@ -271,6 +328,15 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn capture_screenshot(&self) -> Result<ScreenshotSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::CaptureScreenshot { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn take_heap_snapshot(
         &self,
         path: String,
@@ -321,6 +387,132 @@ impl TargetDebuggerHandle {
                 capture_id,
                 filter,
                 no_cache,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn select_heap_nodes(
+        &self,
+        capture_id: String,
+        selector: HeapNodeSelector,
+        max_string_length: Option<u32>,
+        include_dominators: bool,
+    ) -> Result<HeapNodeSelectionSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::SelectHeapNodes {
+                capture_id,
+                selector,
+                max_string_length,
+                include_dominators,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn get_heap_references(
+        &self,
+        reference: String,
+        direction: HeapReferenceDirection,
+        edge_policy: HeapEdgePolicy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapReferencesSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::GetHeapReferences {
+                reference,
+                direction,
+                edge_policy,
+                limit,
+                max_string_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn get_heap_path(
+        &self,
+        from: String,
+        to: String,
+        options: HeapPathOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<Option<HeapPathSnapshot>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::GetHeapPath {
+                from,
+                to,
+                options,
+                max_string_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn get_heap_dominator_chain(
+        &self,
+        reference: String,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapDominatorSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::GetHeapDominatorChain {
+                reference,
+                max_string_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn aggregate_heap_snapshot(
+        &self,
+        capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapAggregateSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::AggregateHeapSnapshot {
+                capture_id,
+                by,
+                limit,
+                max_string_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn diff_heap_snapshots(
+        &self,
+        older_capture_id: String,
+        newer_capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapDiffSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::DiffHeapSnapshots {
+                older_capture_id,
+                newer_capture_id,
+                by,
+                limit,
+                max_string_length,
                 response,
             })
             .await
@@ -423,6 +615,57 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn start_cpu_profile(
+        &self,
+        sampling_interval_micros: Option<u64>,
+    ) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::StartCpuProfile {
+                sampling_interval_micros,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn stop_cpu_profile(
+        &self,
+        capture_id: Option<String>,
+    ) -> Result<CpuProfileSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::StopCpuProfile {
+                capture_id,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn get_cpu_profile(
+        &self,
+        capture_id: String,
+        source_path: Option<String>,
+        no_cache: bool,
+        project: bool,
+    ) -> Result<CpuProfileSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::GetCpuProfile {
+                capture_id,
+                source_path,
+                no_cache,
+                project,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn wait(
         &self,
         predicate: TargetWaitPredicate,
@@ -512,6 +755,9 @@ enum TargetCommand {
         breakpoint_id: String,
         response: CommandResponse,
     },
+    ReleaseIfWaiting {
+        response: CommandResponse,
+    },
     Resume {
         pause_epoch: u64,
         response: CommandResponse,
@@ -526,6 +772,17 @@ enum TargetCommand {
         frame_index: u32,
         expression: String,
         response: oneshot::Sender<Result<EvaluationSnapshot, TargetDebuggerError>>,
+    },
+    ScopeVariables {
+        pause_epoch: u64,
+        frame_index: u32,
+        scope_index: u32,
+        response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
+    },
+    ObjectProperties {
+        pause_epoch: Option<u64>,
+        object_id: String,
+        response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
     },
     SourceContent {
         path: String,
@@ -552,6 +809,9 @@ enum TargetCommand {
         text: String,
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
+    CaptureScreenshot {
+        response: oneshot::Sender<Result<ScreenshotSnapshot, TargetDebuggerError>>,
+    },
     TakeHeapSnapshot {
         path: String,
         capture_numeric_value: bool,
@@ -569,6 +829,48 @@ enum TargetCommand {
         filter: Option<String>,
         no_cache: bool,
         response: oneshot::Sender<Result<HeapClassSnapshot, TargetDebuggerError>>,
+    },
+    SelectHeapNodes {
+        capture_id: String,
+        selector: HeapNodeSelector,
+        max_string_length: Option<u32>,
+        include_dominators: bool,
+        response: oneshot::Sender<Result<HeapNodeSelectionSnapshot, TargetDebuggerError>>,
+    },
+    GetHeapReferences {
+        reference: String,
+        direction: HeapReferenceDirection,
+        edge_policy: HeapEdgePolicy,
+        limit: u32,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<HeapReferencesSnapshot, TargetDebuggerError>>,
+    },
+    GetHeapPath {
+        from: String,
+        to: String,
+        options: HeapPathOptions,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<Option<HeapPathSnapshot>, TargetDebuggerError>>,
+    },
+    GetHeapDominatorChain {
+        reference: String,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<HeapDominatorSnapshot, TargetDebuggerError>>,
+    },
+    AggregateHeapSnapshot {
+        capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<HeapAggregateSnapshot, TargetDebuggerError>>,
+    },
+    DiffHeapSnapshots {
+        older_capture_id: String,
+        newer_capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<HeapDiffSnapshot, TargetDebuggerError>>,
     },
     StartCoverage {
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
@@ -592,6 +894,21 @@ enum TargetCommand {
         no_cache: bool,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
+    StartCpuProfile {
+        sampling_interval_micros: Option<u64>,
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
+    StopCpuProfile {
+        capture_id: Option<String>,
+        response: oneshot::Sender<Result<CpuProfileSnapshot, TargetDebuggerError>>,
+    },
+    GetCpuProfile {
+        capture_id: String,
+        source_path: Option<String>,
+        no_cache: bool,
+        project: bool,
+        response: oneshot::Sender<Result<CpuProfileSnapshot, TargetDebuggerError>>,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -609,8 +926,11 @@ async fn run_target(
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
-    let mut heap_captures = BTreeMap::<String, PathBuf>::new();
+    let mut cpu_profile = None::<CpuProfileRecording>;
+    let mut cpu_profiles = BTreeMap::<String, CpuProfileSnapshot>::new();
+    let mut heap_captures = BTreeMap::<String, StoredHeapCapture>::new();
     let mut heap_constructor_groups = BTreeMap::<String, Arc<Vec<HeapConstructorGroup>>>::new();
+    let mut heap_graphs = BTreeMap::<String, Arc<HeapGraph>>::new();
     let mut heap_aliases = BTreeMap::<(String, String), String>::new();
     loop {
         enum Next {
@@ -735,6 +1055,24 @@ async fn run_target(
                 }
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::ReleaseIfWaiting { response })) => {
+                let result = release_waiting_target(&mut driver, &session_key)
+                    .await
+                    .map(|()| {
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        )
+                    });
+                if let Ok(snapshot) = &result {
+                    snapshots.send_replace(snapshot.clone());
+                }
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::SourceContent { path, response })) => {
                 let result = driver.state().scripts.iter().find_map(|(key, script)| {
                     if script.url == path {
@@ -841,6 +1179,25 @@ async fn run_target(
                     evaluate(&driver, &session_key, pause_epoch, frame_index, expression).await;
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::ScopeVariables {
+                pause_epoch,
+                frame_index,
+                scope_index,
+                response,
+            })) => {
+                let result =
+                    scope_variables(&driver, &session_key, pause_epoch, frame_index, scope_index)
+                        .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::ObjectProperties {
+                pause_epoch,
+                object_id,
+                response,
+            })) => {
+                let result = object_properties(&driver, &session_key, pause_epoch, object_id).await;
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::Click { selector, response })) => {
                 let prior_epoch = driver
                     .state()
@@ -922,6 +1279,22 @@ async fn run_target(
                         }
                     }
                 };
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::CaptureScreenshot { response })) => {
+                let mut params = PageCaptureScreenshotParams::new();
+                params.format = Some(PageCaptureScreenshotParamsFormat::Png);
+                params.from_surface = Some(true);
+                params.capture_beyond_viewport = Some(false);
+                let result = driver
+                    .client()
+                    .page_capture_screenshot(params)
+                    .await
+                    .map(|result| ScreenshotSnapshot {
+                        media_type: "image/png".to_owned(),
+                        data_base64: result.data,
+                    })
+                    .map_err(|error| TargetDebuggerError::Screenshot(format!("{error:?}")));
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::StartCoverage { response })) => {
@@ -1086,6 +1459,97 @@ async fn run_target(
                 .await;
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::StartCpuProfile {
+                sampling_interval_micros,
+                response,
+            })) => {
+                let result = if cpu_profile.is_some() {
+                    Err(TargetDebuggerError::CpuProfileAlreadyActive)
+                } else {
+                    start_cpu_profile(&driver, sampling_interval_micros)
+                        .await
+                        .map(|()| {
+                            cpu_profile = Some(CpuProfileRecording {
+                                sampling_interval_micros,
+                            });
+                        })
+                };
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::StopCpuProfile {
+                capture_id,
+                response,
+            })) => {
+                let result = async {
+                    let recording = cpu_profile.ok_or(TargetDebuggerError::CpuProfileNotActive)?;
+                    let capture_id = capture_id.unwrap_or_else(|| ".".to_owned());
+                    if capture_id != "." && cpu_profiles.contains_key(&capture_id) {
+                        return Err(TargetDebuggerError::CpuProfileCaptureAlreadyExists(
+                            capture_id,
+                        ));
+                    }
+                    let stopped = driver
+                        .client()
+                        .profiler_stop(ProfilerStopParams::new())
+                        .await
+                        .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
+                    cpu_profile = None;
+                    let snapshot = cpu_profile_snapshot(
+                        capture_id.clone(),
+                        recording.sampling_interval_micros,
+                        stopped.profile,
+                    )?;
+                    cpu_profiles.insert(capture_id.clone(), snapshot.clone());
+                    if capture_id != "." {
+                        let mut latest = snapshot.clone();
+                        latest.capture_id = ".".to_owned();
+                        cpu_profiles.insert(".".to_owned(), latest);
+                    }
+                    Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::GetCpuProfile {
+                capture_id,
+                source_path,
+                no_cache,
+                project,
+                response,
+            })) => {
+                let result = async {
+                    let mut snapshot = cpu_profiles.get(&capture_id).cloned().ok_or_else(|| {
+                        TargetDebuggerError::CpuProfileCaptureNotFound(capture_id.clone())
+                    })?;
+                    if !project {
+                        return Ok(snapshot);
+                    }
+                    let started = Instant::now();
+                    let cache_before = driver.source_map_cache_stats();
+                    project_cpu_profile(
+                        &mut driver,
+                        &session_key,
+                        &mut snapshot,
+                        source_path.as_deref(),
+                        no_cache,
+                    )
+                    .await?;
+                    let cache_after = driver.source_map_cache_stats();
+                    snapshot.analysis = Some(CpuProfileAnalysisSnapshot {
+                        duration_micros: started.elapsed().as_micros() as u64,
+                        source_map_cache_hits: cache_after.hits.saturating_sub(cache_before.hits),
+                        source_map_cache_misses: cache_after
+                            .misses
+                            .saturating_sub(cache_before.misses),
+                        source_map_cache_bypasses: cache_after
+                            .bypasses
+                            .saturating_sub(cache_before.bypasses),
+                    });
+                    Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::TakeHeapSnapshot {
                 path,
                 capture_numeric_value,
@@ -1109,13 +1573,14 @@ async fn run_target(
                         driver.abort_heap_snapshot().await;
                         return Err(TargetDebuggerError::HeapSnapshot(format!("{error:?}")));
                     }
-                    let bytes_written = driver
+                    let written = driver
                         .finish_heap_snapshot()
                         .await
                         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
                     Ok(HeapSnapshotResult {
                         path,
-                        bytes_written,
+                        bytes_written: written.bytes_written,
+                        timing: heap_snapshot_timing(&written),
                     })
                 }
                 .await;
@@ -1136,15 +1601,20 @@ async fn run_target(
                     expose_internals,
                 )
                 .await
-                .map(|bytes_written| HeapCaptureResult {
+                .map(|written| HeapCaptureResult {
                     capture_id: capture_id.clone(),
-                    bytes_written,
+                    bytes_written: written.bytes_written,
+                    timing: heap_snapshot_timing(&written),
                 });
-                if result.is_ok() {
-                    if let Some(previous) = heap_captures.insert(capture_id.clone(), path) {
-                        let _ = tokio::fs::remove_file(previous).await;
+                if let Ok(capture) = &result {
+                    let timing = capture.timing.clone();
+                    if let Some(previous) =
+                        heap_captures.insert(capture_id.clone(), StoredHeapCapture { path, timing })
+                    {
+                        let _ = tokio::fs::remove_file(previous.path).await;
                     }
                     heap_constructor_groups.remove(&capture_id);
+                    heap_graphs.remove(&capture_id);
                     heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
                 }
                 let _ = response.send(result);
@@ -1168,10 +1638,11 @@ async fn run_target(
                         match heap_constructor_groups.get(&capture_id).cloned() {
                             Some(groups) => (groups, true),
                             None => {
-                                let path =
+                                let capture =
                                     heap_captures.get(&capture_id).cloned().ok_or_else(|| {
                                         TargetDebuggerError::HeapCaptureNotFound(capture_id.clone())
                                     })?;
+                                let path = capture.path;
                                 let groups = Arc::new(
                                     tokio::task::spawn_blocking(move || {
                                         let file = File::open(path)?;
@@ -1202,6 +1673,9 @@ async fn run_target(
                     )
                     .await?;
                     snapshot.analysis = HeapClassAnalysisSnapshot {
+                        snapshot_timing: heap_captures
+                            .get(&capture_id)
+                            .map(|capture| capture.timing.clone()),
                         parse_duration_micros: parse_duration.as_micros() as u64,
                         projection_duration_micros: projection_started.elapsed().as_micros() as u64,
                         source_map_hydration_duration_micros: source_map_hydration_duration
@@ -1220,6 +1694,375 @@ async fn run_target(
                         }
                     }
                     Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::SelectHeapNodes {
+                capture_id,
+                selector,
+                max_string_length,
+                include_dominators,
+                response,
+            })) => {
+                let result = async {
+                    let (graph, graph_parse_duration, used_cached_graph) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let heap_object_id = selector
+                        .heap_object_id
+                        .as_deref()
+                        .map(parse_heap_object_id)
+                        .transpose()?;
+                    if selector.name.is_some() && selector.name_regex.is_some() {
+                        return Err(TargetDebuggerError::InvalidHeapSelector(
+                            "--name and --name-regex are mutually exclusive".to_owned(),
+                        ));
+                    }
+                    if selector.string_contains.is_some() && selector.string_regex.is_some() {
+                        return Err(TargetDebuggerError::InvalidHeapSelector(
+                            "stringContains and stringRegex are mutually exclusive".to_owned(),
+                        ));
+                    }
+                    let name_regex = selector
+                        .name_regex
+                        .as_deref()
+                        .map(regex::Regex::new)
+                        .transpose()
+                        .map_err(|error| {
+                            TargetDebuggerError::InvalidHeapSelector(error.to_string())
+                        })?;
+                    let string_regex = selector
+                        .string_regex
+                        .as_deref()
+                        .map(regex::Regex::new)
+                        .transpose()
+                        .map_err(|error| {
+                            TargetDebuggerError::InvalidHeapSelector(error.to_string())
+                        })?;
+                    let mut graph_selector = NodeSelector::new();
+                    if let Some(heap_object_id) = heap_object_id {
+                        graph_selector = graph_selector.heap_object_id(heap_object_id);
+                    }
+                    if let Some(node_type) = selector.node_type.as_deref() {
+                        graph_selector = graph_selector.node_type(node_type);
+                    }
+                    if let Some(name) = selector.name.as_deref() {
+                        graph_selector = graph_selector.raw_name(TextMatcher::Exact(name));
+                    } else if let Some(regex) = name_regex.as_ref() {
+                        graph_selector = graph_selector.raw_name(TextMatcher::Regex(regex));
+                    }
+                    if let Some(value) = selector.string_contains.as_deref() {
+                        graph_selector = graph_selector.string_value(TextMatcher::Contains(value));
+                    } else if let Some(regex) = string_regex.as_ref() {
+                        graph_selector = graph_selector.string_value(TextMatcher::Regex(regex));
+                    }
+                    if let Some(size) = selector.min_shallow_size {
+                        graph_selector = graph_selector.min_shallow_size(size);
+                    }
+                    if let Some(size) = selector.max_shallow_size {
+                        graph_selector = graph_selector.max_shallow_size(size);
+                    }
+                    if let Some(limit) = selector.limit {
+                        graph_selector = graph_selector.limit(limit as usize);
+                    }
+                    let nodes = graph.select(&graph_selector);
+                    let dominators = include_dominators
+                        .then(|| graph.dominators())
+                        .transpose()
+                        .map_err(heap_analysis_error)?;
+                    let nodes = nodes
+                        .into_iter()
+                        .map(|node| {
+                            heap_node_snapshot(
+                                &graph,
+                                &capture_id,
+                                node,
+                                max_string_length,
+                                dominators,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(HeapNodeSelectionSnapshot {
+                        capture_id,
+                        total_nodes: graph.node_count() as u64,
+                        total_edges: graph.edge_count() as u64,
+                        nodes,
+                        graph_parse_duration_micros: graph_parse_duration.as_micros() as u64,
+                        used_cached_graph,
+                    })
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::GetHeapReferences {
+                reference,
+                direction,
+                edge_policy,
+                limit,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (capture_id, heap_object_id) = parse_heap_reference(&reference)?;
+                    let (graph, _, _) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let node = heap_node_by_id(&graph, heap_object_id)?;
+                    let mut references = Vec::new();
+                    if matches!(
+                        direction,
+                        HeapReferenceDirection::Outgoing | HeapReferenceDirection::Both
+                    ) {
+                        references.extend(
+                            graph
+                                .outgoing_references(node)
+                                .map_err(heap_analysis_error)?
+                                .filter(|reference| {
+                                    edge_policy == HeapEdgePolicy::All
+                                        || reference.edge_type != "weak"
+                                })
+                                .map(|reference| {
+                                    heap_reference_snapshot(&graph, &capture_id, reference)
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        );
+                    }
+                    if matches!(
+                        direction,
+                        HeapReferenceDirection::Incoming | HeapReferenceDirection::Both
+                    ) {
+                        references.extend(
+                            graph
+                                .incoming_references(node)
+                                .map_err(heap_analysis_error)?
+                                .filter(|reference| {
+                                    edge_policy == HeapEdgePolicy::All
+                                        || reference.edge_type != "weak"
+                                })
+                                .map(|reference| {
+                                    heap_reference_snapshot(&graph, &capture_id, reference)
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        );
+                    }
+                    references.sort_by_key(|reference| reference.edge_index);
+                    let omitted_reference_count =
+                        references.len().saturating_sub(limit as usize) as u64;
+                    references.truncate(limit as usize);
+                    Ok(HeapReferencesSnapshot {
+                        capture_id: capture_id.clone(),
+                        node: heap_node_snapshot(
+                            &graph,
+                            &capture_id,
+                            node,
+                            max_string_length,
+                            None,
+                        )?,
+                        direction,
+                        edge_policy,
+                        references,
+                        omitted_reference_count,
+                    })
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::GetHeapPath {
+                from,
+                to,
+                options,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (from_capture, from_id) = parse_heap_reference(&from)?;
+                    let (to_capture, to_id) = parse_heap_reference(&to)?;
+                    if from_capture != to_capture {
+                        return Err(TargetDebuggerError::IncompatibleHeapCaptures {
+                            older: from_capture,
+                            newer: to_capture,
+                        });
+                    }
+                    let capture_id = from_capture;
+                    let (graph, _, _) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let from_node = heap_node_by_id(&graph, from_id)?;
+                    let to_node = heap_node_by_id(&graph, to_id)?;
+                    let path = graph
+                        .shortest_path(
+                            from_node,
+                            to_node,
+                            PathOptions {
+                                direction: heap_path_direction(options.direction),
+                                edge_policy: heap_edge_policy(options.edge_policy),
+                                cost: heap_path_cost(options.cost),
+                            },
+                        )
+                        .map_err(heap_analysis_error)?;
+                    path.map(|path| {
+                        let nodes = path
+                            .nodes
+                            .iter()
+                            .copied()
+                            .map(|node| {
+                                heap_node_snapshot(
+                                    &graph,
+                                    &capture_id,
+                                    node,
+                                    max_string_length,
+                                    None,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let steps = path
+                            .steps
+                            .iter()
+                            .map(|step| heap_path_step_snapshot(&graph, &capture_id, *step))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(HeapPathSnapshot {
+                            capture_id,
+                            from,
+                            to,
+                            cost: path.cost,
+                            nodes,
+                            steps,
+                        })
+                    })
+                    .transpose()
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::GetHeapDominatorChain {
+                reference,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (capture_id, heap_object_id) = parse_heap_reference(&reference)?;
+                    let (graph, _, _) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let node = heap_node_by_id(&graph, heap_object_id)?;
+                    let dominators = graph.dominators().map_err(heap_analysis_error)?;
+                    let mut chain = Vec::new();
+                    let mut current = node;
+                    while let Some(dominator) = dominators.immediate_dominator(current) {
+                        chain.push(heap_node_snapshot(
+                            &graph,
+                            &capture_id,
+                            dominator,
+                            max_string_length,
+                            Some(dominators),
+                        )?);
+                        current = dominator;
+                    }
+                    Ok(HeapDominatorSnapshot {
+                        capture_id: capture_id.clone(),
+                        node: heap_node_snapshot(
+                            &graph,
+                            &capture_id,
+                            node,
+                            max_string_length,
+                            Some(dominators),
+                        )?,
+                        chain,
+                    })
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::AggregateHeapSnapshot {
+                capture_id,
+                by,
+                limit,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (graph, _, _) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let aggregate = graph.aggregate(heap_aggregate_by(by));
+                    let mut entries = aggregate
+                        .groups
+                        .into_iter()
+                        .filter(|(_, value)| value.count != 0 || value.shallow_size != 0)
+                        .map(|(key, value)| {
+                            let (key, key_truncated) = bounded_heap_text(&key, max_string_length);
+                            Ok(HeapAggregateEntrySnapshot {
+                                key,
+                                key_truncated,
+                                count: value.count,
+                                shallow_size: u64::try_from(value.shallow_size).map_err(|_| {
+                                    TargetDebuggerError::HeapAnalysis(
+                                        "aggregate shallow size exceeds u64".to_owned(),
+                                    )
+                                })?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+                    entries
+                        .sort_by_key(|entry| std::cmp::Reverse((entry.shallow_size, entry.count)));
+                    let omitted_entry_count = entries.len().saturating_sub(limit as usize) as u64;
+                    entries.truncate(limit as usize);
+                    Ok(HeapAggregateSnapshot {
+                        capture_id,
+                        by,
+                        entries,
+                        omitted_entry_count,
+                    })
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::DiffHeapSnapshots {
+                older_capture_id,
+                newer_capture_id,
+                by,
+                limit,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (older, _, _) =
+                        load_heap_graph(&older_capture_id, &heap_captures, &mut heap_graphs)
+                            .await?;
+                    let (newer, _, _) =
+                        load_heap_graph(&newer_capture_id, &heap_captures, &mut heap_graphs)
+                            .await?;
+                    let diff = older.diff(&newer, heap_aggregate_by(by));
+                    let mut entries = diff
+                        .groups
+                        .into_iter()
+                        .filter(|(_, value)| value.count != 0 || value.shallow_size != 0)
+                        .map(|(key, value)| {
+                            let (key, key_truncated) = bounded_heap_text(&key, max_string_length);
+                            Ok(HeapDiffEntrySnapshot {
+                                key,
+                                key_truncated,
+                                count_delta: i64::try_from(value.count).map_err(|_| {
+                                    TargetDebuggerError::HeapAnalysis(
+                                        "aggregate count delta exceeds i64".to_owned(),
+                                    )
+                                })?,
+                                shallow_size_delta: i64::try_from(value.shallow_size).map_err(
+                                    |_| {
+                                        TargetDebuggerError::HeapAnalysis(
+                                            "aggregate shallow size delta exceeds i64".to_owned(),
+                                        )
+                                    },
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+                    entries.sort_by_key(|entry| {
+                        std::cmp::Reverse(entry.shallow_size_delta.unsigned_abs())
+                    });
+                    entries.truncate(limit as usize);
+                    Ok(HeapDiffSnapshot {
+                        older_capture_id,
+                        newer_capture_id,
+                        by,
+                        entries,
+                    })
                 }
                 .await;
                 let _ = response.send(result);
@@ -1253,8 +2096,8 @@ async fn run_target(
             }
         }
     }
-    for path in heap_captures.into_values() {
-        let _ = tokio::fs::remove_file(path).await;
+    for capture in heap_captures.into_values() {
+        let _ = tokio::fs::remove_file(capture.path).await;
     }
 }
 
@@ -1286,12 +2129,242 @@ fn temporary_heap_snapshot_path() -> PathBuf {
     ))
 }
 
+#[derive(Clone)]
+struct StoredHeapCapture {
+    path: PathBuf,
+    timing: HeapSnapshotTiming,
+}
+
+async fn load_heap_graph(
+    capture_id: &str,
+    captures: &BTreeMap<String, StoredHeapCapture>,
+    graphs: &mut BTreeMap<String, Arc<HeapGraph>>,
+) -> Result<(Arc<HeapGraph>, Duration, bool), TargetDebuggerError> {
+    let started = Instant::now();
+    if let Some(graph) = graphs.get(capture_id) {
+        return Ok((graph.clone(), started.elapsed(), true));
+    }
+    let path = captures
+        .get(capture_id)
+        .ok_or_else(|| TargetDebuggerError::HeapCaptureNotFound(capture_id.to_owned()))?
+        .path
+        .clone();
+    let graph = Arc::new(
+        tokio::task::spawn_blocking(move || {
+            let file = File::open(path)?;
+            parse_heap_graph(file).map_err(std::io::Error::other)
+        })
+        .await
+        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?
+        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?,
+    );
+    let duration = started.elapsed();
+    graphs.insert(capture_id.to_owned(), graph.clone());
+    Ok((graph, duration, false))
+}
+
+fn parse_heap_object_id(value: &str) -> Result<u64, TargetDebuggerError> {
+    value.parse().map_err(|error| {
+        TargetDebuggerError::InvalidHeapReference(format!(
+            "heap object id '{value}' is not an unsigned integer: {error}"
+        ))
+    })
+}
+
+fn parse_heap_reference(reference: &str) -> Result<(String, u64), TargetDebuggerError> {
+    let (capture_id, heap_object_id) = reference.rsplit_once('#').ok_or_else(|| {
+        TargetDebuggerError::InvalidHeapReference(format!(
+            "'{reference}' must use <capture>#<heap-object-id>"
+        ))
+    })?;
+    if capture_id.is_empty() {
+        return Err(TargetDebuggerError::InvalidHeapReference(
+            "the capture id cannot be empty".to_owned(),
+        ));
+    }
+    Ok((capture_id.to_owned(), parse_heap_object_id(heap_object_id)?))
+}
+
+fn heap_node_by_id(
+    graph: &HeapGraph,
+    heap_object_id: u64,
+) -> Result<NodeIndex, TargetDebuggerError> {
+    graph
+        .node_by_heap_object_id(heap_object_id)
+        .ok_or(TargetDebuggerError::HeapNodeNotFound(
+            heap_object_id.to_string(),
+        ))
+}
+
+fn heap_node_reference(capture_id: &str, heap_object_id: u64) -> String {
+    format!("{capture_id}#{heap_object_id}")
+}
+
+fn bounded_heap_text(value: &str, max_length: Option<u32>) -> (String, bool) {
+    let Some(max_length) = max_length else {
+        return (value.to_owned(), false);
+    };
+    let max_length = max_length as usize;
+    let mut end = value.len();
+    let mut chars = value.char_indices();
+    if let Some((index, _)) = chars.nth(max_length) {
+        end = index;
+    }
+    (value[..end].to_owned(), end < value.len())
+}
+
+fn heap_node_snapshot(
+    graph: &HeapGraph,
+    capture_id: &str,
+    node: NodeIndex,
+    max_string_length: Option<u32>,
+    dominators: Option<&crate::heap_graph::DominatorAnalysis>,
+) -> Result<HeapNodeSnapshot, TargetDebuggerError> {
+    let summary = graph.node_summary(node).map_err(heap_analysis_error)?;
+    let (name, name_truncated) = bounded_heap_text(summary.raw_name, max_string_length);
+    let (string_value, string_truncated) = match summary.string_value {
+        Some(value) => {
+            let (value, truncated) = bounded_heap_text(value, max_string_length);
+            (Some(value), truncated)
+        }
+        None => (None, name_truncated),
+    };
+    let locations = graph
+        .locations_for_node(node)
+        .map_err(heap_analysis_error)?
+        .map(|location| HeapNodeLocationSnapshot {
+            script_id: location.script_id,
+            line: location.line,
+            column: location.column,
+        })
+        .collect();
+    Ok(HeapNodeSnapshot {
+        reference: heap_node_reference(capture_id, summary.heap_object_id),
+        node_index: node.0,
+        node_type: summary.node_type.to_owned(),
+        heap_object_id: summary.heap_object_id.to_string(),
+        name,
+        string_value,
+        string_truncated,
+        shallow_size: summary.shallow_size,
+        outgoing_reference_count: summary.outgoing_references as u64,
+        incoming_reference_count: summary.incoming_references as u64,
+        locations,
+        immediate_dominator: dominators
+            .and_then(|analysis| analysis.immediate_dominator(node))
+            .map(|dominator| {
+                graph
+                    .node_summary(dominator)
+                    .map(|summary| heap_node_reference(capture_id, summary.heap_object_id))
+            })
+            .transpose()
+            .map_err(heap_analysis_error)?,
+        retained_size: dominators.and_then(|analysis| analysis.retained_size(node)),
+    })
+}
+
+fn heap_reference_snapshot(
+    graph: &HeapGraph,
+    capture_id: &str,
+    reference: crate::heap_graph::HeapReference<'_>,
+) -> Result<HeapReferenceSnapshot, TargetDebuggerError> {
+    let source = graph
+        .node_summary(reference.source)
+        .map_err(heap_analysis_error)?;
+    let target = graph
+        .node_summary(reference.target)
+        .map_err(heap_analysis_error)?;
+    Ok(HeapReferenceSnapshot {
+        edge_index: reference.edge.0,
+        edge_type: reference.edge_type.to_owned(),
+        name: reference.name.map(str::to_owned),
+        name_or_index: reference.name_or_index,
+        source: heap_node_reference(capture_id, source.heap_object_id),
+        target: heap_node_reference(capture_id, target.heap_object_id),
+    })
+}
+
+fn heap_path_step_snapshot(
+    graph: &HeapGraph,
+    capture_id: &str,
+    step: crate::heap_graph::PathStep,
+) -> Result<HeapPathStepSnapshot, TargetDebuggerError> {
+    let source = match step.direction {
+        TraversalDirection::Outgoing => step.from,
+        TraversalDirection::Incoming => step.to,
+    };
+    let reference = graph
+        .outgoing_references(source)
+        .map_err(heap_analysis_error)?
+        .find(|reference| reference.edge == step.edge)
+        .ok_or_else(|| {
+            TargetDebuggerError::HeapAnalysis(format!("path edge {} does not exist", step.edge.0))
+        })?;
+    let from = graph.node_summary(step.from).map_err(heap_analysis_error)?;
+    let to = graph.node_summary(step.to).map_err(heap_analysis_error)?;
+    Ok(HeapPathStepSnapshot {
+        from: heap_node_reference(capture_id, from.heap_object_id),
+        to: heap_node_reference(capture_id, to.heap_object_id),
+        edge_index: reference.edge.0,
+        edge_type: reference.edge_type.to_owned(),
+        name: reference.name.map(str::to_owned),
+        name_or_index: reference.name_or_index,
+        direction: match step.direction {
+            TraversalDirection::Outgoing => HeapTraversalDirection::Outgoing,
+            TraversalDirection::Incoming => HeapTraversalDirection::Incoming,
+        },
+    })
+}
+
+fn heap_path_direction(direction: HeapPathDirection) -> PathDirection {
+    match direction {
+        HeapPathDirection::Outgoing => PathDirection::Outgoing,
+        HeapPathDirection::Incoming => PathDirection::Incoming,
+        HeapPathDirection::Either => PathDirection::Either,
+    }
+}
+
+fn heap_edge_policy(policy: HeapEdgePolicy) -> EdgePolicy {
+    match policy {
+        HeapEdgePolicy::Strong => EdgePolicy::Strong,
+        HeapEdgePolicy::All => EdgePolicy::All,
+    }
+}
+
+fn heap_path_cost(cost: HeapPathCost) -> CostPolicy {
+    match cost {
+        HeapPathCost::Edges => CostPolicy::Edges,
+        HeapPathCost::Readable => CostPolicy::Readable,
+    }
+}
+
+fn heap_aggregate_by(by: HeapAggregateBy) -> AggregateBy {
+    match by {
+        HeapAggregateBy::NodeType => AggregateBy::NodeType,
+        HeapAggregateBy::Name => AggregateBy::RawName,
+        HeapAggregateBy::StringValue => AggregateBy::StringValue,
+    }
+}
+
+fn heap_analysis_error(error: crate::heap_graph::AnalysisError) -> TargetDebuggerError {
+    TargetDebuggerError::HeapAnalysis(error.to_string())
+}
+
+fn heap_snapshot_timing(
+    written: &crate::cdp_runtime::HeapSnapshotWriteResult,
+) -> HeapSnapshotTiming {
+    HeapSnapshotTiming {
+        taking_duration_micros: written.taking_duration.as_micros() as u64,
+        retrieving_duration_micros: written.retrieving_duration.as_micros() as u64,
+    }
+}
+
 async fn take_heap_snapshot(
     driver: &DebuggerDriver,
     path: PathBuf,
     capture_numeric_value: bool,
     expose_internals: bool,
-) -> Result<u64, TargetDebuggerError> {
+) -> Result<crate::cdp_runtime::HeapSnapshotWriteResult, TargetDebuggerError> {
     driver
         .begin_heap_snapshot(path)
         .await
@@ -1519,6 +2592,7 @@ async fn project_heap_classes(
             total_shallow_size,
             classes,
             analysis: HeapClassAnalysisSnapshot {
+                snapshot_timing: None,
                 parse_duration_micros: 0,
                 projection_duration_micros: 0,
                 source_map_hydration_duration_micros: 0,
@@ -1604,6 +2678,9 @@ async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerE
         "ctrl+n" | "control+n" => vec![(2, "KeyN", "n", 78, None)],
         "ctrl+k,ctrl+m" | "control+k,control+m" => {
             vec![(2, "KeyK", "k", 75, None), (2, "KeyM", "m", 77, None)]
+        }
+        "ctrl+k,n" | "control+k,n" => {
+            vec![(2, "KeyK", "k", 75, None), (0, "KeyN", "n", 78, None)]
         }
         "enter" => vec![(0, "Enter", "Enter", 13, Some("\r"))],
         "accept" => vec![(0, "Enter", "Enter", 13, None)],
@@ -1754,18 +2831,16 @@ async fn project_coverage(
                 session: session_key.clone(),
                 script_id: source.script_id.clone(),
             };
-            let eligible = driver.state().scripts.get(&key).is_some_and(|state| {
-                state.source_map_url.is_some()
-                    && matches!(state.source, ScriptSourceState::Unresolved)
-            });
-            (count > 0 && eligible).then_some((count, key))
+            let script = driver.state().scripts.get(&key)?;
+            let eligible = matches!(script.source, ScriptSourceState::Unresolved);
+            (count > 0 && eligible).then_some((script.source_map_url.is_some(), count, key))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|(count, _)| std::cmp::Reverse(*count));
+    candidates.sort_by_key(|(mapped, count, _)| std::cmp::Reverse((*mapped, *count)));
     if !source_already_resolved {
         driver.set_source_map_cache_enabled(!no_cache);
         let mut hydration_result = Ok(());
-        for (_, script) in candidates {
+        for (_, _, script) in candidates {
             hydration_result = driver
                 .apply(Input::RequestScriptSource {
                     script: script.clone(),
@@ -1890,27 +2965,41 @@ async fn project_coverage(
             script_id: source.script_id.clone(),
         };
         source.functions.par_iter_mut().for_each(|function| {
-            let Some(location) = &function.authored_location else {
-                return;
-            };
-            if function.name == "(anonymous)" || !enriched_files.contains(&location.source_url) {
-                return;
+            if let Some(location) = &function.authored_location
+                && enriched_files.contains(&location.source_url)
+                && let Some((_, _, content)) = source_effects.project_generated_offset(
+                    &state,
+                    &script_key,
+                    function.effective_ranges[0].start_offset,
+                )
+            {
+                function.breadcrumb = callback_aware_breadcrumb(
+                    source_effects.breadcrumb(
+                        &state,
+                        &script_key,
+                        &location.source_url,
+                        location.line,
+                        location.column,
+                        &content,
+                    ),
+                    &function.name,
+                );
             }
-            let Some((_, _, content)) = source_effects.project_generated_offset(
-                &state,
-                &script_key,
-                function.effective_ranges[0].start_offset,
-            ) else {
-                return;
-            };
-            function.breadcrumb = source_effects.breadcrumb(
-                &state,
-                &script_key,
-                &location.source_url,
-                location.line,
-                location.column,
-                &content,
-            );
+            if function.breadcrumb.is_none()
+                && let Some(location) = function.generated_location.as_ref()
+                && source_path.is_none_or(|path| {
+                    normalize_source_path(&location.source_url)
+                        .starts_with(normalize_source_path(path))
+                })
+            {
+                function.breadcrumb = generated_script_callback_breadcrumb(
+                    source_effects,
+                    &state,
+                    &script_key,
+                    location,
+                    &function.name,
+                );
+            }
         });
     });
     Ok(())
@@ -1935,6 +3024,351 @@ fn script_contains_source(driver: &DebuggerDriver, script: &ScriptKey, source_pa
 
 fn normalize_source_path(path: &str) -> &str {
     path.trim_start_matches("../").trim_start_matches("./")
+}
+
+#[derive(Clone, Copy)]
+struct CpuProfileRecording {
+    sampling_interval_micros: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CpuProfileFunctionKey {
+    name: String,
+    source_url: String,
+    line: u32,
+    column: u32,
+}
+
+async fn start_cpu_profile(
+    driver: &DebuggerDriver,
+    sampling_interval_micros: Option<u64>,
+) -> Result<(), TargetDebuggerError> {
+    if sampling_interval_micros.is_some_and(|interval| interval == 0 || interval > i32::MAX as u64)
+    {
+        return Err(TargetDebuggerError::InvalidCpuProfileSamplingInterval);
+    }
+    driver
+        .client()
+        .profiler_enable(ProfilerEnableParams::new())
+        .await
+        .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
+    if let Some(interval) = sampling_interval_micros {
+        driver
+            .client()
+            .profiler_set_sampling_interval(ProfilerSetSamplingIntervalParams::new(interval as i64))
+            .await
+            .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
+    }
+    driver
+        .client()
+        .profiler_start(ProfilerStartParams::new())
+        .await
+        .map(|_| ())
+        .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))
+}
+
+fn cpu_profile_snapshot(
+    capture_id: String,
+    sampling_interval_micros: Option<u64>,
+    profile: ProfilerProfile,
+) -> Result<CpuProfileSnapshot, TargetDebuggerError> {
+    let samples = profile.samples.unwrap_or_default();
+    let raw_time_deltas = profile.time_deltas.unwrap_or_default();
+    if samples.len() != raw_time_deltas.len() {
+        return Err(TargetDebuggerError::InvalidCpuProfile(format!(
+            "received {} samples but {} time deltas",
+            samples.len(),
+            raw_time_deltas.len()
+        )));
+    }
+    let time_deltas_micros = raw_time_deltas
+        .into_iter()
+        .map(|delta| {
+            u64::try_from(delta).map_err(|_| {
+                TargetDebuggerError::InvalidCpuProfile(format!(
+                    "received a negative sample time delta ({delta})"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let nodes = profile
+        .nodes
+        .into_iter()
+        .map(|node| CpuProfileNodeSnapshot {
+            id: node.id,
+            call_frame: CpuProfileCallFrameSnapshot {
+                function_name: node.call_frame.function_name,
+                script_id: node.call_frame.script_id,
+                url: node.call_frame.url,
+                line_number: node.call_frame.line_number,
+                column_number: node.call_frame.column_number,
+            },
+            hit_count: node.hit_count,
+            children: node.children.unwrap_or_default(),
+            deopt_reason: node.deopt_reason,
+            position_ticks: node
+                .position_ticks
+                .unwrap_or_default()
+                .into_iter()
+                .map(|tick| CpuProfilePositionTickSnapshot {
+                    line: tick.line,
+                    ticks: tick.ticks,
+                })
+                .collect(),
+            authored_location: None,
+            breadcrumb: None,
+            self_time_micros: 0,
+            total_time_micros: 0,
+            sample_count: 0,
+        })
+        .collect();
+    Ok(CpuProfileSnapshot {
+        capture_id,
+        sampling_interval_micros,
+        start_time_micros: profile.start_time,
+        end_time_micros: profile.end_time,
+        nodes,
+        samples,
+        time_deltas_micros,
+        functions: Vec::new(),
+        analysis: None,
+    })
+}
+
+async fn project_cpu_profile(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    snapshot: &mut CpuProfileSnapshot,
+    source_path: Option<&str>,
+    no_cache: bool,
+) -> Result<(), TargetDebuggerError> {
+    let node_indexes = cpu_profile_node_indexes(snapshot)?;
+    let mut script_weights = BTreeMap::<String, u64>::new();
+    for (&sample_id, &delta) in snapshot.samples.iter().zip(&snapshot.time_deltas_micros) {
+        let node = &snapshot.nodes[*node_indexes.get(&sample_id).ok_or_else(|| {
+            TargetDebuggerError::InvalidCpuProfile(format!(
+                "sample references missing node {sample_id}"
+            ))
+        })?];
+        *script_weights
+            .entry(node.call_frame.script_id.clone())
+            .or_default() += delta;
+    }
+    let mut candidates = script_weights
+        .into_iter()
+        .filter_map(|(script_id, weight)| {
+            let key = ScriptKey {
+                session: session_key.clone(),
+                script_id,
+            };
+            let script = driver.state().scripts.get(&key)?;
+            matches!(script.source, ScriptSourceState::Unresolved).then_some((
+                script.source_map_url.is_some(),
+                weight,
+                key,
+            ))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(mapped, weight, _)| std::cmp::Reverse((*mapped, *weight)));
+
+    driver.set_source_map_cache_enabled(!no_cache);
+    let mut hydration_result = Ok(());
+    for (_, _, script) in candidates {
+        hydration_result = driver
+            .apply(Input::RequestScriptSource {
+                script: script.clone(),
+            })
+            .await
+            .map(|_| ());
+        if hydration_result.is_err()
+            || source_path.is_some_and(|path| script_contains_source(driver, &script, path))
+        {
+            break;
+        }
+    }
+    driver.set_source_map_cache_enabled(true);
+    hydration_result?;
+
+    let state = driver.state().clone();
+    let source_effects = driver.source_effects();
+    snapshot.nodes.par_iter_mut().for_each(|node| {
+        let Ok(line) = u32::try_from(node.call_frame.line_number) else {
+            return;
+        };
+        let Ok(column) = u32::try_from(node.call_frame.column_number) else {
+            return;
+        };
+        let script = ScriptKey {
+            session: session_key.clone(),
+            script_id: node.call_frame.script_id.clone(),
+        };
+        if let Some((source_url, position, content)) =
+            source_effects.project_generated_position(&state, &script, Position { line, column })
+        {
+            let location = source_location(source_url.clone(), position.line, position.column);
+            node.breadcrumb = callback_aware_breadcrumb(
+                source_effects.breadcrumb(
+                    &state,
+                    &script,
+                    &source_url,
+                    location.line,
+                    location.column,
+                    &content,
+                ),
+                &node.call_frame.function_name,
+            );
+            node.authored_location = Some(location);
+        }
+        if node.breadcrumb.is_none() {
+            node.breadcrumb = generated_script_callback_breadcrumb(
+                source_effects,
+                &state,
+                &script,
+                &cpu_profile_generated_location(node),
+                &node.call_frame.function_name,
+            );
+        }
+    });
+    aggregate_cpu_profile(snapshot)
+}
+
+fn cpu_profile_node_indexes(
+    snapshot: &CpuProfileSnapshot,
+) -> Result<BTreeMap<i64, usize>, TargetDebuggerError> {
+    let mut indexes = BTreeMap::new();
+    for (index, node) in snapshot.nodes.iter().enumerate() {
+        if indexes.insert(node.id, index).is_some() {
+            return Err(TargetDebuggerError::InvalidCpuProfile(format!(
+                "profile contains duplicate node {}",
+                node.id
+            )));
+        }
+    }
+    Ok(indexes)
+}
+
+fn aggregate_cpu_profile(snapshot: &mut CpuProfileSnapshot) -> Result<(), TargetDebuggerError> {
+    let node_indexes = cpu_profile_node_indexes(snapshot)?;
+    let mut parents = BTreeMap::<i64, i64>::new();
+    for node in &snapshot.nodes {
+        for child in &node.children {
+            if !node_indexes.contains_key(child) {
+                return Err(TargetDebuggerError::InvalidCpuProfile(format!(
+                    "node {} references missing child {child}",
+                    node.id
+                )));
+            }
+            if let Some(previous) = parents.insert(*child, node.id)
+                && previous != node.id
+            {
+                return Err(TargetDebuggerError::InvalidCpuProfile(format!(
+                    "node {child} has multiple parents"
+                )));
+            }
+        }
+    }
+
+    for node in &mut snapshot.nodes {
+        node.self_time_micros = 0;
+        node.total_time_micros = 0;
+        node.sample_count = 0;
+    }
+    let mut function_templates =
+        BTreeMap::<CpuProfileFunctionKey, CpuProfileFunctionSnapshot>::new();
+    for node in &snapshot.nodes {
+        let key = cpu_profile_function_key(node);
+        function_templates
+            .entry(key)
+            .or_insert_with(|| cpu_profile_function(node));
+    }
+    let mut functions = function_templates;
+
+    for (&sample_id, &delta) in snapshot.samples.iter().zip(&snapshot.time_deltas_micros) {
+        let sample_index = *node_indexes.get(&sample_id).ok_or_else(|| {
+            TargetDebuggerError::InvalidCpuProfile(format!(
+                "sample references missing node {sample_id}"
+            ))
+        })?;
+        let leaf_key = cpu_profile_function_key(&snapshot.nodes[sample_index]);
+        snapshot.nodes[sample_index].self_time_micros = snapshot.nodes[sample_index]
+            .self_time_micros
+            .saturating_add(delta);
+        snapshot.nodes[sample_index].sample_count =
+            snapshot.nodes[sample_index].sample_count.saturating_add(1);
+        if let Some(function) = functions.get_mut(&leaf_key) {
+            function.self_time_micros = function.self_time_micros.saturating_add(delta);
+            function.sample_count = function.sample_count.saturating_add(1);
+        }
+
+        let mut current = Some(sample_id);
+        let mut visited_nodes = BTreeSet::new();
+        let mut visited_functions = BTreeSet::new();
+        while let Some(node_id) = current {
+            if !visited_nodes.insert(node_id) {
+                return Err(TargetDebuggerError::InvalidCpuProfile(
+                    "profile node graph contains a cycle".to_owned(),
+                ));
+            }
+            let index = *node_indexes.get(&node_id).ok_or_else(|| {
+                TargetDebuggerError::InvalidCpuProfile(format!(
+                    "profile stack references missing node {node_id}"
+                ))
+            })?;
+            snapshot.nodes[index].total_time_micros = snapshot.nodes[index]
+                .total_time_micros
+                .saturating_add(delta);
+            let key = cpu_profile_function_key(&snapshot.nodes[index]);
+            if visited_functions.insert(key.clone())
+                && let Some(function) = functions.get_mut(&key)
+            {
+                function.total_time_micros = function.total_time_micros.saturating_add(delta);
+            }
+            current = parents.get(&node_id).copied();
+        }
+    }
+    snapshot.functions = functions
+        .into_values()
+        .filter(|function| function.total_time_micros > 0)
+        .collect();
+    Ok(())
+}
+
+fn cpu_profile_function_key(node: &CpuProfileNodeSnapshot) -> CpuProfileFunctionKey {
+    let location = node
+        .authored_location
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| cpu_profile_generated_location(node));
+    CpuProfileFunctionKey {
+        name: node.call_frame.function_name.clone(),
+        source_url: location.source_url,
+        line: location.line,
+        column: location.column,
+    }
+}
+
+fn cpu_profile_function(node: &CpuProfileNodeSnapshot) -> CpuProfileFunctionSnapshot {
+    CpuProfileFunctionSnapshot {
+        name: node.call_frame.function_name.clone(),
+        breadcrumb: node.breadcrumb.clone(),
+        generated_location: cpu_profile_generated_location(node),
+        authored_location: node.authored_location.clone(),
+        self_time_micros: 0,
+        total_time_micros: 0,
+        sample_count: 0,
+    }
+}
+
+fn cpu_profile_generated_location(node: &CpuProfileNodeSnapshot) -> SourceLocation {
+    SourceLocation {
+        source_url: node.call_frame.url.clone(),
+        line: u32::try_from(node.call_frame.line_number)
+            .map(|line| line.saturating_add(1))
+            .unwrap_or(0),
+        column: u32::try_from(node.call_frame.column_number)
+            .map(|column| column.saturating_add(1))
+            .unwrap_or(0),
+    }
 }
 
 #[derive(Clone, Default)]
@@ -2249,6 +3683,51 @@ async fn resume_and_settle(
     .await
 }
 
+async fn release_waiting_target(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+) -> Result<(), TargetDebuggerError> {
+    let was_waiting = driver
+        .state()
+        .sessions
+        .get(session_key)
+        .is_some_and(|session| session.waiting_for_debugger);
+    driver
+        .apply(Input::ReleaseIfWaiting {
+            session: session_key.clone(),
+        })
+        .await?;
+    if !was_waiting {
+        return Ok(());
+    }
+
+    let startup_pause = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let session = driver
+                .state()
+                .sessions
+                .get(session_key)
+                .ok_or(TargetDebuggerError::SessionMissing)?;
+            if let SessionPhase::Paused { epoch } = session.phase {
+                return Ok::<_, TargetDebuggerError>((epoch, session.pause.clone()));
+            }
+            driver.process_next_event().await?;
+        }
+    })
+    .await;
+    let Ok(startup_pause) = startup_pause else {
+        return Ok(());
+    };
+    let (pause_epoch, pause) = startup_pause?;
+    if pause
+        .as_ref()
+        .is_some_and(|pause| pause.reason == "Break on start")
+    {
+        resume_and_settle(driver, session_key, pause_epoch).await?;
+    }
+    Ok(())
+}
+
 async fn settle_execution(
     driver: &mut DebuggerDriver,
     session_key: &SessionKey,
@@ -2287,7 +3766,7 @@ async fn evaluate(
             .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
         let mut params =
             DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
-        params.return_by_value = Some(true);
+        params.return_by_value = Some(false);
         params.generate_preview = Some(true);
         let evaluated = driver
             .client()
@@ -2300,7 +3779,7 @@ async fn evaluate(
         evaluated.result
     } else {
         let mut params = crate::cdp::RuntimeEvaluateParams::new(expression.clone());
-        params.return_by_value = Some(true);
+        params.return_by_value = Some(false);
         params.generate_preview = Some(true);
         let evaluated = driver
             .client()
@@ -2322,7 +3801,79 @@ async fn evaluate(
         value: result.value,
         unserializable_value: result.unserializable_value,
         description: result.description,
+        object_id: result.object_id,
     })
+}
+
+async fn scope_variables(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: u64,
+    frame_index: u32,
+    scope_index: u32,
+) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
+    let pause = require_pause(driver, session_key, pause_epoch)?;
+    let frame = pause
+        .frames
+        .get(frame_index as usize)
+        .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
+    let scope = frame
+        .scopes
+        .get(scope_index as usize)
+        .ok_or(TargetDebuggerError::ScopeNotFound(scope_index))?;
+    object_properties(
+        driver,
+        session_key,
+        Some(pause_epoch),
+        scope.object_id.clone(),
+    )
+    .await
+}
+
+async fn object_properties(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    object_id: String,
+) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
+    if let Some(pause_epoch) = pause_epoch {
+        require_pause(driver, session_key, pause_epoch)?;
+    }
+    let mut params = RuntimeGetPropertiesParams::new(object_id);
+    params.own_properties = Some(true);
+    params.generate_preview = Some(true);
+    let result = driver
+        .client()
+        .runtime_get_properties(params)
+        .await
+        .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
+    if let Some(exception) = result.exception_details {
+        return Err(TargetDebuggerError::Properties(exception.text));
+    }
+    Ok(result
+        .result
+        .into_iter()
+        .filter_map(|property| {
+            property
+                .value
+                .map(|value| variable_snapshot(property.name, value))
+        })
+        .collect())
+}
+
+fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {
+    let kind = serde_json::to_value(&value.r#type)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned());
+    VariableSnapshot {
+        name,
+        kind,
+        value: value.value,
+        unserializable_value: value.unserializable_value,
+        description: value.description,
+        object_id: value.object_id,
+    }
 }
 
 fn require_pause<'a>(
@@ -2406,11 +3957,14 @@ fn snapshot_from_driver(
                 && let Some(content) =
                     driver.logical_source_content(&raw_frame.raw_script, &location.source_url)
             {
-                frame.breadcrumb = crate::language_intelligence::breadcrumb(
-                    &location.source_url,
-                    &content,
-                    location.line,
-                    location.column,
+                frame.breadcrumb = callback_aware_breadcrumb(
+                    crate::language_intelligence::breadcrumb(
+                        &location.source_url,
+                        &content,
+                        location.line,
+                        location.column,
+                    ),
+                    &raw_frame.function_name,
                 );
                 if frame.index == 0 {
                     pause.source = Some(source_excerpt(
@@ -2420,6 +3974,20 @@ fn snapshot_from_driver(
                         frame.breadcrumb.clone(),
                     ));
                 }
+            }
+            if frame.breadcrumb.is_none()
+                && let Some(content) = driver.generated_source_content(&raw_frame.raw_script)
+            {
+                frame.breadcrumb = callback_aware_breadcrumb(
+                    driver.breadcrumb(
+                        &raw_frame.raw_script,
+                        &frame.raw.source_url,
+                        frame.raw.line,
+                        frame.raw.column,
+                        &content,
+                    ),
+                    &raw_frame.function_name,
+                );
             }
         }
     }
@@ -2473,17 +4041,38 @@ fn window_highlighted_line(
     display_column: usize,
     maximum: usize,
 ) -> (String, u32, u32) {
+    const OMISSION_MARK: &str = "...";
+
+    let total_chars = line.chars().count();
     let start = display_column.saturating_sub(maximum / 2);
-    let prefix = if start > 0 { "..." } else { "" };
+    let prefix = if start > 0 { OMISSION_MARK } else { "" };
+
+    // Reserve room for a trailing marker only when the line actually keeps
+    // going past what the remaining budget can show, so short/ordinary
+    // lines (and lines truncated only by hitting the very end) stay
+    // untouched.
+    let budget_without_suffix = maximum.saturating_sub(prefix.len());
+    let remaining_after_start = total_chars.saturating_sub(start);
+    let needs_suffix = remaining_after_start > budget_without_suffix;
+    let content_budget = if needs_suffix {
+        budget_without_suffix.saturating_sub(OMISSION_MARK.len())
+    } else {
+        budget_without_suffix
+    };
+
     let visible = line
         .chars()
         .skip(start)
-        .take(maximum.saturating_sub(prefix.len()))
+        .take(content_budget)
         .collect::<String>();
+    let suffix = if needs_suffix { OMISSION_MARK } else { "" };
+
     let highlight = prefix.len() + display_column.saturating_sub(start);
-    let available = maximum.saturating_sub(highlight);
+    let available = maximum
+        .saturating_sub(suffix.len())
+        .saturating_sub(highlight);
     (
-        format!("{prefix}{visible}"),
+        format!("{prefix}{visible}{suffix}"),
         highlight.saturating_add(1) as u32,
         available as u32,
     )
@@ -2533,6 +4122,7 @@ fn truncate_line(line: &str, maximum: usize) -> String {
 
 fn predicate_matches(snapshot: &TargetDebuggerSnapshot, predicate: &TargetWaitPredicate) -> bool {
     match predicate {
+        TargetWaitPredicate::Changed { after_revision } => snapshot.revision > *after_revision,
         TargetWaitPredicate::Running => {
             matches!(snapshot.phase, TargetDebuggerPhase::Running)
         }
@@ -2682,6 +4272,16 @@ fn snapshot(
                                 }
                             }
                         },
+                        scopes: frame
+                            .scopes
+                            .iter()
+                            .enumerate()
+                            .map(|(index, scope)| ScopeSnapshot {
+                                index: u32::try_from(index).unwrap_or(u32::MAX),
+                                kind: scope.kind.clone(),
+                                name: scope.name.clone(),
+                            })
+                            .collect(),
                         breadcrumb: None,
                     }
                 })
@@ -2721,10 +4321,16 @@ pub enum TargetDebuggerError {
     StalePause(u64),
     #[error("frame {0} does not exist in the current pause")]
     FrameNotFound(u32),
+    #[error("scope {0} does not exist in the selected frame")]
+    ScopeNotFound(u32),
     #[error("evaluation failed: {0}")]
     Evaluation(String),
+    #[error("property inspection failed: {0}")]
+    Properties(String),
     #[error("interaction failed: {0}")]
     Interaction(String),
+    #[error("screenshot capture failed: {0}")]
+    Screenshot(String),
     #[error("selector '{0}' did not match an element")]
     SelectorNotFound(String),
     #[error("unsupported key chord '{0}'")]
@@ -2737,6 +4343,16 @@ pub enum TargetDebuggerError {
     HeapCaptureNotFound(String),
     #[error("invalid heap class filter: {0}")]
     InvalidHeapFilter(String),
+    #[error("invalid heap selector: {0}")]
+    InvalidHeapSelector(String),
+    #[error("invalid heap reference: {0}")]
+    InvalidHeapReference(String),
+    #[error("heap object id '{0}' does not exist in the capture")]
+    HeapNodeNotFound(String),
+    #[error("heap analysis failed: {0}")]
+    HeapAnalysis(String),
+    #[error("heap captures '{older}' and '{newer}' are incompatible")]
+    IncompatibleHeapCaptures { older: String, newer: String },
     #[error("coverage recording is already active")]
     CoverageAlreadyActive,
     #[error("coverage recording is not active")]
@@ -2745,6 +4361,20 @@ pub enum TargetDebuggerError {
     CoverageCaptureNotFound(String),
     #[error("coverage capture '{0}' already exists in the active recording")]
     CoverageCaptureAlreadyExists(String),
+    #[error("CPU profiling failed: {0}")]
+    CpuProfile(String),
+    #[error("CPU profile recording is already active")]
+    CpuProfileAlreadyActive,
+    #[error("CPU profile recording is not active")]
+    CpuProfileNotActive,
+    #[error("CPU profile capture '{0}' does not exist")]
+    CpuProfileCaptureNotFound(String),
+    #[error("CPU profile capture '{0}' already exists")]
+    CpuProfileCaptureAlreadyExists(String),
+    #[error("CPU profile sampling interval must be between 1us and 2147483647us")]
+    InvalidCpuProfileSamplingInterval,
+    #[error("invalid CPU profile: {0}")]
+    InvalidCpuProfile(String),
     #[error("target debugger stopped")]
     Stopped,
     #[error("target debugger failed: {0}")]
@@ -2764,10 +4394,53 @@ pub enum TargetDebuggerError {
     InvalidTimeout,
 }
 
+fn callback_aware_breadcrumb(
+    breadcrumb: Option<String>,
+    runtime_function_name: &str,
+) -> Option<String> {
+    breadcrumb.map(|breadcrumb| {
+        if (runtime_function_name.is_empty() || runtime_function_name == "(anonymous)")
+            && !breadcrumb.ends_with(" → callback")
+        {
+            format!("{breadcrumb} → callback")
+        } else {
+            breadcrumb
+        }
+    })
+}
+
+fn generated_script_callback_breadcrumb(
+    source_effects: &SourceEffectInterpreter,
+    state: &DebuggerState,
+    script: &ScriptKey,
+    location: &SourceLocation,
+    runtime_function_name: &str,
+) -> Option<String> {
+    let content = source_effects.generated_source_content(state, script)?;
+    callback_aware_breadcrumb(
+        source_effects.breadcrumb(
+            state,
+            script,
+            &location.source_url,
+            location.line,
+            location.column,
+            &content,
+        ),
+        runtime_function_name,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{effective_coverage_ranges, heap_class_display_name, source_excerpt};
-    use crate::service_api::{CoverageRangeSnapshot, SourceLocation};
+    use super::{
+        aggregate_cpu_profile, bounded_heap_text, callback_aware_breadcrumb,
+        effective_coverage_ranges, heap_class_display_name, source_excerpt,
+        window_highlighted_line,
+    };
+    use crate::service_api::{
+        CoverageRangeSnapshot, CpuProfileCallFrameSnapshot, CpuProfileNodeSnapshot,
+        CpuProfileSnapshot, SourceExcerpt, SourceLocation,
+    };
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
         CoverageRangeSnapshot {
@@ -2780,6 +4453,81 @@ mod tests {
     }
 
     #[test]
+    fn heap_text_preview_truncates_on_character_boundaries() {
+        assert_eq!(
+            bounded_heap_text("ab\u{00e9}def", Some(3)),
+            ("ab\u{00e9}".to_owned(), true)
+        );
+        assert_eq!(
+            bounded_heap_text("ab\u{00e9}", Some(3)),
+            ("ab\u{00e9}".to_owned(), false)
+        );
+        assert_eq!(
+            bounded_heap_text("secret", None),
+            ("secret".to_owned(), false)
+        );
+    }
+
+    fn profile_node(id: i64, name: &str, children: Vec<i64>) -> CpuProfileNodeSnapshot {
+        CpuProfileNodeSnapshot {
+            id,
+            call_frame: CpuProfileCallFrameSnapshot {
+                function_name: name.to_owned(),
+                script_id: "1".to_owned(),
+                url: "app.js".to_owned(),
+                line_number: id,
+                column_number: 0,
+            },
+            hit_count: None,
+            children,
+            deopt_reason: None,
+            position_ticks: Vec::new(),
+            authored_location: None,
+            breadcrumb: None,
+            self_time_micros: 0,
+            total_time_micros: 0,
+            sample_count: 0,
+        }
+    }
+
+    #[test]
+    fn cpu_profile_aggregation_attributes_self_and_total_time() {
+        let mut profile = CpuProfileSnapshot {
+            capture_id: "test".to_owned(),
+            sampling_interval_micros: Some(1_000),
+            start_time_micros: 0.0,
+            end_time_micros: 150.0,
+            nodes: vec![
+                profile_node(1, "(root)", vec![2]),
+                profile_node(2, "outer", vec![3]),
+                profile_node(3, "inner", vec![]),
+            ],
+            samples: vec![3, 2],
+            time_deltas_micros: vec![100, 50],
+            functions: Vec::new(),
+            analysis: None,
+        };
+
+        aggregate_cpu_profile(&mut profile).unwrap();
+
+        assert_eq!(profile.nodes[0].self_time_micros, 0);
+        assert_eq!(profile.nodes[0].total_time_micros, 150);
+        assert_eq!(profile.nodes[1].self_time_micros, 50);
+        assert_eq!(profile.nodes[1].total_time_micros, 150);
+        assert_eq!(profile.nodes[2].self_time_micros, 100);
+        assert_eq!(profile.nodes[2].total_time_micros, 100);
+        assert_eq!(
+            profile
+                .functions
+                .iter()
+                .find(|function| function.name == "inner")
+                .unwrap()
+                .self_time_micros,
+            100
+        );
+    }
+
+    #[test]
     fn heap_class_names_omit_the_constructor_breadcrumb_segment() {
         assert_eq!(
             heap_class_display_name("PieceTreeTextBuffer.constructor"),
@@ -2788,6 +4536,31 @@ mod tests {
         assert_eq!(
             heap_class_display_name("Namespace.constructorFactory"),
             "Namespace.constructorFactory"
+        );
+    }
+
+    #[test]
+    fn anonymous_frames_are_identified_as_callbacks_of_the_authored_container() {
+        assert_eq!(
+            callback_aware_breadcrumb(Some("NativeEditContext.constructor".to_owned()), ""),
+            Some("NativeEditContext.constructor → callback".to_owned())
+        );
+        assert_eq!(
+            callback_aware_breadcrumb(Some("NativeEditContext._onType".to_owned()), "_onType"),
+            Some("NativeEditContext._onType".to_owned())
+        );
+        assert_eq!(
+            callback_aware_breadcrumb(Some("Emitter.fire".to_owned()), "(anonymous)"),
+            Some("Emitter.fire → callback".to_owned())
+        );
+        let generated = "function load() { queueMicrotask(() => work()); }";
+        let column = generated.find("work").unwrap() as u32 + 1;
+        assert_eq!(
+            callback_aware_breadcrumb(
+                crate::language_intelligence::breadcrumb("bundle.js", generated, 1, column,),
+                "",
+            ),
+            Some("load → callback".to_owned())
         );
     }
 
@@ -2823,5 +4596,205 @@ mod tests {
         );
         assert_eq!(excerpt.highlight_start, 12);
         assert_eq!(excerpt.highlight_length, 4);
+    }
+
+    /// Builds a single, very long source line made of non-alphanumeric
+    /// filler (so it never gets mistaken for part of `marker`) with
+    /// `marker` spliced in at `marker_offset` characters. `total_length`
+    /// controls the overall line length so tests can force windowing.
+    fn long_line_with_marker(marker: &str, marker_offset: usize, total_length: usize) -> String {
+        let mut line: String = std::iter::repeat_n('-', marker_offset).collect();
+        line.push_str(marker);
+        let remaining = total_length.saturating_sub(line.chars().count());
+        // Use a filler character distinct from both `.` (so it can never
+        // be mistaken for the `...` omission marker) and `_` (so it never
+        // extends the alphanumeric identifier run past `marker`).
+        line.extend(std::iter::repeat_n('#', remaining));
+        line
+    }
+
+    /// Extracts the highlighted slice of `text` addressed by the 1-based
+    /// `highlight_start`/`highlight_length` pair, mirroring how
+    /// `print_source_excerpt` positions the `^^^` caret under the text.
+    fn highlighted_slice(text: &str, highlight_start: u32, highlight_length: u32) -> String {
+        text.chars()
+            .skip(highlight_start.saturating_sub(1) as usize)
+            .take(highlight_length as usize)
+            .collect()
+    }
+
+    fn excerpt_for_single_line(line: &str, one_based_column: u32) -> SourceExcerpt {
+        source_excerpt(
+            "minified.js",
+            &SourceLocation {
+                source_url: "minified.js".to_owned(),
+                line: 1,
+                column: one_based_column,
+            },
+            line,
+            None,
+        )
+    }
+
+    #[test]
+    fn source_excerpt_leaves_ordinary_lines_unchanged() {
+        let source = "const a = 1;\nconst b = a + 1;\nconsole.log(b);\n";
+        let excerpt = source_excerpt(
+            "app.js",
+            &SourceLocation {
+                source_url: "app.js".to_owned(),
+                line: 2,
+                column: 7,
+            },
+            source,
+            None,
+        );
+        let rendered = excerpt
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            vec!["const a = 1;", "const b = a + 1;", "console.log(b);"]
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains('…') || line.contains("..."))
+        );
+        assert_eq!(excerpt.highlight_start, 7);
+        assert_eq!(excerpt.highlight_length, 1);
+    }
+
+    #[test]
+    fn source_excerpt_bounds_long_line_with_column_near_start() {
+        let marker_offset = 10;
+        let line = long_line_with_marker("TARGET", marker_offset, 1_000);
+        let excerpt = excerpt_for_single_line(&line, marker_offset as u32 + 1);
+        let text = &excerpt.lines[0].text;
+
+        // Near the start of the window: no leading omission, but the tail
+        // is far too long to show in full and must be marked as omitted.
+        assert!(
+            !text.starts_with("..."),
+            "unexpected leading omission: {text}"
+        );
+        assert!(text.ends_with("..."), "missing trailing omission: {text}");
+        assert!(text.len() < line.len(), "line should be bounded: {text}");
+        assert_eq!(
+            highlighted_slice(text, excerpt.highlight_start, excerpt.highlight_length),
+            "TARGET"
+        );
+    }
+
+    #[test]
+    fn source_excerpt_bounds_long_line_with_column_near_middle() {
+        let marker_offset = 500;
+        let line = long_line_with_marker("TARGET", marker_offset, 1_000);
+        let excerpt = excerpt_for_single_line(&line, marker_offset as u32 + 1);
+        let text = &excerpt.lines[0].text;
+
+        // Centered in a huge line: both ends must be marked as omitted.
+        assert!(text.starts_with("..."), "missing leading omission: {text}");
+        assert!(text.ends_with("..."), "missing trailing omission: {text}");
+        assert_eq!(
+            highlighted_slice(text, excerpt.highlight_start, excerpt.highlight_length),
+            "TARGET"
+        );
+    }
+
+    #[test]
+    fn source_excerpt_bounds_long_line_with_column_near_end() {
+        let marker_offset = 990;
+        let line = long_line_with_marker("TARGET", marker_offset, 1_000);
+        let excerpt = excerpt_for_single_line(&line, marker_offset as u32 + 1);
+        let text = &excerpt.lines[0].text;
+
+        // Near the true end of the line: leading omission, but nothing
+        // trails past the marker, so no trailing marker should appear.
+        assert!(text.starts_with("..."), "missing leading omission: {text}");
+        assert!(
+            !text.ends_with("..."),
+            "unexpected trailing omission: {text}"
+        );
+        assert_eq!(
+            highlighted_slice(text, excerpt.highlight_start, excerpt.highlight_length),
+            "TARGET"
+        );
+    }
+
+    #[test]
+    fn source_excerpt_bounds_long_unicode_line_around_the_caret() {
+        // 5 astral emoji (2 UTF-16 units, 1 char each) plus ASCII filler
+        // ahead of the marker, exercising UTF-16 column mapping together
+        // with the character-based windowing.
+        let emoji_prefix = "😀".repeat(5);
+        let ascii_prefix = "-".repeat(300);
+        let marker = "MÄRK";
+        let suffix = "#".repeat(300);
+        let line = format!("{emoji_prefix}{ascii_prefix}{marker}{suffix}");
+
+        let utf16_before_marker = (emoji_prefix.chars().count() * 2) + ascii_prefix.chars().count();
+        let excerpt = excerpt_for_single_line(&line, utf16_before_marker as u32 + 1);
+        let text = &excerpt.lines[0].text;
+
+        assert!(text.starts_with("..."), "missing leading omission: {text}");
+        assert!(text.ends_with("..."), "missing trailing omission: {text}");
+        assert_eq!(
+            highlighted_slice(text, excerpt.highlight_start, excerpt.highlight_length),
+            marker
+        );
+    }
+
+    #[test]
+    fn source_excerpt_bounds_nearby_long_lines_without_misleading_columns() {
+        let long_neighbor = "z".repeat(500);
+        let source = format!("{long_neighbor}\nlet value = 1;\n{long_neighbor}\n");
+        let excerpt = source_excerpt(
+            "app.js",
+            &SourceLocation {
+                source_url: "app.js".to_owned(),
+                line: 2,
+                column: 5,
+            },
+            &source,
+            None,
+        );
+        assert_eq!(excerpt.lines.len(), 3);
+        // Non-active long lines are bounded too, but since they carry no
+        // caret they only need a trailing omission marker, never a
+        // misleading leading offset.
+        assert_eq!(excerpt.lines[0].text.chars().count(), 201);
+        assert!(excerpt.lines[0].text.ends_with('…'));
+        assert!(!excerpt.lines[0].text.starts_with('…'));
+        assert_eq!(excerpt.lines[2].text, excerpt.lines[0].text);
+        assert_eq!(excerpt.lines[1].text, "let value = 1;");
+    }
+
+    #[test]
+    fn window_highlighted_line_marks_only_the_omissions_actually_present() {
+        // Short line: fits entirely, no markers at all.
+        let (text, start, _) = window_highlighted_line("let value = 1;", 4, 200);
+        assert_eq!(text, "let value = 1;");
+        assert_eq!(start, 5);
+
+        // Long line, caret at the very start: only a trailing marker.
+        let long_tail = format!("{}{}", "a", "b".repeat(400));
+        let (text, _, _) = window_highlighted_line(&long_tail, 0, 200);
+        assert!(!text.starts_with("..."));
+        assert!(text.ends_with("..."));
+
+        // Long line, caret at the very end: only a leading marker.
+        let long_head = format!("{}{}", "b".repeat(400), "a");
+        let (text, _, _) = window_highlighted_line(&long_head, 400, 200);
+        assert!(text.starts_with("..."));
+        assert!(!text.ends_with("..."));
+
+        // Long line, caret in the middle: markers on both sides.
+        let long_middle = format!("{}{}{}", "b".repeat(400), "a", "b".repeat(400));
+        let (text, _, _) = window_highlighted_line(&long_middle, 400, 200);
+        assert!(text.starts_with("..."));
+        assert!(text.ends_with("..."));
     }
 }

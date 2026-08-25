@@ -1,0 +1,15 @@
+{
+	"name": "jsdbg-vscode-examples",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build:tsc": "tsc --project tsconfig.json"
+	},
+	"devDependencies": {
+		"tsx": "^4.20.5",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"cdp-client-prototypes": "file:../../.."
+	}
+}

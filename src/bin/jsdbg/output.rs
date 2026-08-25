@@ -1,15 +1,20 @@
 use cdp_client::service_api::{
-    BreakpointStatus, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
-    ContextSnapshot, ContextSummary, CoverageSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
-    HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapSnapshotProgress,
-    HeapSnapshotResult, ObservationResult, PlaywrightChannel, ServiceInfo, SourceContentSnapshot,
-    SourceExcerpt, SourceLocation, SourceMatchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot,
+    AgentSessionSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionStatus,
+    ConsoleMessageSnapshot, ContextSnapshot, ContextSummary, CoverageSnapshot,
+    CpuProfileFunctionSnapshot, CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
+    HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry,
+    HeapDiffSnapshot, HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot,
+    HeapPathSnapshot, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
+    ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
+    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceLocation, SourceMatchSnapshot,
+    SourceSnapshotInfo, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
+use std::path::Path;
 
-use super::bounded_tree::{BoundedTree, BoundedTreeStyle, TreeAggregate};
+use super::bounded_tree::{BoundedTree, BoundedTreeStyle, TreeAggregate, TreeRenderOptions};
 
 #[derive(Clone, Copy)]
 pub enum OutputFormat {
@@ -21,6 +26,45 @@ pub struct CoverageOutputOptions<'a> {
     pub path: Option<&'a str>,
     pub all: bool,
     pub max_lines: usize,
+    pub trim_width: bool,
+}
+
+#[derive(Clone, Copy)]
+pub enum CpuProfileView {
+    Functions,
+    Files,
+}
+
+#[derive(Clone, Copy)]
+pub enum CpuProfileSort {
+    SelfTime,
+    TotalTime,
+}
+
+pub struct CpuProfileOutputOptions<'a> {
+    pub path: Option<&'a str>,
+    pub view: CpuProfileView,
+    pub sort: CpuProfileSort,
+    pub max_lines: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct ProcessTreeOutputOptions<'a> {
+    pub command_line: bool,
+    pub stats: bool,
+    pub filter: Option<&'a str>,
+    pub trim_width: bool,
+}
+
+impl Default for ProcessTreeOutputOptions<'_> {
+    fn default() -> Self {
+        Self {
+            command_line: true,
+            stats: false,
+            filter: None,
+            trim_width: true,
+        }
+    }
 }
 
 pub struct HeapClassOutputOptions {
@@ -28,6 +72,7 @@ pub struct HeapClassOutputOptions {
     pub max_lines: usize,
     pub instances: bool,
     pub sort_by_instances: bool,
+    pub trim_width: bool,
 }
 
 impl OutputFormat {
@@ -174,6 +219,96 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_cpu_profile(
+        &self,
+        value: &CpuProfileSnapshot,
+        options: CpuProfileOutputOptions<'_>,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => print_cpu_profile_human(value, options),
+            Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        }
+        Ok(())
+    }
+
+    pub fn print_cpu_profile_started(
+        &self,
+        sampling_interval_micros: Option<u64>,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => match sampling_interval_micros {
+                Some(interval) => {
+                    println!("CPU profile recording started ({interval}us sampling interval).")
+                }
+                None => {
+                    println!("CPU profile recording started (runtime default sampling interval).")
+                }
+            },
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "started": true,
+                    "samplingIntervalMicros": sampling_interval_micros,
+                }))?
+            ),
+        }
+        Ok(())
+    }
+
+    pub fn print_cpu_profile_stopped(
+        &self,
+        profile: &CpuProfileSnapshot,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => println!(
+                "CPU profile recording stopped. Captured {}.",
+                profile.capture_id
+            ),
+            Self::Json => println!("{}", serde_json::to_string_pretty(profile)?),
+        }
+        Ok(())
+    }
+
+    pub fn print_cpu_profile_exported(&self, path: &Path) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => println!("Exported CPU profile to {}.", path.display()),
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": path,
+                }))?
+            ),
+        }
+        Ok(())
+    }
+
+    pub fn print_screenshot_captured(
+        &self,
+        path: &Path,
+        byte_length: usize,
+        width: u32,
+        height: u32,
+        media_type: &str,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => println!(
+                "Captured {width}x{height} screenshot to {}.",
+                path.display()
+            ),
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "path": path,
+                    "mediaType": media_type,
+                    "byteLength": byte_length,
+                    "width": width,
+                    "height": height,
+                }))?
+            ),
+        }
+        Ok(())
+    }
+
     pub fn print<T>(&self, value: &T) -> Result<(), serde_json::Error>
     where
         T: HumanOutput + Serialize,
@@ -181,6 +316,21 @@ impl OutputFormat {
         match self {
             Self::Human => value.print_human(),
             Self::Json => println!("{}", serde_json::to_string_pretty(value)?),
+        }
+        Ok(())
+    }
+
+    pub fn print_process_trees(
+        &self,
+        trees: &[ProcessTreeSnapshot],
+        options: ProcessTreeOutputOptions<'_>,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => print_process_trees_human(trees, options),
+            Self::Json => println!(
+                "{}",
+                serde_json::to_string_pretty(&process_trees_json(trees, options)?)?
+            ),
         }
         Ok(())
     }
@@ -323,8 +473,12 @@ impl HumanOutput for u32 {
 impl HumanOutput for HeapSnapshotResult {
     fn print_human(&self) {
         println!(
-            "Heap snapshot written to {} ({} bytes).",
-            self.path, self.bytes_written
+            "Heap snapshot written to {} ({} bytes) in {:.3}s: taking {:.3}s, retrieving {:.3}s.",
+            self.path,
+            self.bytes_written,
+            self.timing.total_duration_micros() as f64 / 1_000_000.0,
+            self.timing.taking_duration_micros as f64 / 1_000_000.0,
+            self.timing.retrieving_duration_micros as f64 / 1_000_000.0,
         );
     }
 }
@@ -332,11 +486,203 @@ impl HumanOutput for HeapSnapshotResult {
 impl HumanOutput for HeapCaptureResult {
     fn print_human(&self) {
         println!(
-            "Captured {} ({}).",
+            "Captured {} ({}) in {:.3}s: taking {:.3}s, retrieving {:.3}s.",
             self.capture_id,
-            compact_bytes(self.bytes_written)
+            compact_bytes(self.bytes_written),
+            self.timing.total_duration_micros() as f64 / 1_000_000.0,
+            self.timing.taking_duration_micros as f64 / 1_000_000.0,
+            self.timing.retrieving_duration_micros as f64 / 1_000_000.0,
         );
     }
+}
+
+impl HumanOutput for HeapNodeSelectionSnapshot {
+    fn print_human(&self) {
+        println!(
+            "{} nodes selected from '{}' ({} nodes, {} edges; graph {} in {}).",
+            self.nodes.len(),
+            self.capture_id,
+            self.total_nodes,
+            self.total_edges,
+            if self.used_cached_graph {
+                "reused"
+            } else {
+                "parsed"
+            },
+            format_profile_time(self.graph_parse_duration_micros),
+        );
+        for node in &self.nodes {
+            println!("{}", heap_node_line(node));
+        }
+    }
+}
+
+impl HumanOutput for HeapReferencesSnapshot {
+    fn print_human(&self) {
+        println!("{}", heap_node_line(&self.node));
+        for reference in &self.references {
+            let label = reference
+                .name
+                .as_deref()
+                .map(|name| format!(" {}", escaped_heap_text(name, false)))
+                .unwrap_or_else(|| format!(" [{}]", reference.name_or_index));
+            println!(
+                "  {} --{}{}--> {}",
+                reference.source, reference.edge_type, label, reference.target
+            );
+        }
+        if self.omitted_reference_count > 0 {
+            println!("  ... {} references omitted", self.omitted_reference_count);
+        }
+    }
+}
+
+impl HumanOutput for HeapPathSnapshot {
+    fn print_human(&self) {
+        for line in heap_path_lines(self) {
+            println!("{line}");
+        }
+    }
+}
+
+fn heap_path_lines(path: &HeapPathSnapshot) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Heap path in '{}' ({} edges):",
+        path.capture_id,
+        path.steps.len(),
+    )];
+    let Some(first) = path.nodes.first() else {
+        return lines;
+    };
+    lines.push(heap_node_line(first));
+    let root_infrastructure_start = heap_root_infrastructure_start(path);
+    for (step_index, (step, node)) in path.steps.iter().zip(path.nodes.iter().skip(1)).enumerate() {
+        let node_index = step_index + 1;
+        let prefix = root_infrastructure_start
+            .filter(|start| node_index > *start)
+            .map(|_| "│ ")
+            .unwrap_or_default();
+        lines.push(format!("{prefix}{}", heap_path_step_line(step)));
+        if root_infrastructure_start == Some(node_index) {
+            lines.push("┌─ V8 runtime roots (implementation details)".to_owned());
+        }
+        let prefix = root_infrastructure_start
+            .filter(|start| node_index >= *start)
+            .map(|_| "│ ")
+            .unwrap_or_default();
+        lines.push(format!("{prefix}{}", heap_node_line(node)));
+    }
+    if root_infrastructure_start.is_some() {
+        lines.push("└─".to_owned());
+    }
+    lines
+}
+
+fn heap_path_step_line(step: &cdp_client::service_api::HeapPathStepSnapshot) -> String {
+    let direction = match step.direction {
+        cdp_client::service_api::HeapTraversalDirection::Outgoing => "->",
+        cdp_client::service_api::HeapTraversalDirection::Incoming => "<-",
+    };
+    let label = step
+        .name
+        .as_deref()
+        .map(|name| escaped_heap_text(name, false))
+        .unwrap_or_else(|| format!("[{}]", step.name_or_index));
+    format!("  {direction} {} {label}", step.edge_type)
+}
+
+fn heap_root_infrastructure_start(path: &HeapPathSnapshot) -> Option<usize> {
+    let last = path.nodes.last()?;
+    if last.node_type != "synthetic" || last.incoming_reference_count != 0 {
+        return None;
+    }
+    let mut start = path.nodes.len() - 1;
+    while start > 0
+        && matches!(
+            path.nodes[start - 1].node_type.as_str(),
+            "native" | "synthetic"
+        )
+    {
+        start -= 1;
+    }
+    (start > 0).then_some(start)
+}
+
+impl HumanOutput for HeapDominatorSnapshot {
+    fn print_human(&self) {
+        println!("Dominator chain for {}:", self.node.reference);
+        println!("{}", heap_node_line(&self.node));
+        for node in &self.chain {
+            println!("  <- {}", heap_node_line(node));
+        }
+    }
+}
+
+impl HumanOutput for HeapAggregateSnapshot {
+    fn print_human(&self) {
+        let total_entry_count = self.entries.len() as u64 + self.omitted_entry_count;
+        println!(
+            "Heap aggregate for '{}' ({} of {} groups; largest shallow size first):",
+            self.capture_id,
+            self.entries.len(),
+            total_entry_count,
+        );
+        for entry in &self.entries {
+            println!(
+                "{:>10}  {:>10}  {}",
+                entry.count,
+                compact_bytes(entry.shallow_size),
+                escaped_heap_text(&entry.key, entry.key_truncated)
+            );
+        }
+        if self.omitted_entry_count > 0 {
+            println!("... {} aggregate groups omitted", self.omitted_entry_count);
+        }
+    }
+}
+
+impl HumanOutput for HeapDiffSnapshot {
+    fn print_human(&self) {
+        println!(
+            "Heap diff '{}' -> '{}':",
+            self.older_capture_id, self.newer_capture_id
+        );
+        for entry in &self.entries {
+            println!(
+                "{:+10}  {:+12} B  {}",
+                entry.count_delta,
+                entry.shallow_size_delta,
+                escaped_heap_text(&entry.key, entry.key_truncated)
+            );
+        }
+    }
+}
+
+fn heap_node_line(node: &HeapNodeSnapshot) -> String {
+    let value = node
+        .string_value
+        .as_deref()
+        .map(|value| escaped_heap_text(value, node.string_truncated))
+        .unwrap_or_else(|| escaped_heap_text(&node.name, node.string_truncated));
+    let retained = node
+        .retained_size
+        .map(|size| format!(", retained:{}", compact_bytes(size)))
+        .unwrap_or_default();
+    format!(
+        "{}  type:{}, value:{}, shallow:{}{}, in:{}, out:{}",
+        node.reference,
+        node.node_type,
+        value,
+        compact_bytes(node.shallow_size),
+        retained,
+        node.incoming_reference_count,
+        node.outgoing_reference_count,
+    )
+}
+
+fn escaped_heap_text(value: &str, truncated: bool) -> String {
+    let escaped = value.escape_default().to_string();
+    format!("\"{escaped}{}\"", if truncated { "..." } else { "" })
 }
 
 impl HumanOutput for Vec<ContextSummary> {
@@ -357,6 +703,473 @@ impl HumanOutput for Vec<ContextSummary> {
             );
         }
     }
+}
+
+impl HumanOutput for Vec<ProcessTreeSnapshot> {
+    fn print_human(&self) {
+        print_process_trees_human(self, ProcessTreeOutputOptions::default());
+    }
+}
+
+fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTreeOutputOptions<'_>) {
+    if trees.is_empty() {
+        println!("No running VS Code process trees.");
+        return;
+    }
+    let rendered = trees
+        .iter()
+        .filter_map(|tree| {
+            let lines = process_tree_lines(tree, options);
+            (!lines.is_empty()).then_some((tree, lines))
+        })
+        .collect::<Vec<_>>();
+    if rendered.is_empty() {
+        println!(
+            "No VS Code process tree paths matched {}.",
+            options.filter.unwrap_or_default()
+        );
+        return;
+    }
+    for (tree_index, (tree, lines)) in rendered.into_iter().enumerate() {
+        if tree_index != 0 {
+            println!();
+        }
+        println!(
+            "VS Code process tree {}  ({} attachable targets{})",
+            tree.root_process_id,
+            tree.processes
+                .iter()
+                .filter(|process| process.attachable)
+                .count(),
+            if tree.runtime_metadata_available {
+                "; window metadata available"
+            } else {
+                ""
+            }
+        );
+        for line in lines {
+            println!("{line}");
+        }
+    }
+}
+
+#[derive(Clone)]
+enum ProcessTreeLeaf<'a> {
+    Process(&'a ProcessSnapshot),
+    Window { id: u32, title: Option<&'a str> },
+    Session(&'a AgentSessionSnapshot),
+}
+
+#[derive(Clone)]
+struct ProcessRenderNode<'a> {
+    path_segment: String,
+    leaf: ProcessTreeLeaf<'a>,
+    children: Vec<ProcessRenderNode<'a>>,
+}
+
+#[derive(Clone)]
+struct ProcessOrder(u64);
+
+impl Default for ProcessOrder {
+    fn default() -> Self {
+        Self(u64::MAX)
+    }
+}
+
+impl TreeAggregate for ProcessOrder {
+    fn merge(&mut self, other: &Self) {
+        self.0 = self.0.min(other.0);
+    }
+}
+
+struct ProcessTreeStyle {
+    command_line: bool,
+    stats: bool,
+    colorize: bool,
+}
+
+impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
+    fn sort_weight(&self, aggregate: &ProcessOrder) -> u64 {
+        u64::MAX.saturating_sub(aggregate.0)
+    }
+
+    fn expansion_weight(
+        &self,
+        node: &BoundedTree<ProcessOrder, ProcessTreeLeaf<'_>>,
+        _expand_leaves: bool,
+    ) -> u64 {
+        node.leaf_count() as u64
+    }
+
+    fn render_node(
+        &self,
+        label: &str,
+        node: &BoundedTree<ProcessOrder, ProcessTreeLeaf<'_>>,
+        _prefix: &str,
+        _expand_leaves: bool,
+    ) -> String {
+        match node.leaf() {
+            Some(ProcessTreeLeaf::Process(process)) => {
+                let label = process_label(
+                    process,
+                    ProcessTreeOutputOptions {
+                        command_line: self.command_line,
+                        stats: self.stats,
+                        filter: None,
+                        trim_width: true,
+                    },
+                );
+                style_process_label(label, process.attachable, self.colorize)
+            }
+            Some(ProcessTreeLeaf::Window { id, title }) => format!(
+                "window {id}{}",
+                title.map(|title| format!("  {title}")).unwrap_or_default()
+            ),
+            Some(ProcessTreeLeaf::Session(session)) => style_session_label(
+                format!(
+                    "session {}  [{}{}]",
+                    session.title.as_deref().unwrap_or("<untitled>"),
+                    session.internal_id,
+                    if session.disconnected == Some(true) {
+                        ", disconnected"
+                    } else {
+                        ""
+                    }
+                ),
+                self.colorize,
+            ),
+            None => label.to_owned(),
+        }
+    }
+
+    fn render_leaf_children(
+        &self,
+        _prefix: &str,
+        _node: &BoundedTree<ProcessOrder, ProcessTreeLeaf<'_>>,
+        _budget: usize,
+        _expand_leaves: bool,
+    ) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn render_omitted(
+        &self,
+        hidden_items: usize,
+        _hidden_leaves: usize,
+        _aggregate: &ProcessOrder,
+    ) -> String {
+        format!("{hidden_items} process tree nodes omitted")
+    }
+
+    fn render_all_pruned(
+        &self,
+        child_count: usize,
+        _hidden_leaves: usize,
+        _aggregate: &ProcessOrder,
+    ) -> String {
+        format!("all {child_count} process tree nodes pruned")
+    }
+}
+
+fn style_process_label(label: String, attachable: bool, colorize: bool) -> String {
+    if colorize && !attachable {
+        format!("\u{1b}[2m{label}\u{1b}[0m")
+    } else {
+        label
+    }
+}
+
+fn style_session_label(label: String, colorize: bool) -> String {
+    if colorize {
+        format!("\u{1b}[34m{label}\u{1b}[0m")
+    } else {
+        label
+    }
+}
+
+fn process_tree_lines(
+    tree: &ProcessTreeSnapshot,
+    options: ProcessTreeOutputOptions<'_>,
+) -> Vec<String> {
+    let Some(root) = process_render_tree(tree) else {
+        return Vec::new();
+    };
+    let root = match options.filter {
+        Some(filter) => filter_process_render_node(&root, filter),
+        None => Some(root),
+    };
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let mut tree = BoundedTree::default();
+    let mut order = 0;
+    insert_process_render_node(&mut tree, &root, &mut Vec::new(), &mut order);
+    tree.render_with_options(
+        &ProcessTreeStyle {
+            command_line: options.command_line,
+            stats: options.stats,
+            colorize: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+        },
+        false,
+        TreeRenderOptions::terminal(usize::MAX, options.trim_width),
+    )
+}
+
+fn process_render_tree(tree: &ProcessTreeSnapshot) -> Option<ProcessRenderNode<'_>> {
+    let mut children = BTreeMap::<u32, Vec<&ProcessSnapshot>>::new();
+    for process in &tree.processes {
+        if let Some(parent_id) = process.parent_process_id {
+            children.entry(parent_id).or_default().push(process);
+        }
+    }
+    let Some(root) = tree
+        .processes
+        .iter()
+        .find(|process| process.process_id == tree.root_process_id)
+    else {
+        return None;
+    };
+    Some(process_render_node(root, root.window_id, &children))
+}
+
+fn process_render_node<'a>(
+    process: &'a ProcessSnapshot,
+    active_window: Option<u32>,
+    children: &BTreeMap<u32, Vec<&'a ProcessSnapshot>>,
+) -> ProcessRenderNode<'a> {
+    let mut rendered_children = process
+        .agent_sessions
+        .iter()
+        .map(|session| ProcessRenderNode {
+            path_segment: format!(
+                "session {}",
+                session.title.as_deref().unwrap_or(&session.internal_id)
+            ),
+            leaf: ProcessTreeLeaf::Session(session),
+            children: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let process_children = children
+        .get(&process.process_id)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut rendered_windows = BTreeSet::new();
+    for child in process_children {
+        match child
+            .window_id
+            .filter(|window_id| Some(*window_id) != active_window)
+        {
+            Some(window_id) if rendered_windows.insert(window_id) => {
+                let title = process_children
+                    .iter()
+                    .filter(|candidate| candidate.window_id == Some(window_id))
+                    .find_map(|candidate| candidate.window_title.as_deref());
+                rendered_children.push(ProcessRenderNode {
+                    path_segment: format!("window {window_id}"),
+                    leaf: ProcessTreeLeaf::Window {
+                        id: window_id,
+                        title,
+                    },
+                    children: process_children
+                        .iter()
+                        .filter(|candidate| candidate.window_id == Some(window_id))
+                        .map(|window_child| {
+                            process_render_node(window_child, Some(window_id), children)
+                        })
+                        .collect(),
+                });
+            }
+            Some(_) => {}
+            None => rendered_children.push(process_render_node(child, active_window, children)),
+        }
+    }
+    ProcessRenderNode {
+        path_segment: process_path_segment(process),
+        leaf: ProcessTreeLeaf::Process(process),
+        children: rendered_children,
+    }
+}
+
+fn process_path_segment(process: &ProcessSnapshot) -> String {
+    let label = process.display_name.as_deref().unwrap_or(&process.name);
+    format!("{} {label}", process.process_id)
+}
+
+fn filter_process_render_node<'a>(
+    root: &ProcessRenderNode<'a>,
+    filter: &str,
+) -> Option<ProcessRenderNode<'a>> {
+    fn filter_node<'a>(
+        node: &ProcessRenderNode<'a>,
+        path: &mut Vec<String>,
+        filter: &str,
+        ancestor_matched: bool,
+    ) -> Option<ProcessRenderNode<'a>> {
+        path.push(node.path_segment.to_lowercase());
+        let matched = ancestor_matched || path.join("/").contains(filter);
+        let result = if matched {
+            Some(node.clone())
+        } else {
+            let children = node
+                .children
+                .iter()
+                .filter_map(|child| filter_node(child, path, filter, false))
+                .collect::<Vec<_>>();
+            (!children.is_empty()).then(|| ProcessRenderNode {
+                path_segment: node.path_segment.clone(),
+                leaf: node.leaf.clone(),
+                children,
+            })
+        };
+        path.pop();
+        result
+    }
+
+    let filter = filter.trim().to_lowercase();
+    if filter.is_empty() {
+        return Some(root.clone());
+    }
+    filter_node(root, &mut Vec::new(), &filter, false)
+}
+
+fn process_trees_json(
+    trees: &[ProcessTreeSnapshot],
+    options: ProcessTreeOutputOptions<'_>,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let mut result = Vec::new();
+    for tree in trees {
+        let selected = match options.filter {
+            Some(filter) => {
+                let Some(root) = process_render_tree(tree)
+                    .and_then(|root| filter_process_render_node(&root, filter))
+                else {
+                    continue;
+                };
+                let mut process_ids = BTreeSet::new();
+                collect_process_ids(&root, &mut process_ids);
+                Some(process_ids)
+            }
+            None => None,
+        };
+        let mut value = serde_json::to_value(tree)?;
+        if let Some(processes) = value
+            .get_mut("processes")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            if let Some(selected) = &selected {
+                processes.retain(|process| {
+                    process
+                        .get("processId")
+                        .and_then(serde_json::Value::as_u64)
+                        .is_some_and(|process_id| selected.contains(&(process_id as u32)))
+                });
+            }
+            if !options.command_line {
+                for process in processes {
+                    if let Some(process) = process.as_object_mut() {
+                        process.remove("commandLine");
+                    }
+                }
+            }
+        }
+        result.push(value);
+    }
+    Ok(serde_json::Value::Array(result))
+}
+
+fn collect_process_ids(node: &ProcessRenderNode<'_>, result: &mut BTreeSet<u32>) {
+    if let ProcessTreeLeaf::Process(process) = &node.leaf {
+        result.insert(process.process_id);
+    }
+    for child in &node.children {
+        collect_process_ids(child, result);
+    }
+}
+
+fn insert_process_render_node<'a>(
+    tree: &mut BoundedTree<ProcessOrder, ProcessTreeLeaf<'a>>,
+    node: &ProcessRenderNode<'a>,
+    path: &mut Vec<String>,
+    order: &mut u64,
+) {
+    path.push(node.path_segment.clone());
+    tree.insert(
+        path.iter().cloned(),
+        ProcessOrder(*order),
+        node.leaf.clone(),
+    );
+    *order += 1;
+    for child in &node.children {
+        insert_process_render_node(tree, child, path, order);
+    }
+    path.pop();
+}
+
+fn process_label(process: &ProcessSnapshot, options: ProcessTreeOutputOptions<'_>) -> String {
+    let label = process.display_name.as_deref().unwrap_or(&process.name);
+    let stats = options.stats.then(|| {
+        format!(
+            "  cpu {}  memory {}",
+            process
+                .cpu_percent
+                .map(|cpu| format!("{cpu}%"))
+                .unwrap_or_else(|| "?".to_owned()),
+            process
+                .memory_bytes
+                .map(compact_bytes)
+                .unwrap_or_else(|| "?".to_owned())
+        )
+    });
+    let command = options
+        .command_line
+        .then(|| process_command_summary(process))
+        .flatten();
+    format!(
+        "{}  {}  [{}]{}{}{}",
+        process.process_id,
+        label,
+        process_role(&process.role),
+        process
+            .debug_target_id
+            .as_deref()
+            .map(|target_id| format!("  target {target_id}"))
+            .unwrap_or_default(),
+        stats.unwrap_or_default(),
+        command
+            .as_deref()
+            .map(|command| format!("  {command}"))
+            .unwrap_or_default()
+    )
+}
+
+fn process_command_summary(process: &ProcessSnapshot) -> Option<String> {
+    if !matches!(
+        process.role,
+        ProcessRole::Node
+            | ProcessRole::TypeScriptServer
+            | ProcessRole::TypeScriptInstaller
+            | ProcessRole::LanguageServer
+    ) {
+        return None;
+    }
+    let command = strip_windows_executable(&process.command_line);
+    if command.is_empty() {
+        None
+    } else {
+        Some(command.to_owned())
+    }
+}
+
+fn strip_windows_executable(command: &str) -> &str {
+    let command = command.trim();
+    if let Some(rest) = command.strip_prefix('"')
+        && let Some(end) = rest.find('"')
+    {
+        return rest[end + 1..].trim();
+    }
+    command
+        .split_once(char::is_whitespace)
+        .map_or("", |(_, rest)| rest.trim())
 }
 
 impl HumanOutput for ContextSnapshot {
@@ -397,7 +1210,15 @@ impl HumanOutput for ContextSnapshot {
                             counts
                         },
                     );
-                    for target in &connection.targets {
+                    let mut target_depths = BTreeMap::<String, usize>::new();
+                    for node in connection.target_forest() {
+                        let target = &node.target;
+                        let depth = node
+                            .parent_target_id
+                            .as_deref()
+                            .and_then(|parent_id| target_depths.get(parent_id))
+                            .map_or(0, |parent_depth| parent_depth + 1);
+                        target_depths.insert(target.target_id.clone(), depth);
                         let title = if target.title.is_empty() {
                             "(untitled)"
                         } else {
@@ -413,7 +1234,8 @@ impl HumanOutput for ContextSnapshot {
                             target.target_id.as_str()
                         };
                         println!(
-                            "        {}  {}  {}{}",
+                            "        {}{}  {}  {}{}",
+                            "  ".repeat(depth),
                             selector,
                             title,
                             target.url,
@@ -456,6 +1278,32 @@ impl HumanOutput for ContextSnapshot {
                 }
             }
         }
+    }
+}
+
+fn process_role(role: &ProcessRole) -> &'static str {
+    match role {
+        ProcessRole::VscodeMain => "vscode-main",
+        ProcessRole::Renderer => "renderer",
+        ProcessRole::ExtensionHost => "extension-host",
+        ProcessRole::NodeUtility => "node-utility",
+        ProcessRole::Node => "node",
+        ProcessRole::TypeScriptServer => "typescript-server",
+        ProcessRole::TypeScriptInstaller => "typescript-installer",
+        ProcessRole::LanguageServer => "language-server",
+        ProcessRole::PtyHost => "pty-host",
+        ProcessRole::FileWatcher => "file-watcher",
+        ProcessRole::AgentHost => "agent-host",
+        ProcessRole::Copilot => "copilot",
+        ProcessRole::Claude => "claude",
+        ProcessRole::Codex => "codex",
+        ProcessRole::Agent => "agent",
+        ProcessRole::Gpu => "gpu",
+        ProcessRole::NetworkService => "network-service",
+        ProcessRole::AudioService => "audio-service",
+        ProcessRole::Crashpad => "crashpad",
+        ProcessRole::Utility => "utility",
+        ProcessRole::Other => "other",
     }
 }
 
@@ -518,11 +1366,27 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                     }
                     FrameProjectionSnapshot::Raw => runtime_location(&frame.raw),
                     FrameProjectionSnapshot::Pending => "mapping".to_owned(),
-                    FrameProjectionSnapshot::Failed { message } => {
-                        format!("mapping failed ({message})")
-                    }
+                    FrameProjectionSnapshot::Failed { .. } => runtime_location(&frame.raw),
                 };
                 println!("    #{} {function_name} — {location}", frame.index);
+            }
+            let warnings = pause
+                .frames
+                .iter()
+                .filter_map(|frame| match &frame.projected {
+                    FrameProjectionSnapshot::Failed { message } => {
+                        Some((frame.index, message, runtime_location(&frame.raw)))
+                    }
+                    _ => None,
+                });
+            let mut warnings = warnings.peekable();
+            if warnings.peek().is_some() {
+                println!("  Warnings:");
+                for (index, message, generated_location) in warnings {
+                    println!(
+                        "    frame #{index} source mapping failed: {message}; using generated location {generated_location}"
+                    );
+                }
             }
         }
     }
@@ -542,6 +1406,7 @@ impl HumanOutput for CoverageSnapshot {
                 path: None,
                 all: false,
                 max_lines: 300,
+                trim_width: true,
             },
         );
     }
@@ -557,6 +1422,123 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
         files.entry(entry.path.clone()).or_default().push(entry);
     }
     print_coverage_tree(snapshot, options, files);
+}
+
+fn print_cpu_profile_human(snapshot: &CpuProfileSnapshot, options: CpuProfileOutputOptions<'_>) {
+    let sampled_micros = snapshot.time_deltas_micros.iter().copied().sum::<u64>();
+    let elapsed_micros = (snapshot.end_time_micros - snapshot.start_time_micros).max(0.0) as u64;
+    println!(
+        "CPU profile {}: {} elapsed, {} sampled, {} samples",
+        snapshot.capture_id,
+        format_profile_time(elapsed_micros),
+        format_profile_time(sampled_micros),
+        snapshot.samples.len()
+    );
+    match options.view {
+        CpuProfileView::Functions => {
+            let mut functions = snapshot
+                .functions
+                .iter()
+                .filter(|function| cpu_profile_matches_path(function, options.path))
+                .collect::<Vec<_>>();
+            functions.sort_by_key(|function| {
+                std::cmp::Reverse(match options.sort {
+                    CpuProfileSort::SelfTime => function.self_time_micros,
+                    CpuProfileSort::TotalTime => function.total_time_micros,
+                })
+            });
+            if functions.is_empty() {
+                println!("No sampled functions matched.");
+                return;
+            }
+            println!("Self       Total      Samples  Function");
+            for function in functions
+                .into_iter()
+                .take(options.max_lines.saturating_sub(2))
+            {
+                let location = function
+                    .authored_location
+                    .as_ref()
+                    .unwrap_or(&function.generated_location);
+                let name = function
+                    .breadcrumb
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&function.name);
+                println!(
+                    "{:<10} {:<10} {:>7}  {}  {}:{}:{}",
+                    format_profile_time(function.self_time_micros),
+                    format_profile_time(function.total_time_micros),
+                    function.sample_count,
+                    if name.is_empty() { "(anonymous)" } else { name },
+                    location.source_url,
+                    location.line,
+                    location.column,
+                );
+            }
+        }
+        CpuProfileView::Files => {
+            let mut files = BTreeMap::<String, (u64, u64, u64)>::new();
+            for function in snapshot
+                .functions
+                .iter()
+                .filter(|function| cpu_profile_matches_path(function, options.path))
+            {
+                let location = function
+                    .authored_location
+                    .as_ref()
+                    .unwrap_or(&function.generated_location);
+                let totals = files.entry(location.source_url.clone()).or_default();
+                totals.0 = totals.0.saturating_add(function.self_time_micros);
+                totals.1 = totals.1.saturating_add(function.total_time_micros);
+                totals.2 = totals.2.saturating_add(function.sample_count);
+            }
+            let mut files = files.into_iter().collect::<Vec<_>>();
+            files.sort_by_key(|(_, (self_time, total_time, _))| {
+                std::cmp::Reverse(match options.sort {
+                    CpuProfileSort::SelfTime => *self_time,
+                    CpuProfileSort::TotalTime => *total_time,
+                })
+            });
+            if files.is_empty() {
+                println!("No sampled files matched.");
+                return;
+            }
+            println!("Self       Total      Samples  File");
+            for (path, (self_time, total_time, samples)) in
+                files.into_iter().take(options.max_lines.saturating_sub(2))
+            {
+                println!(
+                    "{:<10} {:<10} {:>7}  {}",
+                    format_profile_time(self_time),
+                    format_profile_time(total_time),
+                    samples,
+                    path,
+                );
+            }
+        }
+    }
+}
+
+fn cpu_profile_matches_path(function: &CpuProfileFunctionSnapshot, prefix: Option<&str>) -> bool {
+    let Some(prefix) = prefix else {
+        return true;
+    };
+    let location = function
+        .authored_location
+        .as_ref()
+        .unwrap_or(&function.generated_location);
+    normalize_source_path(&location.source_url).starts_with(&normalize_source_path(prefix))
+}
+
+fn format_profile_time(micros: u64) -> String {
+    if micros < 1_000 {
+        format!("{micros}us")
+    } else if micros < 1_000_000 {
+        format!("{:.2}ms", micros as f64 / 1_000.0)
+    } else {
+        format!("{:.2}s", micros as f64 / 1_000_000.0)
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -752,11 +1734,13 @@ fn render_heap_classes_human(
     if output.len() >= maximum_lines {
         return output;
     }
-    output.push(format!(
-        "Analysis {:.3}s: parse {:.3}s, projection {:.3}s (source-map hydration {:.3}s; {} constructor groups{})",
-        (snapshot.analysis.parse_duration_micros + snapshot.analysis.projection_duration_micros)
-            as f64
-            / 1_000_000.0,
+    let analysis_duration = snapshot
+        .analysis
+        .parse_duration_micros
+        .saturating_add(snapshot.analysis.projection_duration_micros);
+    let analysis = format!(
+        "{:.3}s (parse {:.3}s, projection {:.3}s, source-map hydration {:.3}s; {} constructor groups{})",
+        analysis_duration as f64 / 1_000_000.0,
         snapshot.analysis.parse_duration_micros as f64 / 1_000_000.0,
         snapshot.analysis.projection_duration_micros as f64 / 1_000_000.0,
         snapshot.analysis.source_map_hydration_duration_micros as f64 / 1_000_000.0,
@@ -766,7 +1750,20 @@ fn render_heap_classes_human(
         } else {
             ""
         }
-    ));
+    );
+    output.push(match &snapshot.analysis.snapshot_timing {
+        Some(timing) => format!(
+            "Total {:.3}s: snapshot {:.3}s (taking {:.3}s, retrieving {:.3}s), analysis {analysis}",
+            timing
+                .total_duration_micros()
+                .saturating_add(analysis_duration) as f64
+                / 1_000_000.0,
+            timing.total_duration_micros() as f64 / 1_000_000.0,
+            timing.taking_duration_micros as f64 / 1_000_000.0,
+            timing.retrieving_duration_micros as f64 / 1_000_000.0,
+        ),
+        None => format!("Analysis {analysis}"),
+    });
     if snapshot.classes.is_empty() {
         return output;
     }
@@ -807,7 +1804,11 @@ fn render_heap_classes_human(
     let style = HeapClassTreeStyle {
         instances: options.instances,
     };
-    output.extend(tree.render(&style, true, budget));
+    output.extend(tree.render_with_options(
+        &style,
+        true,
+        TreeRenderOptions::terminal(budget, options.trim_width),
+    ));
     if maximum_lines != usize::MAX {
         output.truncate(maximum_lines);
     }
@@ -948,7 +1949,11 @@ fn print_coverage_tree(
             .max_lines
             .saturating_sub(1 + usize::from(snapshot.analysis.is_some()))
     };
-    for line in root.render(&CoverageTreeStyle, symbols, budget) {
+    for line in root.render_with_options(
+        &CoverageTreeStyle,
+        symbols,
+        TreeRenderOptions::terminal(budget, options.trim_width),
+    ) {
         println!("{line}");
     }
 }
@@ -1557,6 +2562,15 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
         ConnectionConfiguration::DirectCdp { endpoint } => {
             format!("direct CDP at {endpoint}")
         }
+        ConnectionConfiguration::NodeInspector { endpoint } => {
+            format!("Node inspector at {endpoint}")
+        }
+        ConnectionConfiguration::Process { process_id } => {
+            format!("process {process_id}")
+        }
+        ConnectionConfiguration::ProcessTree { root_pid } => {
+            format!("process tree rooted at PID {root_pid}")
+        }
         ConnectionConfiguration::Playwright {
             url,
             playwright_package: _,
@@ -1641,15 +2655,247 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
 mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
-        aggregate_coverage_entries, coverage_entries, effective_file_metrics,
-        looks_minified_identifier, page_logs, render_heap_classes_human,
+        ProcessTreeOutputOptions, aggregate_coverage_entries, coverage_entries,
+        effective_file_metrics, heap_path_lines, looks_minified_identifier, page_logs,
+        process_tree_lines, process_trees_json, render_heap_classes_human, style_process_label,
+        style_session_label,
     };
     use cdp_client::service_api::{
-        ConsoleMessageSnapshot, CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot,
-        CoverageSourceSnapshot, HeapClassAnalysisSnapshot, HeapClassSnapshot,
-        HeapClassSnapshotEntry, HeapInstanceSnapshot, SourceLocation,
+        AgentSessionSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
+        CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, HeapClassAnalysisSnapshot,
+        HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapNodeSnapshot,
+        HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
+        ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn process_tree_uses_virtual_window_nodes() {
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            runtime_metadata_available: true,
+            processes: vec![
+                process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
+                process(
+                    2,
+                    Some(1),
+                    "renderer",
+                    ProcessRole::Renderer,
+                    Some(3),
+                    Some("project"),
+                ),
+                process(
+                    3,
+                    Some(1),
+                    "extension-host",
+                    ProcessRole::ExtensionHost,
+                    Some(3),
+                    Some("project"),
+                ),
+                process(
+                    4,
+                    Some(3),
+                    "server",
+                    ProcessRole::Node,
+                    Some(3),
+                    Some("project"),
+                ),
+                process(5, Some(1), "agent-host", ProcessRole::AgentHost, None, None),
+            ],
+        };
+
+        assert_eq!(
+            process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
+            vec![
+                "└─ 1  Code.exe  [vscode-main]",
+                "   ├─ window 3  project",
+                "   │  ├─ 2  renderer  [renderer]",
+                "   │  └─ 3  extension-host  [extension-host]",
+                "   │     └─ 4  server  [node]",
+                "   └─ 5  agent-host  [agent-host]",
+            ]
+        );
+        let filtered = process_tree_lines(
+            &tree,
+            ProcessTreeOutputOptions {
+                filter: Some("window 3"),
+                ..ProcessTreeOutputOptions::default()
+            },
+        );
+        assert!(filtered.iter().any(|line| line.contains("window 3")));
+        assert!(filtered.iter().all(|line| !line.contains("agent-host")));
+
+        let json = process_trees_json(
+            std::slice::from_ref(&tree),
+            ProcessTreeOutputOptions {
+                command_line: false,
+                filter: Some("window 3"),
+                ..ProcessTreeOutputOptions::default()
+            },
+        )
+        .unwrap();
+        let processes = json[0]["processes"].as_array().unwrap();
+        assert_eq!(processes.len(), 4);
+        assert!(
+            processes
+                .iter()
+                .all(|process| process.get("commandLine").is_none())
+        );
+        assert!(
+            processes
+                .iter()
+                .all(|process| process["processId"] != serde_json::json!(5))
+        );
+    }
+
+    #[test]
+    fn process_tree_renders_multiplexed_agent_sessions_as_virtual_children() {
+        let mut copilot = process(3, Some(2), "copilot", ProcessRole::Copilot, None, None);
+        copilot.agent_sessions = vec![AgentSessionSnapshot {
+            internal_id: "internal-1".to_owned(),
+            chat_uri: Some("copilotcli:/chat-1".to_owned()),
+            title: Some("Add extension launch config".to_owned()),
+            working_directories: vec!["file:///d%3A/dev/hediet/cdp-client".to_owned()],
+            disconnected: Some(false),
+        }];
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            runtime_metadata_available: true,
+            processes: vec![
+                process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
+                process(2, Some(1), "agent-host", ProcessRole::AgentHost, None, None),
+                copilot,
+                process(4, Some(3), "cmd.exe", ProcessRole::Other, None, None),
+            ],
+        };
+        assert_eq!(
+            process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
+            vec![
+                "└─ 1  Code.exe  [vscode-main]",
+                "   └─ 2  agent-host  [agent-host]",
+                "      └─ 3  copilot  [copilot]",
+                "         ├─ session Add extension launch config  [internal-1]",
+                "         └─ 4  cmd.exe  [other]",
+            ]
+        );
+    }
+
+    #[test]
+    fn non_attachable_processes_dim_the_terminal_foreground_without_changing_the_background() {
+        let styled = style_process_label("native process".to_owned(), false, true);
+        assert_eq!(styled, "\u{1b}[2mnative process\u{1b}[0m");
+        assert!(!styled.contains("[4"));
+    }
+
+    #[test]
+    fn agent_sessions_use_blue_foreground_without_changing_the_background() {
+        let styled = style_session_label("session Heap analysis".to_owned(), true);
+        assert_eq!(styled, "\u{1b}[34msession Heap analysis\u{1b}[0m");
+        assert!(!styled.contains("[4"));
+    }
+
+    #[test]
+    fn heap_paths_group_v8_root_infrastructure_and_label_reference_counts() {
+        let path = HeapPathSnapshot {
+            capture_id: ".".to_owned(),
+            from: ".#100".to_owned(),
+            to: ".#1".to_owned(),
+            cost: 4,
+            nodes: vec![
+                heap_node(".#100", "object", "Object", 1, 2),
+                heap_node(".#90", "object", "Window [JSGlobalObject]", 3, 735),
+                heap_node(".#20", "native", "system / NativeContext", 6955, 269),
+                heap_node(".#3", "synthetic", "(GC roots)", 1, 30),
+                heap_node(".#1", "synthetic", "", 0, 1),
+            ],
+            steps: vec![
+                heap_step(".#100", ".#90", "owner"),
+                heap_step(".#90", ".#20", "global_object"),
+                heap_step(".#20", ".#3", "context"),
+                heap_step(".#3", ".#1", "1"),
+            ],
+        };
+
+        assert_eq!(
+            heap_path_lines(&path),
+            vec![
+                "Heap path in '.' (4 edges):",
+                ".#100  type:object, value:\"Object\", shallow:0 B, in:1, out:2",
+                "  <- internal \"owner\"",
+                ".#90  type:object, value:\"Window [JSGlobalObject]\", shallow:0 B, in:3, out:735",
+                "  <- internal \"global_object\"",
+                "┌─ V8 runtime roots (implementation details)",
+                "│ .#20  type:native, value:\"system / NativeContext\", shallow:0 B, in:6955, out:269",
+                "│   <- internal \"context\"",
+                "│ .#3  type:synthetic, value:\"(GC roots)\", shallow:0 B, in:1, out:30",
+                "│   <- internal \"1\"",
+                "│ .#1  type:synthetic, value:\"\", shallow:0 B, in:0, out:1",
+                "└─",
+            ]
+        );
+    }
+
+    fn heap_node(
+        reference: &str,
+        node_type: &str,
+        name: &str,
+        incoming_reference_count: u64,
+        outgoing_reference_count: u64,
+    ) -> HeapNodeSnapshot {
+        HeapNodeSnapshot {
+            reference: reference.to_owned(),
+            node_index: 0,
+            node_type: node_type.to_owned(),
+            heap_object_id: reference.trim_start_matches(".#").to_owned(),
+            name: name.to_owned(),
+            string_value: None,
+            string_truncated: false,
+            shallow_size: 0,
+            outgoing_reference_count,
+            incoming_reference_count,
+            locations: Vec::new(),
+            immediate_dominator: None,
+            retained_size: None,
+        }
+    }
+
+    fn heap_step(from: &str, to: &str, name: &str) -> HeapPathStepSnapshot {
+        HeapPathStepSnapshot {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            edge_index: 0,
+            edge_type: "internal".to_owned(),
+            name: Some(name.to_owned()),
+            name_or_index: 0,
+            direction: HeapTraversalDirection::Incoming,
+        }
+    }
+
+    fn process(
+        process_id: u32,
+        parent_process_id: Option<u32>,
+        name: &str,
+        role: ProcessRole,
+        window_id: Option<u32>,
+        window_title: Option<&str>,
+    ) -> ProcessSnapshot {
+        ProcessSnapshot {
+            process_id,
+            parent_process_id,
+            attachable: true,
+            debug_target_id: Some(format!("process-{process_id}-test")),
+            name: name.to_owned(),
+            command_line: String::new(),
+            creation_date: String::new(),
+            role,
+            display_name: None,
+            window_id,
+            window_title: window_title.map(str::to_owned),
+            cpu_percent: None,
+            memory_bytes: None,
+            agent_sessions: Vec::new(),
+        }
+    }
 
     fn heap_class(name: &str, count: u64) -> HeapClassSnapshotEntry {
         let retained = count.min(20);
@@ -1682,6 +2928,10 @@ mod tests {
             total_shallow_size: classes.iter().map(|class| class.shallow_size).sum(),
             classes,
             analysis: HeapClassAnalysisSnapshot {
+                snapshot_timing: Some(HeapSnapshotTiming {
+                    taking_duration_micros: 2_000_000,
+                    retrieving_duration_micros: 3_000_000,
+                }),
                 parse_duration_micros: 0,
                 projection_duration_micros: 0,
                 source_map_hydration_duration_micros: 0,
@@ -1700,11 +2950,15 @@ mod tests {
                 max_lines: 300,
                 instances: false,
                 sort_by_instances: false,
+                trim_width: true,
             },
         );
         assert!(lines.iter().any(|line| {
             line.contains("PieceTreeModel@1 id 1") && line.contains("PieceTreeModel@2 id 2")
         }));
+        assert!(
+            lines[1].contains("Total 5.000s: snapshot 5.000s (taking 2.000s, retrieving 3.000s)")
+        );
     }
 
     #[test]
@@ -1719,6 +2973,7 @@ mod tests {
                 max_lines: 8,
                 instances: true,
                 sort_by_instances: false,
+                trim_width: true,
             },
         );
         assert!(lines.len() <= 8, "{lines:#?}");
@@ -1737,6 +2992,7 @@ mod tests {
                 max_lines: 1,
                 instances: false,
                 sort_by_instances: false,
+                trim_width: true,
             },
         );
         assert_eq!(lines.len(), 1);
@@ -1757,6 +3013,7 @@ mod tests {
                 max_lines: 10,
                 instances: false,
                 sort_by_instances: true,
+                trim_width: true,
             },
         );
         assert!(lines[2].contains("1. Most  20 instances"), "{lines:#?}");

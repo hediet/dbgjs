@@ -5,16 +5,30 @@ import type {
 	BreakpointSnapshot,
 	ContextSnapshot,
 	FrameSnapshot,
+	SourceSnapshotInfo,
 	TargetDebuggerSnapshot,
+	TargetNodeSnapshot,
 	TargetSnapshot,
+	VariableSnapshot,
 } from "./apiTypes.js";
-import { targetKey } from "./model.js";
-import { resolveLaunch } from "./launchConfig.js";
+import type { DebugSessionReconciler } from "./debugSessionReconciler.js";
+import {
+	resolveLaunch,
+	targetDebugConfiguration,
+} from "./launchConfig.js";
+import {
+	breakpointId,
+	findTargetNode,
+	targetKey,
+	targetReference,
+	type TargetReference,
+} from "./model.js";
 import { SourceRegistry } from "./sourceRegistry.js";
 import type { WorkspaceContextController } from "./workspaceContext.js";
 
 interface TargetBinding {
 	readonly connectionId: string;
+	readonly connectionGeneration: number;
 	readonly target: TargetSnapshot;
 }
 
@@ -24,36 +38,67 @@ interface FrameBinding {
 	readonly pauseEpoch: number;
 }
 
+type VariablesBinding =
+	| {
+		readonly kind: "scope";
+		readonly frame: FrameBinding;
+		readonly scopeIndex: number;
+	}
+	| {
+		readonly kind: "object";
+		readonly target: TargetBinding;
+		readonly pauseEpoch: number | undefined;
+		readonly objectId: string;
+	};
+
 export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable {
+	private static readonly threadId = 1;
 	private sequence = 1;
-	private nextThreadId = 1;
 	private nextFrameId = 1;
+	private nextVariablesReference = 1;
 	private supportsInvalidatedEvent = false;
+	private supportsStartDebuggingRequest = false;
 	private readonly messageEmitter = new vscode.EventEmitter<DebugProtocol.ProtocolMessage>();
-	private readonly targetKeyToThread = new Map<string, number>();
-	private readonly threadToTarget = new Map<number, TargetBinding>();
 	private readonly frameBindings = new Map<number, FrameBinding>();
+	private readonly variablesBindings = new Map<number, VariablesBinding>();
 	private readonly breakpointIdsBySource = new Map<string, Set<string>>();
-	private readonly targetObservers = new Map<string, { cancelled: boolean }>();
+	private readonly pendingRequests = new Map<
+		number,
+		{ resolve(): void; reject(error: Error): void }
+	>();
+	private readonly declaredChildren = new Set<string>();
 	private readonly sourceRegistry: SourceRegistry;
 	private readonly subscriptions: vscode.Disposable[];
+	private targetBinding: TargetBinding | undefined;
+	private targetObserver: { cancelled: boolean } | undefined;
 	private sourcePaths = new Set<string>();
 	private disposed = false;
+	private configurationDone = false;
+	private childCapabilityWarningShown = false;
 	private ownedConnectionId: string | undefined;
 	private launchTask: Promise<void> | undefined;
 	private cleanupTask: Promise<void> | undefined;
+	private sourceRefreshTask = Promise.resolve();
 
 	public readonly onDidSendMessage = this.messageEmitter.event;
 
 	public constructor(
 		private readonly controller: WorkspaceContextController,
-		private readonly debugSessionId: string,
+		private readonly debugSession: vscode.DebugSession,
+		private readonly reconciler: DebugSessionReconciler,
+		private readonly log: (message: string) => void,
 	) {
+		reconciler.registerAdapter(debugSession.id);
 		this.sourceRegistry = new SourceRegistry(controller);
 		this.subscriptions = [
 			controller.onDidChangeSnapshot((snapshot) => {
 				if (snapshot !== undefined) {
 					this.acceptSnapshot(snapshot);
+				}
+			}),
+			reconciler.onDidChangeBindings(() => {
+				if (this.configurationDone) {
+					void this.reconcileChildren();
 				}
 			}),
 		];
@@ -63,6 +108,10 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	}
 
 	public handleMessage(message: DebugProtocol.ProtocolMessage): void {
+		if (message.type === "response") {
+			this.acceptResponse(message as DebugProtocol.Response);
+			return;
+		}
 		if (message.type !== "request") {
 			return;
 		}
@@ -73,15 +122,22 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 
 	public dispose(): void {
 		this.disposed = true;
-		void this.cleanupLaunch(0).catch(() => undefined);
-		for (const observer of this.targetObservers.values()) {
-			observer.cancelled = true;
+		this.cancelTargetObservers();
+		for (const pending of this.pendingRequests.values()) {
+			pending.reject(new Error("jsdbg debug adapter was disposed"));
 		}
-		this.targetObservers.clear();
+		this.pendingRequests.clear();
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
 		this.messageEmitter.dispose();
+	}
+
+	private cancelTargetObservers(): void {
+		if (this.targetObserver !== undefined) {
+			this.targetObserver.cancelled = true;
+			this.targetObserver = undefined;
+		}
 	}
 
 	private async dispatch(request: DebugProtocol.Request): Promise<void> {
@@ -90,10 +146,17 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				const initialize = request as DebugProtocol.InitializeRequest;
 				this.supportsInvalidatedEvent =
 					initialize.arguments.supportsInvalidatedEvent === true;
+				this.supportsStartDebuggingRequest =
+					initialize.arguments.supportsStartDebuggingRequest === true;
+				this.log(
+					`[dap:${this.debugSession.id}] initialize `
+					+ `supportsStartDebuggingRequest=${this.supportsStartDebuggingRequest}`,
+				);
 				this.sendResponse(request, {
 					supportsConfigurationDoneRequest: true,
 					supportsEvaluateForHovers: true,
 					supportsLoadedSourcesRequest: true,
+					supportsTerminateRequest: true,
 					supportsSetVariable: false,
 				} satisfies DebugProtocol.Capabilities);
 				return;
@@ -109,10 +172,13 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				}
 				this.sendResponse(request);
 				this.sendEvent("initialized");
-				await this.refreshSources();
+				await this.scheduleSourceRefresh();
 				return;
 			case "configurationDone":
+				await this.releaseWaitingTarget();
 				this.sendResponse(request);
+				this.configurationDone = true;
+				void this.reconcileChildren();
 				return;
 			case "threads":
 				this.handleThreads(request);
@@ -121,10 +187,10 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				await this.handleStackTrace(request as DebugProtocol.StackTraceRequest);
 				return;
 			case "scopes":
-				this.sendResponse(request, { scopes: [] } satisfies DebugProtocol.ScopesResponse["body"]);
+				await this.handleScopes(request as DebugProtocol.ScopesRequest);
 				return;
 			case "variables":
-				this.sendResponse(request, { variables: [] } satisfies DebugProtocol.VariablesResponse["body"]);
+				await this.handleVariables(request as DebugProtocol.VariablesRequest);
 				return;
 			case "source":
 				await this.handleSource(request as DebugProtocol.SourceRequest);
@@ -151,7 +217,12 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				await this.handleEvaluate(request as DebugProtocol.EvaluateRequest);
 				return;
 			case "disconnect":
+				this.log(`[dap:${this.debugSession.id}] detaching VS Code session`);
+				this.sendResponse(request);
+				this.sendEvent("terminated");
+				return;
 			case "terminate":
+				this.log(`[dap:${this.debugSession.id}] terminating owned runtime`);
 				await this.cleanupLaunch(request.seq);
 				this.sendResponse(request);
 				this.sendEvent("terminated");
@@ -176,18 +247,34 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		}
 	}
 
+	private scheduleSourceRefresh(): Promise<void> {
+		const task = this.sourceRefreshTask.then(() => this.refreshSources());
+		this.sourceRefreshTask = task.catch(() => undefined);
+		return task;
+	}
+
 	private async configureLaunch(request: DebugProtocol.LaunchRequest): Promise<void> {
-		const launch = await resolveLaunch(request.arguments, this.debugSessionId);
+		const launch = await resolveLaunch(request.arguments, this.debugSession.id);
 		if (this.disposed) {
 			throw new Error("jsdbg debug session was disposed during launch");
 		}
-		if (launch.configuration === undefined) {
+		if (launch.target !== undefined) {
+			await this.bindTarget(launch.target);
 			return;
 		}
-		this.ownedConnectionId = launch.connectionId;
+		if (launch.configuration === undefined) {
+			const root = await this.waitForRootTarget();
+			await this.bindTarget(targetReference(this.controller.contextId, root));
+			return;
+		}
+		const connectionId = launch.connectionId;
+		if (connectionId === undefined) {
+			throw new Error("jsdbg runtime launch did not produce a connection ID");
+		}
+		this.ownedConnectionId = connectionId;
 		let snapshot = await this.controller.client.putConnection(
 			this.controller.contextId,
-			launch.connectionId,
+			connectionId,
 			launch.configuration,
 		);
 		this.controller.adoptSnapshot(snapshot);
@@ -196,35 +283,45 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		}
 		snapshot = await this.controller.client.connectConnection(
 			this.controller.contextId,
-			launch.connectionId,
+			connectionId,
 		);
 		this.controller.adoptSnapshot(snapshot);
 		if (this.disposed) {
 			throw new Error("jsdbg debug session was disposed during launch");
 		}
 		const connection = snapshot.connections.find(
-			(candidate) => candidate.id === launch.connectionId,
+			(candidate) => candidate.id === connectionId,
 		);
 		if (connection?.status.kind === "failed") {
 			throw new Error(
 				typeof connection.status.message === "string"
 					? connection.status.message
-					: `jsdbg connection '${launch.connectionId}' failed`,
+					: `jsdbg connection '${connectionId}' failed`,
 			);
 		}
-		await this.waitForAttachedTarget(launch.connectionId);
+		const root = await this.waitForRootTarget(connectionId);
+		await this.bindTarget(targetReference(this.controller.contextId, root));
 	}
 
-	private async waitForAttachedTarget(connectionId: string): Promise<void> {
+	private async waitForRootTarget(connectionId?: string): Promise<TargetNodeSnapshot> {
 		const deadline = Date.now() + 30_000;
 		while (Date.now() < deadline) {
 			await this.controller.refresh();
+			const root = this.controller.snapshot?.targetForest.find(
+				(candidate) =>
+					candidate.parentTargetId === undefined
+					&& (connectionId === undefined || candidate.connectionId === connectionId),
+			);
+			if (root !== undefined) {
+				return root;
+			}
+			if (connectionId === undefined) {
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				continue;
+			}
 			const connection = this.controller.snapshot?.connections.find(
 				(candidate) => candidate.id === connectionId,
 			);
-			if (connection?.targets.some((target) => target.attached)) {
-				return;
-			}
 			if (connection?.status.kind === "failed") {
 				throw new Error(
 					typeof connection.status.message === "string"
@@ -234,7 +331,67 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			}
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
-		throw new Error(`Timed out waiting for jsdbg connection '${connectionId}' to attach a target`);
+		throw new Error(connectionId === undefined
+			? "Timed out waiting for a jsdbg root target"
+			: `Timed out waiting for jsdbg connection '${connectionId}' to expose a root target`);
+	}
+
+	private async bindTarget(reference: TargetReference): Promise<void> {
+		if (reference.contextId !== this.controller.contextId) {
+			throw new Error(
+				`jsdbg target belongs to context '${reference.contextId}', `
+				+ `not workspace context '${this.controller.contextId}'`,
+			);
+		}
+		await this.controller.refresh();
+		const node = findTargetNode(
+			this.controller.snapshot?.targetForest ?? [],
+			reference,
+		);
+		if (node === undefined) {
+			throw new Error(
+				`jsdbg target '${reference.targetId}' generation ${reference.connectionGeneration} does not exist`,
+			);
+		}
+		await this.controller.client.attachTarget(
+			this.controller.contextId,
+			reference.connectionId,
+			reference.targetId,
+		);
+		this.targetBinding = {
+			connectionId: reference.connectionId,
+			connectionGeneration: reference.connectionGeneration,
+			target: node.target,
+		};
+		this.reconciler.bindSession(this.debugSession.id, reference);
+		this.log(
+			`[dap:${this.debugSession.id}] bound target `
+			+ `${reference.connectionId}/${reference.connectionGeneration}/${reference.targetId}`,
+		);
+		this.sendEvent("thread", {
+			reason: "started",
+			threadId: JsdbgDebugAdapter.threadId,
+		});
+		const observer = { cancelled: false };
+		this.targetObserver = observer;
+		void this.observeTarget(
+			JsdbgDebugAdapter.threadId,
+			this.targetBinding,
+			observer,
+		).catch((error: unknown) => {
+			if (!observer.cancelled && !this.disposed) {
+				this.reportAdapterError(error);
+			}
+		});
+	}
+
+	private async releaseWaitingTarget(): Promise<void> {
+		const binding = this.requireBoundTarget();
+		await this.controller.client.releaseTarget(
+			this.controller.contextId,
+			binding.connectionId,
+			binding.target.targetId,
+		);
 	}
 
 	private async cleanupLaunch(requestSequence: number): Promise<void> {
@@ -254,6 +411,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 
 	private async runCleanup(requestSequence: number): Promise<void> {
 		await this.launchTask?.catch(() => undefined);
+		this.cancelTargetObservers();
 		const connectionId = this.ownedConnectionId;
 		this.ownedConnectionId = undefined;
 		if (connectionId !== undefined) {
@@ -272,12 +430,15 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	}
 
 	private handleThreads(request: DebugProtocol.Request): void {
-		const threads = [...this.threadToTarget.entries()].map(([id, binding]) => ({
-			id,
-			name: binding.target.title
-				|| binding.target.url
-				|| `${binding.target.targetType} ${binding.target.targetId}`,
-		}));
+		const binding = this.targetBinding;
+		const threads = binding === undefined
+			? []
+			: [{
+				id: JsdbgDebugAdapter.threadId,
+				name: binding.target.title
+					|| binding.target.url
+					|| `${binding.target.targetType} ${binding.target.targetId}`,
+			}];
 		this.sendResponse(request, { threads } satisfies DebugProtocol.ThreadsResponse["body"]);
 	}
 
@@ -293,6 +454,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			this.sendResponse(request, { stackFrames: [], totalFrames: 0 });
 			return;
 		}
+
 		const start = request.arguments.startFrame ?? 0;
 		const levels = request.arguments.levels ?? pause.frames.length;
 		const frames = pause.frames.slice(start, start + levels).map((frame) => {
@@ -319,13 +481,65 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		} satisfies DebugProtocol.StackTraceResponse["body"]);
 	}
 
+	private async handleScopes(request: DebugProtocol.ScopesRequest): Promise<void> {
+		const frame = this.frameBindings.get(request.arguments.frameId);
+		if (frame === undefined) {
+			throw new Error(`Unknown or stale jsdbg frame ${request.arguments.frameId}`);
+		}
+		const scopes = frame.frame.scopes.map((scope) => ({
+			name: scope.name ?? scopeName(scope.kind),
+			presentationHint: scope.kind === "global" ? "globals" as const : "locals" as const,
+			variablesReference: this.bindVariables({
+				kind: "scope",
+				frame,
+				scopeIndex: scope.index,
+			}),
+			expensive: scope.kind === "global",
+		}));
+		this.sendResponse(request, { scopes } satisfies DebugProtocol.ScopesResponse["body"]);
+	}
+
+	private async handleVariables(request: DebugProtocol.VariablesRequest): Promise<void> {
+		const binding = this.variablesBindings.get(request.arguments.variablesReference);
+		if (binding === undefined) {
+			throw new Error(
+				`Unknown or stale jsdbg variables reference ${request.arguments.variablesReference}`,
+			);
+		}
+		const variables = binding.kind === "scope"
+			? await this.controller.client.getScopeVariables(
+				this.controller.contextId,
+				binding.frame.target.connectionId,
+				binding.frame.target.target.targetId,
+				binding.frame.pauseEpoch,
+				binding.frame.frame.index,
+				binding.scopeIndex,
+			)
+			: await this.controller.client.getObjectProperties(
+				this.controller.contextId,
+				binding.target.connectionId,
+				binding.target.target.targetId,
+				binding.pauseEpoch,
+				binding.objectId,
+			);
+		this.sendResponse(request, {
+			variables: variables.map((variable) => this.toDapVariable(
+				binding.kind === "scope" ? binding.frame.target : binding.target,
+				binding.kind === "scope" ? binding.frame.pauseEpoch : binding.pauseEpoch,
+				variable,
+			)),
+		} satisfies DebugProtocol.VariablesResponse["body"]);
+	}
+
 	private async handleSource(request: DebugProtocol.SourceRequest): Promise<void> {
 		const result = await this.sourceRegistry.content(request.arguments.sourceReference);
 		this.sendResponse(request, result satisfies DebugProtocol.SourceResponse["body"]);
 	}
 
 	private async handleLoadedSources(request: DebugProtocol.Request): Promise<void> {
-		const sources = await this.controller.client.listSources(this.controller.contextId);
+		const sources = this.filterTargetSources(
+			await this.controller.client.listSources(this.controller.contextId),
+		);
 		this.sendResponse(request, {
 			sources: sources.map((source) => this.sourceRegistry.sourceForInfo(source)),
 		} satisfies DebugProtocol.LoadedSourcesResponse["body"]);
@@ -386,7 +600,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			binding.target.targetId,
 			target.pause?.epoch ?? requirePauseEpoch(target),
 		);
-		this.sendResponse(request, { allThreadsContinued: false });
+		this.sendResponse(request, { allThreadsContinued: true });
 	}
 
 	private async handleStep(
@@ -409,10 +623,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		const frame = request.arguments.frameId === undefined
 			? undefined
 			: this.frameBindings.get(request.arguments.frameId);
-		const target = frame?.target ?? this.threadToTarget.values().next().value as TargetBinding | undefined;
-		if (target === undefined) {
-			throw new Error("No attached jsdbg target is available for evaluation");
-		}
+		const target = frame?.target ?? this.requireBoundTarget();
 		const evaluation = await this.controller.client.evaluateTarget(
 			this.controller.contextId,
 			target.connectionId,
@@ -425,62 +636,162 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			result: evaluation.description
 				?? evaluation.unserializableValue
 				?? formatEvaluationValue(evaluation.value),
-			variablesReference: 0,
+			type: evaluation.kind,
+			variablesReference: evaluation.objectId === undefined
+				? 0
+				: this.bindVariables({
+					kind: "object",
+					target,
+					pauseEpoch: frame?.pauseEpoch,
+					objectId: evaluation.objectId,
+				}),
 		} satisfies DebugProtocol.EvaluateResponse["body"]);
 	}
 
-	private acceptSnapshot(snapshot: ContextSnapshot): void {
-		const previousKeys = new Set(this.targetKeyToThread.keys());
-		const currentKeys = new Set<string>();
-		for (const connection of snapshot.connections) {
-			for (const target of connection.targets.filter((candidate) => candidate.attached)) {
-				const key = targetKey(connection.id, target.targetId);
-				currentKeys.add(key);
-				let thread = this.targetKeyToThread.get(key);
-				if (thread === undefined) {
-					thread = this.nextThreadId++;
-					this.targetKeyToThread.set(key, thread);
-					this.sendEvent("thread", { reason: "started", threadId: thread });
-					const observer = { cancelled: false };
-					this.targetObservers.set(key, observer);
-					void this.observeTarget(thread, {
-						connectionId: connection.id,
-						target,
-					}, observer).catch((error: unknown) => {
-						if (!observer.cancelled && !this.disposed) {
-							this.reportAdapterError(error);
-						}
-					});
-				}
-				this.threadToTarget.set(thread, {
-					connectionId: connection.id,
+	private bindVariables(binding: VariablesBinding): number {
+		const reference = this.nextVariablesReference++;
+		this.variablesBindings.set(reference, binding);
+		return reference;
+	}
+
+	private toDapVariable(
+		target: TargetBinding,
+		pauseEpoch: number | undefined,
+		variable: VariableSnapshot,
+	): DebugProtocol.Variable {
+		return {
+			name: variable.name,
+			value: variable.description
+				?? variable.unserializableValue
+				?? formatEvaluationValue(variable.value),
+			type: variable.kind,
+			variablesReference: variable.objectId === undefined
+				? 0
+				: this.bindVariables({
+					kind: "object",
 					target,
+					pauseEpoch,
+					objectId: variable.objectId,
+				}),
+		};
+	}
+
+	private acceptSnapshot(snapshot: ContextSnapshot): void {
+		const binding = this.targetBinding;
+		if (binding !== undefined) {
+			const reference = {
+				contextId: this.controller.contextId,
+				connectionId: binding.connectionId,
+				connectionGeneration: binding.connectionGeneration,
+				targetId: binding.target.targetId,
+			};
+			const node = findTargetNode(snapshot.targetForest, reference);
+			if (node === undefined) {
+				this.targetBinding = undefined;
+				this.cancelTargetObservers();
+				this.reconciler.targetEnded(this.debugSession.id);
+				this.sendEvent("thread", {
+					reason: "exited",
+					threadId: JsdbgDebugAdapter.threadId,
 				});
+				this.sendEvent("terminated");
+				return;
 			}
-		}
-		for (const key of previousKeys) {
-			if (!currentKeys.has(key)) {
-				const thread = this.targetKeyToThread.get(key);
-				if (thread !== undefined) {
-					this.sendEvent("thread", { reason: "exited", threadId: thread });
-					this.threadToTarget.delete(thread);
-				}
-				const observer = this.targetObservers.get(key);
-				if (observer !== undefined) {
-					observer.cancelled = true;
-					this.targetObservers.delete(key);
-				}
-				this.targetKeyToThread.delete(key);
+			if (!this.reconciler.isSessionPlacementCurrent(this.debugSession.id, node)) {
+				this.cancelTargetObservers();
+				this.reconciler.targetEnded(this.debugSession.id);
+				this.sendEvent("terminated");
+				return;
+			}
+			this.targetBinding = {
+				connectionId: node.connectionId,
+				connectionGeneration: node.connectionGeneration,
+				target: node.target,
+			};
+			if (this.configurationDone) {
+				void this.reconcileChildren(snapshot.targetForest);
 			}
 		}
 		if (this.supportsInvalidatedEvent) {
 			this.sendEvent("invalidated", { areas: ["threads", "stacks"] });
 		}
-		void this.refreshSources().catch((error: unknown) => {
+		void this.scheduleSourceRefresh().catch((error: unknown) => {
 			if (!this.disposed) {
 				this.reportAdapterError(error);
 			}
 		});
+	}
+
+	private async reconcileChildren(
+		forest = this.controller.snapshot?.targetForest ?? [],
+	): Promise<void> {
+		const binding = this.targetBinding;
+		if (binding === undefined || !this.configurationDone) {
+			return;
+		}
+		const node = findTargetNode(
+			forest,
+			{
+				contextId: this.controller.contextId,
+				connectionId: binding.connectionId,
+				connectionGeneration: binding.connectionGeneration,
+				targetId: binding.target.targetId,
+			},
+		);
+		if (node === undefined) {
+			return;
+		}
+		const children = forest.filter((candidate) =>
+			candidate.connectionId === node.connectionId
+			&& candidate.connectionGeneration === node.connectionGeneration
+			&& candidate.parentTargetId === node.target.targetId
+		);
+		this.log(
+			`[dap:${this.debugSession.id}] reconciling ${children.length} direct child target(s)`,
+		);
+		const childKeys = new Set(children.map((child) =>
+			targetKey(targetReference(this.controller.contextId, child))
+		));
+		for (const declared of this.declaredChildren) {
+			if (!childKeys.has(declared)) {
+				this.declaredChildren.delete(declared);
+			}
+		}
+		if (children.length > 0 && !this.supportsStartDebuggingRequest) {
+			if (!this.childCapabilityWarningShown) {
+				this.childCapabilityWarningShown = true;
+				this.reportAdapterError(
+					new Error("VS Code did not advertise support for child debug sessions"),
+				);
+			}
+			return;
+		}
+
+		for (const child of children) {
+			const childReference = targetReference(this.controller.contextId, child);
+			const key = targetKey(childReference);
+			if (this.declaredChildren.has(key)) {
+				continue;
+			}
+			if (this.reconciler.hasSessionForTarget(childReference, this.debugSession.id)) {
+				continue;
+			}
+			this.declaredChildren.add(key);
+			const configuration = targetDebugConfiguration(this.controller.contextId, child);
+			const { type: _type, request: childRequest, ...adapterConfiguration } = configuration;
+			this.log(
+				`[dap:${this.debugSession.id}] requesting child session for ${child.target.targetId}`,
+			);
+			void this.sendRequest("startDebugging", {
+				request: childRequest,
+				configuration: adapterConfiguration,
+			}).catch((error: unknown) => {
+				this.declaredChildren.delete(key);
+				if (!this.disposed) {
+					this.reportAdapterError(error);
+				}
+			});
+		}
 	}
 
 	private async observeTarget(
@@ -488,48 +799,68 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		binding: TargetBinding,
 		observer: { cancelled: boolean },
 	): Promise<void> {
+		let lastRevision = 0;
 		let lastPauseEpoch = 0;
+		let lastLogIndex = 0;
 		let paused = false;
 		while (!observer.cancelled && !this.disposed) {
-			const snapshot = paused
-				? await this.controller.client.waitTarget(
-					this.controller.contextId,
-					binding.connectionId,
-					binding.target.targetId,
-					{ kind: "running" },
-					30_000,
-				)
-				: await this.controller.client.waitTarget(
-					this.controller.contextId,
-					binding.connectionId,
-					binding.target.targetId,
-					{ kind: "paused", afterEpoch: lastPauseEpoch },
-					30_000,
-				);
+			const snapshot = await this.controller.client.observeTarget(
+				this.controller.contextId,
+				binding.connectionId,
+				binding.target.targetId,
+				lastRevision,
+				30_000,
+			);
 			if (observer.cancelled || this.disposed) {
 				return;
 			}
-			if (!paused && snapshot.phase.kind === "paused" && snapshot.pause !== undefined) {
+			if (snapshot === undefined) {
+				continue;
+			}
+			lastRevision = snapshot.revision;
+			for (const log of snapshot.logs) {
+				if (log.index > lastLogIndex) {
+					this.sendEvent("output", {
+						category: "console",
+						output: `${log.values.join(" ")}\n`,
+					});
+					lastLogIndex = log.index;
+				}
+			}
+			await this.scheduleSourceRefresh();
+			if (snapshot.phase.kind === "paused"
+				&& snapshot.pause !== undefined
+				&& (!paused || snapshot.pause.epoch > lastPauseEpoch)) {
+				this.clearInspectionBindings();
 				lastPauseEpoch = snapshot.pause.epoch;
 				paused = true;
 				this.sendEvent("stopped", {
 					reason: stoppedReason(snapshot.pause.reason),
-					description: snapshot.pause.reason,
+					description: stoppedDescription(snapshot.pause.reason),
 					threadId,
-					allThreadsStopped: false,
+					allThreadsStopped: true,
 				});
 			} else if (paused && snapshot.phase.kind === "running") {
+				this.clearInspectionBindings();
 				paused = false;
 				this.sendEvent("continued", {
 					threadId,
-					allThreadsContinued: false,
+					allThreadsContinued: true,
 				});
 			}
+
 		}
 	}
 
+	private clearInspectionBindings(): void {
+		this.frameBindings.clear();
+		this.variablesBindings.clear();
+	}
+
 	private async refreshSources(): Promise<void> {
-		const infos = await this.controller.client.listSources(this.controller.contextId);
+		const infos = this.filterTargetSources(
+			await this.controller.client.listSources(this.controller.contextId),
+		);
 		const next = new Set(infos.map((source) => source.path));
 		for (const source of infos) {
 			if (!this.sourcePaths.has(source.path)) {
@@ -554,12 +885,34 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		this.sourcePaths = next;
 	}
 
+	private filterTargetSources(
+		sources: readonly SourceSnapshotInfo[],
+	): readonly SourceSnapshotInfo[] {
+		const binding = this.targetBinding;
+		if (binding === undefined) {
+			return [];
+		}
+		return sources.filter((source) =>
+			source.connectionId === undefined
+			|| (
+				source.connectionId === binding.connectionId
+				&& source.targetId === binding.target.targetId
+			)
+		);
+	}
+
 	private requireTarget(threadId: number): TargetBinding {
-		const target = this.threadToTarget.get(threadId);
-		if (target === undefined) {
+		if (threadId !== JsdbgDebugAdapter.threadId) {
 			throw new Error(`Unknown jsdbg thread ${threadId}`);
 		}
-		return target;
+		return this.requireBoundTarget();
+	}
+
+	private requireBoundTarget(): TargetBinding {
+		if (this.targetBinding === undefined) {
+			throw new Error("No jsdbg target is bound to this debug session");
+		}
+		return this.targetBinding;
 	}
 
 	private getPausedTarget(binding: TargetBinding): Promise<TargetDebuggerSnapshot> {
@@ -605,6 +958,40 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		this.messageEmitter.fire(debugEvent);
 	}
 
+	private sendRequest(command: string, args: object): Promise<void> {
+		const seq = this.sequence++;
+		const request: DebugProtocol.Request = {
+			seq,
+			type: "request",
+			command,
+			arguments: args,
+		};
+		const response = new Promise<void>((resolve, reject) => {
+			this.pendingRequests.set(seq, { resolve, reject });
+		});
+		this.messageEmitter.fire(request);
+		return response;
+	}
+
+	private acceptResponse(response: DebugProtocol.Response): void {
+		const pending = this.pendingRequests.get(response.request_seq);
+		if (pending === undefined) {
+			return;
+		}
+		this.pendingRequests.delete(response.request_seq);
+		this.log(
+			`[dap:${this.debugSession.id}] reverse request '${response.command}' `
+			+ `${response.success ? "succeeded" : "failed"}`,
+		);
+		if (response.success) {
+			pending.resolve();
+		} else {
+			pending.reject(new Error(
+				response.message ?? `DAP request '${response.command}' failed`,
+			));
+		}
+	}
+
 	private reportAdapterError(error: unknown): void {
 		const message = error instanceof Error ? error.message : String(error);
 		this.sendEvent("output", {
@@ -612,14 +999,6 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			output: `jsdbg adapter: ${message}\n`,
 		});
 	}
-}
-
-function breakpointId(path: string, line: number, column: number): string {
-	const digest = createHash("sha256")
-		.update(`${path}\0${line}\0${column}`)
-		.digest("hex")
-		.slice(0, 20);
-	return `vscode:${digest}`;
 }
 
 function toDapBreakpoint(
@@ -674,6 +1053,27 @@ function formatEvaluationValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
+function scopeName(kind: string): string {
+	switch (kind) {
+		case "local":
+			return "Local";
+		case "closure":
+			return "Closure";
+		case "catch":
+			return "Catch";
+		case "block":
+			return "Block";
+		case "script":
+			return "Script";
+		case "with":
+			return "With";
+		case "global":
+			return "Global";
+		default:
+			return kind;
+	}
+}
+
 function stoppedReason(reason: string): string {
 	const normalized = reason.toLowerCase();
 	if (normalized.includes("breakpoint")) {
@@ -686,4 +1086,24 @@ function stoppedReason(reason: string): string {
 		return "step";
 	}
 	return "pause";
+}
+
+function stoppedDescription(reason: string): string {
+	const normalized = reason.toLowerCase();
+	if (normalized === "ambiguous" || normalized === "other") {
+		return "Paused";
+	}
+	if (normalized === "break on start") {
+		return "Paused on entry";
+	}
+	if (normalized.includes("breakpoint")) {
+		return "Paused on breakpoint";
+	}
+	if (normalized.includes("exception")) {
+		return "Paused on exception";
+	}
+	if (normalized.includes("step")) {
+		return "Paused after step";
+	}
+	return `Paused: ${reason}`;
 }

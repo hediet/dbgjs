@@ -14,7 +14,8 @@
   ],
   "main": "./dist/extension.cjs",
   "activationEvents": [
-    "onDebug:jsdbg",
+    "onStartupFinished",
+    "onDebugResolve:jsdbg",
     "onView:jsdbg.targets",
     "onCommand:jsdbg.refreshTargets"
   ],
@@ -36,6 +37,10 @@
         "jsdbg.serviceStatePath": {
           "type": "string",
           "description": "Path to the jsdbg-service endpoint state file. Defaults to JSDBG_SERVICE_STATE or the platform jsdbg cache location."
+        },
+        "jsdbg.serviceExecutable": {
+          "type": "string",
+          "description": "Path to jsdbg-service. Defaults to JSDBG_SERVICE_EXE, the extension's bundled binary, or the repository development build."
         }
       }
     },
@@ -169,10 +174,28 @@
               "runtime": {
                 "type": "string",
                 "enum": [
-                  "context"
+                  "context",
+                  "target"
                 ],
                 "default": "context",
                 "description": "Expose targets already attached to the workspace jsdbg context."
+              },
+              "contextId": {
+                "type": "string",
+                "description": "Internal workspace context identity for a target-bound session."
+              },
+              "connectionId": {
+                "type": "string",
+                "description": "Internal connection identity for a target-bound session."
+              },
+              "connectionGeneration": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Internal connection generation for a target-bound session."
+              },
+              "targetId": {
+                "type": "string",
+                "description": "Internal target identity for a target-bound session."
               }
             }
           }

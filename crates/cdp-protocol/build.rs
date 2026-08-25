@@ -9,8 +9,9 @@ use hubrpc::prelude::{GenerateRustOptions, generate_rust_interface};
 mod protocol_schema;
 
 fn main() {
-    let repository_root =
+    let crate_root =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
+    let repository_root = crate_root.join("..").join("..");
     let protocol_root = repository_root
         .join("node_modules")
         .join("devtools-protocol")

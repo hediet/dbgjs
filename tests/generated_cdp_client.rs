@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use cdp_client::cdp::{
-    CdpClient, DebuggerSetBreakpointByUrlParams, RuntimeEvaluateParams, RuntimeRemoteObjectType,
-    TargetAttachToTargetParams,
+    CdpClient, DebuggerPausedParams, DebuggerScriptParsedParams, DebuggerSetBreakpointByUrlParams,
+    RuntimeEvaluateParams, RuntimeRemoteObjectType, TargetAttachToTargetParams,
 };
 use cdp_client::session_transport::{CdpEnvelope, CdpSessionMux};
 use hubrpc::connection::channel::{Channel, RejectingHandler};
@@ -10,6 +10,32 @@ use hubrpc::prelude::{JsonRpcMessage, MessageTransport};
 use hubrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
 use hubrpc::transport::memory::transport_pair_of;
 use serde_json::json;
+
+#[test]
+fn script_parsed_accepts_events_without_newer_build_id() {
+    let event: DebuggerScriptParsedParams = serde_json::from_value(json!({
+        "scriptId": "1",
+        "url": "file:///app.js",
+        "startLine": 0,
+        "startColumn": 0,
+        "endLine": 1,
+        "endColumn": 0,
+        "executionContextId": 1,
+        "hash": "abc"
+    }))
+    .unwrap();
+    assert_eq!(event.build_id, None);
+}
+
+#[test]
+fn debugger_paused_accepts_node_specific_reasons() {
+    let event: DebuggerPausedParams = serde_json::from_value(json!({
+        "callFrames": [],
+        "reason": "Break on start"
+    }))
+    .unwrap();
+    assert_eq!(event.reason, "Break on start");
+}
 
 #[tokio::test]
 async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel() {

@@ -1,14 +1,24 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as vscode from "vscode";
 import type {
 	ConnectionConfiguration,
 	PlaywrightChannel,
 } from "./apiTypes.js";
+import type { TargetNodeSnapshot } from "./apiTypes.js";
+import type { TargetReference } from "./model.js";
 
 export type JsdbgLaunchConfiguration =
 	| { readonly runtime: "context"; }
+	| {
+			readonly runtime: "target";
+			readonly contextId: string;
+			readonly connectionId: string;
+			readonly connectionGeneration: number;
+			readonly targetId: string;
+	  }
 	| {
 			readonly runtime: "node";
 			readonly program: string;
@@ -36,8 +46,9 @@ export type JsdbgLaunchConfiguration =
 	  };
 
 export interface ResolvedLaunch {
-	readonly connectionId: string;
+	readonly connectionId?: string;
 	readonly configuration?: ConnectionConfiguration;
+	readonly target?: TargetReference;
 }
 
 export async function resolveLaunch(
@@ -45,11 +56,20 @@ export async function resolveLaunch(
 	sessionId: string,
 ): Promise<ResolvedLaunch> {
 	const configuration = parseLaunch(value);
-	const connectionId = `vscode-${sessionId}`;
 	switch (configuration.runtime) {
 		case "context":
-			return { connectionId };
+			return {};
+		case "target":
+			return {
+				target: {
+					contextId: configuration.contextId,
+					connectionId: configuration.connectionId,
+					connectionGeneration: configuration.connectionGeneration,
+					targetId: configuration.targetId,
+				},
+			};
 		case "node": {
+			const connectionId = `vscode-${sessionId}`;
 			const cwd = configuration.cwd ?? firstWorkspacePath();
 			const env = Object.fromEntries(
 				Object.entries(configuration.env ?? {})
@@ -68,12 +88,13 @@ export async function resolveLaunch(
 				},
 			};
 		}
-		case "playwright":
+		case "playwright": {
+			const connectionId = `vscode-${sessionId}`;
 			return {
 				connectionId,
 				configuration: {
 					kind: "playwright",
-					url: configuration.url,
+					url: normalizeRuntimeUrl(configuration.url),
 					playwrightPackage: configuration.playwrightPackage
 						?? await findWorkspacePlaywright(),
 					channel: configuration.channel ?? "bundled",
@@ -81,12 +102,14 @@ export async function resolveLaunch(
 					ignoreHttpsErrors: configuration.ignoreHttpsErrors ?? false,
 				},
 			};
-		case "chrome":
+		}
+		case "chrome": {
+			const connectionId = `vscode-${sessionId}`;
 			return {
 				connectionId,
 				configuration: {
 					kind: "chrome",
-					url: configuration.url,
+					url: normalizeRuntimeUrl(configuration.url),
 					executable: configuration.executablePath ?? await findInstalledChrome(),
 					headless: configuration.headless ?? false,
 					...(configuration.userDataDir === undefined
@@ -95,6 +118,7 @@ export async function resolveLaunch(
 					args: configuration.args ?? [],
 				},
 			};
+		}
 	}
 }
 
@@ -103,6 +127,18 @@ export function parseLaunch(value: unknown): JsdbgLaunchConfiguration {
 	const runtime = object.runtime ?? "context";
 	if (runtime === "context") {
 		return { runtime };
+	}
+	if (runtime === "target") {
+		return {
+			runtime,
+			contextId: requiredString(object.contextId, "contextId"),
+			connectionId: requiredString(object.connectionId, "connectionId"),
+			connectionGeneration: requiredNumber(
+				object.connectionGeneration,
+				"connectionGeneration",
+			),
+			targetId: requiredString(object.targetId, "targetId"),
+		};
 	}
 	if (runtime === "node") {
 		return {
@@ -117,6 +153,7 @@ export function parseLaunch(value: unknown): JsdbgLaunchConfiguration {
 				: { env: nullableStringRecord(object.env, "env") }),
 		};
 	}
+
 	if (runtime === "playwright") {
 		return {
 			runtime,
@@ -140,6 +177,50 @@ export function parseLaunch(value: unknown): JsdbgLaunchConfiguration {
 		};
 	}
 	throw new Error(`Unsupported jsdbg runtime '${String(runtime)}'`);
+}
+
+export function targetDebugConfiguration(
+	contextId: string,
+	node: TargetNodeSnapshot,
+): vscode.DebugConfiguration {
+	return {
+		type: "jsdbg",
+		request: "attach",
+		name: targetSessionName(node),
+		runtime: "target",
+		contextId,
+		connectionId: node.connectionId,
+		connectionGeneration: node.connectionGeneration,
+		targetId: node.target.targetId,
+	};
+}
+
+export function targetReferenceFromConfiguration(
+	value: vscode.DebugConfiguration,
+): TargetReference | undefined {
+	try {
+		const parsed = parseLaunch(value);
+		return parsed.runtime === "target"
+			? {
+				contextId: parsed.contextId,
+				connectionId: parsed.connectionId,
+				connectionGeneration: parsed.connectionGeneration,
+				targetId: parsed.targetId,
+			}
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function targetSessionName(node: TargetNodeSnapshot): string {
+	return node.target.title
+		|| node.target.url
+		|| `${node.target.targetType} ${node.target.targetId}`;
+}
+
+function normalizeRuntimeUrl(value: string): string {
+	return isAbsolute(value) ? pathToFileURL(value).toString() : value;
 }
 
 export async function findInstalledChrome(
@@ -243,6 +324,13 @@ function objectValue(value: unknown, label: string): Record<string, unknown> {
 function requiredString(value: unknown, name: string): string {
 	if (typeof value !== "string" || value.length === 0) {
 		throw new Error(`jsdbg launch property '${name}' must be a non-empty string`);
+	}
+	return value;
+}
+
+function requiredNumber(value: unknown, name: string): number {
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+		throw new Error(`jsdbg launch property '${name}' must be a non-negative integer`);
 	}
 	return value;
 }

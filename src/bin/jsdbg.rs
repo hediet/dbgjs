@@ -5,12 +5,14 @@ use std::io::Write;
 use std::path::Path;
 
 use atomic_write_file::AtomicWriteFile;
+use base64::Engine;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    BreakpointSpec, ConnectionConfiguration, DebuggerServiceApiClient, EvaluationSnapshot,
-    HeapCaptureResult, HeapSnapshotProgress, LogpointSpec, MutationOptions, ObservationCursor,
-    ObservationResult, PlaywrightChannel, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetWaitPredicate,
+    BreakpointSpec, ConnectionConfiguration, CpuProfileSnapshot, DebuggerServiceApiClient,
+    EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector,
+    HeapPathCost, HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress,
+    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel,
+    ProcessRole, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +21,10 @@ mod bounded_tree;
 #[path = "jsdbg/output.rs"]
 mod output;
 
-use output::{CoverageOutputOptions, HeapClassOutputOptions, OutputFormat};
+use output::{
+    CoverageOutputOptions, CpuProfileOutputOptions, CpuProfileSort, CpuProfileView,
+    HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions,
+};
 
 #[tokio::main]
 async fn main() {
@@ -32,48 +37,36 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1).collect::<Vec<_>>();
     let output = OutputFormat::from_arguments(&mut arguments);
+    let scope_options = extract_scope_options(&mut arguments)?;
     let state_file = default_state_file();
     let selection_file = state_file.with_extension("selection.json");
     match arguments.as_slice() {
-        [set, workspace, context_id] if set == "set" && workspace == "workspace" => {
+        [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace") => {
+            let context_id = required_option("--context", scope_options.context.as_ref())?;
             let client = ensure_service(&state_file).await?;
             rpc(client.get_context(context_id.clone()).await)?;
-            let mut selection = load_selection(&selection_file)?;
-            if selection.workspace.as_deref() != Some(context_id) {
-                selection.target = None;
-                selection.watches.clear();
-                selection.log_cursor = 0;
-                selection.log_scope = None;
-            }
-            selection.workspace = Some(context_id.clone());
-            write_selection(&selection_file, &selection)?;
-            println!("Workspace: {context_id}");
+            select_context(&selection_file, context_id)?;
+            println!("Context: {context_id}");
         }
-        [set, target, selector] if set == "set" && target == "target" => {
+        [set, target] if set == "set" && target == "target" => {
+            let selector = required_option("--target", scope_options.target.as_ref())?;
             let client = ensure_service(&state_file).await?;
-            let mut selection = load_selection(&selection_file)?;
-            if selection.target.as_deref() != Some(selector) {
-                selection.log_cursor = 0;
-                selection.log_scope = None;
-            }
-            selection.target = Some(selector.clone());
-            let scope = resolve_scope(&client, &selection).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
-                    selector.clone(),
+                    scope.target.clone(),
                 )
                 .await)?;
-            selection.log_cursor = snapshot.logs.last().map_or(0, |message| message.index);
-            selection.log_scope = Some(log_scope(&scope, &snapshot));
-            write_selection(&selection_file, &selection)?;
+            select_scope(&selection_file, &scope, &snapshot)?;
             println!("Target: {selector}");
         }
         [target, show] if target == "target" && show == "show" => {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client
                 .get_target(
                     scope.context.clone(),
@@ -86,7 +79,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [log, options @ ..] if log == "log" => {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client
                 .get_target(
                     scope.context.clone(),
@@ -109,10 +102,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 write_selection(&selection_file, &selection)?;
             }
         }
-        [target, step, kind, options @ ..] if target == "target" && step == "step" => {
+        [target, step, kind, options @ ..]
+            if target == "target"
+                && step == "step"
+                && matches!(kind.as_str(), "into" | "over" | "out") =>
+        {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let pause_epoch = resolve_pause_epoch(
                 &client,
                 &scope.context,
@@ -132,10 +129,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
-        [target, resume, options @ ..] if target == "target" && resume == "resume" => {
+        [target, resume, options @ ..]
+            if target == "target"
+                && resume == "resume"
+                && options
+                    .first()
+                    .is_none_or(|argument| argument.starts_with("--")) =>
+        {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let pause_epoch = resolve_pause_epoch(
                 &client,
                 &scope.context,
@@ -157,7 +160,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, eval, expression] if target == "target" && eval == "eval" => {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client
                 .get_target(
                     scope.context.clone(),
@@ -180,7 +183,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if target == "target" && logpoint == "logpoint" =>
         {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
                 .set_logpoints(
                     scope.context,
@@ -204,7 +208,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|logpoint| format!("log:{}", logpoint.id))
                 .collect::<Vec<_>>();
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
                 .set_logpoints(
                     scope.context,
@@ -218,7 +223,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, click, selector] if target == "target" && click == "click" => {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             rpc(client
                 .click_target(
                     scope.context,
@@ -231,7 +236,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [target, key, chord] if target == "target" && key == "key" => {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
                 .key_target(scope.context, scope.connection, scope.target, chord.clone())
                 .await)?;
@@ -239,34 +245,46 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [target, type_text, text] if target == "target" && type_text == "type" => {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
                 .type_target(scope.context, scope.connection, scope.target, text.clone())
                 .await)?;
             println!("Typed {text:?}");
         }
-        [
-            target,
-            click,
-            context_id,
-            connection_id,
-            target_id,
-            selector,
-        ] if target == "target" && click == "click" => {
+        [screenshot, capture, options @ ..]
+            if screenshot == "screenshot" && capture == "capture" =>
+        {
+            let options = parse_screenshot_capture_options(options)?;
             let client = ensure_service(&state_file).await?;
-            rpc(client
-                .click_target(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
-                    selector.clone(),
-                )
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let snapshot = rpc(client
+                .capture_screenshot(scope.context, scope.connection, scope.target)
                 .await)?;
-            println!("Clicked {selector}");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&snapshot.data_base64)
+                .map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("debug target returned invalid screenshot data: {error}"),
+                    )
+                })?;
+            let (width, height) = png_dimensions(&bytes)?;
+            let requested_path = options.output.unwrap_or_else(default_screenshot_path);
+            let path = write_binary_file(&requested_path, &bytes)?;
+            output.print_screenshot_captured(
+                &path,
+                bytes.len(),
+                width,
+                height,
+                &snapshot.media_type,
+            )?;
         }
         [coverage, start] if coverage == "coverage" && start == "start" => {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
                 .start_coverage(scope.context, scope.connection, scope.target)
                 .await)?;
@@ -276,7 +294,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if coverage == "coverage" && matches!(take.as_str(), "take" | "capture") =>
         {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             output.print(&rpc(client
                 .take_coverage(scope.context, scope.connection, scope.target, None, None)
                 .await)?)?;
@@ -285,7 +304,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if coverage == "coverage" && capture == "capture" && id == "--id" =>
         {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
                 .take_coverage(
                     scope.context,
@@ -301,7 +321,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if coverage == "coverage" && capture == "capture" && exclude == "--exclude" =>
         {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             output.print_coverage(
                 &rpc(client
                     .take_coverage(
@@ -316,12 +337,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     path: None,
                     all: false,
                     max_lines: 300,
+                    trim_width: true,
                 },
             )?;
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
                 .finish_coverage(scope.context, scope.connection, scope.target, None)
                 .await)?;
@@ -331,7 +354,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if coverage == "coverage" && stop == "stop" && exclude == "--exclude" =>
         {
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
                 .finish_coverage(
                     scope.context,
@@ -345,7 +369,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [coverage, show, options @ ..] if coverage == "coverage" && show == "show" => {
             let options = parse_coverage_show_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             output.print_coverage(
                 &rpc(client
                     .get_coverage(
@@ -361,13 +386,87 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     path: options.path.as_deref(),
                     all: options.all,
                     max_lines: options.max_lines,
+                    trim_width: options.trim_width,
                 },
             )?;
+        }
+        [profile, start, options @ ..] if profile == "profile" && start == "start" => {
+            let sampling_interval_micros = parse_cpu_profile_start_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            rpc(client
+                .start_cpu_profile(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    sampling_interval_micros,
+                )
+                .await)?;
+            output.print_cpu_profile_started(sampling_interval_micros)?;
+        }
+        [profile, stop, options @ ..] if profile == "profile" && stop == "stop" => {
+            let capture_id = parse_cpu_profile_stop_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let profile = rpc(client
+                .stop_cpu_profile(scope.context, scope.connection, scope.target, capture_id)
+                .await)?;
+            output.print_cpu_profile_stopped(&profile)?;
+        }
+        [profile, show, options @ ..] if profile == "profile" && show == "show" => {
+            let options = parse_cpu_profile_show_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let profile = rpc(client
+                .get_cpu_profile(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.path.clone(),
+                    options.no_cache,
+                    true,
+                )
+                .await)?;
+            output.print_cpu_profile(
+                &profile,
+                CpuProfileOutputOptions {
+                    path: options.path.as_deref(),
+                    view: options.view,
+                    sort: options.sort,
+                    max_lines: options.max_lines,
+                },
+            )?;
+        }
+        [profile, export, options @ ..] if profile == "profile" && export == "export" => {
+            let options = parse_cpu_profile_export_options(options)?;
+            let destination = absolute_path(Path::new(&options.output))?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let profile = rpc(client
+                .get_cpu_profile(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    None,
+                    false,
+                    false,
+                )
+                .await)?;
+            let serialized = serde_json::to_vec_pretty(&cpu_profile_export(&profile))?;
+            tokio::fs::write(&destination, serialized).await?;
+            output.print_cpu_profile_exported(&destination)?;
         }
         [heap, capture, options @ ..] if heap == "heap" && capture == "capture" => {
             let options = parse_heap_capture_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let operation = client.capture_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
@@ -383,7 +482,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let options = parse_heap_class_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             if options.capture {
                 let operation = client.capture_heap_snapshot(
                     scope.context.clone(),
@@ -413,14 +513,280 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     max_lines: options.max_lines,
                     instances: options.instances,
                     sort_by_instances: options.sort_by_instances,
+                    trim_width: options.trim_width,
                 },
             )?;
+        }
+        [heap, select, options @ ..] if heap == "heap" && select == "select" => {
+            let options = parse_heap_select_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = rpc(client
+                .select_heap_nodes(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.selector,
+                    options.max_string_length,
+                    options.include_dominators,
+                )
+                .await)?;
+            output.print(&selection)?;
+        }
+        [heap, strings, options @ ..] if heap == "heap" && strings == "strings" => {
+            let options = parse_heap_string_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = rpc(client
+                .select_heap_nodes(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.selector,
+                    options.max_string_length,
+                    false,
+                )
+                .await)?;
+            output.print(&selection)?;
+        }
+        [heap, show, reference, options @ ..] if heap == "heap" && show == "show" => {
+            let (capture_id, heap_object_id) = split_heap_reference_cli(reference)?;
+            let max_string_length = parse_heap_string_display_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = rpc(client
+                .select_heap_nodes(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    capture_id,
+                    HeapNodeSelector {
+                        heap_object_id: Some(heap_object_id),
+                        limit: Some(1),
+                        ..HeapNodeSelector::default()
+                    },
+                    max_string_length,
+                    true,
+                )
+                .await)?;
+            if selection.nodes.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("heap reference '{reference}' does not exist"),
+                )
+                .into());
+            }
+            output.print(&selection)?;
+        }
+        [heap, refs, reference, options @ ..] if heap == "heap" && refs == "refs" => {
+            let options = parse_heap_reference_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let references = rpc(client
+                .get_heap_references(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    reference.clone(),
+                    options.direction,
+                    options.edge_policy,
+                    options.limit,
+                    options.max_string_length,
+                )
+                .await)?;
+            output.print(&references)?;
+        }
+        [heap, path, from, to, options @ ..] if heap == "heap" && path == "path" => {
+            let options = parse_heap_path_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let path = rpc(client
+                .get_heap_path(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    from.clone(),
+                    to.clone(),
+                    options.path,
+                    options.max_string_length,
+                )
+                .await)?;
+            match path {
+                Some(path) => output.print(&path)?,
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("no heap path exists from '{from}' to '{to}'"),
+                    )
+                    .into());
+                }
+            }
+        }
+        [heap, root_path, reference, options @ ..]
+            if heap == "heap" && root_path == "root-path" =>
+        {
+            let options = parse_heap_path_options(options)?;
+            let (capture_id, _) = split_heap_reference_cli(reference)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let root = rpc(client
+                .select_heap_nodes(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    capture_id,
+                    HeapNodeSelector {
+                        limit: Some(1),
+                        ..HeapNodeSelector::default()
+                    },
+                    options.max_string_length,
+                    false,
+                )
+                .await)?
+            .nodes
+            .into_iter()
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
+            let path = rpc(client
+                .get_heap_path(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    root.reference,
+                    reference.clone(),
+                    options.path,
+                    options.max_string_length,
+                )
+                .await)?;
+            match path {
+                Some(path) => output.print(&path)?,
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("no root path exists for '{reference}'"),
+                    )
+                    .into());
+                }
+            }
+        }
+        [heap, retainer_path, reference, options @ ..]
+            if heap == "heap" && retainer_path == "retainer-path" =>
+        {
+            let mut options = parse_heap_path_options(options)?;
+            options.path.direction = HeapPathDirection::Incoming;
+            let (capture_id, _) = split_heap_reference_cli(reference)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let root = rpc(client
+                .select_heap_nodes(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                    capture_id,
+                    HeapNodeSelector {
+                        limit: Some(1),
+                        ..HeapNodeSelector::default()
+                    },
+                    options.max_string_length,
+                    false,
+                )
+                .await)?
+            .nodes
+            .into_iter()
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
+            let path = rpc(client
+                .get_heap_path(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    reference.clone(),
+                    root.reference,
+                    options.path,
+                    options.max_string_length,
+                )
+                .await)?;
+            match path {
+                Some(path) => output.print(&path)?,
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("no retainer path exists for '{reference}'"),
+                    )
+                    .into());
+                }
+            }
+        }
+        [heap, dominators, reference, options @ ..]
+            if heap == "heap" && dominators == "dominators" =>
+        {
+            let max_string_length = parse_heap_string_display_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let chain = rpc(client
+                .get_heap_dominator_chain(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    reference.clone(),
+                    max_string_length,
+                )
+                .await)?;
+            output.print(&chain)?;
+        }
+        [heap, aggregate, options @ ..] if heap == "heap" && aggregate == "aggregate" => {
+            let options = parse_heap_aggregate_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let aggregate = rpc(client
+                .aggregate_heap_snapshot(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.by,
+                    options.limit,
+                    options.max_string_length,
+                )
+                .await)?;
+            output.print(&aggregate)?;
+        }
+        [heap, diff, older, newer, options @ ..] if heap == "heap" && diff == "diff" => {
+            let options = parse_heap_diff_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let diff = rpc(client
+                .diff_heap_snapshots(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    older.clone(),
+                    newer.clone(),
+                    options.by,
+                    options.limit,
+                    options.max_string_length,
+                )
+                .await)?;
+            output.print(&diff)?;
         }
         [heap, snapshot, path, options @ ..] if heap == "heap" && snapshot == "snapshot" => {
             let options = parse_heap_snapshot_options(options)?;
             let destination = absolute_path(Path::new(path))?;
             let client = ensure_service(&state_file).await?;
-            let scope = resolve_scope(&client, &load_selection(&selection_file)?).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let operation = client.take_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
@@ -465,49 +831,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             output.print(&result)?;
         }
-        [coverage, operation, context_id, connection_id, target_id]
-            if coverage == "coverage"
-                && matches!(operation.as_str(), "start" | "take" | "capture" | "stop") =>
-        {
-            let client = ensure_service(&state_file).await?;
-            match operation.as_str() {
-                "start" => {
-                    rpc(client
-                        .start_coverage(
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id.clone(),
-                        )
-                        .await)?;
-                    println!("Coverage recording started.");
-                }
-                "take" | "capture" => output.print(&rpc(client
-                    .take_coverage(
-                        context_id.clone(),
-                        connection_id.clone(),
-                        target_id.clone(),
-                        None,
-                        None,
-                    )
-                    .await)?)?,
-                "stop" => {
-                    rpc(client
-                        .finish_coverage(
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id.clone(),
-                            None,
-                        )
-                        .await)?;
-                    output.print_coverage_stopped()?;
-                }
-                _ => unreachable!(),
-            }
-        }
         [target, watch, expression] if target == "target" && watch == "watch" => {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
-            let scope = resolve_scope(&client, &selection).await?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
             if !selection.watches.contains(expression) {
                 selection.watches.push(expression.clone());
                 write_selection(&selection_file, &selection)?;
@@ -529,39 +856,131 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = connect_existing(&state_file).await?;
             output.print(&rpc(client.shutdown().await)?)?;
         }
+        [process, list, options @ ..] if process == "process" && list == "list" => {
+            let options = parse_process_list_options(options)?;
+            let trees =
+                cdp_client::process_discovery::discover_vscode_process_trees(options.stats).await?;
+            output.print_process_trees(
+                &trees,
+                ProcessTreeOutputOptions {
+                    command_line: options.command_line,
+                    stats: options.stats,
+                    filter: options.filter.as_deref(),
+                    trim_width: options.trim_width,
+                },
+            )?;
+        }
+        [process, attach, arguments @ ..] if process == "process" && attach == "attach" => {
+            let options = parse_process_attach_options(arguments)?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let process_id = options.process_id;
+            let renderer = cdp_client::process_discovery::discover_vscode_process_trees(false)
+                .await?
+                .into_iter()
+                .find_map(|tree| {
+                    tree.processes
+                        .into_iter()
+                        .find(|process| {
+                            process.process_id == process_id
+                                && process.role == ProcessRole::Renderer
+                        })
+                        .map(|process| (tree.root_process_id, process.debug_target_id))
+                });
+            let (connection_id, configuration, target_id) =
+                if let Some((root_process_id, Some(target_id))) = renderer {
+                    (
+                        format!("process-tree-{root_process_id}"),
+                        ConnectionConfiguration::ProcessTree {
+                            root_pid: root_process_id,
+                        },
+                        target_id,
+                    )
+                } else {
+                    (
+                        format!("process-{process_id}"),
+                        ConnectionConfiguration::Process { process_id },
+                        "$node-root".to_owned(),
+                    )
+                };
+            let client = ensure_service(&state_file).await?;
+            rpc(client
+                .put_connection(context_id.clone(), connection_id.clone(), configuration)
+                .await)?;
+            rpc(client
+                .connect_connection(context_id.clone(), connection_id.clone())
+                .await)?;
+            if target_id != "$node-root" {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    let context = rpc(client.get_context(context_id.clone()).await)?;
+                    if context.target_forest.iter().any(|node| {
+                        node.connection_id == connection_id && node.target.target_id == target_id
+                    }) {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!(
+                            "renderer target {target_id} was not published within 10 seconds"
+                        )
+                        .into());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+            let snapshot = rpc(client
+                .attach_target(context_id.clone(), connection_id.clone(), target_id.clone())
+                .await)?;
+            if options.set_default {
+                select_scope(
+                    &selection_file,
+                    &ResolvedScope {
+                        context: context_id.clone(),
+                        connection: connection_id,
+                        target: target_id.clone(),
+                    },
+                    &snapshot,
+                )?;
+            }
+            output.print_target(&snapshot, &target_id)?;
+        }
         [context, list] if context == "context" && list == "list" => {
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client.list_contexts().await)?)?;
         }
-        [context, create, context_id] if context == "context" && create == "create" => {
+        [context, create, options @ ..] if context == "context" && create == "create" => {
+            let context_id = required_option("--context", scope_options.context.as_ref())?;
+            let (display_name, set_default) = parse_context_create_options(options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.put_context(context_id.clone(), None).await)?)?;
+            let snapshot = rpc(client.put_context(context_id.clone(), display_name).await)?;
+            if set_default {
+                select_context(&selection_file, context_id)?;
+            }
+            output.print(&snapshot)?;
         }
-        [context, create, context_id, display_name]
-            if context == "context" && create == "create" =>
-        {
+        [context, show] if context == "context" && show == "show" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.get_context(context_id).await)?)?;
+        }
+        [context, delete, options @ ..] if context == "context" && delete == "delete" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .put_context(context_id.clone(), Some(display_name.clone()))
+                .delete_context(context_id, parse_mutation_options(options)?)
                 .await)?)?;
         }
-        [context, show, context_id] if context == "context" && show == "show" => {
+        [state, get] if state == "state" && get == "get" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.get_context(context_id.clone()).await)?)?;
+            output.print(&rpc(client.get_context(context_id).await)?)?;
         }
-        [context, delete, context_id, options @ ..]
-            if context == "context" && delete == "delete" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
-                .delete_context(context_id.clone(), parse_mutation_options(options)?)
-                .await)?)?;
-        }
-        [state, get, context_id] if state == "state" && get == "get" => {
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.get_context(context_id.clone()).await)?)?;
-        }
-        [state, watch, context_id, options @ ..] if state == "state" && watch == "watch" => {
+        [state, watch, options @ ..] if state == "state" && watch == "watch" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             let mut cursor = parse_observation_cursor(options)?;
             loop {
@@ -584,9 +1003,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        [events, context_id, after, revision]
-            if events == "events" && after == "--after-revision" =>
-        {
+        [events, after, revision] if events == "events" && after == "--after-revision" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .observe_context(
@@ -598,53 +1017,122 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?)?;
         }
-        [
-            connection,
-            add,
-            context_id,
-            connection_id,
-            endpoint,
-            connect_now,
-        ] if connection == "connection" && add == "add" && connect_now == "--connect" => {
+        [connection, add, process, process_id, connect_now]
+            if connection == "connection"
+                && add == "add"
+                && process == "--process"
+                && connect_now == "--connect" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
             add_connection(
-                context_id,
+                &context_id,
+                connection_id,
+                ConnectionConfiguration::Process {
+                    process_id: parse_u32("process ID", process_id)?,
+                },
+                true,
+                &state_file,
+                &selection_file,
+                false,
+                output,
+            )
+            .await?;
+        }
+        [connection, add, process_tree, root_pid, connect_now]
+            if connection == "connection"
+                && add == "add"
+                && process_tree == "--process-tree"
+                && connect_now == "--connect" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            add_connection(
+                &context_id,
+                connection_id,
+                ConnectionConfiguration::ProcessTree {
+                    root_pid: parse_u32("root process ID", root_pid)?,
+                },
+                true,
+                &state_file,
+                &selection_file,
+                false,
+                output,
+            )
+            .await?;
+        }
+        [connection, add, node_inspector, endpoint, connect_now]
+            if connection == "connection"
+                && add == "add"
+                && node_inspector == "--node-inspector"
+                && connect_now == "--connect" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            add_connection(
+                &context_id,
+                connection_id,
+                ConnectionConfiguration::NodeInspector {
+                    endpoint: endpoint.clone(),
+                },
+                true,
+                &state_file,
+                &selection_file,
+                false,
+                output,
+            )
+            .await?;
+        }
+        [connection, add, endpoint, connect_now]
+            if connection == "connection" && add == "add" && connect_now == "--connect" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            add_connection(
+                &context_id,
                 connection_id,
                 ConnectionConfiguration::DirectCdp {
                     endpoint: endpoint.clone(),
                 },
                 true,
                 &state_file,
+                &selection_file,
+                false,
                 output,
             )
             .await?;
         }
-        [connection, add, context_id, connection_id, endpoint]
-            if connection == "connection" && add == "add" =>
-        {
+        [connection, add, endpoint] if connection == "connection" && add == "add" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
             add_connection(
-                context_id,
+                &context_id,
                 connection_id,
                 ConnectionConfiguration::DirectCdp {
                     endpoint: endpoint.clone(),
                 },
                 false,
                 &state_file,
+                &selection_file,
+                false,
                 output,
             )
             .await?;
         }
-        [
-            connection,
-            add,
-            context_id,
-            connection_id,
-            playwright,
-            url,
-            options @ ..,
-        ] if connection == "connection" && add == "add" && playwright == "--playwright" => {
+        [connection, add, playwright, url, options @ ..]
+            if connection == "connection" && add == "add" && playwright == "--playwright" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
             let options = parse_playwright_options(options)?;
             add_connection(
-                context_id,
+                &context_id,
                 connection_id,
                 ConnectionConfiguration::Playwright {
                     url: url.clone(),
@@ -655,53 +1143,93 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 options.connect,
                 &state_file,
+                &selection_file,
+                options.set_default,
                 output,
             )
             .await?;
         }
-        [connection, connect, context_id, connection_id]
-            if connection == "connection" && connect == "connect" =>
+        [connection, add, chrome, url, options @ ..]
+            if connection == "connection" && add == "add" && chrome == "--chrome" =>
         {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            let options = parse_chrome_options(options)?;
+            add_connection(
+                &context_id,
+                connection_id,
+                ConnectionConfiguration::Chrome {
+                    url: url.clone(),
+                    executable: options.executable,
+                    headless: options.headless,
+                    user_data_dir: options.user_data_dir,
+                    args: options.args,
+                },
+                options.connect,
+                &state_file,
+                &selection_file,
+                options.set_default,
+                output,
+            )
+            .await?;
+        }
+        [connection, connect] if connection == "connection" && connect == "connect" => {
+            let (context_id, connection_id) =
+                selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .connect_connection(context_id.clone(), connection_id.clone())
+                .connect_connection(context_id, connection_id)
                 .await)?)?;
         }
-        [connection, disconnect, context_id, connection_id]
-            if connection == "connection" && disconnect == "disconnect" =>
-        {
+        [connection, disconnect] if connection == "connection" && disconnect == "disconnect" => {
+            let (context_id, connection_id) =
+                selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .disconnect_connection(context_id.clone(), connection_id.clone())
+                .disconnect_connection(context_id, connection_id)
                 .await)?)?;
         }
-        [connection, delete, context_id, connection_id, options @ ..]
-            if connection == "connection" && delete == "delete" =>
-        {
+        [connection, delete, options @ ..] if connection == "connection" && delete == "delete" => {
+            let (context_id, connection_id) =
+                selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .delete_connection(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    parse_mutation_options(options)?,
-                )
+                .delete_connection(context_id, connection_id, parse_mutation_options(options)?)
                 .await)?)?;
         }
-        [
-            breakpoint,
-            set,
-            context_id,
-            breakpoint_id,
-            source_path,
-            line,
-        ] if breakpoint == "breakpoint" && set == "set" => {
-            put_breakpoint(
-                context_id,
+        [breakpoint, set, breakpoint_id, source_path, line]
+            if breakpoint == "breakpoint" && set == "set" =>
+        {
+            put_selected_breakpoint(
                 breakpoint_id,
                 source_path,
                 line,
                 "1",
+                &selection_file,
                 &state_file,
+                &scope_options,
+                output,
+            )
+            .await?;
+        }
+        [
+            breakpoint,
+            set,
+            breakpoint_id,
+            source_path,
+            line,
+            column_option,
+            column,
+        ] if breakpoint == "breakpoint" && set == "set" && column_option == "--column" => {
+            put_selected_breakpoint(
+                breakpoint_id,
+                source_path,
+                line,
+                column,
+                &selection_file,
+                &state_file,
+                &scope_options,
                 output,
             )
             .await?;
@@ -709,70 +1237,92 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [
             breakpoint,
             configure,
-            context_id,
             breakpoint_id,
             source_path,
             line,
             column,
             options @ ..,
         ] if breakpoint == "breakpoint" && configure == "configure" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let (specification, mutation) =
                 parse_breakpoint_spec(source_path, line, column, options)?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .put_breakpoint_spec(
-                    context_id.clone(),
-                    breakpoint_id.clone(),
-                    specification,
-                    mutation,
-                )
+                .put_breakpoint_spec(context_id, breakpoint_id.clone(), specification, mutation)
                 .await)?)?;
         }
-        [breakpoint, delete, context_id, breakpoint_id, options @ ..]
+        [breakpoint, delete, breakpoint_id, options @ ..]
             if breakpoint == "breakpoint" && delete == "delete" =>
         {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .delete_breakpoint(
-                    context_id.clone(),
+                    context_id,
                     breakpoint_id.clone(),
                     parse_mutation_options(options)?,
                 )
                 .await)?)?;
         }
-        [source, list, context_id] if source == "source" && list == "list" => {
+        [source, list, options @ ..] if source == "source" && list == "list" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.list_sources(context_id.clone(), None).await)?)?;
+            output.print(&rpc(client.list_sources(context_id, None).await)?)?;
         }
-        [source, resolve, context_id, path] if source == "source" && resolve == "resolve" => {
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
-                .list_sources(context_id.clone(), Some(path.clone()))
-                .await)?)?;
-        }
-        [source, endpoints, context_id, path] if source == "source" && endpoints == "endpoints" => {
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
-                .list_sources(context_id.clone(), Some(path.clone()))
-                .await)?)?;
-        }
-        [source, show, context_id, path] if source == "source" && show == "show" => {
+        [source, resolve, path, options @ ..] if source == "source" && resolve == "resolve" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .show_source(context_id.clone(), path.clone())
+                .list_sources(context_id, Some(path.clone()))
                 .await)?)?;
         }
-        [source, grep, context_id, pattern] if source == "source" && grep == "grep" => {
+        [source, endpoints, path, options @ ..]
+            if source == "source" && endpoints == "endpoints" =>
+        {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .grep_sources(context_id.clone(), pattern.clone())
+                .list_sources(context_id, Some(path.clone()))
                 .await)?)?;
         }
-        [source, map, context_id, path, line, column] if source == "source" && map == "map" => {
+        [source, show, path, options @ ..] if source == "source" && show == "show" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.show_source(context_id, path.clone()).await)?)?;
+        }
+        [source, grep, pattern, options @ ..] if source == "source" && grep == "grep" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .grep_sources(context_id, pattern.clone())
+                .await)?)?;
+        }
+        [source, map, path, line, column, options @ ..] if source == "source" && map == "map" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .map_source(
-                    context_id.clone(),
+                    context_id,
                     path.clone(),
                     parse_u64("line", line)?.try_into().map_err(|_| {
                         io::Error::new(io::ErrorKind::InvalidInput, "line exceeds u32")
@@ -783,69 +1333,53 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?)?;
         }
-        [source, cache, evict, context_id]
+        [source, cache, evict, options @ ..]
             if source == "source" && cache == "cache" && evict == "evict" =>
         {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.evict_source_caches(context_id.clone()).await)?)?;
+            output.print(&rpc(client.evict_source_caches(context_id).await)?)?;
         }
-        [source, export, context_id, destination] if source == "source" && export == "export" => {
+        [source, export, destination, options @ ..] if source == "source" && export == "export" => {
+            let context_id = selected_or_explicit_context(
+                &selection_file,
+                parse_context_option(options)?.or(scope_options.context.clone()),
+            )?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .export_sources(context_id.clone(), destination.clone())
+                .export_sources(context_id, destination.clone())
                 .await)?)?;
         }
-        [
-            breakpoint,
-            set,
-            context_id,
-            breakpoint_id,
-            source_path,
-            line,
-            column,
-        ] if breakpoint == "breakpoint" && set == "set" => {
-            put_breakpoint(
-                context_id,
-                breakpoint_id,
-                source_path,
-                line,
-                column,
-                &state_file,
-                output,
-            )
-            .await?;
+        [target, attach, options @ ..] if target == "target" && attach == "attach" => {
+            let set_default = parse_set_option(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let snapshot = rpc(client
+                .attach_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            if set_default {
+                select_scope(&selection_file, &scope, &snapshot)?;
+            }
+            output.print_target(&snapshot, &scope.target)?;
         }
-        [target, attach, context_id, connection_id, target_id]
-            if target == "target" && attach == "attach" =>
+        [target, wait, installed, breakpoint_id]
+            if target == "target" && wait == "wait" && installed == "breakpoint-installed" =>
         {
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
-                .attach_target(context_id.clone(), connection_id.clone(), target_id.clone())
-                .await)?;
-            output.print_target(&snapshot, target_id)?;
-        }
-        [target, show, context_id, connection_id, target_id]
-            if target == "target" && show == "show" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
-                .get_target(context_id.clone(), connection_id.clone(), target_id.clone())
-                .await)?;
-            output.print_target(&snapshot, target_id)?;
-        }
-        [
-            target,
-            wait,
-            context_id,
-            connection_id,
-            target_id,
-            installed,
-            breakpoint_id,
-        ] if target == "target" && wait == "wait" && installed == "breakpoint-installed" => {
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                context_id,
-                connection_id,
-                target_id,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
                 TargetWaitPredicate::BreakpointInstalled {
                     breakpoint_id: breakpoint_id.clone(),
                 },
@@ -855,20 +1389,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-        [
-            target,
-            wait,
-            context_id,
-            connection_id,
-            target_id,
-            installed,
-            breakpoint_id,
-            timeout_ms,
-        ] if target == "target" && wait == "wait" && installed == "breakpoint-installed" => {
+        [target, wait, installed, breakpoint_id, timeout_ms]
+            if target == "target" && wait == "wait" && installed == "breakpoint-installed" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                context_id,
-                connection_id,
-                target_id,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
                 TargetWaitPredicate::BreakpointInstalled {
                     breakpoint_id: breakpoint_id.clone(),
                 },
@@ -878,19 +1408,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-        [
-            target,
-            wait,
-            context_id,
-            connection_id,
-            target_id,
-            paused,
-            after_epoch,
-        ] if target == "target" && wait == "wait" && paused == "paused" => {
+        [target, wait, paused, after_epoch]
+            if target == "target" && wait == "wait" && paused == "paused" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                context_id,
-                connection_id,
-                target_id,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
                 TargetWaitPredicate::Paused {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
@@ -900,20 +1427,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-        [
-            target,
-            wait,
-            context_id,
-            connection_id,
-            target_id,
-            paused,
-            after_epoch,
-            timeout_ms,
-        ] if target == "target" && wait == "wait" && paused == "paused" => {
+        [target, wait, paused, after_epoch, timeout_ms]
+            if target == "target" && wait == "wait" && paused == "paused" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                context_id,
-                connection_id,
-                target_id,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
                 TargetWaitPredicate::Paused {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
@@ -923,117 +1446,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         }
-        [target, wait, context_id, connection_id, target_id, running]
-            if target == "target" && wait == "wait" && running == "running" =>
-        {
+        [target, wait, running] if target == "target" && wait == "wait" && running == "running" => {
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                context_id,
-                connection_id,
-                target_id,
+                &scope.context,
+                &scope.connection,
+                &scope.target,
                 TargetWaitPredicate::Running,
                 "30000",
                 &state_file,
                 output,
             )
             .await?;
-        }
-        [
-            target,
-            resume,
-            context_id,
-            connection_id,
-            target_id,
-            options @ ..,
-        ] if target == "target" && resume == "resume" => {
-            let client = ensure_service(&state_file).await?;
-            let pause_epoch =
-                resolve_pause_epoch(&client, context_id, connection_id, target_id, options).await?;
-            let snapshot = rpc(client
-                .resume_target(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
-                    pause_epoch,
-                )
-                .await)?;
-            output.print_target(&snapshot, target_id)?;
-        }
-        [
-            target,
-            step,
-            context_id,
-            connection_id,
-            target_id,
-            kind,
-            options @ ..,
-        ] if target == "target" && step == "step" => {
-            let client = ensure_service(&state_file).await?;
-            let pause_epoch =
-                resolve_pause_epoch(&client, context_id, connection_id, target_id, options).await?;
-            let snapshot = rpc(client
-                .step_target(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
-                    pause_epoch,
-                    parse_step_kind(kind)?,
-                )
-                .await)?;
-            output.print_target(&snapshot, target_id)?;
-        }
-        [
-            target,
-            operation,
-            context_id,
-            connection_id,
-            target_id,
-            expression,
-        ] if target == "target" && operation == "eval" => {
-            let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
-                .get_target(context_id.clone(), connection_id.clone(), target_id.clone())
-                .await)?;
-            output.print(&rpc(client
-                .evaluate_target(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
-                    pause_epoch(&snapshot),
-                    0,
-                    expression.clone(),
-                )
-                .await)?)?;
-        }
-        [
-            target,
-            logpoint,
-            context_id,
-            connection_id,
-            target_id,
-            logpoint_id,
-            source_url,
-            line,
-            column,
-            expression,
-        ] if target == "target" && logpoint == "logpoint" => {
-            let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
-                .set_logpoint(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
-                    logpoint_id.clone(),
-                    source_url.clone(),
-                    line.parse()?,
-                    column.parse()?,
-                    expression.clone(),
-                )
-                .await)?;
-            output.print_target_with_breakpoint_sources(
-                &snapshot,
-                target_id,
-                &[format!("log:{logpoint_id}")],
-            )?;
         }
         _ => {
             return Err(usage().into());
@@ -1045,7 +1471,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CliSelection {
-    workspace: Option<String>,
+    #[serde(default, alias = "workspace")]
+    context: Option<String>,
+    #[serde(default)]
+    connection: Option<String>,
     target: Option<String>,
     #[serde(default)]
     watches: Vec<String>,
@@ -1055,10 +1484,137 @@ struct CliSelection {
     log_scope: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedScope {
     context: String,
     connection: String,
     target: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ScopeOptionKind {
+    context: bool,
+    connection: bool,
+    target: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ScopeOptions {
+    context: Option<String>,
+    connection: Option<String>,
+    target: Option<String>,
+}
+
+fn required_option<'a>(name: &str, value: Option<&'a String>) -> Result<&'a String, io::Error> {
+    value.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} is required for this command"),
+        )
+    })
+}
+
+fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
+    let command = arguments.first().map(String::as_str);
+    let operation = arguments.get(1).map(String::as_str);
+    match (command, operation) {
+        (Some("target" | "coverage" | "profile" | "heap" | "screenshot" | "log" | "watch"), _)
+        | (Some("breakpoint"), Some("set"))
+        | (Some("set"), Some("target")) => ScopeOptionKind {
+            context: true,
+            connection: true,
+            target: true,
+        },
+        (Some("connection"), _) => ScopeOptionKind {
+            context: true,
+            connection: true,
+            target: false,
+        },
+        (Some("context" | "state" | "events" | "source"), _)
+        | (Some("breakpoint"), _)
+        | (Some("process"), Some("attach"))
+        | (Some("set"), Some("context" | "workspace")) => ScopeOptionKind {
+            context: true,
+            connection: false,
+            target: false,
+        },
+        _ => ScopeOptionKind::default(),
+    }
+}
+
+fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io::Error> {
+    let kind = scope_option_kind(arguments);
+    let mut options = ScopeOptions::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == "--" {
+            arguments.remove(index);
+            break;
+        }
+        let slot = match arguments[index].as_str() {
+            "--context" if kind.context => Some((&mut options.context, "--context")),
+            "--connection" if kind.connection => Some((&mut options.connection, "--connection")),
+            "--target" if kind.target => Some((&mut options.target, "--target")),
+            _ => None,
+        };
+        let Some((slot, option)) = slot else {
+            index += 1;
+            continue;
+        };
+        if slot.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} may only be specified once"),
+            ));
+        }
+        if index + 1 >= arguments.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} requires a value"),
+            ));
+        }
+        *slot = Some(arguments.remove(index + 1));
+        arguments.remove(index);
+    }
+    Ok(options)
+}
+
+fn parse_set_option(options: &[String]) -> Result<bool, io::Error> {
+    match options {
+        [] => Ok(false),
+        [option] if option == "--set" => Ok(true),
+        [option, ..] => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown option '{option}'"),
+        )),
+    }
+}
+
+fn parse_context_create_options(options: &[String]) -> Result<(Option<String>, bool), io::Error> {
+    let mut display_name = None;
+    let mut set_default = false;
+    for option in options {
+        if option == "--set" {
+            if set_default {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--set may only be specified once",
+                ));
+            }
+            set_default = true;
+        } else if option.starts_with("--") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown context create option '{option}'"),
+            ));
+        } else if display_name.replace(option.clone()).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "context create accepts at most one display name",
+            ));
+        }
+    }
+    Ok((display_name, set_default))
 }
 
 fn log_scope(scope: &ResolvedScope, snapshot: &TargetDebuggerSnapshot) -> String {
@@ -1089,26 +1645,261 @@ fn write_selection(
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ScreenshotCaptureOptions {
+    output: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProcessAttachOptions {
+    process_id: u32,
+    set_default: bool,
+}
+
+fn parse_context_option(arguments: &[String]) -> Result<Option<String>, io::Error> {
+    match arguments {
+        [] => Ok(None),
+        [flag, context_id] if flag == "--context" => Ok(Some(context_id.clone())),
+        [flag] if flag == "--context" => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--context requires a value",
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected at most --context <id>",
+        )),
+    }
+}
+
+fn selected_or_explicit_context(
+    selection_file: &Path,
+    explicit_context: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    explicit_context
+        .or(load_selection(selection_file)?.context)
+        .ok_or_else(|| io::Error::other("no context is selected; use --context <id>").into())
+}
+
+fn selected_or_explicit_connection(
+    selection_file: &Path,
+    options: &ScopeOptions,
+) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let selection = load_selection(selection_file)?;
+    let context = options
+        .context
+        .clone()
+        .or(selection.context.clone())
+        .ok_or_else(|| io::Error::other("no context is selected; use --context <id>"))?;
+    let use_selection = selection.context.as_deref() == Some(context.as_str());
+    let connection = options
+        .connection
+        .clone()
+        .or_else(|| use_selection.then_some(selection.connection).flatten())
+        .ok_or_else(|| {
+            io::Error::other("no connection is selected; use --connection <id> or --set")
+        })?;
+    Ok((context, connection))
+}
+
+fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOptions, io::Error> {
+    let mut process_id = None;
+    let mut set_default = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--set" => {
+                if set_default {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--set may only be specified once",
+                    ));
+                }
+                set_default = true;
+                index += 1;
+            }
+            argument if argument.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown process attach option '{argument}'"),
+                ));
+            }
+            argument => {
+                if process_id.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "process attach accepts exactly one process ID",
+                    ));
+                }
+                process_id = Some(parse_u32("process ID", argument)?);
+                index += 1;
+            }
+        }
+    }
+    Ok(ProcessAttachOptions {
+        process_id: process_id.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process attach requires a process ID",
+            )
+        })?,
+        set_default,
+    })
+}
+
+fn parse_screenshot_capture_options(
+    arguments: &[String],
+) -> Result<ScreenshotCaptureOptions, io::Error> {
+    let mut output = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--output" => {
+                if output.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--output may only be specified once",
+                    ));
+                }
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--output requires a value")
+                })?;
+                output = Some(value.into());
+                index += 2;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown screenshot capture option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok(ScreenshotCaptureOptions { output })
+}
+
+fn default_screenshot_path() -> std::path::PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    std::env::temp_dir()
+        .join("jsdbg-screenshots")
+        .join(format!("screenshot-{}-{timestamp}.png", std::process::id()))
+}
+
+fn write_binary_file(path: &Path, bytes: &[u8]) -> Result<std::path::PathBuf, io::Error> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(bytes)?;
+    file.commit()?;
+    fs::canonicalize(path)
+}
+
+fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), io::Error> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.len() < 24 || &bytes[..8] != PNG_SIGNATURE || &bytes[12..16] != b"IHDR" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "debug target returned an invalid PNG screenshot",
+        ));
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    if width == 0 || height == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "debug target returned an empty PNG screenshot",
+        ));
+    }
+    Ok((width, height))
+}
+
+fn select_context(path: &Path, context_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut selection = load_selection(path)?;
+    if selection.context.as_deref() != Some(context_id) {
+        selection.connection = None;
+        selection.target = None;
+        selection.watches.clear();
+        selection.log_cursor = 0;
+        selection.log_scope = None;
+    }
+    selection.context = Some(context_id.to_owned());
+    write_selection(path, &selection)
+}
+
+fn select_scope(
+    path: &Path,
+    scope: &ResolvedScope,
+    snapshot: &TargetDebuggerSnapshot,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut selection = load_selection(path)?;
+    apply_scope_selection(
+        &mut selection,
+        scope,
+        snapshot.logs.last().map_or(0, |message| message.index),
+        log_scope(scope, snapshot),
+    );
+    write_selection(path, &selection)
+}
+
+fn apply_scope_selection(
+    selection: &mut CliSelection,
+    scope: &ResolvedScope,
+    log_cursor: u64,
+    log_scope: String,
+) {
+    if selection.context.as_deref() != Some(scope.context.as_str()) {
+        selection.watches.clear();
+    }
+    selection.context = Some(scope.context.clone());
+    selection.connection = Some(scope.connection.clone());
+    selection.target = Some(scope.target.clone());
+    selection.log_cursor = log_cursor;
+    selection.log_scope = Some(log_scope);
+}
+
 async fn resolve_scope(
     client: &DebuggerServiceApiClient,
     selection: &CliSelection,
+    options: &ScopeOptions,
 ) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
-    let context = match &selection.workspace {
+    let context = match options.context.as_ref().or(selection.context.as_ref()) {
         Some(context) => context.clone(),
         None => {
             let contexts = rpc(client.list_contexts().await)?;
             match contexts.as_slice() {
                 [context] => context.id.clone(),
-                [] => return Err("no debugger workspace exists; run `jsdbg set workspace`".into()),
+                [] => return Err("no debugger context exists; create one first".into()),
                 _ => {
-                    return Err(
-                        "multiple workspaces exist; run `jsdbg set workspace <context>`".into(),
-                    );
+                    return Err("multiple contexts exist; use --context <id> or select one".into());
                 }
             }
         }
     };
     let snapshot = rpc(client.get_context(context.clone()).await)?;
+    Ok(resolve_target_scope(
+        context, &snapshot, selection, options,
+    )?)
+}
+
+fn resolve_target_scope(
+    context: String,
+    snapshot: &cdp_client::service_api::ContextSnapshot,
+    selection: &CliSelection,
+    options: &ScopeOptions,
+) -> Result<ResolvedScope, io::Error> {
+    let use_selection = selection.context.as_deref() == Some(context.as_str());
+    let selected_connection = use_selection
+        .then(|| selection.connection.as_ref())
+        .flatten();
+    let selected_target = use_selection.then(|| selection.target.as_ref()).flatten();
+    let requested_connection = options.connection.as_ref().or(selected_connection);
+    let requested_target = options.target.as_ref().or(selected_target);
     let connected = snapshot
         .connections
         .iter()
@@ -1119,28 +1910,73 @@ async fn resolve_scope(
             )
         })
         .collect::<Vec<_>>();
-    let connection = match connected.as_slice() {
-        [connection] => connection.id.clone(),
-        [] => return Err(format!("workspace '{context}' has no connected connection").into()),
-        _ => {
-            return Err(format!(
-                "workspace '{context}' has multiple connected connections; use an explicit command"
-            )
-            .into());
-        }
+    if connected.is_empty() {
+        return Err(io::Error::other(format!(
+            "context '{context}' has no connected connection"
+        )));
+    }
+
+    let candidate_connections = match requested_connection {
+        Some(connection_id) => vec![
+            connected
+                .iter()
+                .copied()
+                .find(|connection| connection.id == *connection_id)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "connected connection '{connection_id}' does not exist in context '{context}'"
+                        ),
+                    )
+                })?,
+        ],
+        None => connected,
     };
-    let connection_snapshot = connected[0];
-    let target = match &selection.target {
-        Some(target) => target.clone(),
-        None => match connection_snapshot.targets.as_slice() {
-            [target] => target.target_type.clone(),
-            [] => return Err("the connection has no targets".into()),
-            _ => {
-                return Err(
-                    "the connection has multiple targets; run `jsdbg set target <selector>`".into(),
-                );
-            }
-        },
+    let candidates = candidate_connections
+        .iter()
+        .flat_map(|connection| {
+            connection.targets.iter().filter_map(|target| {
+                let matches = requested_target.is_none_or(|selector| {
+                    target.target_id == *selector
+                        || target.target_type == *selector
+                        || target.title == *selector
+                        || target.url == *selector
+                });
+                matches.then_some((connection.id.as_str(), target.target_id.as_str()))
+            })
+        })
+        .collect::<Vec<_>>();
+    let (connection, target) = match candidates.as_slice() {
+        [(connection, target)] => ((*connection).to_owned(), (*target).to_owned()),
+        [] => {
+            let selector = requested_target.map_or("<unspecified>", String::as_str);
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "target selector '{selector}' did not match a target in context '{context}'"
+                ),
+            ));
+        }
+        _ => {
+            let selector = requested_target.map_or("<unspecified>", String::as_str);
+            let connections = candidates
+                .iter()
+                .map(|(connection, _)| *connection)
+                .collect::<std::collections::BTreeSet<_>>();
+            let hint = if connections.len() > 1 {
+                " use --connection <id> to disambiguate"
+            } else {
+                " use --target <selector> to select one"
+            };
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "target selector '{selector}' is ambiguous across {} targets in context '{context}';{hint}",
+                    candidates.len()
+                ),
+            ));
+        }
     };
     Ok(ResolvedScope {
         context,
@@ -1191,6 +2027,7 @@ async fn evaluate_watches(
                     value: None,
                     unserializable_value: None,
                     description: Some("unavailable in this frame".to_owned()),
+                    object_id: None,
                 },
             },
         );
@@ -1354,6 +2191,21 @@ struct CoverageShowOptions {
     all: bool,
     max_lines: usize,
     no_cache: bool,
+    trim_width: bool,
+}
+
+struct CpuProfileShowOptions {
+    capture_id: String,
+    path: Option<String>,
+    view: CpuProfileView,
+    sort: CpuProfileSort,
+    max_lines: usize,
+    no_cache: bool,
+}
+
+struct CpuProfileExportOptions {
+    capture_id: String,
+    output: String,
 }
 
 struct HeapSnapshotOptions {
@@ -1376,6 +2228,446 @@ struct HeapClassOptions {
     instances: bool,
     sort_by_instances: bool,
     no_cache: bool,
+    trim_width: bool,
+}
+
+const DEFAULT_HEAP_STRING_LENGTH: u32 = 160;
+
+struct HeapSelectOptions {
+    capture_id: String,
+    selector: HeapNodeSelector,
+    max_string_length: Option<u32>,
+    include_dominators: bool,
+}
+
+struct HeapReferenceOptions {
+    direction: HeapReferenceDirection,
+    edge_policy: HeapEdgePolicy,
+    limit: u32,
+    max_string_length: Option<u32>,
+}
+
+struct HeapPathCliOptions {
+    path: HeapPathOptions,
+    max_string_length: Option<u32>,
+}
+
+struct HeapAggregateOptions {
+    capture_id: String,
+    by: HeapAggregateBy,
+    limit: u32,
+    max_string_length: Option<u32>,
+}
+
+struct HeapDiffOptions {
+    by: HeapAggregateBy,
+    limit: u32,
+    max_string_length: Option<u32>,
+}
+
+fn parse_heap_select_options(values: &[String]) -> Result<HeapSelectOptions, io::Error> {
+    let mut capture_id = None;
+    let mut selector = HeapNodeSelector::default();
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut include_dominators = false;
+    let mut index = 0;
+    while index < values.len() {
+        let option = values[index].as_str();
+        let target = match option {
+            "--id" => Some(&mut selector.heap_object_id),
+            "--type" => Some(&mut selector.node_type),
+            "--name" => Some(&mut selector.name),
+            "--name-regex" => Some(&mut selector.name_regex),
+            "--string-grep" => Some(&mut selector.string_contains),
+            "--string-regex" => Some(&mut selector.string_regex),
+            _ => None,
+        };
+        if let Some(target) = target {
+            index += 1;
+            *target = Some(
+                values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("{option} requires a value"),
+                        )
+                    })?
+                    .clone(),
+            );
+        } else {
+            match option {
+                "--min-size" => {
+                    index += 1;
+                    selector.min_shallow_size =
+                        Some(parse_u64_option(values, index, "--min-size")?);
+                }
+                "--max-size" => {
+                    index += 1;
+                    selector.max_shallow_size =
+                        Some(parse_u64_option(values, index, "--max-size")?);
+                }
+                "--limit" => {
+                    index += 1;
+                    selector.limit = Some(parse_u32_option(values, index, "--limit")?);
+                }
+                "--dominators" => include_dominators = true,
+                "--full-strings" => max_string_length = None,
+                "--max-string-length" => {
+                    index += 1;
+                    max_string_length =
+                        Some(parse_u32_option(values, index, "--max-string-length")?);
+                }
+                value if value.starts_with("--") => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unknown heap select option '{value}'"),
+                    ));
+                }
+                value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+                value => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("unexpected heap select argument '{value}'"),
+                    ));
+                }
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapSelectOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        selector,
+        max_string_length,
+        include_dominators,
+    })
+}
+
+fn parse_heap_string_options(values: &[String]) -> Result<HeapSelectOptions, io::Error> {
+    let mut capture_id = ".".to_owned();
+    let mut string_contains = None;
+    let mut string_regex = None;
+    let mut limit = 100;
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--capture" => {
+                index += 1;
+                capture_id = values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "--capture requires a name")
+                    })?
+                    .clone();
+            }
+            option @ ("--grep" | "--regex") => {
+                index += 1;
+                let value = values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("{option} requires a pattern"),
+                        )
+                    })?
+                    .clone();
+                if option == "--grep" {
+                    string_contains = Some(value);
+                } else {
+                    string_regex = Some(value);
+                }
+            }
+            "--limit" => {
+                index += 1;
+                limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--full-strings" => max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                max_string_length = Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap strings option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    if string_contains.is_some() == string_regex.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "heap strings requires exactly one of --grep <text> or --regex <regex>",
+        ));
+    }
+    Ok(HeapSelectOptions {
+        capture_id,
+        selector: HeapNodeSelector {
+            string_contains,
+            string_regex,
+            limit: Some(limit),
+            ..HeapNodeSelector::default()
+        },
+        max_string_length,
+        include_dominators: false,
+    })
+}
+
+fn parse_heap_reference_options(values: &[String]) -> Result<HeapReferenceOptions, io::Error> {
+    let mut options = HeapReferenceOptions {
+        direction: HeapReferenceDirection::Outgoing,
+        edge_policy: HeapEdgePolicy::Strong,
+        limit: 100,
+        max_string_length: Some(DEFAULT_HEAP_STRING_LENGTH),
+    };
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--incoming" => options.direction = HeapReferenceDirection::Incoming,
+            "--outgoing" => options.direction = HeapReferenceDirection::Outgoing,
+            "--both" => options.direction = HeapReferenceDirection::Both,
+            "--all-edges" => options.edge_policy = HeapEdgePolicy::All,
+            "--limit" => {
+                index += 1;
+                options.limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--full-strings" => options.max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                options.max_string_length =
+                    Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap refs option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn parse_heap_path_options(values: &[String]) -> Result<HeapPathCliOptions, io::Error> {
+    let mut options = HeapPathCliOptions {
+        path: HeapPathOptions::default(),
+        max_string_length: Some(DEFAULT_HEAP_STRING_LENGTH),
+    };
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--direction" => {
+                index += 1;
+                options.path.direction = match values.get(index).map(String::as_str) {
+                    Some("outgoing") => HeapPathDirection::Outgoing,
+                    Some("incoming") => HeapPathDirection::Incoming,
+                    Some("either") => HeapPathDirection::Either,
+                    Some(value) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("unknown heap path direction '{value}'"),
+                        ));
+                    }
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--direction requires outgoing, incoming, or either",
+                        ));
+                    }
+                };
+            }
+            "--all-edges" => options.path.edge_policy = HeapEdgePolicy::All,
+            "--readable" => options.path.cost = HeapPathCost::Readable,
+            "--full-strings" => options.max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                options.max_string_length =
+                    Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap path option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn parse_heap_aggregate_options(values: &[String]) -> Result<HeapAggregateOptions, io::Error> {
+    let mut capture_id = None;
+    let mut by = HeapAggregateBy::NodeType;
+    let mut limit = 100;
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--by" => {
+                index += 1;
+                by = parse_heap_aggregate_by(values.get(index))?;
+            }
+            "--limit" => {
+                index += 1;
+                limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--full-strings" => max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                max_string_length = Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap aggregate option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected heap aggregate argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapAggregateOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        by,
+        limit,
+        max_string_length,
+    })
+}
+
+fn parse_heap_diff_options(values: &[String]) -> Result<HeapDiffOptions, io::Error> {
+    let mut by = HeapAggregateBy::NodeType;
+    let mut limit = 100;
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--by" => {
+                index += 1;
+                by = parse_heap_aggregate_by(values.get(index))?;
+            }
+            "--limit" => {
+                index += 1;
+                limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--full-strings" => max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                max_string_length = Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap diff option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapDiffOptions {
+        by,
+        limit,
+        max_string_length,
+    })
+}
+
+fn parse_heap_aggregate_by(value: Option<&String>) -> Result<HeapAggregateBy, io::Error> {
+    match value.map(String::as_str) {
+        Some("type") => Ok(HeapAggregateBy::NodeType),
+        Some("name") => Ok(HeapAggregateBy::Name),
+        Some("string") => Ok(HeapAggregateBy::StringValue),
+        Some(value) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown heap aggregate key '{value}'"),
+        )),
+        None => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--by requires type, name, or string",
+        )),
+    }
+}
+
+fn parse_heap_string_display_options(values: &[String]) -> Result<Option<u32>, io::Error> {
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--full-strings" => max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                max_string_length = Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap display option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(max_string_length)
+}
+
+fn parse_u32_option(values: &[String], index: usize, option: &str) -> Result<u32, io::Error> {
+    values
+        .get(index)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} requires an unsigned integer"),
+            )
+        })?
+        .parse()
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid {option} value: {error}"),
+            )
+        })
+}
+
+fn parse_u64_option(values: &[String], index: usize, option: &str) -> Result<u64, io::Error> {
+    values
+        .get(index)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} requires an unsigned integer"),
+            )
+        })?
+        .parse()
+        .map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid {option} value: {error}"),
+            )
+        })
+}
+
+fn split_heap_reference_cli(reference: &str) -> Result<(String, String), io::Error> {
+    let (capture_id, heap_object_id) = reference.rsplit_once('#').ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("heap reference '{reference}' must use <capture>#<heap-object-id>"),
+        )
+    })?;
+    if capture_id.is_empty() || heap_object_id.parse::<u64>().is_err() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid heap reference '{reference}'"),
+        ));
+    }
+    Ok((capture_id.to_owned(), heap_object_id.to_owned()))
 }
 
 fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, io::Error> {
@@ -1423,6 +2715,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
     let mut instances = false;
     let mut sort_by_instances = false;
     let mut no_cache = false;
+    let mut trim_width = true;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -1445,6 +2738,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
             "--instances" => instances = true,
             "--sort-by-instances" => sort_by_instances = true,
             "--no-cache" => no_cache = true,
+            "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
                 max_lines = values
@@ -1494,6 +2788,7 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
         instances,
         sort_by_instances,
         no_cache,
+        trim_width,
     })
 }
 
@@ -1576,6 +2871,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
     let mut all = false;
     let mut max_lines = 300_usize;
     let mut no_cache = false;
+    let mut trim_width = true;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -1595,6 +2891,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
             }
             "--all" => all = true,
             "--no-cache" => no_cache = true,
+            "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
                 max_lines = values
@@ -1641,62 +2938,340 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         all,
         max_lines,
         no_cache,
+        trim_width,
     })
 }
 
-async fn put_breakpoint(
-    context_id: &str,
+fn parse_cpu_profile_start_options(values: &[String]) -> Result<Option<u64>, io::Error> {
+    match values {
+        [] => Ok(None),
+        [option, value] if option == "--sampling-interval" => {
+            parse_cpu_profile_sampling_interval(value).map(Some)
+        }
+        [option] if option == "--sampling-interval" => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--sampling-interval requires a duration",
+        )),
+        [option, ..] => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown profile start option '{option}'"),
+        )),
+    }
+}
+
+fn parse_cpu_profile_sampling_interval(value: &str) -> Result<u64, io::Error> {
+    let value = value.trim().to_ascii_lowercase();
+    let (number, multiplier, unit) = if let Some(number) = value.strip_suffix("us") {
+        (number, 1.0, "us")
+    } else if let Some(number) = value.strip_suffix("ms") {
+        (number, 1_000.0, "ms")
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1_000_000.0, "s")
+    } else {
+        (value.as_str(), 1_000.0, "ms")
+    };
+    let number = number.parse::<f64>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid sampling interval '{value}': {error}"),
+        )
+    })?;
+    let micros = number * multiplier;
+    if !micros.is_finite() || micros <= 0.0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sampling interval must be positive",
+        ));
+    }
+    if micros.fract() != 0.0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("sampling interval must resolve to a whole number of microseconds ({unit})"),
+        ));
+    }
+    if micros > i32::MAX as f64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sampling interval exceeds the runtime maximum of 2147483647us",
+        ));
+    }
+    Ok(micros as u64)
+}
+
+fn parse_cpu_profile_stop_options(values: &[String]) -> Result<Option<String>, io::Error> {
+    match values {
+        [] => Ok(None),
+        [option, capture_id] if option == "--id" && !capture_id.is_empty() => {
+            Ok(Some(capture_id.clone()))
+        }
+        [option] if option == "--id" => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--id requires a name",
+        )),
+        [option, ..] => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown profile stop option '{option}'"),
+        )),
+    }
+}
+
+fn parse_cpu_profile_show_options(values: &[String]) -> Result<CpuProfileShowOptions, io::Error> {
+    let mut capture_id = None;
+    let mut path = None;
+    let mut view = CpuProfileView::Functions;
+    let mut sort = CpuProfileSort::SelfTime;
+    let mut max_lines = 80_usize;
+    let mut no_cache = false;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--path" => {
+                index += 1;
+                path = Some(
+                    values
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--path requires a source prefix",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--view" => {
+                index += 1;
+                view = match values.get(index).map(String::as_str) {
+                    Some("functions") => CpuProfileView::Functions,
+                    Some("files") => CpuProfileView::Files,
+                    Some(value) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("unsupported profile view '{value}'"),
+                        ));
+                    }
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--view requires 'functions' or 'files'",
+                        ));
+                    }
+                };
+            }
+            "--sort" => {
+                index += 1;
+                sort = match values.get(index).map(String::as_str) {
+                    Some("self") => CpuProfileSort::SelfTime,
+                    Some("total") => CpuProfileSort::TotalTime,
+                    Some(value) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("unsupported profile sort '{value}'"),
+                        ));
+                    }
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--sort requires 'self' or 'total'",
+                        ));
+                    }
+                };
+            }
+            "--max-lines" => {
+                index += 1;
+                max_lines = values
+                    .get(index)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--max-lines requires a positive integer",
+                        )
+                    })?
+                    .parse()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid --max-lines value: {error}"),
+                        )
+                    })?;
+                if max_lines < 3 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--max-lines must be at least 3",
+                    ));
+                }
+            }
+            "--no-cache" => no_cache = true,
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown profile show option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected profile show argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(CpuProfileShowOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        path,
+        view,
+        sort,
+        max_lines,
+        no_cache,
+    })
+}
+
+fn parse_cpu_profile_export_options(
+    values: &[String],
+) -> Result<CpuProfileExportOptions, io::Error> {
+    let mut capture_id = None;
+    let mut output = None;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--output" => {
+                index += 1;
+                output = Some(
+                    values
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "--output requires a path")
+                        })?
+                        .clone(),
+                );
+            }
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown profile export option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected profile export argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(CpuProfileExportOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        output: output.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "profile export requires --output <path>",
+            )
+        })?,
+    })
+}
+
+fn cpu_profile_export(profile: &CpuProfileSnapshot) -> serde_json::Value {
+    let nodes = profile
+        .nodes
+        .iter()
+        .map(|node| {
+            let mut value = serde_json::Map::new();
+            value.insert("id".to_owned(), serde_json::json!(node.id));
+            value.insert(
+                "callFrame".to_owned(),
+                serde_json::json!({
+                    "functionName": node.call_frame.function_name,
+                    "scriptId": node.call_frame.script_id,
+                    "url": node.call_frame.url,
+                    "lineNumber": node.call_frame.line_number,
+                    "columnNumber": node.call_frame.column_number,
+                }),
+            );
+            if let Some(hit_count) = node.hit_count {
+                value.insert("hitCount".to_owned(), serde_json::json!(hit_count));
+            }
+            if !node.children.is_empty() {
+                value.insert("children".to_owned(), serde_json::json!(node.children));
+            }
+            if let Some(deopt_reason) = &node.deopt_reason {
+                value.insert("deoptReason".to_owned(), serde_json::json!(deopt_reason));
+            }
+            if !node.position_ticks.is_empty() {
+                value.insert(
+                    "positionTicks".to_owned(),
+                    serde_json::json!(node.position_ticks),
+                );
+            }
+            serde_json::Value::Object(value)
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "nodes": nodes,
+        "startTime": profile.start_time_micros,
+        "endTime": profile.end_time_micros,
+        "samples": profile.samples,
+        "timeDeltas": profile.time_deltas_micros,
+    })
+}
+
+async fn put_selected_breakpoint(
     breakpoint_id: &str,
     source_path: &str,
     line: &str,
     column: &str,
-    state_file: &std::path::Path,
+    selection_file: &Path,
+    state_file: &Path,
+    scope_options: &ScopeOptions,
     output: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let line = line.parse::<u32>()?;
     let column = column.parse::<u32>()?;
     let client = ensure_service(state_file).await?;
+    let selection = load_selection(selection_file)?;
+    let context_id = scope_options
+        .context
+        .clone()
+        .or(selection.context.clone())
+        .ok_or_else(|| io::Error::other("no context is selected; use --context <id>"))?;
+    let current = rpc(client.get_context(context_id.clone()).await)?;
+    let explicit_target_scope =
+        scope_options.connection.is_some() || scope_options.target.is_some();
+    let scope = match resolve_target_scope(context_id.clone(), &current, &selection, scope_options)
+    {
+        Ok(scope) => Some(scope),
+        Err(_) if !explicit_target_scope => None,
+        Err(error) => return Err(error.into()),
+    };
     let context = rpc(client
         .put_breakpoint(
-            context_id.to_owned(),
+            context_id,
             breakpoint_id.to_owned(),
             source_path.to_owned(),
             line,
             column,
         )
         .await)?;
-    let targets = context
-        .connections
-        .iter()
-        .filter(|connection| {
-            matches!(
-                connection.status,
-                cdp_client::service_api::ConnectionStatus::Connected { .. }
+    if let Some(scope) = scope {
+        let snapshot = rpc(client
+            .wait_target(
+                scope.context,
+                scope.connection,
+                scope.target.clone(),
+                TargetWaitPredicate::BreakpointInstalled {
+                    breakpoint_id: breakpoint_id.to_owned(),
+                },
+                30_000,
             )
-        })
-        .flat_map(|connection| {
-            connection
-                .targets
-                .iter()
-                .map(move |target| (connection.id.clone(), target))
-        })
-        .collect::<Vec<_>>();
-    if let [(connection, target)] = targets.as_slice() {
-        match client
-            .get_target(
-                context_id.to_owned(),
-                connection.clone(),
-                target.target_id.clone(),
-            )
-            .await
-        {
-            Ok(snapshot) => output.print_target_with_breakpoint_sources(
-                &snapshot,
-                &target.target_type,
-                &[breakpoint_id.to_owned()],
-            )?,
-            Err(_) => output.print(&context)?,
-        }
+            .await)?;
+        output.print_target_with_breakpoint_sources(
+            &snapshot,
+            &scope.target,
+            &[breakpoint_id.to_owned()],
+        )?;
     } else {
         output.print(&context)?;
     }
@@ -1709,8 +3284,17 @@ async fn add_connection(
     configuration: ConnectionConfiguration,
     connect_now: bool,
     state_file: &std::path::Path,
+    selection_file: &std::path::Path,
+    set_default: bool,
     output: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if set_default && !connect_now {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--set requires --connect so a target can be selected",
+        )
+        .into());
+    }
     let client = ensure_service(state_file).await?;
     let configured = rpc(client
         .put_connection(
@@ -1720,9 +3304,69 @@ async fn add_connection(
         )
         .await)?;
     if connect_now {
-        output.print(&rpc(client
+        let mut connected = rpc(client
             .connect_connection(context_id.to_owned(), connection_id.to_owned())
-            .await)?)?;
+            .await)?;
+        if set_default {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            let target_id = loop {
+                let connection = connected
+                    .connections
+                    .iter()
+                    .find(|connection| connection.id == connection_id)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("connected context has no connection '{connection_id}'"),
+                        )
+                    })?;
+                let attached = connection
+                    .targets
+                    .iter()
+                    .filter(|target| target.attached)
+                    .collect::<Vec<_>>();
+                match attached.as_slice() {
+                    [target] => break target.target_id.clone(),
+                    [] if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        connected = rpc(client.get_context(context_id.to_owned()).await)?;
+                    }
+                    [] => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!(
+                                "connection '{connection_id}' did not attach a target within 30 seconds"
+                            ),
+                        )
+                        .into());
+                    }
+                    targets => {
+                        return Err(io::Error::other(format!(
+                            "connection '{connection_id}' has {} attached targets; select one explicitly",
+                            targets.len()
+                        ))
+                        .into());
+                    }
+                }
+            };
+            let snapshot = rpc(client
+                .get_target(
+                    context_id.to_owned(),
+                    connection_id.to_owned(),
+                    target_id.clone(),
+                )
+                .await)?;
+            select_scope(
+                selection_file,
+                &ResolvedScope {
+                    context: context_id.to_owned(),
+                    connection: connection_id.to_owned(),
+                    target: target_id,
+                },
+                &snapshot,
+            )?;
+        }
+        output.print(&connected)?;
     } else {
         output.print(&configured)?;
     }
@@ -1733,6 +3377,7 @@ struct PlaywrightOptions {
     channel: PlaywrightChannel,
     headless: bool,
     connect: bool,
+    set_default: bool,
     ignore_https_errors: bool,
 }
 
@@ -1741,12 +3386,14 @@ fn parse_playwright_options(options: &[String]) -> Result<PlaywrightOptions, io:
         channel: PlaywrightChannel::Bundled,
         headless: true,
         connect: false,
+        set_default: false,
         ignore_https_errors: false,
     };
     let mut index = 0;
     while index < options.len() {
         match options[index].as_str() {
             "--connect" => parsed.connect = true,
+            "--set" => parsed.set_default = true,
             "--headed" => parsed.headless = false,
             "--ignore-https-errors" => parsed.ignore_https_errors = true,
             "--channel" => {
@@ -1786,6 +3433,88 @@ fn parse_playwright_channel(value: &str) -> Result<PlaywrightChannel, io::Error>
     }
 }
 
+struct ChromeOptions {
+    executable: String,
+    headless: bool,
+    connect: bool,
+    set_default: bool,
+    user_data_dir: Option<String>,
+    args: Vec<String>,
+}
+
+fn parse_chrome_options(options: &[String]) -> Result<ChromeOptions, io::Error> {
+    let mut executable = None;
+    let mut parsed = ChromeOptions {
+        executable: String::new(),
+        headless: true,
+        connect: false,
+        set_default: false,
+        user_data_dir: None,
+        args: Vec::new(),
+    };
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--connect" => parsed.connect = true,
+            "--set" => parsed.set_default = true,
+            "--headed" => parsed.headless = false,
+            "--executable" => {
+                index += 1;
+                executable = Some(
+                    options
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--executable requires a value",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--user-data-dir" => {
+                index += 1;
+                parsed.user_data_dir = Some(
+                    options
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--user-data-dir requires a value",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--arg" => {
+                index += 1;
+                parsed.args.push(
+                    options
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "--arg requires a value")
+                        })?
+                        .clone(),
+                );
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown Chrome connection option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    parsed.executable = executable.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--chrome requires --executable <path>",
+        )
+    })?;
+    Ok(parsed)
+}
+
 async fn wait_target(
     context_id: &str,
     connection_id: &str,
@@ -1810,6 +3539,64 @@ async fn wait_target(
     Ok(())
 }
 
+struct ProcessListOptions {
+    command_line: bool,
+    stats: bool,
+    filter: Option<String>,
+    trim_width: bool,
+}
+
+fn parse_process_list_options(arguments: &[String]) -> Result<ProcessListOptions, io::Error> {
+    let mut result = ProcessListOptions {
+        command_line: true,
+        stats: false,
+        filter: None,
+        trim_width: true,
+    };
+    let mut vscode = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--vscode" if !vscode => vscode = true,
+            "--vscode" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--vscode may only be specified once",
+                ));
+            }
+            "--no-cmd-line" => result.command_line = false,
+            "--stats" => result.stats = true,
+            "--no-trim" => result.trim_width = false,
+            "--filter" => {
+                if result.filter.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--filter may only be specified once",
+                    ));
+                }
+                index += 1;
+                result.filter = Some(arguments.get(index).cloned().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--filter requires a tree path")
+                })?);
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown process list option: {argument}"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    if !vscode {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "process list requires --vscode",
+        ));
+    }
+    Ok(result)
+}
+
 fn parse_u64(name: &str, value: &str) -> Result<u64, io::Error> {
     value.parse().map_err(|error| {
         io::Error::new(
@@ -1817,6 +3604,12 @@ fn parse_u64(name: &str, value: &str) -> Result<u64, io::Error> {
             format!("invalid {name} '{value}': {error}"),
         )
     })
+}
+
+fn parse_u32(name: &str, value: &str) -> Result<u32, io::Error> {
+    parse_u64(name, value)?
+        .try_into()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, format!("{name} is too large")))
 }
 
 fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::Error> {
@@ -1951,63 +3744,300 @@ fn usage() -> &'static str {
 
 commands:
   jsdbg service status|stop
+  jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  jsdbg process attach <process-id> [--context <id>] [--set]
   jsdbg context list
-  jsdbg context create <context-id> [display-name]
-  jsdbg context show <context-id>
-  jsdbg context delete <context-id> [--expected-revision <revision>] [--request-id <id>]
-  jsdbg state get <context-id>
-  jsdbg state watch <context-id> [--after-revision <revision>]
-  jsdbg events <context-id> --after-revision <revision>
-  jsdbg set workspace <context-id>
-  jsdbg set target <selector>
-  jsdbg connection add <context-id> <connection-id> <ws-endpoint> [--connect]
-  jsdbg connection add <context-id> <connection-id> --playwright <url> [--channel <channel>] [--headed] [--ignore-https-errors] [--connect]
-  jsdbg connection connect|disconnect <context-id> <connection-id>
-  jsdbg connection delete <context-id> <connection-id> [--expected-revision <revision>] [--request-id <id>]
-  jsdbg breakpoint set <context-id> <breakpoint-id> <source-url> <line> [column]
-  jsdbg breakpoint configure <context-id> <breakpoint-id> <source-url> <line> <column> [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg breakpoint delete <context-id> <breakpoint-id> [--expected-revision <revision>] [--request-id <id>]
-  jsdbg source list <context-id>
-  jsdbg source resolve|endpoints <context-id> <path>
-  jsdbg source show|grep <context-id> <path-or-pattern>
-  jsdbg source map <context-id> <generated-path> <line> <column>
-  jsdbg source cache evict <context-id>
-  jsdbg source export <context-id> <destination>
-  jsdbg target show
-  jsdbg target attach|show <context-id> <connection-id> <target>
-  jsdbg target wait <context-id> <connection-id> <target> breakpoint-installed <breakpoint-id> [timeout-ms]
-  jsdbg target wait <context-id> <connection-id> <target> paused <after-epoch> [timeout-ms]
-  jsdbg target wait <context-id> <connection-id> <target> running
-  jsdbg target resume [--epoch <epoch>]
-  jsdbg target step into|over|out [--epoch <epoch>]
-  jsdbg target eval|watch <expression>
-  jsdbg target logpoint <id> <source> <line> <column> <expression>
-  jsdbg target logpoints (<id> <source> <line> <column> <expression>)+
-  jsdbg log [--after <cursor>] [--limit <count>]
-  jsdbg target click <css-selector>
-  jsdbg target key <ctrl+n|ctrl+k,ctrl+m|enter|accept|arrowup>
-  jsdbg target type <text>
-  jsdbg target click <context-id> <connection-id> <target> <css-selector>
-  jsdbg coverage start
-  jsdbg coverage capture [--id <name>]
-  jsdbg coverage stop [--exclude <name>]
-  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache]
-  jsdbg coverage start|capture|stop <context-id> <connection-id> <target>
-  jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals]
-  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache]
-  jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals]
-  jsdbg target resume <context-id> <connection-id> <target> [--epoch <epoch>]
-  jsdbg target step <context-id> <connection-id> <target> into|over|out [--epoch <epoch>]
-  jsdbg target eval <context-id> <connection-id> <target> <expression>
-  jsdbg target logpoint <context-id> <connection-id> <target> <id> <source> <line> <column> <expression>"
+  jsdbg context create --context <id> [display-name] [--set]
+  jsdbg context show [--context <id>]
+  jsdbg context delete [--context <id>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg state get [--context <id>]
+  jsdbg state watch [--context <id>] [--after-revision <revision>]
+  jsdbg events --after-revision <revision> [--context <id>]
+  jsdbg set context --context <id>
+  jsdbg set target --target <selector> [--context <id>] [--connection <id>]
+  jsdbg connection add <ws-endpoint> --connection <id> [--context <id>] [--connect]
+  jsdbg connection add --node-inspector <ws-endpoint> --connection <id> [--context <id>] --connect
+  jsdbg connection add --process <process-id> --connection <id> [--context <id>] --connect
+  jsdbg connection add --process-tree <root-pid> --connection <id> [--context <id>] --connect
+  jsdbg connection add --playwright <url> --connection <id> [--context <id>] [--channel <channel>] [--headed] [--ignore-https-errors] [--connect] [--set]
+  jsdbg connection add --chrome <url> --connection <id> [--context <id>] --executable <path> [--headed] [--user-data-dir <path>] [--arg <value>]... [--connect] [--set]
+  jsdbg connection connect|disconnect [--context <id>] [--connection <id>]
+  jsdbg connection delete [--context <id>] [--connection <id>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
+  jsdbg breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg source list [--context <id>]
+  jsdbg source resolve|endpoints <path> [--context <id>]
+  jsdbg source show|grep <path-or-pattern> [--context <id>]
+  jsdbg source map <generated-path> <line> <column> [--context <id>]
+  jsdbg source cache evict [--context <id>]
+  jsdbg source export <destination> [--context <id>]
+  jsdbg target show [target scope]
+  jsdbg target attach [target scope] [--set]
+  jsdbg target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
+  jsdbg target wait paused <after-epoch> [timeout-ms] [target scope]
+  jsdbg target wait running [target scope]
+  jsdbg target resume [--epoch <epoch>] [target scope]
+  jsdbg target step into|over|out [--epoch <epoch>] [target scope]
+  jsdbg target eval|watch <expression> [target scope]
+  jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
+  jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
+  jsdbg log [--after <cursor>] [--limit <count>] [target scope]
+  jsdbg target click <css-selector> [target scope]
+  jsdbg target key <ctrl+n|ctrl+k,ctrl+m|ctrl+k,n|enter|accept|arrowup> [target scope]
+  jsdbg target type <text> [target scope]
+  jsdbg screenshot capture [--output <path>] [target scope]
+  jsdbg coverage start [target scope]
+  jsdbg coverage capture [--id <name>] [target scope]
+  jsdbg coverage stop [--exclude <name>] [target scope]
+  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [target scope]
+  jsdbg profile start [--sampling-interval <duration>] [target scope]
+  jsdbg profile stop [--id <name>] [target scope]
+  jsdbg profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [target scope]
+  jsdbg profile export [<name>] --output <path> [target scope]
+  jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
+  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
+  jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
+  jsdbg heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
+  jsdbg heap show <capture#heap-object-id> [--full-strings]
+  jsdbg heap refs <capture#heap-object-id> [--incoming|--outgoing|--both] [--all-edges] [--limit <count>]
+  jsdbg heap path <from-ref> <to-ref> [--direction <outgoing|incoming|either>] [--all-edges] [--readable]
+  jsdbg heap root-path|retainer-path|dominators <capture#heap-object-id>
+  jsdbg heap aggregate [<capture>] [--by <type|name|string>] [--limit <count>] [--full-strings]
+  jsdbg heap diff <older-capture> <newer-capture> [--by <type|name|string>] [--limit <count>] [--full-strings]
+  jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals] [target scope]
+
+target scope:
+  [--context <id>] [--target <selector>] [--connection <id>]
+  Accepted by target, log, screenshot, coverage, profile, and heap commands.
+  --connection is only needed when the target selector is ambiguous."
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_heap_capture_options, parse_heap_class_options};
+    use super::{
+        CliSelection, ResolvedScope, ScopeOptions, apply_scope_selection, extract_scope_options,
+        parse_chrome_options, parse_context_create_options, parse_context_option,
+        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
+        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
+        parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
+        parse_process_attach_options, parse_process_list_options, parse_screenshot_capture_options,
+        png_dimensions, resolve_target_scope, split_heap_reference_cli,
+    };
+    use cdp_client::service_api::{
+        ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
+        HeapEdgePolicy, HeapPathCost, HeapPathDirection, TargetSnapshot,
+    };
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_screenshot_capture_output() {
+        let options =
+            parse_screenshot_capture_options(&arguments(&["--output", "renderer.png"])).unwrap();
+        assert_eq!(
+            options.output,
+            Some(std::path::PathBuf::from("renderer.png"))
+        );
+        assert_eq!(parse_screenshot_capture_options(&[]).unwrap().output, None);
+    }
+
+    #[test]
+    fn parses_selected_and_explicit_context_options() {
+        assert_eq!(parse_context_option(&[]).unwrap(), None);
+        assert_eq!(
+            parse_context_option(&arguments(&["--context", "renderer"])).unwrap(),
+            Some("renderer".to_owned())
+        );
+        assert!(parse_context_option(&arguments(&["renderer"])).is_err());
+    }
+
+    #[test]
+    fn parses_process_attach_scope_as_an_option() {
+        let mut args = arguments(&[
+            "process",
+            "attach",
+            "15388",
+            "--context",
+            "linkrpc-ext-host",
+            "--set",
+        ]);
+        let scope = extract_scope_options(&mut args).unwrap();
+        let options = parse_process_attach_options(&args[2..]).unwrap();
+        assert_eq!(options.process_id, 15388);
+        assert_eq!(scope.context.as_deref(), Some("linkrpc-ext-host"));
+        assert!(options.set_default);
+        assert!(parse_process_attach_options(&arguments(&["linkrpc-ext-host", "15388"])).is_err());
+    }
+
+    #[test]
+    fn extracts_target_scope_flags_without_positional_scope() {
+        let mut args = arguments(&[
+            "target",
+            "show",
+            "--target",
+            "$node-root",
+            "--context",
+            "brave",
+            "--connection",
+            "process-42",
+        ]);
+        let scope = extract_scope_options(&mut args).unwrap();
+        assert_eq!(args, arguments(&["target", "show"]));
+        assert_eq!(
+            scope,
+            ScopeOptions {
+                context: Some("brave".to_owned()),
+                connection: Some("process-42".to_owned()),
+                target: Some("$node-root".to_owned()),
+            }
+        );
+
+        let mut positional = arguments(&["target", "show", "brave", "process-42", "$node-root"]);
+        assert_eq!(
+            extract_scope_options(&mut positional).unwrap(),
+            ScopeOptions::default()
+        );
+        assert_eq!(positional.len(), 5);
+    }
+
+    #[test]
+    fn target_scope_infers_connection_and_reports_ambiguity() {
+        let snapshot =
+            context_snapshot(&[("process-1", &["$node-root"]), ("renderer", &["page-1"])]);
+        let scope = resolve_target_scope(
+            "ctx".to_owned(),
+            &snapshot,
+            &CliSelection::default(),
+            &ScopeOptions {
+                target: Some("page-1".to_owned()),
+                ..ScopeOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            scope,
+            ResolvedScope {
+                context: "ctx".to_owned(),
+                connection: "renderer".to_owned(),
+                target: "page-1".to_owned(),
+            }
+        );
+
+        let duplicate = context_snapshot(&[
+            ("process-1", &["$node-root"]),
+            ("process-2", &["$node-root"]),
+        ]);
+        let options = ScopeOptions {
+            target: Some("$node-root".to_owned()),
+            ..ScopeOptions::default()
+        };
+        let error = resolve_target_scope(
+            "ctx".to_owned(),
+            &duplicate,
+            &CliSelection::default(),
+            &options,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--connection <id>"));
+
+        let scope = resolve_target_scope(
+            "ctx".to_owned(),
+            &duplicate,
+            &CliSelection::default(),
+            &ScopeOptions {
+                connection: Some("process-2".to_owned()),
+                ..options
+            },
+        )
+        .unwrap();
+        assert_eq!(scope.connection, "process-2");
+    }
+
+    #[test]
+    fn setting_scope_persists_the_resolved_identity() {
+        let scope = ResolvedScope {
+            context: "ctx".to_owned(),
+            connection: "process-42".to_owned(),
+            target: "$node-root".to_owned(),
+        };
+        let mut selection = CliSelection {
+            context: Some("old".to_owned()),
+            watches: vec!["value".to_owned()],
+            ..CliSelection::default()
+        };
+        apply_scope_selection(&mut selection, &scope, 17, "scope-key".to_owned());
+        assert_eq!(selection.context.as_deref(), Some("ctx"));
+        assert_eq!(selection.connection.as_deref(), Some("process-42"));
+        assert_eq!(selection.target.as_deref(), Some("$node-root"));
+        assert_eq!(selection.log_cursor, 17);
+        assert_eq!(selection.log_scope.as_deref(), Some("scope-key"));
+        assert!(selection.watches.is_empty());
+
+        let legacy: CliSelection =
+            serde_json::from_str(r#"{"workspace":"ctx","target":"$node-root"}"#).unwrap();
+        assert_eq!(legacy.context.as_deref(), Some("ctx"));
+    }
+
+    fn context_snapshot(connections: &[(&str, &[&str])]) -> ContextSnapshot {
+        ContextSnapshot {
+            agent_instance_id: "agent".to_owned(),
+            id: "ctx".to_owned(),
+            display_name: "Context".to_owned(),
+            revision: 1,
+            connections: connections
+                .iter()
+                .map(|(connection_id, target_ids)| ConnectionSnapshot {
+                    id: (*connection_id).to_owned(),
+                    configuration: ConnectionConfiguration::DirectCdp {
+                        endpoint: String::new(),
+                    },
+                    generation: 1,
+                    status: ConnectionStatus::Connected {
+                        product: String::new(),
+                        protocol_version: String::new(),
+                    },
+                    targets: target_ids
+                        .iter()
+                        .map(|target_id| TargetSnapshot {
+                            target_id: (*target_id).to_owned(),
+                            target_type: "node".to_owned(),
+                            title: (*target_id).to_owned(),
+                            url: String::new(),
+                            attached: true,
+                            parent_id: None,
+                            opener_id: None,
+                            browser_context_id: None,
+                            subtype: None,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            target_forest: Vec::new(),
+            breakpoints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_screenshot_capture_options() {
+        assert!(
+            parse_screenshot_capture_options(&arguments(&[
+                "--output", "one.png", "--output", "two.png"
+            ]))
+            .is_err()
+        );
+        assert!(parse_screenshot_capture_options(&arguments(&["--full-page"])).is_err());
+    }
+
+    #[test]
+    fn reads_png_dimensions() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&1920u32.to_be_bytes());
+        png.extend_from_slice(&1080u32.to_be_bytes());
+        assert_eq!(png_dimensions(&png).unwrap(), (1920, 1080));
+        assert!(png_dimensions(b"not a png").is_err());
     }
 
     #[test]
@@ -2025,6 +4055,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_process_tree_output_options() {
+        let options = parse_process_list_options(&arguments(&[
+            "--vscode",
+            "--no-cmd-line",
+            "--stats",
+            "--filter",
+            "window 3",
+            "--no-trim",
+        ]))
+        .unwrap();
+        assert!(!options.command_line);
+        assert!(options.stats);
+        assert_eq!(options.filter.as_deref(), Some("window 3"));
+        assert!(!options.trim_width);
+    }
+
+    #[test]
     fn parses_heap_class_capture_and_output_options() {
         let options = parse_heap_class_options(&arguments(&[
             "startup",
@@ -2036,6 +4083,7 @@ mod tests {
             "--max-lines",
             "42",
             "--no-cache",
+            "--no-trim",
         ]))
         .unwrap();
         assert_eq!(options.capture_id, "startup");
@@ -2045,6 +4093,155 @@ mod tests {
         assert!(options.instances);
         assert_eq!(options.max_lines, 42);
         assert!(options.no_cache);
+        assert!(!options.trim_width);
+    }
+
+    #[test]
+    fn parses_composable_heap_selector_options() {
+        let options = parse_heap_select_options(&arguments(&[
+            "startup",
+            "--type",
+            "string",
+            "--string-regex",
+            "session.*title",
+            "--min-size",
+            "16",
+            "--limit",
+            "25",
+            "--dominators",
+            "--full-strings",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id, "startup");
+        assert_eq!(options.selector.node_type.as_deref(), Some("string"));
+        assert_eq!(
+            options.selector.string_regex.as_deref(),
+            Some("session.*title")
+        );
+        assert_eq!(options.selector.min_shallow_size, Some(16));
+        assert_eq!(options.selector.limit, Some(25));
+        assert!(options.include_dominators);
+        assert_eq!(options.max_string_length, None);
+    }
+
+    #[test]
+    fn parses_heap_string_search_and_path_policies() {
+        let strings = parse_heap_string_options(&arguments(&[
+            "--capture",
+            "live",
+            "--regex",
+            "Add extension launch config",
+            "--limit",
+            "7",
+        ]))
+        .unwrap();
+        assert_eq!(strings.capture_id, "live");
+        assert_eq!(
+            strings.selector.string_regex.as_deref(),
+            Some("Add extension launch config")
+        );
+        assert_eq!(strings.selector.limit, Some(7));
+
+        let grep = parse_heap_string_options(&arguments(&["--grep", "extension launch"])).unwrap();
+        assert_eq!(
+            grep.selector.string_contains.as_deref(),
+            Some("extension launch")
+        );
+        assert!(parse_heap_string_options(&arguments(&["extension launch"])).is_err());
+        assert!(
+            parse_heap_string_options(&arguments(&["--grep", "extension", "--regex", "launch"]))
+                .is_err()
+        );
+
+        let path = parse_heap_path_options(&arguments(&[
+            "--direction",
+            "either",
+            "--all-edges",
+            "--readable",
+        ]))
+        .unwrap();
+        assert_eq!(path.path.direction, HeapPathDirection::Either);
+        assert_eq!(path.path.edge_policy, HeapEdgePolicy::All);
+        assert_eq!(path.path.cost, HeapPathCost::Readable);
+        assert_eq!(
+            split_heap_reference_cli("live#123").unwrap(),
+            ("live".to_owned(), "123".to_owned())
+        );
+    }
+
+    #[test]
+    fn parses_coverage_no_trim_option() {
+        let options = parse_coverage_show_options(&arguments(&["--no-trim"])).unwrap();
+        assert!(!options.trim_width);
+    }
+
+    #[test]
+    fn parses_native_chrome_connection_options() {
+        let options = parse_chrome_options(&arguments(&[
+            "--executable",
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "--headed",
+            "--user-data-dir",
+            "C:\\tmp\\jsdbg-chrome",
+            "--arg",
+            "--disable-extensions",
+            "--arg",
+            "--window-size=1200,800",
+            "--connect",
+            "--set",
+        ]))
+        .unwrap();
+        assert_eq!(
+            options.executable,
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        );
+        assert!(!options.headless);
+        assert!(options.connect);
+        assert!(options.set_default);
+        assert_eq!(
+            options.user_data_dir.as_deref(),
+            Some("C:\\tmp\\jsdbg-chrome")
+        );
+        assert_eq!(
+            options.args,
+            ["--disable-extensions", "--window-size=1200,800"]
+        );
+    }
+
+    #[test]
+    fn parses_context_creation_selection_policy_independently_of_the_name() {
+        assert_eq!(
+            parse_context_create_options(&arguments(&["Heap analysis", "--set"])).unwrap(),
+            (Some("Heap analysis".to_owned()), true)
+        );
+        assert_eq!(
+            parse_context_create_options(&arguments(&["--set"])).unwrap(),
+            (None, true)
+        );
+    }
+
+    #[test]
+    fn parses_cpu_profile_sampling_intervals() {
+        assert_eq!(parse_cpu_profile_sampling_interval("1").unwrap(), 1_000);
+        assert_eq!(parse_cpu_profile_sampling_interval("1ms").unwrap(), 1_000);
+        assert_eq!(parse_cpu_profile_sampling_interval("500us").unwrap(), 500);
+        assert_eq!(parse_cpu_profile_sampling_interval("0.5ms").unwrap(), 500);
+        assert_eq!(
+            parse_cpu_profile_sampling_interval("1s").unwrap(),
+            1_000_000
+        );
+        assert!(parse_cpu_profile_sampling_interval("0").is_err());
+        assert!(parse_cpu_profile_sampling_interval("0.1us").is_err());
+        assert!(parse_cpu_profile_sampling_interval("-1ms").is_err());
+    }
+
+    #[test]
+    fn omitted_cpu_profile_sampling_interval_uses_the_runtime_default() {
+        assert_eq!(parse_cpu_profile_start_options(&[]).unwrap(), None);
+        assert_eq!(
+            parse_cpu_profile_start_options(&arguments(&["--sampling-interval", "1ms"])).unwrap(),
+            Some(1_000)
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { access } from "node:fs/promises";
 import { createServer } from "node:net";
+import { delimiter, join } from "node:path";
 import { expect } from "@playwright/test";
 
 export async function buildLiveTest() {
@@ -67,6 +69,85 @@ export async function readCdpEndpoint(port) {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
 	throw new Error(`Chromium did not expose CDP at ${url}: ${lastError}`);
+}
+
+export async function findChromeExecutable() {
+	const explicit = process.env.JSDBG_CHROME_EXECUTABLE;
+	const candidates = explicit ? [explicit] : chromeCandidates();
+	for (const candidate of candidates) {
+		try {
+			await access(candidate);
+			return candidate;
+		} catch {}
+	}
+	throw new Error(
+		`Chrome executable not found. Checked:\n${candidates.map((candidate) => `- ${candidate}`).join("\n")}`,
+	);
+}
+
+export async function findPageTargetId(
+	cli,
+	contextId,
+	connectionId,
+	urlPrefix,
+	environment,
+) {
+	const result = await run(
+		cli,
+		["--json", "context", "show", "--context", contextId],
+		environment,
+	);
+	if (result.code !== 0) {
+		throw new Error(`Could not read context '${contextId}':\n${result.output}`);
+	}
+	const context = JSON.parse(result.output);
+	const connection = context.connections.find(
+		(candidate) => candidate.id === connectionId,
+	);
+	const target = connection?.targets.find(
+		(candidate) =>
+			candidate.targetType === "page" && candidate.url.startsWith(urlPrefix),
+	);
+	if (target === undefined) {
+		throw new Error(
+			`Connection '${connectionId}' has no page target starting with '${urlPrefix}'`,
+		);
+	}
+	return target.targetId;
+}
+
+function chromeCandidates() {
+	if (process.platform === "win32") {
+		return [
+			process.env.PROGRAMFILES,
+			process.env["PROGRAMFILES(X86)"],
+			process.env.LOCALAPPDATA,
+		]
+			.filter(Boolean)
+			.flatMap((directory) => [
+				join(directory, "Google", "Chrome", "Application", "chrome.exe"),
+				join(directory, "Chromium", "Application", "chrome.exe"),
+			]);
+	}
+	if (process.platform === "darwin") {
+		return [
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		];
+	}
+	const pathDirectories = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+	return [
+		"/usr/bin/google-chrome",
+		"/usr/bin/google-chrome-stable",
+		"/usr/bin/chromium",
+		"/usr/bin/chromium-browser",
+		...pathDirectories.flatMap((directory) => [
+			join(directory, "google-chrome"),
+			join(directory, "google-chrome-stable"),
+			join(directory, "chromium"),
+			join(directory, "chromium-browser"),
+		]),
+	];
 }
 
 export function run(command, args, extraEnvironment, options = {}) {

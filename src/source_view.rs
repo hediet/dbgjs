@@ -422,6 +422,26 @@ impl ResolvedSourceView {
         }
     }
 
+    pub fn source_map_location(
+        &self,
+        generated_url: &str,
+        position: Position,
+    ) -> Option<(String, Position)> {
+        let GeneratedProjection::SourceMap { map_id } = self.generated.get(generated_url)? else {
+            return None;
+        };
+        let token = self.maps[map_id.0]
+            .map
+            .lookup_token(position.line, position.column)?;
+        Some((
+            token.get_source()?.to_owned(),
+            Position {
+                line: token.get_src_line(),
+                column: token.get_src_col(),
+            },
+        ))
+    }
+
     pub fn reverse(&self, logical_url: &str, position: Position) -> Vec<CandidateLocation> {
         let Some(file) = self.files.get(logical_url) else {
             return Vec::new();
@@ -1162,6 +1182,35 @@ mod tests {
         let reverse = view.reverse("src/app.ts", Position { line: 0, column: 5 });
         assert_eq!(reverse[0].quality, MappingQuality::GreatestLowerBound);
         assert_eq!(reverse[0].position, Position::ZERO);
+    }
+
+    #[test]
+    fn source_map_location_survives_missing_authored_content() {
+        let mut builder = SourceMapBuilder::new(Some("bundle.js"));
+        builder.add(0, 4, 10, 2, Some("src/app.ts"), None::<&str>, false);
+        let mut bytes = Vec::new();
+        builder.into_sourcemap().to_writer(&mut bytes).unwrap();
+        let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+        view.add_generated(GeneratedSourceInput {
+            url: "bundle.js",
+            content: "call();",
+            source_map: Some(&bytes),
+            minified: false,
+        })
+        .unwrap();
+
+        let generated = Position { line: 0, column: 4 };
+        assert!(view.forward("bundle.js", generated).is_empty());
+        assert_eq!(
+            view.source_map_location("bundle.js", generated),
+            Some((
+                "src/app.ts".to_owned(),
+                Position {
+                    line: 10,
+                    column: 2
+                }
+            ))
+        );
     }
 
     #[test]

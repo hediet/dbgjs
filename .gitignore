@@ -7,3 +7,5 @@
 /vscode-extension/node_modules
 /vscode-extension/.vscode-test
 /vscode-extension/core.*
+/vscode-extension/test/workspace/node_modules
+/vscode-extension/test/workspace/dist

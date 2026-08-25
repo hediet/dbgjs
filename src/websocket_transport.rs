@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 
+use crate::cdp_transport::ManagedCdpTransport;
 use crate::session_transport::CdpEnvelope;
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -79,6 +80,7 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for CdpWebSocketTransport {
         if *self.closed.borrow() {
             return Err(TransportError::Closed);
         }
+
         let json = serde_json::to_string(&envelope)
             .map_err(|error| TransportError::Other(error.to_string()))?;
         if let Err(error) = self
@@ -141,6 +143,21 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for CdpWebSocketTransport {
                 }
             }
         }
+    }
+}
+
+#[async_trait]
+impl ManagedCdpTransport for CdpWebSocketTransport {
+    fn close_reason(&self) -> Arc<Mutex<Option<String>>> {
+        CdpWebSocketTransport::close_reason(self)
+    }
+
+    async fn wait_closed(&self) -> String {
+        CdpWebSocketTransport::wait_closed(self).await
+    }
+
+    async fn close(&self) {
+        CdpWebSocketTransport::close(self).await;
     }
 }
 

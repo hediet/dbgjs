@@ -10,14 +10,17 @@ export interface LegacyHubConnection {
 export async function connectLegacyHub(
 	endpoint: string,
 	token: string,
+	log?: (message: string) => void,
 ): Promise<LegacyHubConnection> {
+	log?.(`Connecting to daemon transport ${endpoint}`);
 	const socket = createConnection(endpoint);
 	await new Promise<void>((resolve, reject) => {
 		socket.once("connect", resolve);
 		socket.once("error", reject);
 	});
 
-	const transport = new LegacyNdjsonTransport(socket);
+	log?.("Connected to daemon transport");
+	const transport = new LegacyNdjsonTransport(socket, log);
 	socket.write(`${JSON.stringify({ hello: 1, token })}\n`);
 	const connection = HubRpcConnection.fromTransport(transport);
 	return {
@@ -33,18 +36,26 @@ class LegacyNdjsonTransport implements IMessageTransport<JsonRpcMessage, JsonRpc
 	private readonly closeListeners = new Set<() => void>();
 	private closed = false;
 
-	public constructor(private readonly socket: Socket) {
+	public constructor(
+		private readonly socket: Socket,
+		private readonly log?: (message: string) => void,
+	) {
 		socket.setEncoding("utf8");
 		socket.on("data", (chunk: string) => this.accept(chunk));
 		socket.on("close", () => this.fireClose());
-		socket.on("error", () => this.fireClose());
+		socket.on("error", (error) => {
+			this.log?.(`Daemon transport error: ${error.message}`);
+			this.fireClose();
+		});
 	}
 
 	public send(message: JsonRpcMessage): void {
 		if (this.closed) {
 			throw new Error("jsdbg HubRPC transport is closed");
 		}
-		this.socket.write(`${JSON.stringify(message)}\n`);
+		const line = JSON.stringify(message);
+		this.log?.(`extension -> daemon ${line}`);
+		this.socket.write(`${line}\n`);
 	}
 
 	public setListener(listener: ((message: JsonRpcMessage) => void) | undefined): void {
@@ -77,6 +88,7 @@ class LegacyNdjsonTransport implements IMessageTransport<JsonRpcMessage, JsonRpc
 			if (line.length === 0) {
 				continue;
 			}
+			this.log?.(`daemon -> extension ${line}`);
 			try {
 				const message: unknown = JSON.parse(line);
 				if (isJsonRpcMessage(message)) {
@@ -95,6 +107,7 @@ class LegacyNdjsonTransport implements IMessageTransport<JsonRpcMessage, JsonRpc
 			return;
 		}
 		this.closed = true;
+		this.log?.("Daemon transport closed");
 		for (const listener of this.closeListeners) {
 			listener();
 		}

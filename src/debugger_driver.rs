@@ -55,7 +55,9 @@ impl DebuggerDriver {
         self.session.begin_heap_snapshot(destination).await
     }
 
-    pub async fn finish_heap_snapshot(&self) -> std::io::Result<u64> {
+    pub(crate) async fn finish_heap_snapshot(
+        &self,
+    ) -> std::io::Result<crate::cdp_runtime::HeapSnapshotWriteResult> {
         self.session.finish_heap_snapshot().await
     }
 
@@ -175,7 +177,8 @@ impl DebuggerDriver {
                     })
                     .collect(),
             ));
-            return Ok(false);
+            self.apply(Input::ConsoleMessageObserved).await?;
+            return Ok(true);
         }
         let Some(input) = event.into_input(pause_epoch)? else {
             return Ok(false);
@@ -187,10 +190,11 @@ impl DebuggerDriver {
     async fn drain_effects(&mut self, effects: Vec<Effect>) -> Result<(), DebuggerDriverError> {
         let mut queue = VecDeque::from(effects);
         while let Some(effect) = queue.pop_front() {
-            let completion = match self.sources.interpret(&effect)? {
-                Some(input) => Some(input),
-                None => self.session.execute(&effect).await?,
-            };
+            let completion =
+                match source_effect_completion(&effect, self.sources.interpret(&effect)) {
+                    Some(input) => Some(input),
+                    None => self.session.execute(&effect).await?,
+                };
             let Some(completion) = completion else {
                 return Err(DebuggerDriverError::UnhandledEffect(effect));
             };
@@ -209,6 +213,19 @@ impl DebuggerDriver {
         self.state = transition.state;
         self.sources.retain_for_state(&self.state);
         effects
+    }
+}
+
+fn source_effect_completion(
+    effect: &Effect,
+    result: Result<Option<Input>, SourceEffectError>,
+) -> Option<Input> {
+    match result {
+        Ok(completion) => completion,
+        Err(error) => Some(Input::EffectFailed {
+            effect_id: effect.effect_id(),
+            message: error.to_string(),
+        }),
     }
 }
 
@@ -271,6 +288,52 @@ pub enum DebuggerDriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debugger_engine::{EffectId, ScriptKey, SessionKey};
+    use crate::source_view::Position;
+
+    #[test]
+    fn source_mapping_failure_completes_effect_without_stopping_driver() {
+        let effect = Effect::MapFrame {
+            effect_id: EffectId(7),
+            session: SessionKey {
+                connection_generation: 1,
+                session_id: "session".into(),
+            },
+            pause_epoch: 2,
+            frame_index: 1,
+            script: ScriptKey {
+                session: SessionKey {
+                    connection_generation: 1,
+                    session_id: "session".into(),
+                },
+                script_id: "script".into(),
+            },
+            view_id: EffectId(6),
+            position: Position {
+                line: 232,
+                column: 41,
+            },
+        };
+
+        let completion = source_effect_completion(
+            &effect,
+            Err(SourceEffectError::UnmappedPosition {
+                view_id: EffectId(6),
+                position: Position {
+                    line: 232,
+                    column: 41,
+                },
+            }),
+        );
+
+        assert!(matches!(
+            completion,
+            Some(Input::EffectFailed {
+                effect_id: EffectId(7),
+                message,
+            }) if message.contains("cannot map generated position")
+        ));
+    }
 
     #[test]
     fn replay_reports_the_transition_with_effect_divergence() {

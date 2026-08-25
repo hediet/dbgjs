@@ -24,11 +24,15 @@ use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointSpec, BreakpointStatus, ConnectionConfiguration,
     ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
-    ContextSnapshot, ContextSummary, CoverageSnapshot, DebuggerServiceApi, EvaluationSnapshot,
-    HeapCaptureResult, HeapClassSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec,
-    MutationOptions, ObservationCursor, ObservationResult, ServiceInfo, SourceContentSnapshot,
-    SourceMatchSnapshot, SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
-    TargetSnapshot, TargetWaitPredicate,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot, DebuggerServiceApi,
+    EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult,
+    HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
+    HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
+    HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
+    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
+    ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceMatchSnapshot,
+    SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot,
+    TargetWaitPredicate, VariableSnapshot,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -501,6 +505,15 @@ impl DebuggerServiceApi for DebuggerService {
             process_id: std::process::id(),
             agent_instance_id: self.agent_instance_id.clone(),
         })
+    }
+
+    async fn discover_vscode_process_trees(
+        &self,
+        _ctx: &CallCtx,
+    ) -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError> {
+        crate::process_discovery::discover_vscode_process_trees(false)
+            .await
+            .map_err(|error| internal_error(error.to_string()))
     }
 
     async fn list_contexts(&self, _ctx: &CallCtx) -> Result<Vec<ContextSummary>, JsonRpcError> {
@@ -1407,7 +1420,7 @@ impl DebuggerServiceApi for DebuggerService {
             .resolve_target_id(&context_id, &connection_id, &target_id)
             .await?;
         let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
-        let (runtime, generation, failed_session) = {
+        let (runtime, generation, waiting_for_debugger, failed_session) = {
             let mut state = self.state.lock().await;
             let failed_session = match state.target_debuggers.get(&debugger_key).cloned() {
                 Some(debugger)
@@ -1439,7 +1452,15 @@ impl DebuggerServiceApi for DebuggerService {
                 .get(&(context_id.clone(), connection_id.clone()))
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
-            (runtime, connection.generation, failed_session)
+            (
+                runtime,
+                connection.generation,
+                matches!(
+                    &connection.configuration,
+                    ConnectionConfiguration::Node { .. }
+                ),
+                failed_session,
+            )
         };
         if let Some(session_id) = failed_session {
             detach_session(&runtime, &session_id).await;
@@ -1448,7 +1469,9 @@ impl DebuggerServiceApi for DebuggerService {
         let (session, session_key) = if runtime.is_direct_debugger() {
             let session = runtime
                 .take_direct_debugger_session(&target_id)
-                .ok_or_else(|| invalid_state("direct debugger target is already attached"))?;
+                .await
+                .map_err(|error| internal_error(error.to_string()))?
+                .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
             let key = session.key().clone();
             (session, key)
         } else {
@@ -1479,6 +1502,7 @@ impl DebuggerServiceApi for DebuggerService {
             generation,
             session,
             session_key.clone(),
+            waiting_for_debugger,
         )
         .await
         {
@@ -1596,6 +1620,44 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn observe_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        after_revision: u64,
+        timeout_ms: u64,
+    ) -> Result<Option<TargetDebuggerSnapshot>, JsonRpcError> {
+        match self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .wait(
+                TargetWaitPredicate::Changed { after_revision },
+                Duration::from_millis(timeout_ms),
+            )
+            .await
+        {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(TargetDebuggerError::WaitTimedOut) => Ok(None),
+            Err(error) => Err(target_debugger_rpc_error(error)),
+        }
+    }
+
+    async fn release_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .release_if_waiting()
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn resume_target(
         &self,
         _ctx: &CallCtx,
@@ -1647,6 +1709,39 @@ impl DebuggerServiceApi for DebuggerService {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .evaluate(pause_epoch, frame_index, expression)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_scope_variables(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: u64,
+        frame_index: u32,
+        scope_index: u32,
+    ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .scope_variables(pause_epoch, frame_index, scope_index)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_object_properties(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: Option<u64>,
+        object_id: String,
+    ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .object_properties(pause_epoch, object_id)
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -1768,6 +1863,20 @@ impl DebuggerServiceApi for DebuggerService {
         Ok(true)
     }
 
+    async fn capture_screenshot(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<ScreenshotSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .capture_screenshot()
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn start_coverage(
         &self,
         _ctx: &CallCtx,
@@ -1847,6 +1956,55 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
+    async fn start_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        sampling_interval_micros: Option<u64>,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .start_cpu_profile(sampling_interval_micros)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
+    async fn stop_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: Option<String>,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .stop_cpu_profile(capture_id)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        source_path: Option<String>,
+        no_cache: bool,
+        project: bool,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_cpu_profile(capture_id, source_path, no_cache, project)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn take_heap_snapshot(
         &self,
         _ctx: &CallCtx,
@@ -1894,6 +2052,120 @@ impl DebuggerServiceApi for DebuggerService {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_classes(capture_id, filter, no_cache)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn select_heap_nodes(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        selector: HeapNodeSelector,
+        max_string_length: Option<u32>,
+        include_dominators: bool,
+    ) -> Result<HeapNodeSelectionSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .select_heap_nodes(capture_id, selector, max_string_length, include_dominators)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_heap_references(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        reference: String,
+        direction: HeapReferenceDirection,
+        edge_policy: HeapEdgePolicy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapReferencesSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_heap_references(reference, direction, edge_policy, limit, max_string_length)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_heap_path(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        from: String,
+        to: String,
+        options: HeapPathOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<Option<HeapPathSnapshot>, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_heap_path(from, to, options, max_string_length)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn get_heap_dominator_chain(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        reference: String,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapDominatorSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_heap_dominator_chain(reference, max_string_length)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn aggregate_heap_snapshot(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapAggregateSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .aggregate_heap_snapshot(capture_id, by, limit, max_string_length)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn diff_heap_snapshots(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        older_capture_id: String,
+        newer_capture_id: String,
+        by: HeapAggregateBy,
+        limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapDiffSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .diff_heap_snapshots(
+                older_capture_id,
+                newer_capture_id,
+                by,
+                limit,
+                max_string_length,
+            )
             .await
             .map_err(target_debugger_rpc_error)
     }
@@ -2008,16 +2280,32 @@ async fn connect_runtime(
         .await
         .map_err(|error| error.to_string())?;
     if connection.is_direct_debugger() {
+        let title = match configuration {
+            ConnectionConfiguration::Process { process_id } => {
+                format!("Process {process_id}")
+            }
+            ConnectionConfiguration::ProcessTree { root_pid } => {
+                format!("Process {root_pid}")
+            }
+            _ => "Node.js".to_owned(),
+        };
         return Ok((
             connection,
-            "Node.js".to_owned(),
+            title.clone(),
             "1.3".to_owned(),
             vec![TargetSnapshot {
                 target_id: "$node-root".to_owned(),
                 target_type: "node".to_owned(),
-                title: "Node.js".to_owned(),
+                title,
                 url: match configuration {
                     ConnectionConfiguration::Node { program, .. } => program.clone(),
+                    ConnectionConfiguration::NodeInspector { endpoint } => endpoint.clone(),
+                    ConnectionConfiguration::Process { process_id } => {
+                        format!("process:{process_id}")
+                    }
+                    ConnectionConfiguration::ProcessTree { root_pid } => {
+                        format!("process:{root_pid}")
+                    }
                     _ => String::new(),
                 },
                 attached: true,
@@ -2081,22 +2369,28 @@ fn target_snapshot(target: TargetTargetInfo) -> TargetSnapshot {
 }
 
 fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> ContextSnapshot {
+    let connections = context
+        .connections
+        .iter()
+        .map(|(id, connection)| ConnectionSnapshot {
+            id: id.clone(),
+            configuration: connection.configuration.clone(),
+            generation: connection.generation,
+            status: connection.status.clone(),
+            targets: connection.targets.values().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+    let target_forest = connections
+        .iter()
+        .flat_map(ConnectionSnapshot::target_forest)
+        .collect();
     ContextSnapshot {
         agent_instance_id: agent_instance_id.to_owned(),
         id: id.to_owned(),
         display_name: context.display_name.clone(),
         revision: context.revision,
-        connections: context
-            .connections
-            .iter()
-            .map(|(id, connection)| ConnectionSnapshot {
-                id: id.clone(),
-                configuration: connection.configuration.clone(),
-                generation: connection.generation,
-                status: connection.status.clone(),
-                targets: connection.targets.values().cloned().collect(),
-            })
-            .collect(),
+        connections,
+        target_forest,
         breakpoints: context
             .breakpoints
             .iter()
@@ -2488,6 +2782,9 @@ fn validate_breakpoint_spec(specification: &BreakpointSpec) -> Result<(), JsonRp
 }
 
 fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
+    if Path::new(path).is_absolute() {
+        return Ok(PathBuf::from(path));
+    }
     if let Ok(url) = url::Url::parse(path) {
         if url.scheme() != "file" {
             return Err(invalid_params(
@@ -2541,14 +2838,24 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         TargetDebuggerError::InvalidBreakpointPosition
         | TargetDebuggerError::StalePause(_)
         | TargetDebuggerError::FrameNotFound(_)
+        | TargetDebuggerError::ScopeNotFound(_)
         | TargetDebuggerError::SelectorNotFound(_)
         | TargetDebuggerError::UnsupportedKeyChord(_)
         | TargetDebuggerError::CoverageAlreadyActive
         | TargetDebuggerError::CoverageNotActive
         | TargetDebuggerError::CoverageCaptureNotFound(_)
         | TargetDebuggerError::CoverageCaptureAlreadyExists(_)
+        | TargetDebuggerError::CpuProfileAlreadyActive
+        | TargetDebuggerError::CpuProfileNotActive
+        | TargetDebuggerError::CpuProfileCaptureNotFound(_)
+        | TargetDebuggerError::CpuProfileCaptureAlreadyExists(_)
+        | TargetDebuggerError::InvalidCpuProfileSamplingInterval
         | TargetDebuggerError::HeapCaptureNotFound(_)
         | TargetDebuggerError::InvalidHeapFilter(_)
+        | TargetDebuggerError::InvalidHeapSelector(_)
+        | TargetDebuggerError::InvalidHeapReference(_)
+        | TargetDebuggerError::HeapNodeNotFound(_)
+        | TargetDebuggerError::IncompatibleHeapCaptures { .. }
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::SettlementTimedOut
@@ -2556,9 +2863,14 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::SessionMissing
         | TargetDebuggerError::BreakpointFailed { .. }
         | TargetDebuggerError::Evaluation(_)
+        | TargetDebuggerError::Properties(_)
         | TargetDebuggerError::Interaction(_)
+        | TargetDebuggerError::Screenshot(_)
         | TargetDebuggerError::Coverage(_)
+        | TargetDebuggerError::CpuProfile(_)
+        | TargetDebuggerError::InvalidCpuProfile(_)
         | TargetDebuggerError::HeapSnapshot(_)
+        | TargetDebuggerError::HeapAnalysis(_)
         | TargetDebuggerError::BatchRollback { .. }
         | TargetDebuggerError::DriverFailed(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,

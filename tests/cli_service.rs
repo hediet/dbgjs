@@ -25,7 +25,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "shop", "Shop"],
+        &["context", "create", "--context", "shop", "Shop"],
     );
     assert_eq!(created["id"], "shop");
     assert_eq!(created["revision"], 1);
@@ -45,7 +45,15 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &cli,
         &service,
         &state_file,
-        &["connection", "add", "shop", "server", "ws://127.0.0.1:9229"],
+        &[
+            "connection",
+            "add",
+            "ws://127.0.0.1:9229",
+            "--context",
+            "shop",
+            "--connection",
+            "server",
+        ],
     );
     run_json(
         &cli,
@@ -54,9 +62,11 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &[
             "connection",
             "add",
-            "shop",
-            "browser",
             "ws://127.0.0.1:9222",
+            "--context",
+            "shop",
+            "--connection",
+            "browser",
         ],
     );
     run_json(
@@ -66,15 +76,22 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &[
             "breakpoint",
             "set",
-            "shop",
             "shared-validation",
             "file:///workspace/shared/validation.ts",
             "41",
+            "--column",
             "1",
+            "--context",
+            "shop",
         ],
     );
 
-    let snapshot = run_json(&cli, &service, &state_file, &["context", "show", "shop"]);
+    let snapshot = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "show", "--context", "shop"],
+    );
     assert_eq!(snapshot["revision"], 4);
     assert_eq!(
         snapshot["connections"]
@@ -99,6 +116,34 @@ fn cli_spawns_service_and_manages_shared_context_state() {
 }
 
 #[test]
+fn service_ensure_starts_the_shared_daemon() {
+    let state_file = std::env::temp_dir().join(format!(
+        "jsdbg-service-ensure-{}-{}.json",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    let status = Command::new(&service)
+        .args(["--ensure", "--state-file"])
+        .arg(&state_file)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "jsdbg-service --ensure failed with {status}"
+    );
+    assert!(read_endpoint(&state_file).is_ok());
+
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    cleanup.disarm();
+}
+
+#[test]
 fn cli_manages_lifecycle_concurrency_and_sources() {
     let state_file = std::env::temp_dir().join(format!(
         "jsdbg-cli-management-{}-{}.json",
@@ -115,7 +160,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "managed"],
+        &["context", "create", "--context", "managed"],
     );
     let source = source_file.to_string_lossy();
     let configured = run_json(
@@ -125,11 +170,12 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &[
             "breakpoint",
             "configure",
-            "managed",
             "conditional",
             &source,
             "1",
             "1",
+            "--context",
+            "managed",
             "--disabled",
             "--condition",
             "validationValue > 0",
@@ -148,7 +194,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &cli,
         &service,
         &state_file,
-        &["events", "managed", "--after-revision", "1"],
+        &["events", "--after-revision", "1", "--context", "managed"],
     );
     let observed_items = observed["items"].as_array().unwrap();
     assert_eq!(observed_items.len(), 1);
@@ -162,11 +208,12 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &[
             "breakpoint",
             "configure",
-            "managed",
             "conditional",
             &source,
             "1",
             "1",
+            "--context",
+            "managed",
             "--request-id",
             "configure-1",
         ],
@@ -177,7 +224,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &cli,
         &service,
         &state_file,
-        &["source", "grep", "managed", "validationValue"],
+        &["source", "grep", "validationValue", "--context", "managed"],
     );
     assert_eq!(matches.as_array().unwrap().len(), 1);
 
@@ -189,8 +236,9 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &[
             "breakpoint",
             "delete",
-            "managed",
             "conditional",
+            "--context",
+            "managed",
             "--expected-revision",
             &configured_revision,
         ],
@@ -204,6 +252,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &[
             "context",
             "delete",
+            "--context",
             "managed",
             "--expected-revision",
             &deleted_revision,
@@ -218,6 +267,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &[
             "context",
             "delete",
+            "--context",
             "managed",
             "--request-id",
             "delete-managed",
@@ -247,14 +297,22 @@ fn context_intent_survives_service_restart() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "shop", "Shop"],
+        &["context", "create", "--context", "shop", "Shop"],
     );
     let first_instance = created["agentInstanceId"].as_str().unwrap().to_owned();
     run_json(
         &cli,
         &service,
         &state_file,
-        &["connection", "add", "shop", "server", "ws://127.0.0.1:9229"],
+        &[
+            "connection",
+            "add",
+            "ws://127.0.0.1:9229",
+            "--context",
+            "shop",
+            "--connection",
+            "server",
+        ],
     );
     run_json(
         &cli,
@@ -263,17 +321,24 @@ fn context_intent_survives_service_restart() {
         &[
             "breakpoint",
             "set",
-            "shop",
             "shared-validation",
             "file:///workspace/shared/validation.ts",
             "41",
+            "--column",
             "1",
+            "--context",
+            "shop",
         ],
     );
     run_json(&cli, &service, &state_file, &["service", "stop"]);
     wait_until_removed(&state_file);
 
-    let restored = run_json(&cli, &service, &state_file, &["context", "show", "shop"]);
+    let restored = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "show", "--context", "shop"],
+    );
     assert_ne!(restored["agentInstanceId"], first_instance);
     assert_eq!(restored["displayName"], "Shop");
     assert_eq!(restored["revision"], 3);
@@ -287,7 +352,7 @@ fn context_intent_survives_service_restart() {
         &cli,
         &service,
         &state_file,
-        &["events", "shop", "--after-revision", "0"],
+        &["events", "--after-revision", "0", "--context", "shop"],
     );
     assert_eq!(history_gap["kind"], "historyGap");
     assert_eq!(history_gap["oldest_available_revision"], 3);
@@ -353,19 +418,34 @@ fn cli_service_connects_to_live_cdp() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "live-browser"],
+        &["context", "create", "--context", "live-browser"],
     );
     run_json(
         &cli,
         &service,
         &state_file,
-        &["connection", "add", "live-browser", "browser", &endpoint],
+        &[
+            "connection",
+            "add",
+            &endpoint,
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+        ],
     );
     let connected = run_json(
         &cli,
         &service,
         &state_file,
-        &["connection", "connect", "live-browser", "browser"],
+        &[
+            "connection",
+            "connect",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+        ],
     );
 
     assert_eq!(connected["connections"][0]["status"]["kind"], "connected");
@@ -389,7 +469,14 @@ fn cli_service_connects_to_live_cdp() {
         &cli,
         &service,
         &state_file,
-        &["connection", "disconnect", "live-browser", "browser"],
+        &[
+            "connection",
+            "disconnect",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+        ],
     );
     assert_eq!(
         disconnected["connections"][0]["status"]["kind"],
@@ -407,7 +494,14 @@ fn cli_service_connects_to_live_cdp() {
         &cli,
         &service,
         &state_file,
-        &["connection", "connect", "live-browser", "browser"],
+        &[
+            "connection",
+            "connect",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+        ],
     );
     assert_eq!(reconnected["connections"][0]["status"]["kind"], "connected");
     assert_eq!(reconnected["connections"][0]["generation"], 2);

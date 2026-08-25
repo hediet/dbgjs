@@ -1,0 +1,33 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Compile VS Code Extension",
+			"type": "npm",
+			"script": "compile",
+			"path": "vscode-extension",
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Compile jsdbg binaries",
+			"type": "process",
+			"command": "cargo",
+			"args": [
+				"build",
+				"--bins"
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Build VS Code Extension",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"Compile VS Code Extension",
+				"Compile jsdbg binaries"
+			],
+			"problemMatcher": []
+		}
+	]
+}

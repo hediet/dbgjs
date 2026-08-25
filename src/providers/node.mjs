@@ -47,7 +47,7 @@ async function main() {
 	await writeFile(bootloader, bootloaderSource, { mode: 0o600 });
 	const child = spawn(executable, [
 		...runtimeArgs,
-		"--inspect=127.0.0.1:0",
+		"--inspect-brk=127.0.0.1:0",
 		program,
 		...programArgs,
 	], {

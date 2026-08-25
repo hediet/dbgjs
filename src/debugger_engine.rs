@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -68,6 +69,7 @@ pub struct FrameState {
     pub function_name: String,
     pub raw_script: ScriptKey,
     pub raw_position: Position,
+    pub scopes: Arc<Vec<RawScope>>,
     pub projected: FrameProjection,
 }
 
@@ -333,6 +335,23 @@ pub enum Effect {
     },
 }
 
+impl Effect {
+    pub fn effect_id(&self) -> EffectId {
+        match self {
+            Self::ConfigureSession { effect_id, .. }
+            | Self::RunIfWaitingForDebugger { effect_id, .. }
+            | Self::FetchScriptSource { effect_id, .. }
+            | Self::BuildSourceView { effect_id, .. }
+            | Self::MapBreakpoint { effect_id, .. }
+            | Self::InstallBreakpoint { effect_id, .. }
+            | Self::RemoveBreakpoint { effect_id, .. }
+            | Self::MapFrame { effect_id, .. }
+            | Self::Resume { effect_id, .. }
+            | Self::Step { effect_id, .. } => *effect_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepKind {
     Into,
@@ -343,6 +362,7 @@ pub enum StepKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Input {
     Connected,
+    ConsoleMessageObserved,
     SessionAttached {
         session_id: String,
         target_id: String,
@@ -351,6 +371,9 @@ pub enum Input {
     },
     SessionConfigured {
         effect_id: EffectId,
+    },
+    ReleaseIfWaiting {
+        session: SessionKey,
     },
     CommandAccepted {
         effect_id: EffectId,
@@ -433,6 +456,14 @@ pub struct RawFrame {
     pub function_name: String,
     pub script_id: String,
     pub position: Position,
+    pub scopes: Vec<RawScope>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawScope {
+    pub kind: String,
+    pub name: Option<String>,
+    pub object_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -461,6 +492,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             }
             state.breakpoints = Arc::new(breakpoints);
         }
+        Input::ConsoleMessageObserved => {}
         Input::SessionAttached {
             session_id,
             target_id,
@@ -504,18 +536,20 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             if let Some(session_state) = Arc::make_mut(&mut state.sessions).get_mut(&session) {
                 let session_state = Arc::make_mut(session_state);
                 session_state.phase = SessionPhase::Running;
-                if session_state.waiting_for_debugger {
-                    let run_effect = allocate_effect(
-                        &mut state,
-                        PendingEffect::RunIfWaiting {
-                            session: session.clone(),
-                        },
-                    );
-                    effects.push(Effect::RunIfWaitingForDebugger {
-                        effect_id: run_effect,
-                        session,
-                    });
-                }
+            }
+        }
+        Input::ReleaseIfWaiting { session } => {
+            let should_release = state.sessions.get(&session).is_some_and(|session| {
+                session.waiting_for_debugger && matches!(session.phase, SessionPhase::Running)
+            });
+            if should_release {
+                let effect_id = allocate_effect(
+                    &mut state,
+                    PendingEffect::RunIfWaiting {
+                        session: session.clone(),
+                    },
+                );
+                effects.push(Effect::RunIfWaitingForDebugger { effect_id, session });
             }
         }
         Input::CommandAccepted { effect_id } => match state.pending.get(&effect_id).cloned() {
@@ -1142,7 +1176,7 @@ fn script_may_expose_breakpoint(
     let Some(breakpoint) = state.breakpoints.get(breakpoint) else {
         return false;
     };
-    script.url == breakpoint.source_url || script.source_map_url.is_some()
+    source_urls_match(&script.url, &breakpoint.source_url) || script.source_map_url.is_some()
 }
 
 fn script_has_frame_demand(state: &DebuggerState, script: &ScriptKey) -> bool {
@@ -1170,9 +1204,10 @@ fn script_has_source(
         return false;
     };
     match &script.source {
-        ScriptSourceState::Resolved(view) => {
-            view.logical_sources.contains_key(&breakpoint.source_url)
-        }
+        ScriptSourceState::Resolved(view) => view
+            .logical_sources
+            .keys()
+            .any(|source| source_urls_match(source, &breakpoint.source_url)),
         _ => false,
     }
 }
@@ -1313,6 +1348,12 @@ fn schedule_mapping(
     let ScriptSourceState::Resolved(view) = &script_state.source else {
         return;
     };
+    let source_url = view
+        .logical_sources
+        .keys()
+        .find(|source| source_urls_match(source, &breakpoint_state.source_url))
+        .cloned()
+        .unwrap_or_else(|| breakpoint_state.source_url.clone());
     let effect_id = allocate_effect(
         state,
         PendingEffect::MapBreakpoint {
@@ -1336,9 +1377,32 @@ fn schedule_mapping(
         breakpoint: breakpoint.clone(),
         script: script.clone(),
         view_id: view.view_id,
-        source_url: breakpoint_state.source_url.clone(),
+        source_url,
         position: breakpoint_state.position,
     });
+}
+
+fn source_urls_match(left: &str, right: &str) -> bool {
+    left == right
+        || comparable_file_path(left)
+            .zip(comparable_file_path(right))
+            .is_some_and(|(left, right)| left == right)
+}
+
+fn comparable_file_path(value: &str) -> Option<String> {
+    let path = if Path::new(value).is_absolute() {
+        PathBuf::from(value)
+    } else {
+        let url = url::Url::parse(value).ok()?;
+        if url.scheme() != "file" {
+            return None;
+        }
+        url.to_file_path().ok()?
+    };
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let normalized = normalized.to_ascii_lowercase();
+    Some(normalized)
 }
 
 fn bind_physical(
@@ -1663,6 +1727,7 @@ fn pause_session(
                 script_id: frame.script_id,
             },
             raw_position: frame.position,
+            scopes: Arc::new(frame.scopes),
             projected: FrameProjection::Raw,
         })
         .collect();
@@ -1872,6 +1937,85 @@ fn with_set_insert<T: Ord + Clone>(set: &BTreeSet<T>, value: T) -> BTreeSet<T> {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn matches_windows_paths_with_node_file_urls() {
+        assert!(source_urls_match(
+            "file:///D:/workspace/my%20app.js",
+            r"d:\workspace\my app.js",
+        ));
+        assert!(!source_urls_match(
+            "file:///D:/workspace/app.js",
+            r"d:\workspace\other.js",
+        ));
+    }
+
+    #[test]
+    fn waiting_session_runs_only_after_explicit_release() {
+        let connected = reduce(&Arc::new(DebuggerState::default()), Input::Connected);
+        let attached = reduce(
+            &connected.state,
+            Input::SessionAttached {
+                session_id: "session".into(),
+                target_id: "target".into(),
+                parent_session_id: None,
+                waiting_for_debugger: true,
+            },
+        );
+        let Effect::ConfigureSession { effect_id, session } = attached.effects[0].clone() else {
+            panic!("expected session configuration");
+        };
+
+        let configured = reduce(&attached.state, Input::SessionConfigured { effect_id });
+        assert!(configured.effects.is_empty());
+        assert!(
+            configured
+                .state
+                .sessions
+                .get(&session)
+                .is_some_and(|session| session.waiting_for_debugger)
+        );
+
+        let released = reduce(
+            &configured.state,
+            Input::ReleaseIfWaiting {
+                session: session.clone(),
+            },
+        );
+        let Effect::RunIfWaitingForDebugger {
+            effect_id: release_effect,
+            session: released_session,
+        } = &released.effects[0]
+        else {
+            panic!("expected waiting session release");
+        };
+        assert_eq!(released_session, &session);
+
+        let completed = reduce(
+            &released.state,
+            Input::CommandAccepted {
+                effect_id: *release_effect,
+            },
+        );
+        assert!(
+            completed
+                .state
+                .sessions
+                .get(&session)
+                .is_some_and(|session| !session.waiting_for_debugger)
+        );
+        assert!(
+            reduce(
+                &completed.state,
+                Input::ReleaseIfWaiting {
+                    session: session.clone(),
+                },
+            )
+            .effects
+            .is_empty()
+        );
+    }
+
     #[test]
     fn reuses_unaffected_state_nodes() {
         let initial = Arc::new(DebuggerState::default());
@@ -2035,12 +2179,14 @@ mod tests {
                         function_name: "first".into(),
                         script_id: "1".into(),
                         position: Position::ZERO,
+                        scopes: vec![],
                     },
                     RawFrame {
                         call_frame_id: "frame-2".into(),
                         function_name: "second".into(),
                         script_id: "1".into(),
                         position: Position { line: 1, column: 2 },
+                        scopes: vec![],
                     },
                 ],
             },
@@ -2133,6 +2279,7 @@ mod tests {
                     function_name: "run".into(),
                     script_id: "1".into(),
                     position: Position::ZERO,
+                    scopes: vec![],
                 }],
             },
         );
@@ -2247,6 +2394,7 @@ mod tests {
                     function_name: "run".into(),
                     script_id: "1".into(),
                     position: Position::ZERO,
+                    scopes: vec![],
                 }],
             },
         );
@@ -2440,6 +2588,7 @@ mod tests {
                     function_name: "main".into(),
                     script_id: script.script_id,
                     position: Position::ZERO,
+                    scopes: vec![],
                 }],
             },
         );
@@ -2679,6 +2828,7 @@ mod tests {
                     function_name: "main".into(),
                     script_id: script.script_id,
                     position: Position::ZERO,
+                    scopes: vec![],
                 }],
             },
         );

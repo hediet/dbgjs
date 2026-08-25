@@ -9,6 +9,8 @@ Chrome DevTools Protocol (CDP).
 The shared immutable state semantics are defined in
 [Debugger Data Model](./debugger-data-model.md). This document derives CLI
 workflows and presentation from that model rather than defining a second one.
+For operational steps against live VS Code processes, see
+[Debugging VS Code Processes with jsdbg](./debugging-vscode-processes.md).
 
 The first client is a non-interactive CLI. A TUI may be added later, but it must
 use the same debugger service and state model rather than creating a separate
@@ -71,6 +73,7 @@ The debugger must:
 - Resolve authored and generated sources through source maps.
 - Search projected sources and optionally materialize them to disk.
 - Record, compare, and render precise JavaScript coverage.
+- Record, source-map, render, and export sampled JavaScript CPU profiles.
 - Explore and interact with page DOM state through raw CDP requests.
 - Capture full-page, viewport, and DOM-element screenshots.
 - Produce useful human-readable terminal output, including highlighted source
@@ -324,7 +327,26 @@ block ranges, together with the source identities and projection information
 needed to render those ranges. Coverage objects remain useful after recording
 stops and can be compared through exclusion.
 
-### 4.15 Breakpoint specification
+### 4.15 CPU profile recording
+
+The active target-scoped process that periodically samples the V8 call stack.
+The optional sampling interval is expressed as a duration and must resolve to a
+positive whole number of microseconds. A bare numeric CLI value means
+milliseconds; omitting the option leaves the runtime default unchanged.
+
+CDP returns the sample stream only when recording stops. CPU profiling therefore
+does not have coverage-style intermediate capture or exclusion operations.
+
+### 4.16 CPU profile object
+
+An immutable profile produced when a CPU profile recording stops. It preserves
+the raw node graph, sample node IDs, actual time deltas, timestamps, sampling
+interval, and target provenance needed for lossless DevTools `.cpuprofile`
+export. Source-mapped function and file summaries are derived views of this raw
+value. Self time attributes each sample to its leaf frame; total time attributes
+it to that frame and its ancestors.
+
+### 4.17 Breakpoint specification
 
 Persistent desired state describing:
 
@@ -335,7 +357,7 @@ Persistent desired state describing:
 One specification can have zero or more live CDP breakpoint resolutions across
 attachments. Raw CDP breakpoint IDs are ephemeral implementation details.
 
-### 4.16 Watch expression
+### 4.18 Watch expression
 
 Persistent desired state describing an expression to evaluate in an applicable
 paused target and frame.
@@ -352,7 +374,7 @@ A watch has:
 Watch results are tied to a pause snapshot and must not masquerade as current
 after the target resumes.
 
-### 4.17 Event
+### 4.19 Event
 
 An ordered, structured record of a debugger state change or noteworthy protocol
 observation.
@@ -360,7 +382,7 @@ observation.
 Events are ordered in context scope and carry connection, target, and attachment
 provenance where relevant.
 
-### 4.18 Generation and revision
+### 4.20 Generation and revision
 
 Each connection has a **generation**, incremented whenever a new underlying CDP
 transport replaces the previous one. Each context has a monotonically
@@ -451,7 +473,7 @@ shared desired breakpoints again. Other connections continue unaffected.
 A context can be created without connecting:
 
 ```text
-jsdbg context create shop --workspace <path>
+jsdbg context create --context shop --workspace <path>
 jsdbg --context shop status
 ```
 
@@ -585,6 +607,12 @@ so durable references and JSON results qualify them with the connection ID.
 Set-valued selectors explicitly say that multiple matches are allowed; a command
 that requires one target fails on zero or multiple matches.
 
+The connection remains an internal lifecycle and provenance dimension: it owns
+the transport, reconnect generation, and target namespace. It is not normally a
+third interactive selection step. The CLI infers it from an unambiguous target
+match and exposes `--connection <id>` only as an ambiguity escape hatch or when
+the connection itself is the command's subject.
+
 Interactive focus can be changed explicitly:
 
 ```text
@@ -713,9 +741,13 @@ viewport metrics, element clipping, and artifact storage are cumbersome to
 compose manually:
 
 ```text
+jsdbg screenshot capture
 jsdbg screenshot capture --output page.png
 jsdbg screenshot capture --selector "#checkout" --output checkout.png
 ```
+
+Without `--output`, jsdbg stores the image in its temporary screenshot
+directory and returns the generated path.
 
 It supports viewport, full-page, and DOM-element capture where the selected
 target has the required page capabilities. A worker or Node target produces an
@@ -1545,6 +1577,32 @@ Each provider reports probe and activation capabilities rather than reducing all
 failures to "not supported." Experimental injection, elevation, or target
 modification remains opt-in.
 
+For Electron, a discovered Chromium browser endpoint remains the preferred
+transport because its native `Target.*` graph already multiplexes renderer
+sessions. When only the main-process Node inspector is available, a process-tree
+connection may expose renderer processes through an equivalent CDP transport
+backed by `webContents.debugger`. The process-tree target ID identifies the
+stable process instance, while `webContents.id` remains an internal live bridge
+handle correlated by `webContents.getOSProcessId()`.
+
+This fallback must preserve ordinary CDP envelopes, including nested
+`sessionId` values, so evaluation, breakpoints, profiles, coverage, and heap
+operations do not acquire Electron-specific variants. Zero or multiple
+`WebContents` matches are explicit errors.
+
+The main-process CDP connection bootstraps an authenticated loopback server but
+does not carry renderer traffic. One control socket owns the bridge lifetime,
+and one renderer socket carries newline-delimited CDP envelopes for each
+attachment. Closing a renderer socket releases only its debugger attachment;
+closing the control socket releases every attachment and the server. This also
+makes process termination a cleanup signal enforced by the operating system
+rather than by a remote JavaScript object finalizer.
+
+The bridge owns only debugger attachments it created and never detaches an
+unknown external debugger. For a recognized VS Code browser view whose root
+debugger is already owned by VS Code, it borrows a flattened child session and
+releases only that child session when the renderer socket closes.
+
 ## 28. Advanced raw CDP support
 
 The core raw CDP command can later gain additional routing and diagnostic modes
@@ -1601,7 +1659,7 @@ frontend. The user creates the durable context before either runtime is
 available:
 
 ```text
-> jsdbg context create shop --workspace D:\src\shop
+> jsdbg context create --context shop --workspace D:\src\shop
 Created context shop (disconnected)
 
 > jsdbg -c shop breakpoint set src/shared/validation.ts:41

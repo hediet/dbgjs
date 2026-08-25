@@ -235,9 +235,24 @@ impl SourceEffectInterpreter {
                     .forward(&retained.generated_url, *position)
                     .into_iter()
                     .next()
-                    .ok_or(SourceEffectError::UnmappedPosition {
-                        view_id: *view_id,
-                        position: *position,
+                    .ok_or_else(|| {
+                        retained
+                            .view
+                            .source_map_location(&retained.generated_url, *position)
+                            .map_or(
+                                SourceEffectError::UnmappedPosition {
+                                    view_id: *view_id,
+                                    position: *position,
+                                },
+                                |(source_url, source_position)| {
+                                    SourceEffectError::UnavailableMappedSource {
+                                        view_id: *view_id,
+                                        position: *position,
+                                        source_url,
+                                        source_position,
+                                    }
+                                },
+                            )
                     })?;
                 Ok(Some(Input::FrameMapped {
                     effect_id: *effect_id,
@@ -516,6 +531,16 @@ pub enum SourceEffectError {
         view_id: EffectId,
         position: crate::source_view::Position,
     },
+    #[error(
+        "source view {view_id:?} maps generated position {position:?} to {source_url} at \
+         {source_position:?}, but the authored source content is unavailable"
+    )]
+    UnavailableMappedSource {
+        view_id: EffectId,
+        position: crate::source_view::Position,
+        source_url: String,
+        source_position: crate::source_view::Position,
+    },
 }
 
 #[cfg(test)]
@@ -597,15 +622,23 @@ mod tests {
             .map(|session| session.waiting_for_debugger)
             .expect("session exists");
         assert!(waiting_for_debugger);
+        assert!(configured.effects.is_empty());
+        let released = apply(
+            &configured.state,
+            Input::ReleaseIfWaiting {
+                session: session.clone(),
+            },
+            &mut revisions,
+        );
         let Effect::RunIfWaitingForDebugger {
             effect_id: run_effect,
             ..
-        } = configured.effects[0]
+        } = released.effects[0]
         else {
             panic!("expected run-if-waiting");
         };
         state = apply(
-            &configured.state,
+            &released.state,
             Input::CommandAccepted {
                 effect_id: run_effect,
             },
@@ -725,6 +758,7 @@ mod tests {
                         line: 0,
                         column: 10,
                     },
+                    scopes: vec![],
                 }],
             },
             &mut revisions,

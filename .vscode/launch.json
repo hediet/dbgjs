@@ -1,0 +1,19 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Run VS Code Extension",
+			"type": "extensionHost",
+			"request": "launch",
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}/vscode-extension",
+				"--disable-extensions",
+				"${workspaceFolder}/vscode-extension/test/workspace"
+			],
+			"outFiles": [
+				"${workspaceFolder}/vscode-extension/dist/**/*.js",
+				"${workspaceFolder}/vscode-extension/dist/**/*.cjs"
+			]
+		}
+	]
+}

@@ -9,17 +9,23 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import { run } from "./live-test-harness.mjs";
+import {
+	findChromeExecutable,
+	run,
+} from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/release/jsdbg${executableSuffix}`);
 const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-heap-classes.md");
-const commandTimeoutMs = 180_000;
+const expectedDurationMs = 120_000;
+const hardTimeoutMs = 180_000;
+const commandTimeoutMs = 120_000;
+const heapMarker = "jsdbg-vscode-heap-golden-marker";
 let stepNumber = 0;
 
 test("compares vscode.dev editor buffers with infrastructure objects", async () => {
-	test.setTimeout(180_000);
+	test.setTimeout(hardTimeoutMs);
 	const startedAt = Date.now();
 	const build = await run(
 		"cargo",
@@ -28,11 +34,13 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 		{ timeoutMs: commandTimeoutMs },
 	);
 	expect(build.code, build.output).toBe(0);
+	const chromeExecutable = await findChromeExecutable();
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
 		"# What occupies the live vscode.dev JavaScript heap?\n\n" +
-			"This scenario compares editor text-buffer objects with the event, lifecycle, and collection infrastructure around them. It uses a real V8 heap snapshot and source-maps constructor locations back to authored TypeScript classes.\n",
+			"This scenario compares editor text-buffer objects with the event, lifecycle, and collection infrastructure around them. It uses a real V8 heap snapshot, source-maps constructor locations back to authored TypeScript classes, then queries the same immutable indexed heap graph for strings, reverse references, retainer paths, dominators, and arbitrary node aggregates.\n\n" +
+			`- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout: ${hardTimeoutMs / 1000}s\n`,
 	);
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-heap-"));
@@ -48,29 +56,27 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 	try {
 		await runCli(
 			"Create the isolated heap investigation workspace.",
-			["context", "create", "vscode-heap"],
+			["context", "create", "--context", "vscode-heap", "--set"],
 			environment,
 		);
 		await runCli(
-			"Select the heap workspace.",
-			["set", "workspace", "vscode-heap"],
-			environment,
-		);
-		await runCli(
-			"Launch bundled Chromium and attach to vscode.dev.",
+			"Launch installed Chrome and attach to vscode.dev.",
 			[
 				"connection",
 				"add",
-				"vscode-heap",
-				"browser",
-				"--playwright",
+				"--chrome",
 				"https://vscode.dev/",
-				"--ignore-https-errors",
+				"--context",
+				"vscode-heap",
+				"--connection",
+				"browser",
+				"--executable",
+				chromeExecutable,
 				"--connect",
+				"--set",
 			],
 			environment,
 		);
-		await runCli("Select the page target.", ["set", "target", "page"], environment);
 		await retryCli(
 			"Wait for the workbench and focus it.",
 			["target", "click", ".monaco-workbench"],
@@ -79,7 +85,7 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 		);
 		await runCli(
 			"Create an editor so its text model and PieceTree buffer are live.",
-			["target", "key", "ctrl+n"],
+			["target", "key", "ctrl+k,n"],
 			environment,
 		);
 		await retryCli(
@@ -91,6 +97,15 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 		await runCli(
 			"Populate the editor with enough text to exercise its buffer.",
 			["target", "type", "  foo\n  bar\n  baz"],
+			environment,
+		);
+		await runCli(
+			"Create one unmistakable retained object for graph navigation.",
+			[
+				"target",
+				"eval",
+				`globalThis.__jsdbgHeapGolden = { title: ${JSON.stringify(heapMarker)}, payload: { kind: "golden", values: [1, 2, 3] } }; ${JSON.stringify(heapMarker)}`,
+			],
 			environment,
 		);
 		await runCli(
@@ -132,10 +147,56 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 		expect(pieceTree).toMatch(/PieceTreeTextBuffer@\d+\s+id \d+/);
 		expect(pieceTree.trimEnd().split("\n").length).toBeLessThanOrEqual(60);
 
+		const markerStrings = await runCli(
+			"Search arbitrary heap string nodes for the retained marker.",
+			["heap", "strings", "--grep", heapMarker, "--limit", "8"],
+			environment,
+		);
+		expect(markerStrings).toContain(heapMarker);
+		const markerSelection = await runJson(
+			"Read the matching string nodes and stable capture-scoped references.",
+			["heap", "strings", "--grep", heapMarker, "--limit", "8"],
+			environment,
+			summarizeHeapSelection,
+		);
+		const markerNode = await findStringReferencedByProperty(
+			markerSelection,
+			"title",
+			environment,
+		);
+		expect(markerNode).toBeDefined();
+		const markerReference = markerNode.reference;
+		const reverseReferences = await runCli(
+			"Follow the reverse property edge from the marker string to its retaining object.",
+			["heap", "refs", markerReference, "--incoming", "--limit", "12"],
+			environment,
+		);
+		expect(reverseReferences).toContain('"title"');
+		const retainerPath = await runCli(
+			"Find a readable retaining path from the marker back to the synthetic heap root.",
+			["heap", "retainer-path", markerReference],
+			environment,
+		);
+		expect(retainerPath).toContain("Heap path");
+		const dominators = await runCli(
+			"Compute the marker's immediate-dominator chain and retained sizes.",
+			["heap", "dominators", markerReference],
+			environment,
+		);
+		expect(dominators).toContain("Dominator chain");
+		const aggregate = await runCli(
+			"Aggregate every heap node kind, including non-class objects and strings.",
+			["heap", "aggregate", ".", "--by", "type", "--limit", "12"],
+			environment,
+		);
+		expect(aggregate).toContain("Heap aggregate");
+		expect(aggregate).toContain("aggregate groups omitted");
+
 		const snapshot = await runJson(
 			"Load the cached compact constructor index as structured data.",
 			["heap", "classes", "."],
 			environment,
+			summarizeClassSnapshot,
 		);
 		expect(snapshot.classes.length).toBeGreaterThan(100);
 		expect(snapshot.totalInstances).toBeGreaterThan(1_000);
@@ -169,7 +230,14 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 
 		await runCli(
 			"Disconnect and terminate the launched browser.",
-			["connection", "disconnect", "vscode-heap", "browser"],
+			[
+				"connection",
+				"disconnect",
+				"--context",
+				"vscode-heap",
+				"--connection",
+				"browser",
+			],
 			environment,
 		);
 		await runCli("Stop the debugger service.", ["service", "stop"], environment);
@@ -247,32 +315,74 @@ async function runCli(explanation, arguments_, environment) {
 	);
 }
 
-async function runJson(explanation, arguments_, environment) {
+async function runJson(
+	explanation,
+	arguments_,
+	environment,
+	summarize = (value) => value,
+) {
 	const startedAt = Date.now();
 	const result = await run(cli, ["--json", ...arguments_], environment, {
 		timeoutMs: commandTimeoutMs,
 	});
 	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
+	const parsed = JSON.parse(result.output);
 	await recordCompleted(
 		`${explanation} (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`,
 		["--json", ...arguments_],
-		{ output: summarizeJson(JSON.parse(result.output)) },
+		{
+			output: `Summary of the full JSON response:\n${JSON.stringify(summarize(parsed), null, 2)}\n`,
+		},
 	);
+	return parsed;
+}
+
+async function runJsonSilent(arguments_, environment) {
+	const result = await run(cli, ["--json", ...arguments_], environment, {
+		timeoutMs: commandTimeoutMs,
+	});
+	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
 	return JSON.parse(result.output);
 }
 
-function summarizeJson(snapshot) {
-	return JSON.stringify(
-		{
-			captureId: snapshot.captureId,
-			totalInstances: snapshot.totalInstances,
-			totalShallowSize: snapshot.totalShallowSize,
-			classCount: snapshot.classes.length,
-			analysis: snapshot.analysis,
-		},
-		null,
-		2,
-	) + "\n";
+function summarizeClassSnapshot(snapshot) {
+	return {
+		captureId: snapshot.captureId,
+		totalInstances: snapshot.totalInstances,
+		totalShallowSize: snapshot.totalShallowSize,
+		classCount: snapshot.classes.length,
+		analysis: snapshot.analysis,
+	};
+}
+
+function summarizeHeapSelection(selection) {
+	return {
+		captureId: selection.captureId,
+		totalNodes: selection.totalNodes,
+		totalEdges: selection.totalEdges,
+		graphParseDurationMicros: selection.graphParseDurationMicros,
+		usedCachedGraph: selection.usedCachedGraph,
+		nodes: selection.nodes.map((node) => ({
+			reference: node.reference,
+			nodeType: node.nodeType,
+			stringValue: node.stringValue,
+			shallowSize: node.shallowSize,
+			incomingReferenceCount: node.incomingReferenceCount,
+		})),
+	};
+}
+
+async function findStringReferencedByProperty(selection, property, environment) {
+	for (const node of selection.nodes) {
+		const references = await runJsonSilent(
+			["heap", "refs", node.reference, "--incoming", "--limit", "100"],
+			environment,
+		);
+		if (references.references.some((reference) => reference.name === property)) {
+			return node;
+		}
+	}
+	return undefined;
 }
 
 async function recordCompleted(explanation, arguments_, result) {

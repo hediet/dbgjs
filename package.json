@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:rust && npm run test:offline && npm run test:cdp-session",
-    "test:rust": "cargo test --all-targets",
+    "test:rust": "cargo test --workspace --all-targets",
     "test:offline": "node --test tests/cdp-recording.test.mjs",
     "test:cdp-session": "node experiments/cdp-flat-session.mjs",
     "test:e2e": "playwright test",
@@ -13,6 +13,8 @@
     "test:e2e:typescript": "playwright test tests/playwright/typescript-cli.spec.mjs",
     "test:e2e:vscode-coverage": "playwright test tests/playwright/vscode-coverage-cli.spec.mjs",
     "test:e2e:vscode-heap": "playwright test tests/playwright/vscode-heap-cli.spec.mjs",
+    "test:e2e:vscode-profile": "playwright test tests/playwright/vscode-profile-cli.spec.mjs",
+    "test:e2e:extension-host-coverage": "playwright test tests/playwright/vscode-extension-host-coverage-cli.spec.mjs",
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",

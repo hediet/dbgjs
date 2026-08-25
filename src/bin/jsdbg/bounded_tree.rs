@@ -1,4 +1,31 @@
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
+
+use unicode_width::UnicodeWidthChar;
+
+#[derive(Clone, Copy)]
+pub(crate) struct TreeRenderOptions {
+    pub(crate) maximum_lines: usize,
+    pub(crate) maximum_width: Option<usize>,
+}
+
+impl TreeRenderOptions {
+    pub(crate) fn terminal(maximum_lines: usize, trim_width: bool) -> Self {
+        let maximum_width = trim_width
+            .then(|| {
+                std::io::stdout()
+                    .is_terminal()
+                    .then(terminal_size::terminal_size)
+                    .flatten()
+            })
+            .flatten()
+            .map(|(terminal_size::Width(width), _)| usize::from(width));
+        Self {
+            maximum_lines,
+            maximum_width,
+        }
+    }
+}
 
 pub(crate) trait TreeAggregate: Clone + Default {
     fn merge(&mut self, other: &Self);
@@ -71,6 +98,21 @@ where
         self.render_children(style, "", expand_leaves, maximum_lines)
     }
 
+    pub(crate) fn render_with_options<Style>(
+        &self,
+        style: &Style,
+        expand_leaves: bool,
+        options: TreeRenderOptions,
+    ) -> Vec<String>
+    where
+        Style: BoundedTreeStyle<Aggregate, Leaf>,
+    {
+        self.render(style, expand_leaves, options.maximum_lines)
+            .into_iter()
+            .map(|line| trim_to_width(&line, options.maximum_width))
+            .collect()
+    }
+
     fn render_children<Style>(
         &self,
         style: &Style,
@@ -86,6 +128,7 @@ where
         if budget == 0 {
             return Vec::new();
         }
+
         let mut children = self
             .children
             .iter()
@@ -188,6 +231,64 @@ where
         }
         output
     }
+}
+
+fn trim_to_width(line: &str, maximum_width: Option<usize>) -> String {
+    let Some(maximum_width) = maximum_width else {
+        return line.to_owned();
+    };
+    if visible_width(line) <= maximum_width {
+        return line.to_owned();
+    }
+    if maximum_width == 0 {
+        return String::new();
+    }
+    let content_width = maximum_width - 1;
+    let mut result = String::new();
+    let mut width = 0;
+    let mut characters = line.chars().peekable();
+    let mut styled = false;
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' && characters.peek() == Some(&'[') {
+            result.push(character);
+            for character in characters.by_ref() {
+                result.push(character);
+                if character.is_ascii_alphabetic() {
+                    styled = character != 'm' || !result.ends_with("[0m");
+                    break;
+                }
+            }
+            continue;
+        }
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width + character_width > content_width {
+            break;
+        }
+        result.push(character);
+        width += character_width;
+    }
+    result.push('…');
+    if styled {
+        result.push_str("\u{1b}[0m");
+    }
+    result
+}
+
+fn visible_width(line: &str) -> usize {
+    let mut width = 0;
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\u{1b}' && characters.peek() == Some(&'[') {
+            for character in characters.by_ref() {
+                if character.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            width += UnicodeWidthChar::width(character).unwrap_or(0);
+        }
+    }
+    width
 }
 
 pub(crate) trait BoundedTreeStyle<Aggregate, Leaf>
@@ -320,5 +421,30 @@ mod tests {
         for leaf in ["a", "b", "c", "d"] {
             assert!(rendered.contains(leaf), "{rendered}");
         }
+    }
+
+    #[test]
+    fn trims_rendered_lines_to_terminal_width() {
+        let mut tree = BoundedTree::default();
+        tree.insert(["a very long process label".to_owned()], Count(1), ());
+        assert_eq!(
+            tree.render_with_options(
+                &Style,
+                false,
+                TreeRenderOptions {
+                    maximum_lines: usize::MAX,
+                    maximum_width: Some(12),
+                }
+            ),
+            vec!["└─ a very l…"]
+        );
+    }
+
+    #[test]
+    fn trims_ansi_styled_lines_by_visible_width_and_resets_style() {
+        let line = "\u{1b}[48;5;238mnon-javascript process\u{1b}[0m";
+        let trimmed = trim_to_width(line, Some(8));
+        assert_eq!(visible_width(&trimmed), 8);
+        assert_eq!(trimmed, "\u{1b}[48;5;238mnon-jav…\u{1b}[0m");
     }
 }

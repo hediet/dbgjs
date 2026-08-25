@@ -9,7 +9,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import { run } from "./live-test-harness.mjs";
+import {
+	findChromeExecutable,
+	findPageTargetId,
+	run,
+} from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const cli = resolve(`target/release/jsdbg${executableSuffix}`);
@@ -25,10 +29,11 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 	const startedAt = Date.now();
 	const build = await run("cargo", ["build", "--release", "--bins"], {}, { timeoutMs: commandTimeoutMs });
 	expect(build.code, build.output).toBe(0);
+	const chromeExecutable = await findChromeExecutable();
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real jsdbg/HubRPC/Playwright/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
+		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real jsdbg/HubRPC/Chrome/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
 	);
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-coverage-"));
@@ -43,31 +48,32 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 	try {
 		await runCli(
 			"Create and select a workspace for this investigation.",
-			["context", "create", "vscode-typing"],
+			["context", "create", "--context", "vscode-typing", "--set"],
 			environment,
 		);
 		await runCli(
-			"Select it as the CLI-local workspace.",
-			["set", "workspace", "vscode-typing"],
-			environment,
-		);
-		await runCli(
-			"Launch bundled Chromium, open vscode.dev, connect CDP, and auto-attach the page.",
+			"Launch installed Chrome, open vscode.dev, connect CDP, and auto-attach the page.",
 			[
 				"connection",
 				"add",
-				"vscode-typing",
-				"browser",
-				"--playwright",
+				"--chrome",
 				"https://vscode.dev/",
-				"--ignore-https-errors",
+				"--context",
+				"vscode-typing",
+				"--connection",
+				"browser",
+				"--executable",
+				chromeExecutable,
 				"--connect",
+				"--set",
 			],
 			environment,
 		);
-		await runCli(
-			"Select the unique page target.",
-			["set", "target", "page"],
+		const pageTarget = await findPageTargetId(
+			cli,
+			"vscode-typing",
+			"browser",
+			"https://vscode.dev/",
 			environment,
 		);
 		await retryCli(
@@ -76,9 +82,8 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			environment,
 			60_000,
 		);
-		await runCli(
-			"Create an untitled editor using a real Ctrl+N key chord.",
-			["target", "key", "ctrl+n"],
+		await createUntitledEditor(
+			"Create an untitled editor through VS Code's command chord.",
 			environment,
 		);
 		await retryCli(
@@ -196,9 +201,8 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			environment,
 		);
 		expect(noCache.trimEnd().split("\n").length).toBeLessThanOrEqual(5);
-		await runCli(
+		await createUntitledEditor(
 			"Create a fresh editor to repeat the exact interaction under a normal breakpoint.",
-			["target", "key", "ctrl+n"],
 			environment,
 		);
 		await retryCli(
@@ -228,41 +232,35 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			[
 				"breakpoint",
 				"set",
-				"vscode-typing",
 				"indent-cleanup",
 				sourcePath,
 				String(candidate.range.authoredStart.line + 1),
+				"--column",
 				"3",
 			],
 			environment,
 		);
 		expect(breakpoint).toContain("indent-cleanup");
-		const installed = await runCli(
-			"Wait until the authored cleanup breakpoint has a live generated binding.",
-			[
-				"target",
-				"wait",
-				"vscode-typing",
-				"browser",
-				"page",
-				"breakpoint-installed",
-				"indent-cleanup",
-				"30000",
-			],
-			environment,
+		expect(breakpoint).toContain("Breakpoint indent-cleanup:");
+		expect(breakpoint).toMatch(
+			new RegExp(
+				`>\\s+${candidate.range.authoredStart.line + 1}\\s+\\|`,
+			),
 		);
-		expect(installed).toContain("[installed; 1 binding]");
 		const pausedCommand = runCli(
 			"Wait for the normal breakpoint in the first edit transaction after ArrowUp.",
 			[
 				"target",
 				"wait",
-				"vscode-typing",
-				"browser",
-				"page",
 				"paused",
 				"0",
 				"30000",
+				"--context",
+				"vscode-typing",
+				"--connection",
+				"browser",
+				"--target",
+				pageTarget,
 			],
 			environment,
 		);
@@ -313,7 +311,14 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		);
 		await runCli(
 			"Disconnect and terminate the launched browser.",
-			["connection", "disconnect", "vscode-typing", "browser"],
+			[
+				"connection",
+				"disconnect",
+				"--context",
+				"vscode-typing",
+				"--connection",
+				"browser",
+			],
 			environment,
 		);
 		await runCli("Stop the debugger service.", ["service", "stop"], environment);
@@ -429,6 +434,14 @@ async function runCli(
 	);
 }
 
+async function createUntitledEditor(explanation, environment) {
+	await runCli(
+		explanation,
+		["target", "key", "ctrl+k,n"],
+		environment,
+	);
+}
+
 async function runJsonSilent(
 	arguments_,
 	environment,
@@ -452,15 +465,16 @@ async function runTextSilent(
 }
 
 async function readEditorLines(explanation, environment) {
-	return runCli(
+	const output = await runCli(
 		explanation,
 		[
 			"target",
 			"eval",
-			'({ lines: Array.from(document.querySelectorAll(".monaco-editor.focused .view-lines .view-line"), line => line.textContent?.replace(/\\u00a0/g, " ")), cursor: document.querySelector(".monaco-editor.focused .cursor")?.getAttribute("style") })',
+			'JSON.stringify({ lines: Array.from(document.querySelectorAll(".monaco-editor.focused .view-lines .view-line"), line => line.textContent?.replace(/\\u00a0/g, " ")), cursor: document.querySelector(".monaco-editor.focused .cursor")?.getAttribute("style") })',
 		],
 		environment,
 	);
+	return JSON.parse(output);
 }
 
 async function setTypeScriptMode(environment) {

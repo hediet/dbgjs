@@ -82,6 +82,11 @@ partially implemented architecture remains unchecked.
 - [x] Explicit connection cancellation, peer-loss recovery, initial target
   enumeration, and live connect/disconnect/reconnect validation.
 
+Focused follow-up work for breakpoint binding fidelity, unified execution
+triggers, awaitable evaluation, live heap-object materialization, raw CDP, and
+promise analysis is specified in
+[Runtime introspection and execution triggers](./docs/todo/plan-runtime-introspection-and-triggers.md).
+
 Before completing the first roadmap milestone, preserve this baseline in one or
 more reviewed commits and replace this note with real `commit:<sha>` links.
 
@@ -149,14 +154,14 @@ make the current service state harder to replace.
   Run a deterministic fake CDP endpoint that pauses `Browser.getVersion`, then:
 
   ```text
-  jsdbg context create race "Race context"
-  jsdbg connection add race browser ws://<fake-cdp>
-  jsdbg connection connect race browser            # process A, remains pending
-  jsdbg connection disconnect race browser         # process B
+  jsdbg context create --context race "Race context"
+  jsdbg connection add ws://<fake-cdp> --context race --connection browser
+  jsdbg connection connect --context race --connection browser       # process A, remains pending
+  jsdbg connection disconnect --context race --connection browser    # process B
   <fixture releases Browser.getVersion>
-  jsdbg context show race
+  jsdbg context show --context race
   jsdbg service stop
-  jsdbg context show race                           # restarts service
+  jsdbg context show --context race                # restarts service
   ```
 
   Assert that process B succeeds; process A fails with structured
@@ -209,10 +214,10 @@ make the current service state harder to replace.
   Create context `observe` with one breakpoint, start:
 
   ```text
-  jsdbg state watch observe --output jsonl           # process A
-  jsdbg breakpoint set observe bp-2 file:///b.ts 2 1 # process B
-  jsdbg connection add observe browser ws://<cdp>    # process C
-  jsdbg connection connect observe browser           # process C
+  jsdbg state watch --context observe --output jsonl                    # process A
+  jsdbg breakpoint set bp-2 file:///b.ts 2 --column 1 --context observe # process B
+  jsdbg connection add ws://<cdp> --context observe --connection browser # process C
+  jsdbg connection connect --context observe --connection browser       # process C
   ```
 
   Wait for process A to acknowledge its initial item before mutations. Assert
@@ -269,10 +274,10 @@ explicit, generation-safe attachments.
   browser-level Chromium endpoint and start:
 
   ```text
-  jsdbg context create topology
-  jsdbg connection add topology browser ws://<browser-cdp>
-  jsdbg target watch topology --connection browser --output jsonl
-  jsdbg connection connect topology browser
+  jsdbg context create --context topology
+  jsdbg connection add ws://<browser-cdp> --context topology --connection browser
+  jsdbg target watch --context topology --connection browser --output jsonl
+  jsdbg connection connect --context topology --connection browser
   ```
 
   Through Playwright create page A, rename/navigate it, create a dedicated
@@ -331,14 +336,14 @@ one shared graph.
   browser bundle, and source maps:
 
   ```text
-  jsdbg context create sources --workspace <fixture>
-  jsdbg source resolve sources src/shared/validation.ts --output json
-  jsdbg source map sources src/shared/validation.ts:41:1 --to generated --output json
-  jsdbg connection add sources server ws://<node-cdp>
-  jsdbg connection add sources browser ws://<browser-cdp>
-  jsdbg connection connect sources server
-  jsdbg connection connect sources browser
-  jsdbg source endpoints sources src/shared/validation.ts --output json
+  jsdbg context create --context sources --workspace <fixture>
+  jsdbg source resolve src/shared/validation.ts --context sources --output json
+  jsdbg source map src/shared/validation.ts:41:1 --to generated --context sources --output json
+  jsdbg connection add ws://<node-cdp> --context sources --connection server
+  jsdbg connection add ws://<browser-cdp> --context sources --connection browser
+  jsdbg connection connect --context sources --connection server
+  jsdbg connection connect --context sources --connection browser
+  jsdbg source endpoints src/shared/validation.ts --context sources --output json
   ```
 
   Before connecting, assert exact workspace/authored and both generated snapshot
@@ -392,14 +397,14 @@ breakpoint across several runtime connections.
   shared-source fixture with both runtimes paused before application code:
 
   ```text
-  jsdbg context create fullstack --workspace <fixture>
-  jsdbg breakpoint set fullstack validate src/shared/validation.ts 41 1
-  jsdbg connection add fullstack server ws://<node-cdp>
-  jsdbg connection add fullstack browser ws://<browser-cdp>
-  jsdbg connection connect fullstack server
-  jsdbg connection connect fullstack browser
+  jsdbg context create --context fullstack --workspace <fixture>
+  jsdbg breakpoint set validate src/shared/validation.ts 41 --column 1 --context fullstack
+  jsdbg connection add ws://<node-cdp> --context fullstack --connection server
+  jsdbg connection add ws://<browser-cdp> --context fullstack --connection browser
+  jsdbg connection connect --context fullstack --connection server
+  jsdbg connection connect --context fullstack --connection browser
   jsdbg wait fullstack breakpoint --id validate --status fully-bound --timeout 10s
-  jsdbg breakpoint show fullstack validate --output json
+  jsdbg breakpoint show validate --context fullstack --output json
   ```
 
   Assert one logical specification at the exact requested TypeScript location,
@@ -561,9 +566,9 @@ source knowledge directly useful.
   content and source-map projections:
 
   ```text
-  jsdbg source grep scale "validateUser" --output json
-  jsdbg source cache evict scale --memory-only
-  jsdbg source grep scale "validateUser" --output json
+  jsdbg source grep "validateUser" --context scale --output json
+  jsdbg source cache evict --context scale --memory-only
+  jsdbg source grep "validateUser" --context scale --output json
   ```
 
   Assert byte-equivalent normalized match sets before and after eviction:
