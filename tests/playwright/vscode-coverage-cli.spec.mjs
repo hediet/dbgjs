@@ -201,6 +201,80 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			environment,
 		);
 		expect(noCache.trimEnd().split("\n").length).toBeLessThanOrEqual(5);
+		const sourceGrep = await runCli(
+			"Search the debugger's resolved authored sources for both ends of the deferred auto-whitespace handoff.",
+			[
+				"source",
+				"grep",
+				"newTrimAutoWhitespaceCandidates|trimAutoWhitespaceLineNumbers",
+				"--regex",
+				"--path",
+				"src/vs/editor/common/model",
+				"--max-results",
+				"20",
+				"--context-lines",
+				"2",
+			],
+			environment,
+		);
+		expect(sourceGrep).toContain("pieceTreeTextBuffer.ts");
+		expect(sourceGrep).toContain("textModel.ts");
+		expect(sourceGrep).toContain("newTrimAutoWhitespaceCandidates");
+		expect(sourceGrep).toContain("trimAutoWhitespaceLineNumbers");
+		const sourceMatches = await runJsonSilent(
+			[
+				"source",
+				"grep",
+				"newTrimAutoWhitespaceCandidates|trimAutoWhitespaceLineNumbers",
+				"--regex",
+				"--path",
+				"src/vs/editor/common/model",
+				"--max-results",
+				"20",
+			],
+			environment,
+		);
+		const pieceTreeMatch = sourceMatches.matches.find((match) =>
+			match.path.endsWith("/pieceTreeTextBuffer.ts")
+				&& match.text.includes("newTrimAutoWhitespaceCandidates.push"),
+		);
+		expect(pieceTreeMatch).toBeDefined();
+		const sourceExcerpt = await runCli(
+			"Show the exact PieceTree code that records future trim candidates.",
+			[
+				"source",
+				"show",
+				pieceTreeMatch.path,
+				"--line",
+				String(pieceTreeMatch.line),
+				"--context-lines",
+				"12",
+			],
+			environment,
+		);
+		expect(sourceExcerpt).toContain("isAutoWhitespaceEdit");
+		expect(sourceExcerpt).toContain("newTrimAutoWhitespaceCandidates.push");
+		const sourceGraph = await runCli(
+			"Explain how the authored TextModel source is connected to the runtime workbench bundle.",
+			["source", "explain", sourcePath],
+			environment,
+		);
+		expect(sourceGraph).toContain("authored source");
+		expect(sourceGraph).toContain("source map");
+		expect(sourceGraph).toContain("workbench.web.main.internal.js");
+		const reverseMapping = await runCli(
+			"Map the authored cleanup location back to its generated runtime endpoint.",
+			[
+				"source",
+				"map",
+				sourcePath,
+				String(candidate.range.authoredStart.line + 1),
+				"3",
+			],
+			environment,
+		);
+		expect(reverseMapping).toContain("authored-to-generated");
+		expect(reverseMapping).toContain("workbench.web.main.internal.js");
 		await createUntitledEditor(
 			"Create a fresh editor to repeat the exact interaction under a normal breakpoint.",
 			environment,

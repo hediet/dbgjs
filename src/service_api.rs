@@ -406,6 +406,9 @@ pub struct SourceSnapshotInfo {
 pub struct SourceContentSnapshot {
     pub path: String,
     pub content: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub total_lines: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -415,6 +418,70 @@ pub struct SourceMatchSnapshot {
     pub line: u32,
     pub column: u32,
     pub text: String,
+    pub before_context: Vec<String>,
+    pub after_context: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchOptions {
+    pub pattern: String,
+    pub path: Option<String>,
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub max_results: u32,
+    pub context_lines: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchSnapshot {
+    pub matches: Vec<SourceMatchSnapshot>,
+    pub omitted_matches: u64,
+    pub searched_sources: u32,
+    pub skipped_sources: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceDisplayOptions {
+    pub line: Option<u32>,
+    pub context_lines: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceProjectionPathSnapshot {
+    pub generated_url: String,
+    pub steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceGraphViewSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub generated_url: String,
+    pub source_path: String,
+    pub role: String,
+    pub kind: String,
+    pub primary_provenance: String,
+    pub alternative_provenance: Vec<String>,
+    pub projection_paths: Vec<SourceProjectionPathSnapshot>,
+    pub resolved_source_count: u32,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMappingSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub direction: String,
+    pub quality: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1095,19 +1162,25 @@ pub trait DebuggerServiceApi {
     async fn show_source(
         context_id: String,
         path: String,
+        options: SourceDisplayOptions,
     ) -> Result<SourceContentSnapshot, JsonRpcError>;
 
     async fn grep_sources(
         context_id: String,
-        pattern: String,
-    ) -> Result<Vec<SourceMatchSnapshot>, JsonRpcError>;
+        options: SourceSearchOptions,
+    ) -> Result<SourceSearchSnapshot, JsonRpcError>;
+
+    async fn explain_source(
+        context_id: String,
+        path: String,
+    ) -> Result<Vec<SourceGraphViewSnapshot>, JsonRpcError>;
 
     async fn map_source(
         context_id: String,
         path: String,
         line: u32,
         column: u32,
-    ) -> Result<Vec<SourceLocation>, JsonRpcError>;
+    ) -> Result<Vec<SourceMappingSnapshot>, JsonRpcError>;
 
     async fn evict_source_caches(context_id: String) -> Result<u32, JsonRpcError>;
 

@@ -30,9 +30,10 @@ use crate::service_api::{
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
-    ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceMatchSnapshot,
-    SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot,
-    TargetWaitPredicate, VariableSnapshot,
+    ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceDisplayOptions,
+    SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot, SourceSearchOptions,
+    SourceSearchSnapshot, SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate, VariableSnapshot,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -1161,10 +1162,12 @@ impl DebuggerServiceApi for DebuggerService {
             return Err(not_found("context", &context_id));
         }
         let mut sources = BTreeMap::new();
+        let mut live_debuggers = Vec::new();
         for ((candidate_context, connection_id, target_id), debugger) in &state.target_debuggers {
             if candidate_context != &context_id {
                 continue;
             }
+            live_debuggers.push((connection_id.clone(), target_id.clone(), debugger.clone()));
             for script in debugger.snapshot().scripts {
                 if path.as_ref().is_some_and(|path| !script.url.contains(path)) {
                     continue;
@@ -1221,6 +1224,35 @@ impl DebuggerServiceApi for DebuggerService {
                     });
             }
         }
+        drop(state);
+        for (connection_id, target_id, debugger) in live_debuggers {
+            for (source_path, kind) in debugger
+                .resolved_source_paths()
+                .await
+                .map_err(target_debugger_rpc_error)?
+            {
+                if path
+                    .as_ref()
+                    .is_some_and(|path| !source_path.contains(path))
+                {
+                    continue;
+                }
+                sources
+                    .entry((
+                        source_path.clone(),
+                        connection_id.clone(),
+                        target_id.clone(),
+                    ))
+                    .or_insert(SourceSnapshotInfo {
+                        path: source_path,
+                        kind,
+                        status: "resolved".to_owned(),
+                        connection_id: Some(connection_id.clone()),
+                        target_id: Some(target_id.clone()),
+                        source_map_url: None,
+                    });
+            }
+        }
         Ok(sources.into_values().collect())
     }
 
@@ -1229,6 +1261,7 @@ impl DebuggerServiceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
         path: String,
+        options: SourceDisplayOptions,
     ) -> Result<SourceContentSnapshot, JsonRpcError> {
         let debuggers = {
             let state = self.state.lock().await;
@@ -1248,7 +1281,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .await
                 .map_err(target_debugger_rpc_error)?
             {
-                return Ok(content);
+                return source_content_range(content, &options);
             }
         }
         let file_path = source_file_path(&path)?;
@@ -1258,39 +1291,167 @@ impl DebuggerServiceApi for DebuggerService {
                 file_path.display()
             ))
         })?;
-        Ok(SourceContentSnapshot { path, content })
+        source_content_range(
+            SourceContentSnapshot {
+                path,
+                total_lines: content.lines().count() as u32,
+                start_line: 1,
+                end_line: content.lines().count() as u32,
+                content,
+            },
+            &options,
+        )
     }
 
     async fn grep_sources(
         &self,
         ctx: &CallCtx,
         context_id: String,
-        pattern: String,
-    ) -> Result<Vec<SourceMatchSnapshot>, JsonRpcError> {
-        if pattern.is_empty() {
+        options: SourceSearchOptions,
+    ) -> Result<SourceSearchSnapshot, JsonRpcError> {
+        if options.pattern.is_empty() {
             return Err(invalid_params("source grep pattern must not be empty"));
         }
-        let sources = self.list_sources(ctx, context_id.clone(), None).await?;
+        if options.max_results == 0 {
+            return Err(invalid_params("source grep max_results must be positive"));
+        }
+        let regex = if options.regex {
+            Some(
+                regex::RegexBuilder::new(&options.pattern)
+                    .case_insensitive(!options.case_sensitive)
+                    .build()
+                    .map_err(|error| invalid_params(format!("invalid source regex: {error}")))?,
+            )
+        } else {
+            None
+        };
+        let literal = (!options.regex).then(|| {
+            if options.case_sensitive {
+                options.pattern.clone()
+            } else {
+                options.pattern.to_lowercase()
+            }
+        });
+        let sources = self
+            .list_sources(ctx, context_id.clone(), options.path.clone())
+            .await?;
         let mut matches = Vec::new();
+        let mut omitted_matches = 0_u64;
+        let mut searched_sources = 0_u32;
+        let mut skipped_sources = 0_u32;
         for source in sources {
             let Ok(content) = self
-                .show_source(ctx, context_id.clone(), source.path.clone())
+                .show_source(
+                    ctx,
+                    context_id.clone(),
+                    source.path.clone(),
+                    SourceDisplayOptions {
+                        line: None,
+                        context_lines: 0,
+                    },
+                )
                 .await
             else {
+                skipped_sources = skipped_sources.saturating_add(1);
                 continue;
             };
-            for (line_index, line) in content.content.lines().enumerate() {
-                for (column, _) in line.match_indices(&pattern) {
-                    matches.push(SourceMatchSnapshot {
-                        path: source.path.clone(),
-                        line: line_index as u32 + 1,
-                        column: column as u32 + 1,
-                        text: line.to_owned(),
-                    });
+            searched_sources = searched_sources.saturating_add(1);
+            let lines = content.content.lines().collect::<Vec<_>>();
+            for (line_index, line) in lines.iter().enumerate() {
+                let columns: Vec<usize> = match &regex {
+                    Some(regex) => regex.find_iter(line).map(|item| item.start()).collect(),
+                    None => {
+                        let searchable;
+                        let line = if options.case_sensitive {
+                            *line
+                        } else {
+                            searchable = line.to_lowercase();
+                            &searchable
+                        };
+                        line.match_indices(literal.as_deref().unwrap())
+                            .map(|(column, _)| column)
+                            .collect()
+                    }
+                };
+                for column in columns {
+                    if matches.len() < options.max_results as usize {
+                        let context = options.context_lines as usize;
+                        matches.push(SourceMatchSnapshot {
+                            path: source.path.clone(),
+                            line: line_index as u32 + 1,
+                            column: column as u32 + 1,
+                            text: (*line).to_owned(),
+                            before_context: lines[line_index.saturating_sub(context)..line_index]
+                                .iter()
+                                .map(|line| (*line).to_owned())
+                                .collect(),
+                            after_context: lines
+                                [line_index + 1..(line_index + context + 1).min(lines.len())]
+                                .iter()
+                                .map(|line| (*line).to_owned())
+                                .collect(),
+                        });
+                    } else {
+                        omitted_matches = omitted_matches.saturating_add(1);
+                    }
                 }
             }
         }
-        Ok(matches)
+        Ok(SourceSearchSnapshot {
+            matches,
+            omitted_matches,
+            searched_sources,
+            skipped_sources,
+        })
+    }
+
+    async fn explain_source(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        path: String,
+    ) -> Result<Vec<SourceGraphViewSnapshot>, JsonRpcError> {
+        let debuggers = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|((_, connection_id, target_id), debugger)| {
+                    (connection_id.clone(), target_id.clone(), debugger.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut explanations = Vec::new();
+        for (connection_id, target_id, debugger) in debuggers {
+            let mut target_explanations = debugger
+                .explain_source(path.clone())
+                .await
+                .map_err(target_debugger_rpc_error)?;
+            for explanation in &mut target_explanations {
+                explanation.connection_id = connection_id.clone();
+                explanation.target_id = target_id.clone();
+            }
+            explanations.extend(target_explanations);
+        }
+        explanations.sort_by(|left, right| {
+            (
+                &left.connection_id,
+                &left.target_id,
+                &left.generated_url,
+                &left.source_path,
+            )
+                .cmp(&(
+                    &right.connection_id,
+                    &right.target_id,
+                    &right.generated_url,
+                    &right.source_path,
+                ))
+        });
+        Ok(explanations)
     }
 
     async fn map_source(
@@ -1300,7 +1461,7 @@ impl DebuggerServiceApi for DebuggerService {
         path: String,
         line: u32,
         column: u32,
-    ) -> Result<Vec<crate::service_api::SourceLocation>, JsonRpcError> {
+    ) -> Result<Vec<SourceMappingSnapshot>, JsonRpcError> {
         if line == 0 || column == 0 {
             return Err(invalid_params("source locations are one-based"));
         }
@@ -1313,24 +1474,40 @@ impl DebuggerServiceApi for DebuggerService {
                 .target_debuggers
                 .iter()
                 .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
-                .map(|(_, debugger)| debugger.clone())
+                .map(|((_, connection_id, target_id), debugger)| {
+                    (connection_id.clone(), target_id.clone(), debugger.clone())
+                })
                 .collect::<Vec<_>>()
         };
         let mut locations = Vec::new();
-        for debugger in debuggers {
-            locations.extend(
-                debugger
-                    .map_source(path.clone(), line, column)
-                    .await
-                    .map_err(target_debugger_rpc_error)?,
-            );
+        for (connection_id, target_id, debugger) in debuggers {
+            let mut target_locations = debugger
+                .map_source(path.clone(), line, column)
+                .await
+                .map_err(target_debugger_rpc_error)?;
+            for location in &mut target_locations {
+                location.connection_id = connection_id.clone();
+                location.target_id = target_id.clone();
+            }
+            locations.extend(target_locations);
         }
         locations.sort_by(|left, right| {
-            (&left.source_url, left.line, left.column).cmp(&(
-                &right.source_url,
-                right.line,
-                right.column,
-            ))
+            (
+                &left.connection_id,
+                &left.target_id,
+                &left.source_url,
+                left.line,
+                left.column,
+                &left.direction,
+            )
+                .cmp(&(
+                    &right.connection_id,
+                    &right.target_id,
+                    &right.source_url,
+                    right.line,
+                    right.column,
+                    &right.direction,
+                ))
         });
         locations.dedup();
         Ok(locations)
@@ -1379,7 +1556,15 @@ impl DebuggerServiceApi for DebuggerService {
         let mut exported = Vec::new();
         for source in sources {
             let Ok(content) = self
-                .show_source(ctx, context_id.clone(), source.path.clone())
+                .show_source(
+                    ctx,
+                    context_id.clone(),
+                    source.path.clone(),
+                    SourceDisplayOptions {
+                        line: None,
+                        context_lines: 0,
+                    },
+                )
                 .await
             else {
                 continue;
@@ -2798,6 +2983,30 @@ fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
     Ok(PathBuf::from(path))
 }
 
+fn source_content_range(
+    mut source: SourceContentSnapshot,
+    options: &SourceDisplayOptions,
+) -> Result<SourceContentSnapshot, JsonRpcError> {
+    let lines = source.content.lines().collect::<Vec<_>>();
+    source.total_lines = lines.len() as u32;
+    let Some(line) = options.line else {
+        source.start_line = 1;
+        source.end_line = source.total_lines;
+        return Ok(source);
+    };
+    if line == 0 || line > source.total_lines {
+        return Err(invalid_params(format!(
+            "source line {line} is outside 1..={}",
+            source.total_lines
+        )));
+    }
+    let context = options.context_lines;
+    source.start_line = line.saturating_sub(context).max(1);
+    source.end_line = line.saturating_add(context).min(source.total_lines);
+    source.content = lines[source.start_line as usize - 1..source.end_line as usize].join("\n");
+    Ok(source)
+}
+
 fn stable_name_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
@@ -2817,7 +3026,7 @@ fn sanitize_file_name(value: &str) -> String {
         .collect()
 }
 
-fn invalid_params(message: &str) -> JsonRpcError {
+fn invalid_params(message: impl Into<String>) -> JsonRpcError {
     JsonRpcError::new(error_codes::INVALID_PARAMS, message)
 }
 

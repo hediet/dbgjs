@@ -226,7 +226,9 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &state_file,
         &["source", "grep", "validationValue", "--context", "managed"],
     );
-    assert_eq!(matches.as_array().unwrap().len(), 1);
+    assert_eq!(matches["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(matches["omittedMatches"], 0);
+    assert_eq!(matches["searchedSources"], 1);
 
     let configured_revision = configured["revision"].as_u64().unwrap().to_string();
     let deleted = run_json(

@@ -8,8 +8,10 @@ use crate::content_store::ContentStore;
 use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
+use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_view::{
-    GeneratedSourceInput, Position, ResolutionPolicy, ResolvedSourceView, SourceViewError,
+    GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
+    ResolvedSourceView, SourceViewError,
 };
 
 pub struct SourceEffectOptions {
@@ -470,6 +472,112 @@ impl SourceEffectInterpreter {
             })
     }
 
+    pub fn explain_source(&self, path: &str) -> Vec<SourceGraphViewSnapshot> {
+        let mut explanations = Vec::new();
+        for retained in self.views.values() {
+            let diagnostics = retained
+                .view
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| format!("{diagnostic:?}"))
+                .collect::<Vec<_>>();
+            if retained.generated_url == path {
+                explanations.push(SourceGraphViewSnapshot {
+                    connection_id: String::new(),
+                    target_id: String::new(),
+                    generated_url: retained.generated_url.clone(),
+                    source_path: path.to_owned(),
+                    role: "generated".to_owned(),
+                    kind: "runtime".to_owned(),
+                    primary_provenance: format!("runtime source {}", retained.generated_url),
+                    alternative_provenance: Vec::new(),
+                    projection_paths: Vec::new(),
+                    resolved_source_count: retained.view.files().len() as u32,
+                    diagnostics: diagnostics.clone(),
+                });
+            }
+            let Some(file) = retained.view.files().get(path) else {
+                continue;
+            };
+            explanations.push(SourceGraphViewSnapshot {
+                connection_id: String::new(),
+                target_id: String::new(),
+                generated_url: retained.generated_url.clone(),
+                source_path: file.logical_url.clone(),
+                role: "authored".to_owned(),
+                kind: format!("{:?}", file.kind).to_ascii_lowercase(),
+                primary_provenance: provenance_label(&file.primary.provenance),
+                alternative_provenance: file
+                    .alternatives
+                    .iter()
+                    .map(|candidate| provenance_label(&candidate.provenance))
+                    .collect(),
+                projection_paths: file
+                    .projection_paths
+                    .iter()
+                    .map(|projection| SourceProjectionPathSnapshot {
+                        generated_url: projection.generated_url.clone(),
+                        steps: projection.steps.iter().map(projection_step_label).collect(),
+                    })
+                    .collect(),
+                resolved_source_count: retained.view.files().len() as u32,
+                diagnostics,
+            });
+        }
+        explanations
+    }
+
+    pub fn resolved_source_paths(&self) -> Vec<(String, String)> {
+        let mut paths = BTreeSet::new();
+        for retained in self.views.values() {
+            paths.insert((retained.generated_url.clone(), "runtime".to_owned()));
+            paths.extend(
+                retained
+                    .view
+                    .files()
+                    .keys()
+                    .cloned()
+                    .map(|path| (path, "authored".to_owned())),
+            );
+        }
+        paths.into_iter().collect()
+    }
+
+    pub fn map_source_position(
+        &self,
+        path: &str,
+        position: Position,
+    ) -> Vec<(String, Position, String, String)> {
+        let mut mappings = Vec::new();
+        for retained in self.views.values() {
+            if retained.generated_url == path {
+                mappings.extend(retained.view.forward(path, position).into_iter().map(
+                    |candidate| {
+                        (
+                            candidate.source_url,
+                            candidate.position,
+                            "generated-to-authored".to_owned(),
+                            mapping_quality_label(candidate.quality).to_owned(),
+                        )
+                    },
+                ));
+            }
+            if retained.view.files().contains_key(path) {
+                mappings.extend(retained.view.reverse(path, position).into_iter().map(
+                    |candidate| {
+                        (
+                            candidate.source_url,
+                            candidate.position,
+                            "authored-to-generated".to_owned(),
+                            mapping_quality_label(candidate.quality).to_owned(),
+                        )
+                    },
+                ));
+            }
+        }
+        mappings
+    }
+
     pub fn generated_source_content(
         &self,
         state: &DebuggerState,
@@ -511,6 +619,41 @@ impl SourceEffectInterpreter {
         }
 
         Ok(retained)
+    }
+}
+
+fn mapping_quality_label(quality: MappingQuality) -> &'static str {
+    match quality {
+        MappingQuality::Exact => "exact",
+        MappingQuality::GreatestLowerBound => "greatest-lower-bound",
+    }
+}
+
+fn provenance_label(provenance: &Provenance) -> String {
+    match provenance {
+        Provenance::RuntimeSource { url } => format!("runtime source {url}"),
+        Provenance::SourcesContent { map_id } => {
+            format!("source-map sourcesContent ({map_id:?})")
+        }
+        Provenance::Workspace { logical_url } => format!("workspace {logical_url}"),
+        Provenance::VerifiedWorkspaceAndSourcesContent {
+            map_id,
+            logical_url,
+        } => format!("verified workspace {logical_url} and sourcesContent ({map_id:?})"),
+        Provenance::Formatted { generated_url } => {
+            format!("formatted fallback from {generated_url}")
+        }
+    }
+}
+
+fn projection_step_label(step: &ProjectionStep) -> String {
+    match step {
+        ProjectionStep::Identity => "identity".to_owned(),
+        ProjectionStep::SourceMap { map_id, shape } => {
+            format!("source map {map_id:?} ({shape:?})")
+        }
+        ProjectionStep::Format { formatter } => format!("format with {formatter}"),
+        ProjectionStep::Edit { edit_id } => format!("edit {edit_id}"),
     }
 }
 

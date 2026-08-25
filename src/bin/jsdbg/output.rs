@@ -6,8 +6,9 @@ use cdp_client::service_api::{
     HeapDiffSnapshot, HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot,
     HeapPathSnapshot, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
-    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceLocation, SourceMatchSnapshot,
-    SourceSnapshotInfo, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceGraphViewSnapshot, SourceLocation,
+    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
+    TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -436,14 +437,103 @@ impl HumanOutput for Vec<SourceSnapshotInfo> {
 
 impl HumanOutput for SourceContentSnapshot {
     fn print_human(&self) {
-        print!("{}", self.content);
+        if self.start_line == 1 && self.end_line == self.total_lines {
+            print!("{}", self.content);
+            return;
+        }
+        println!(
+            "{} (lines {}-{} of {})",
+            self.path, self.start_line, self.end_line, self.total_lines
+        );
+        for (index, line) in self.content.lines().enumerate() {
+            println!("{:>6} | {line}", self.start_line + index as u32);
+        }
     }
 }
 
-impl HumanOutput for Vec<SourceMatchSnapshot> {
+impl HumanOutput for SourceSearchSnapshot {
     fn print_human(&self) {
-        for item in self {
+        for item in &self.matches {
+            let first_context_line = item.line.saturating_sub(item.before_context.len() as u32);
+            for (index, line) in item.before_context.iter().enumerate() {
+                println!(
+                    "{}-{}-{}",
+                    item.path,
+                    first_context_line + index as u32,
+                    line
+                );
+            }
             println!("{}:{}:{}:{}", item.path, item.line, item.column, item.text);
+            for (index, line) in item.after_context.iter().enumerate() {
+                println!("{}-{}-{}", item.path, item.line + index as u32 + 1, line);
+            }
+            if !item.before_context.is_empty() || !item.after_context.is_empty() {
+                println!("--");
+            }
+        }
+        if self.omitted_matches > 0 {
+            println!(
+                "... {} additional matches omitted; increase --max-results",
+                self.omitted_matches
+            );
+        }
+        println!(
+            "{} source(s) searched, {} skipped",
+            self.searched_sources, self.skipped_sources
+        );
+    }
+}
+
+impl HumanOutput for Vec<SourceGraphViewSnapshot> {
+    fn print_human(&self) {
+        if self.is_empty() {
+            println!("No resolved source-map view contains this source.");
+            return;
+        }
+        for view in self {
+            println!(
+                "{} / {}  {} source",
+                view.connection_id, view.target_id, view.role
+            );
+            println!("  Source: {}", view.source_path);
+            println!("  Runtime: {}", view.generated_url);
+            println!("  Kind: {}", view.kind);
+            println!("  Content: {}", view.primary_provenance);
+            for alternative in &view.alternative_provenance {
+                println!("  Alternative content: {alternative}");
+            }
+            println!("  View: {} resolved source(s)", view.resolved_source_count);
+            for projection in &view.projection_paths {
+                println!("  Projection: {}", projection.generated_url);
+                for step in &projection.steps {
+                    println!("    -> {step}");
+                }
+                println!("    -> {}", view.source_path);
+            }
+            for diagnostic in &view.diagnostics {
+                println!("  Diagnostic: {diagnostic}");
+            }
+        }
+    }
+}
+
+impl HumanOutput for Vec<SourceMappingSnapshot> {
+    fn print_human(&self) {
+        if self.is_empty() {
+            println!("No mapping found.");
+            return;
+        }
+        for mapping in self {
+            println!(
+                "{} / {}  {}  {}:{}:{}  [{}]",
+                mapping.connection_id,
+                mapping.target_id,
+                mapping.direction,
+                mapping.source_url,
+                mapping.line,
+                mapping.column,
+                mapping.quality
+            );
         }
     }
 }

@@ -44,9 +44,10 @@ use crate::service_api::{
     HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection, HeapReferenceSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
     HeapTraversalDirection, PauseSnapshot, ScopeSnapshot, ScreenshotSnapshot,
-    SourceContentSnapshot, SourceExcerpt, SourceExcerptLine, SourceLocation,
-    TargetBreakpointSnapshot, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetScriptSnapshot, TargetScriptStatus, TargetWaitPredicate, VariableSnapshot,
+    SourceContentSnapshot, SourceExcerpt, SourceExcerptLine, SourceGraphViewSnapshot,
+    SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot, TargetBreakpointStatus,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus,
+    TargetWaitPredicate, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -273,12 +274,35 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn resolved_source_paths(
+        &self,
+    ) -> Result<Vec<(String, String)>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::ResolvedSourcePaths { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn explain_source(
+        &self,
+        path: String,
+    ) -> Result<Vec<SourceGraphViewSnapshot>, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::ExplainSource { path, response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn map_source(
         &self,
         path: String,
         line: u32,
         column: u32,
-    ) -> Result<Vec<SourceLocation>, TargetDebuggerError> {
+    ) -> Result<Vec<SourceMappingSnapshot>, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::MapSource {
@@ -788,11 +812,18 @@ enum TargetCommand {
         path: String,
         response: oneshot::Sender<Result<Option<SourceContentSnapshot>, TargetDebuggerError>>,
     },
+    ResolvedSourcePaths {
+        response: oneshot::Sender<Result<Vec<(String, String)>, TargetDebuggerError>>,
+    },
+    ExplainSource {
+        path: String,
+        response: oneshot::Sender<Result<Vec<SourceGraphViewSnapshot>, TargetDebuggerError>>,
+    },
     MapSource {
         path: String,
         line: u32,
         column: u32,
-        response: oneshot::Sender<Result<Vec<SourceLocation>, TargetDebuggerError>>,
+        response: oneshot::Sender<Result<Vec<SourceMappingSnapshot>, TargetDebuggerError>>,
     },
     EvictSourceCaches {
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
@@ -1080,6 +1111,9 @@ async fn run_target(
                             SourceContentSnapshot {
                                 path: path.clone(),
                                 content: content.to_string(),
+                                start_line: 1,
+                                end_line: content.lines().count() as u32,
+                                total_lines: content.lines().count() as u32,
                             }
                         });
                     }
@@ -1088,9 +1122,20 @@ async fn run_target(
                         .map(|content| SourceContentSnapshot {
                             path: path.clone(),
                             content: content.to_string(),
+                            start_line: 1,
+                            end_line: content.lines().count() as u32,
+                            total_lines: content.lines().count() as u32,
                         })
                 });
                 let _ = response.send(Ok(result));
+            }
+            Next::Command(Some(TargetCommand::ResolvedSourcePaths { response })) => {
+                let paths = driver.source_effects().resolved_source_paths();
+                let _ = response.send(Ok(paths));
+            }
+            Next::Command(Some(TargetCommand::ExplainSource { path, response })) => {
+                let explanations = driver.source_effects().explain_source(&path);
+                let _ = response.send(Ok(explanations));
             }
             Next::Command(Some(TargetCommand::MapSource {
                 path,
@@ -1103,22 +1148,20 @@ async fn run_target(
                     column: column.saturating_sub(1),
                 };
                 let locations = driver
-                    .state()
-                    .scripts
-                    .iter()
-                    .filter(|(_, script)| script.url == path)
-                    .filter_map(|(key, _)| {
-                        driver.source_effects().project_generated_position(
-                            driver.state(),
-                            key,
-                            position,
-                        )
-                    })
-                    .map(|(source_url, position, _)| SourceLocation {
-                        source_url,
-                        line: position.line + 1,
-                        column: position.column + 1,
-                    })
+                    .source_effects()
+                    .map_source_position(&path, position)
+                    .into_iter()
+                    .map(
+                        |(source_url, position, direction, quality)| SourceMappingSnapshot {
+                            connection_id: String::new(),
+                            target_id: String::new(),
+                            source_url,
+                            line: position.line + 1,
+                            column: position.column + 1,
+                            direction,
+                            quality,
+                        },
+                    )
                     .collect();
                 let _ = response.send(Ok(locations));
             }

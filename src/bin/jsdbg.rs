@@ -12,7 +12,8 @@ use cdp_client::service_api::{
     EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector,
     HeapPathCost, HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel,
-    ProcessRole, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    ProcessRole, SourceDisplayOptions, SourceSearchOptions, StepKind, TargetDebuggerPhase,
+    TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1267,87 +1268,66 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?)?;
         }
         [source, list, options @ ..] if source == "source" && list == "list" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.list_sources(context_id, None).await)?)?;
-        }
-        [source, resolve, path, options @ ..] if source == "source" && resolve == "resolve" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
-                .list_sources(context_id, Some(path.clone()))
+                .list_sources(context_id, parse_source_list_options(options)?)
                 .await)?)?;
         }
-        [source, endpoints, path, options @ ..]
-            if source == "source" && endpoints == "endpoints" =>
-        {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
+        [source, resolve, arguments @ ..] if source == "source" && resolve == "resolve" => {
+            let path = parse_source_path_arguments(arguments, "source resolve")?;
             let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.list_sources(context_id, Some(path)).await)?)?;
+        }
+        [source, endpoints, arguments @ ..] if source == "source" && endpoints == "endpoints" => {
+            let path = parse_source_path_arguments(arguments, "source endpoints")?;
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.list_sources(context_id, Some(path)).await)?)?;
+        }
+        [source, show, arguments @ ..] if source == "source" && show == "show" => {
+            let (path, options) = parse_source_show_options(arguments)?;
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.show_source(context_id, path, options).await)?)?;
+        }
+        [source, grep, arguments @ ..] if source == "source" && grep == "grep" => {
+            let options = parse_source_grep_options(arguments)?;
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.grep_sources(context_id, options).await)?)?;
+        }
+        [source, explain, arguments @ ..] if source == "source" && explain == "explain" => {
+            let path = parse_source_path_arguments(arguments, "source explain")?;
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.explain_source(context_id, path).await)?)?;
+        }
+        [source, map, arguments @ ..] if source == "source" && map == "map" => {
+            let (path, line, column) = parse_source_map_arguments(arguments)?;
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
-                .list_sources(context_id, Some(path.clone()))
+                .map_source(context_id, path, line, column)
                 .await)?)?;
         }
-        [source, show, path, options @ ..] if source == "source" && show == "show" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.show_source(context_id, path.clone()).await)?)?;
-        }
-        [source, grep, pattern, options @ ..] if source == "source" && grep == "grep" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
-                .grep_sources(context_id, pattern.clone())
-                .await)?)?;
-        }
-        [source, map, path, line, column, options @ ..] if source == "source" && map == "map" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
-                .map_source(
-                    context_id,
-                    path.clone(),
-                    parse_u64("line", line)?.try_into().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "line exceeds u32")
-                    })?,
-                    parse_u64("column", column)?.try_into().map_err(|_| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "column exceeds u32")
-                    })?,
-                )
-                .await)?)?;
-        }
-        [source, cache, evict, options @ ..]
-            if source == "source" && cache == "cache" && evict == "evict" =>
-        {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
+        [source, cache, evict] if source == "source" && cache == "cache" && evict == "evict" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client.evict_source_caches(context_id).await)?)?;
         }
-        [source, export, destination, options @ ..] if source == "source" && export == "export" => {
-            let context_id = selected_or_explicit_context(
-                &selection_file,
-                parse_context_option(options)?.or(scope_options.context.clone()),
-            )?;
+        [source, export, destination] if source == "source" && export == "export" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .export_sources(context_id, destination.clone())
@@ -2217,6 +2197,195 @@ struct HeapCaptureOptions {
     capture_id: Option<String>,
     capture_numeric_value: bool,
     expose_internals: bool,
+}
+
+fn parse_source_list_options(values: &[String]) -> Result<Option<String>, io::Error> {
+    let mut path = None;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--path" => {
+                index += 1;
+                path = Some(required_option(values, index, "--path")?.to_owned());
+            }
+            option if option.starts_with("--") => {
+                return Err(invalid_option("source list", option));
+            }
+            value => return Err(unexpected_argument("source list", value)),
+        }
+        index += 1;
+    }
+    Ok(path)
+}
+
+fn parse_source_path_arguments(values: &[String], command: &str) -> Result<String, io::Error> {
+    match values {
+        [path] => Ok(path.clone()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{command} requires <path>"),
+        )),
+    }
+}
+
+fn parse_source_show_options(
+    values: &[String],
+) -> Result<(String, SourceDisplayOptions), io::Error> {
+    let mut positional = Vec::new();
+    let mut line = None;
+    let mut context_lines = 20_u32;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--line" => {
+                index += 1;
+                line = Some(parse_positive_u32(
+                    "--line",
+                    required_option(values, index, "--line")?,
+                )?);
+            }
+            "--context-lines" => {
+                index += 1;
+                context_lines = parse_u32_option(
+                    "--context-lines",
+                    required_option(values, index, "--context-lines")?,
+                )?;
+            }
+            option if option.starts_with("--") => {
+                return Err(invalid_option("source show", option));
+            }
+            value => positional.push(value.to_owned()),
+        }
+        index += 1;
+    }
+    let path = parse_source_path_arguments(&positional, "source show")?;
+    Ok((
+        path,
+        SourceDisplayOptions {
+            line,
+            context_lines,
+        },
+    ))
+}
+
+fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, io::Error> {
+    let mut positional = Vec::new();
+    let mut path = None;
+    let mut regex = false;
+    let mut case_sensitive = true;
+    let mut max_results = 200_u32;
+    let mut context_lines = 0_u32;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--path" => {
+                index += 1;
+                path = Some(required_option(values, index, "--path")?.to_owned());
+            }
+            "--regex" => regex = true,
+            "--ignore-case" => case_sensitive = false,
+            "--max-results" => {
+                index += 1;
+                max_results = parse_positive_u32(
+                    "--max-results",
+                    required_option(values, index, "--max-results")?,
+                )?;
+            }
+            "--context-lines" => {
+                index += 1;
+                context_lines = parse_u32_option(
+                    "--context-lines",
+                    required_option(values, index, "--context-lines")?,
+                )?;
+            }
+            option if option.starts_with("--") => {
+                return Err(invalid_option("source grep", option));
+            }
+            value => positional.push(value.to_owned()),
+        }
+        index += 1;
+    }
+    let pattern = match positional.as_slice() {
+        [pattern] => pattern.clone(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source grep requires <pattern>",
+            ));
+        }
+    };
+    Ok(SourceSearchOptions {
+        pattern,
+        path,
+        regex,
+        case_sensitive,
+        max_results,
+        context_lines,
+    })
+}
+
+fn parse_source_map_arguments(values: &[String]) -> Result<(String, u32, u32), io::Error> {
+    let (path, line, column) = match values {
+        [path, line, column] => (path, line, column),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source map requires <path> <line> <column>",
+            ));
+        }
+    };
+    Ok((
+        path.clone(),
+        parse_positive_u32("line", line)?,
+        parse_positive_u32("column", column)?,
+    ))
+}
+
+fn required_option<'a>(
+    values: &'a [String],
+    index: usize,
+    option: &str,
+) -> Result<&'a str, io::Error> {
+    values.get(index).map(String::as_str).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{option} requires a value"),
+        )
+    })
+}
+
+fn parse_positive_u32(name: &str, value: &str) -> Result<u32, io::Error> {
+    let parsed = parse_u32_option(name, value)?;
+    if parsed == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name} must be positive"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_u32_option(name: &str, value: &str) -> Result<u32, io::Error> {
+    value.parse().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid {name} value: {error}"),
+        )
+    })
+}
+
+fn invalid_option(command: &str, option: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("unknown {command} option '{option}'"),
+    )
+}
+
+fn unexpected_argument(command: &str, value: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("unexpected {command} argument '{value}'"),
+    )
 }
 
 struct HeapClassOptions {
@@ -3766,10 +3935,11 @@ commands:
   jsdbg breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
   jsdbg breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg source list [--context <id>]
-  jsdbg source resolve|endpoints <path> [--context <id>]
-  jsdbg source show|grep <path-or-pattern> [--context <id>]
-  jsdbg source map <generated-path> <line> <column> [--context <id>]
+  jsdbg source list [--path <substring>] [--context <id>]
+  jsdbg source resolve|endpoints|explain <path> [--context <id>]
+  jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
+  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
+  jsdbg source map <path> <line> <column> [--context <id>]
   jsdbg source cache evict [--context <id>]
   jsdbg source export <destination> [--context <id>]
   jsdbg target show [target scope]
@@ -3822,6 +3992,7 @@ mod tests {
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
         parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
         parse_process_attach_options, parse_process_list_options, parse_screenshot_capture_options,
+        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
         png_dimensions, resolve_target_scope, split_heap_reference_cli,
     };
     use cdp_client::service_api::{
@@ -4250,5 +4421,47 @@ mod tests {
         assert_eq!(options.capture_id, ".");
         assert_eq!(options.max_lines, 300);
         assert!(!options.capture);
+    }
+
+    #[test]
+    fn parses_source_grep_options() {
+        let options = parse_source_grep_options(&arguments(&[
+            "trim.*Whitespace",
+            "--regex",
+            "--ignore-case",
+            "--path",
+            "src/vs/editor",
+            "--max-results",
+            "25",
+            "--context-lines",
+            "2",
+        ]))
+        .unwrap();
+        assert_eq!(options.pattern, "trim.*Whitespace");
+        assert_eq!(options.path.as_deref(), Some("src/vs/editor"));
+        assert!(options.regex);
+        assert!(!options.case_sensitive);
+        assert_eq!(options.max_results, 25);
+        assert_eq!(options.context_lines, 2);
+    }
+
+    #[test]
+    fn parses_source_show_and_map() {
+        let (path, options) = parse_source_show_options(&arguments(&[
+            "src/model.ts",
+            "--line",
+            "1352",
+            "--context-lines",
+            "12",
+        ]))
+        .unwrap();
+        assert_eq!(path, "src/model.ts");
+        assert_eq!(options.line, Some(1352));
+        assert_eq!(options.context_lines, 12);
+
+        let (path, line, column) =
+            parse_source_map_arguments(&arguments(&["src/model.ts", "1352", "3"])).unwrap();
+        assert_eq!(path, "src/model.ts");
+        assert_eq!((line, column), (1352, 3));
     }
 }
