@@ -221,7 +221,11 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         unique_suffix()
     ));
     let source_file = state_file.with_extension("source.ts");
-    fs::write(&source_file, "export const validationValue = 42;\n").unwrap();
+    fs::write(
+        &source_file,
+        "export const validationValue = 42;\nconsole.log(validationValue);\nvoid validationValue;\n",
+    )
+    .unwrap();
     let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
     let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
@@ -296,9 +300,25 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         &state_file,
         &["source", "grep", "validationValue", "--context", "managed"],
     );
-    assert_eq!(matches["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(matches["matches"].as_array().unwrap().len(), 3);
     assert_eq!(matches["omittedMatches"], 0);
     assert_eq!(matches["searchedSources"], 1);
+    let bounded_matches = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "grep",
+            "validationValue",
+            "--max-results",
+            "1",
+            "--context",
+            "managed",
+        ],
+    );
+    assert_eq!(bounded_matches["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(bounded_matches["omittedMatches"], 2);
     let source_graph = run_json(
         &cli,
         &service,

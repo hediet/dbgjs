@@ -120,6 +120,11 @@ impl OutputFormat {
                     if let Some(source) = &breakpoint.source {
                         println!();
                         print_source_excerpt(&format!("Breakpoint {}", breakpoint.id), source);
+                    } else if matches!(breakpoint.status, TargetBreakpointStatus::Pending) {
+                        println!(
+                            "Breakpoint {} is still pending: no loaded script resolved '{}'.",
+                            breakpoint.id, breakpoint.source_url
+                        );
                     }
                 }
                 Ok(())
@@ -1522,6 +1527,16 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
         snapshot.connection_generation,
         snapshot.revision
     );
+    if let Some(reused) = snapshot.attachment_reused {
+        println!(
+            "  Attachment: {}",
+            if reused {
+                "reused existing debugger session"
+            } else {
+                "created new debugger session"
+            }
+        );
+    }
 
     if !snapshot.breakpoints.is_empty() {
         println!("  Breakpoints:");
@@ -1534,6 +1549,12 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                 breakpoint.column,
                 target_breakpoint_status(&breakpoint.status)
             );
+            if matches!(breakpoint.status, TargetBreakpointStatus::Pending) {
+                println!(
+                    "      waiting for a loaded script that resolves '{}'",
+                    breakpoint.source_url
+                );
+            }
         }
     }
     match &snapshot.pause {

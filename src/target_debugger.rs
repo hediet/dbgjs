@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::cdp::{
     DebuggerEvaluateOnCallFrameParams, DomGetBoxModelParams, DomGetDocumentParams,
@@ -54,6 +54,7 @@ use crate::source_view::Position;
 
 const COMMAND_BUFFER: usize = 32;
 const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
+const RAW_CDP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct TargetBreakpointSpec {
@@ -68,6 +69,7 @@ pub struct TargetBreakpointSpec {
 pub struct TargetDebuggerHandle {
     commands: mpsc::Sender<TargetCommand>,
     snapshots: watch::Receiver<TargetDebuggerSnapshot>,
+    pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
     session_id: String,
     heap_snapshot_progress: watch::Receiver<Option<crate::cdp_runtime::HeapSnapshotStreamProgress>>,
 }
@@ -118,6 +120,7 @@ impl TargetDebuggerHandle {
             &driver,
         );
         let (snapshot_sender, snapshots) = watch::channel(initial);
+        let (pause_events, _) = broadcast::channel(COMMAND_BUFFER);
         let (commands, command_receiver) = mpsc::channel(COMMAND_BUFFER);
         tokio::spawn(run_target(
             context_id,
@@ -128,10 +131,12 @@ impl TargetDebuggerHandle {
             driver,
             command_receiver,
             snapshot_sender,
+            pause_events.clone(),
         ));
         Ok(Self {
             commands,
             snapshots,
+            pause_events,
             session_id: session_key.session_id,
             heap_snapshot_progress,
         })
@@ -262,6 +267,33 @@ impl TargetDebuggerHandle {
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn raw_cdp_request(
+        &self,
+        method: String,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, hubrpc::prelude::JsonRpcError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::RawCdpRequest {
+                method,
+                params,
+                response,
+            })
+            .await
+            .map_err(|_| {
+                hubrpc::prelude::JsonRpcError::new(
+                    hubrpc::prelude::error_codes::PEER_DISCONNECTED,
+                    "target debugger stopped before CDP request was sent",
+                )
+            })?;
+        receiver.await.map_err(|_| {
+            hubrpc::prelude::JsonRpcError::new(
+                hubrpc::prelude::error_codes::PEER_DISCONNECTED,
+                "target debugger stopped before CDP response arrived",
+            )
+        })?
     }
 
     pub async fn source_content(
@@ -701,6 +733,7 @@ impl TargetDebuggerHandle {
             return Err(TargetDebuggerError::InvalidTimeout);
         }
         let mut snapshots = self.snapshots.clone();
+        let mut pause_events = self.pause_events.subscribe();
         tokio::time::timeout(timeout, async {
             loop {
                 let current = snapshots.borrow_and_update().clone();
@@ -725,10 +758,24 @@ impl TargetDebuggerHandle {
                 if predicate_matches(&current, &predicate) {
                     return Ok(current);
                 }
-                snapshots
-                    .changed()
-                    .await
-                    .map_err(|_| TargetDebuggerError::Stopped)?;
+                tokio::select! {
+                    changed = snapshots.changed() => {
+                        changed.map_err(|_| TargetDebuggerError::Stopped)?;
+                    }
+                    event = pause_events.recv(),
+                        if matches!(predicate, TargetWaitPredicate::Paused { .. }) =>
+                    {
+                        match event {
+                            Ok(snapshot) if predicate_matches(&snapshot, &predicate) => {
+                                return Ok(snapshot);
+                            }
+                            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => {
+                                return Err(TargetDebuggerError::Stopped);
+                            }
+                        }
+                    }
+                }
             }
         })
         .await
@@ -809,6 +856,11 @@ enum TargetCommand {
         pause_epoch: Option<u64>,
         object_id: String,
         response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
+    },
+    RawCdpRequest {
+        method: String,
+        params: serde_json::Value,
+        response: oneshot::Sender<Result<serde_json::Value, hubrpc::prelude::JsonRpcError>>,
     },
     SourceContent {
         path: String,
@@ -954,6 +1006,7 @@ async fn run_target(
     mut driver: DebuggerDriver,
     mut commands: mpsc::Receiver<TargetCommand>,
     snapshots: watch::Sender<TargetDebuggerSnapshot>,
+    pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
 ) {
     let mut breakpoint_revisions = BTreeMap::<String, u64>::new();
     let mut coverage = None::<CoverageRecording>;
@@ -1056,8 +1109,25 @@ async fn run_target(
                 }
                 .await;
                 if let Ok(snapshot) = &result {
-                    snapshots.send_replace(snapshot.clone());
+                    publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::RawCdpRequest {
+                method,
+                params,
+                response,
+            })) => {
+                let result =
+                    tokio::time::timeout(RAW_CDP_TIMEOUT, driver.raw_cdp_request(&method, params))
+                        .await
+                        .map_err(|_| {
+                            hubrpc::prelude::JsonRpcError::new(
+                                hubrpc::prelude::error_codes::REQUEST_TIMEOUT,
+                                "raw CDP request timed out after 30 seconds",
+                            )
+                        })
+                        .and_then(|result| result);
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::RemoveBreakpoint {
@@ -1084,7 +1154,7 @@ async fn run_target(
                 }
                 .await;
                 if let Ok(snapshot) = &result {
-                    snapshots.send_replace(snapshot.clone());
+                    publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
                 let _ = response.send(result);
             }
@@ -1102,7 +1172,7 @@ async fn run_target(
                         )
                     });
                 if let Ok(snapshot) = &result {
-                    snapshots.send_replace(snapshot.clone());
+                    publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
                 let _ = response.send(result);
             }
@@ -1188,7 +1258,7 @@ async fn run_target(
                         )
                     });
                 if let Ok(snapshot) = &result {
-                    snapshots.send_replace(snapshot.clone());
+                    publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
                 let _ = response.send(result);
             }
@@ -1210,7 +1280,7 @@ async fn run_target(
                         )
                     });
                 if let Ok(snapshot) = &result {
-                    snapshots.send_replace(snapshot.clone());
+                    publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
                 let _ = response.send(result);
             }
@@ -1262,14 +1332,18 @@ async fn run_target(
                                 if let Err(error) = event {
                                     break Err(error.into());
                                 }
-                                snapshots.send_replace(snapshot_from_driver(
-                                    &context_id,
-                                    &connection_id,
-                                    &target_id,
-                                    connection_generation,
-                                    &session_key,
-                                    &driver,
-                                ));
+                                publish_snapshot(
+                                    &snapshots,
+                                    &pause_events,
+                                    snapshot_from_driver(
+                                        &context_id,
+                                        &connection_id,
+                                        &target_id,
+                                        connection_generation,
+                                        &session_key,
+                                        &driver,
+                                    ),
+                                );
                                 if matches!(
                                     driver.state().sessions.get(&session_key).map(|session| &session.phase),
                                     Some(SessionPhase::Paused { epoch }) if *epoch > prior_epoch
@@ -1305,14 +1379,18 @@ async fn run_target(
                             if let Err(error) = event {
                                 break Err(error.into());
                             }
-                            snapshots.send_replace(snapshot_from_driver(
-                                &context_id,
-                                &connection_id,
-                                &target_id,
-                                connection_generation,
-                                &session_key,
-                                &driver,
-                            ));
+                            publish_snapshot(
+                                &snapshots,
+                                &pause_events,
+                                snapshot_from_driver(
+                                    &context_id,
+                                    &connection_id,
+                                    &target_id,
+                                    connection_generation,
+                                    &session_key,
+                                    &driver,
+                                ),
+                            );
                             if matches!(
                                 driver.state().sessions.get(&session_key).map(|session| &session.phase),
                                 Some(SessionPhase::Paused { epoch }) if *epoch > prior_epoch
@@ -2114,14 +2192,18 @@ async fn run_target(
             }
             Next::Command(None) => break,
             Next::Event(Ok(_)) => {
-                snapshots.send_replace(snapshot_from_driver(
-                    &context_id,
-                    &connection_id,
-                    &target_id,
-                    connection_generation,
-                    &session_key,
-                    &driver,
-                ));
+                publish_snapshot(
+                    &snapshots,
+                    &pause_events,
+                    snapshot_from_driver(
+                        &context_id,
+                        &connection_id,
+                        &target_id,
+                        connection_generation,
+                        &session_key,
+                        &driver,
+                    ),
+                );
             }
 
             Next::Event(Err(error)) => {
@@ -2136,7 +2218,7 @@ async fn run_target(
                 failed.phase = TargetDebuggerPhase::Failed {
                     message: error.to_string(),
                 };
-                snapshots.send_replace(failed);
+                publish_snapshot(&snapshots, &pause_events, failed);
                 break;
             }
         }
@@ -2144,6 +2226,17 @@ async fn run_target(
     for capture in heap_captures.into_values() {
         let _ = tokio::fs::remove_file(capture.path).await;
     }
+}
+
+fn publish_snapshot(
+    snapshots: &watch::Sender<TargetDebuggerSnapshot>,
+    pause_events: &broadcast::Sender<TargetDebuggerSnapshot>,
+    snapshot: TargetDebuggerSnapshot,
+) {
+    if matches!(snapshot.phase, TargetDebuggerPhase::Paused { .. }) {
+        let _ = pause_events.send(snapshot.clone());
+    }
+    snapshots.send_replace(snapshot);
 }
 
 fn temporary_heap_snapshot_path() -> PathBuf {
@@ -3819,7 +3912,9 @@ async fn evaluate(
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
-            return Err(TargetDebuggerError::Evaluation(exception.text));
+            return Err(TargetDebuggerError::Evaluation(format_exception_details(
+                &exception,
+            )));
         }
         evaluated.result
     } else {
@@ -3832,7 +3927,9 @@ async fn evaluate(
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
-            return Err(TargetDebuggerError::Evaluation(exception.text));
+            return Err(TargetDebuggerError::Evaluation(format_exception_details(
+                &exception,
+            )));
         }
         evaluated.result
     };
@@ -3893,7 +3990,9 @@ async fn object_properties(
         .await
         .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
     if let Some(exception) = result.exception_details {
-        return Err(TargetDebuggerError::Properties(exception.text));
+        return Err(TargetDebuggerError::Properties(format_exception_details(
+            &exception,
+        )));
     }
     Ok(result
         .result
@@ -3904,6 +4003,13 @@ async fn object_properties(
                 .map(|value| variable_snapshot(property.name, value))
         })
         .collect())
+}
+
+fn format_exception_details<T>(exception: &T) -> String
+where
+    T: serde::Serialize + std::fmt::Debug,
+{
+    serde_json::to_string(exception).unwrap_or_else(|_| format!("{exception:?}"))
 }
 
 fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {
@@ -4198,6 +4304,7 @@ fn snapshot(
             connection_id: connection_id.to_owned(),
             target_id: target_id.to_owned(),
             connection_generation,
+            attachment_reused: None,
             revision: state.revision,
             phase: TargetDebuggerPhase::Failed {
                 message: "debugger session is no longer available".to_owned(),
@@ -4337,6 +4444,7 @@ fn snapshot(
         connection_id: connection_id.to_owned(),
         target_id: target_id.to_owned(),
         connection_generation,
+        attachment_reused: None,
         revision: state.revision,
         phase,
         scripts,
@@ -4479,12 +4587,13 @@ fn generated_script_callback_breadcrumb(
 mod tests {
     use super::{
         aggregate_cpu_profile, bounded_heap_text, callback_aware_breadcrumb,
-        effective_coverage_ranges, heap_class_display_name, source_excerpt,
-        window_highlighted_line,
+        effective_coverage_ranges, heap_class_display_name, predicate_matches, publish_snapshot,
+        source_excerpt, window_highlighted_line,
     };
     use crate::service_api::{
         CoverageRangeSnapshot, CpuProfileCallFrameSnapshot, CpuProfileNodeSnapshot,
-        CpuProfileSnapshot, SourceExcerpt, SourceLocation,
+        CpuProfileSnapshot, SourceExcerpt, SourceLocation, TargetDebuggerPhase,
+        TargetDebuggerSnapshot, TargetWaitPredicate,
     };
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
@@ -4495,6 +4604,51 @@ mod tests {
             authored_start: None,
             authored_end: None,
         }
+    }
+
+    fn target_snapshot(phase: TargetDebuggerPhase) -> TargetDebuggerSnapshot {
+        TargetDebuggerSnapshot {
+            context_id: "test".to_owned(),
+            connection_id: "browser".to_owned(),
+            target_id: "page".to_owned(),
+            connection_generation: 1,
+            attachment_reused: None,
+            revision: 1,
+            phase,
+            scripts: Vec::new(),
+            breakpoints: Vec::new(),
+            logs: Vec::new(),
+            pause: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn pause_events_survive_a_later_running_snapshot() {
+        let (snapshots, _) =
+            tokio::sync::watch::channel(target_snapshot(TargetDebuggerPhase::Running));
+        let (pause_events, _) = tokio::sync::broadcast::channel(4);
+        let mut pauses = pause_events.subscribe();
+
+        publish_snapshot(
+            &snapshots,
+            &pause_events,
+            target_snapshot(TargetDebuggerPhase::Paused { epoch: 2 }),
+        );
+        publish_snapshot(
+            &snapshots,
+            &pause_events,
+            target_snapshot(TargetDebuggerPhase::Running),
+        );
+
+        assert!(matches!(
+            snapshots.borrow().phase,
+            TargetDebuggerPhase::Running
+        ));
+        let pause = pauses.recv().await.unwrap();
+        assert!(predicate_matches(
+            &pause,
+            &TargetWaitPredicate::Paused { after_epoch: 1 }
+        ));
     }
 
     #[test]

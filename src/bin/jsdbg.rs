@@ -201,6 +201,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?)?;
         }
+        [target, cdp, method, options @ ..] if target == "target" && cdp == "cdp" => {
+            let options = parse_raw_cdp_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let result = rpc(client
+                .raw_cdp_request(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    method.clone(),
+                    options.params,
+                    options.validate,
+                )
+                .await)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         [target, logpoint, id, source, line, column, expression]
             if target == "target" && logpoint == "logpoint" =>
         {
@@ -504,8 +521,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let options = parse_heap_class_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             if options.capture {
                 let operation = client.capture_heap_snapshot(
                     scope.context.clone(),
@@ -542,8 +559,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let selection = rpc(client
                 .select_heap_nodes(
                     scope.context,
@@ -560,8 +577,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, strings, options @ ..] if heap == "heap" && strings == "strings" => {
             let options = parse_heap_string_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let selection = rpc(client
                 .select_heap_nodes(
                     scope.context,
@@ -576,40 +593,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&selection)?;
         }
         [heap, show, reference, options @ ..] if heap == "heap" && show == "show" => {
-            let (capture_id, heap_object_id) = split_heap_reference_cli(reference)?;
             let max_string_length = parse_heap_string_display_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let selection = rpc(client
-                .select_heap_nodes(
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
+            let properties = rpc(client
+                .get_heap_references(
                     scope.context,
                     scope.connection,
                     scope.target,
-                    capture_id,
-                    HeapNodeSelector {
-                        heap_object_id: Some(heap_object_id),
-                        limit: Some(1),
-                        ..HeapNodeSelector::default()
-                    },
+                    reference.clone(),
+                    HeapReferenceDirection::Outgoing,
+                    HeapEdgePolicy::All,
+                    100,
                     max_string_length,
-                    true,
                 )
                 .await)?;
-            if selection.nodes.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("heap reference '{reference}' does not exist"),
-                )
-                .into());
-            }
-            output.print(&selection)?;
+            output.print(&properties)?;
         }
         [heap, refs, reference, options @ ..] if heap == "heap" && refs == "refs" => {
             let options = parse_heap_reference_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let references = rpc(client
                 .get_heap_references(
                     scope.context,
@@ -627,8 +633,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, path, from, to, options @ ..] if heap == "heap" && path == "path" => {
             let options = parse_heap_path_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let path = rpc(client
                 .get_heap_path(
                     scope.context,
@@ -657,8 +663,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_heap_path_options(options)?;
             let (capture_id, _) = split_heap_reference_cli(reference)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let root = rpc(client
                 .select_heap_nodes(
                     scope.context.clone(),
@@ -706,8 +712,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             options.path.direction = HeapPathDirection::Incoming;
             let (capture_id, _) = split_heap_reference_cli(reference)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let root = rpc(client
                 .select_heap_nodes(
                     scope.context.clone(),
@@ -753,8 +759,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let max_string_length = parse_heap_string_display_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let chain = rpc(client
                 .get_heap_dominator_chain(
                     scope.context,
@@ -769,8 +775,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, aggregate, options @ ..] if heap == "heap" && aggregate == "aggregate" => {
             let options = parse_heap_aggregate_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let aggregate = rpc(client
                 .aggregate_heap_snapshot(
                     scope.context,
@@ -787,8 +793,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, diff, older, newer, options @ ..] if heap == "heap" && diff == "diff" => {
             let options = parse_heap_diff_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let diff = rpc(client
                 .diff_heap_snapshots(
                     scope.context,
@@ -1842,6 +1848,53 @@ struct ScreenshotCaptureOptions {
     output: Option<std::path::PathBuf>,
 }
 
+#[derive(Debug, PartialEq)]
+struct RawCdpOptions {
+    params: serde_json::Value,
+    validate: bool,
+}
+
+fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Error> {
+    let mut params = serde_json::json!({});
+    let mut has_params = false;
+    let mut validate = true;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--params" => {
+                if has_params {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--params may only be specified once",
+                    ));
+                }
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--params requires JSON")
+                })?;
+                params = serde_json::from_str(value).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid --params JSON: {error}"),
+                    )
+                })?;
+                has_params = true;
+                index += 2;
+            }
+            "--no-validation" => {
+                validate = false;
+                index += 1;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown target cdp option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok(RawCdpOptions { params, validate })
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct ProcessAttachOptions {
     process_id: u32,
@@ -2118,6 +2171,40 @@ async fn resolve_scope(
     )?)
 }
 
+async fn resolve_offline_scope(
+    client: &DebuggerServiceApiClient,
+    selection: &CliSelection,
+    options: &ScopeOptions,
+) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
+    if let (Some(context), Some(connection), Some(target)) = (
+        options.context.clone(),
+        options.connection.clone(),
+        options.target.clone(),
+    ) {
+        return Ok(ResolvedScope {
+            context,
+            connection,
+            target,
+        });
+    }
+    if options.context.is_none()
+        && options.connection.is_none()
+        && options.target.is_none()
+        && let (Some(context), Some(connection), Some(target)) = (
+            selection.context.clone(),
+            selection.connection.clone(),
+            selection.target.clone(),
+        )
+    {
+        return Ok(ResolvedScope {
+            context,
+            connection,
+            target,
+        });
+    }
+    resolve_scope(client, selection, options).await
+}
+
 fn resolve_target_scope(
     context: String,
     snapshot: &cdp_client::service_api::ContextSnapshot,
@@ -2174,12 +2261,12 @@ fn resolve_target_scope(
                         || target.title == *selector
                         || target.url == *selector
                 });
-                matches.then_some((connection.id.as_str(), target.target_id.as_str()))
+                matches.then_some((connection.id.as_str(), target))
             })
         })
         .collect::<Vec<_>>();
     let (connection, target) = match candidates.as_slice() {
-        [(connection, target)] => ((*connection).to_owned(), (*target).to_owned()),
+        [(connection, target)] => ((*connection).to_owned(), target.target_id.clone()),
         [] => {
             let selector = requested_target.map_or("<unspecified>", String::as_str);
             return Err(io::Error::new(
@@ -2200,11 +2287,20 @@ fn resolve_target_scope(
             } else {
                 " use --target <selector> to select one"
             };
+            let details = candidates
+                .iter()
+                .map(|(connection, target)| {
+                    format!(
+                        "\n  {connection}/{}  type={}  title={:?}  url={}",
+                        target.target_id, target.target_type, target.title, target.url
+                    )
+                })
+                .collect::<String>();
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "target selector '{selector}' is ambiguous across {} targets in context '{context}';{hint}",
-                    candidates.len()
+                    "target selector '{selector}' is ambiguous across {} targets in context '{context}';{hint}. Candidates:{details}",
+                    candidates.len(),
                 ),
             ));
         }
@@ -4202,6 +4298,7 @@ commands:
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
   jsdbg target eval|watch <expression> [target scope]
+  jsdbg target cdp <method> [--params <json>] [--no-validation] [target scope]
   jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
   jsdbg log [--after <cursor>] [--limit <count>] [target scope]
@@ -4232,7 +4329,10 @@ commands:
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
   Accepted by target, log, screenshot, coverage, profile, and heap commands.
-  --connection is only needed when the target selector is ambiguous."
+  --connection is only needed when the target selector is ambiguous.
+
+target cdp validates params against the generated CDP schema by default.
+Use --no-validation for vendor or newer protocol methods."
 }
 
 #[cfg(test)]
@@ -4244,9 +4344,9 @@ mod tests {
         parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
         parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
         parse_heap_select_options, parse_heap_string_options, parse_process_attach_options,
-        parse_process_list_options, parse_screenshot_capture_options, parse_source_grep_options,
-        parse_source_map_arguments, parse_source_show_options, png_dimensions,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        parse_process_list_options, parse_raw_cdp_options, parse_screenshot_capture_options,
+        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
+        png_dimensions, resolve_target_scope, select_implicit_context, split_heap_reference_cli,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -4257,6 +4357,25 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn parses_raw_cdp_params_and_validation_bypass() {
+        let defaults = parse_raw_cdp_options(&[]).unwrap();
+        assert_eq!(defaults.params, serde_json::json!({}));
+        assert!(defaults.validate);
+
+        let options = parse_raw_cdp_options(&arguments(&[
+            "--params",
+            r#"{"expression":"globalThis.location.href"}"#,
+            "--no-validation",
+        ]))
+        .unwrap();
+        assert_eq!(
+            options.params,
+            serde_json::json!({ "expression": "globalThis.location.href" })
+        );
+        assert!(!options.validate);
     }
 
     #[test]

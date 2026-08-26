@@ -115,6 +115,7 @@ impl CdpConnection {
         let debugger = CdpDebuggerSession {
             session,
             client: CdpClient::root(root_channel.clone()),
+            channel: root_channel.clone(),
             events: event_receiver,
             source_map_frame_id: Mutex::new(None),
             source_map_cache_enabled: AtomicBool::new(true),
@@ -160,10 +161,12 @@ impl CdpConnection {
             }),
         );
         let client = CdpClient::root(channel.clone());
-        tokio::spawn(async move { channel.run().await });
+        let run_channel = channel.clone();
+        tokio::spawn(async move { run_channel.run().await });
         Ok(CdpDebuggerSession {
             session,
             client,
+            channel: channel.clone(),
             events: event_receiver,
             source_map_frame_id: Mutex::new(None),
             source_map_cache_enabled: AtomicBool::new(true),
@@ -274,6 +277,7 @@ pub(crate) struct HeapSnapshotWriteResult {
 pub struct CdpDebuggerSession {
     session: SessionKey,
     client: CdpClient<Channel>,
+    channel: Channel,
     events: mpsc::UnboundedReceiver<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
     source_map_frame_id: Mutex<Option<String>>,
     source_map_cache_enabled: AtomicBool,
@@ -291,6 +295,10 @@ impl CdpDebuggerSession {
 
     pub fn client(&self) -> &CdpClient<Channel> {
         &self.client
+    }
+
+    pub async fn raw_request(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
+        self.channel.call(method, params).await
     }
 
     pub fn set_source_map_cache_enabled(&self, enabled: bool) {

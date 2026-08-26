@@ -530,6 +530,8 @@ pub struct TargetDebuggerSnapshot {
     pub connection_id: String,
     pub target_id: String,
     pub connection_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_reused: Option<bool>,
     pub revision: u64,
     pub phase: TargetDebuggerPhase,
     pub scripts: Vec<TargetScriptSnapshot>,
@@ -1307,6 +1309,15 @@ pub trait DebuggerServiceApi {
         pause_epoch: Option<u64>,
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, JsonRpcError>;
+
+    async fn raw_cdp_request(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        method: String,
+        params: serde_json::Value,
+        validate: bool,
+    ) -> Result<serde_json::Value, JsonRpcError>;
 
     async fn set_logpoint(
         context_id: String,

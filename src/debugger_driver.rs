@@ -45,6 +45,14 @@ impl DebuggerDriver {
         self.session.client()
     }
 
+    pub async fn raw_cdp_request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, hubrpc::prelude::JsonRpcError> {
+        self.session.raw_request(method, params).await
+    }
+
     pub fn heap_snapshot_progress(
         &self,
     ) -> tokio::sync::watch::Receiver<Option<HeapSnapshotStreamProgress>> {

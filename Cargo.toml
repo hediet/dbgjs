@@ -40,6 +40,7 @@ oxc_syntax = "0.146.0"
 rayon = "1.12.0"
 regex = "1"
 reqwest = "0.12"
+jsonschema = { version = "0.33.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }

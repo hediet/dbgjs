@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
@@ -1385,6 +1385,9 @@ impl DebuggerServiceApi for DebuggerService {
                 return source_content_range(content, &options);
             }
         }
+        if path.is_empty() {
+            return Err(not_found("source", "<empty>"));
+        }
         let file_path = source_file_path(&path)?;
         let content = fs::read_to_string(&file_path).map_err(|error| {
             internal_error(format!(
@@ -1441,6 +1444,7 @@ impl DebuggerServiceApi for DebuggerService {
         let mut searched_sources = 0_u32;
         let mut skipped_sources = 0_u32;
         for source in sources {
+            tokio::task::yield_now().await;
             let Ok(content) = self
                 .show_source(
                     ctx,
@@ -1459,6 +1463,7 @@ impl DebuggerServiceApi for DebuggerService {
             searched_sources = searched_sources.saturating_add(1);
             let lines = content.content.lines().collect::<Vec<_>>();
             for (line_index, line) in lines.iter().enumerate() {
+                tokio::task::yield_now().await;
                 let columns: Vec<usize> = match &regex {
                     Some(regex) => regex.find_iter(line).map(|item| item.start()).collect(),
                     None => {
@@ -1475,26 +1480,26 @@ impl DebuggerServiceApi for DebuggerService {
                     }
                 };
                 for column in columns {
-                    if matches.len() < options.max_results as usize {
-                        let context = options.context_lines as usize;
-                        matches.push(SourceMatchSnapshot {
-                            path: source.path.clone(),
-                            line: line_index as u32 + 1,
-                            column: column as u32 + 1,
-                            text: (*line).to_owned(),
-                            before_context: lines[line_index.saturating_sub(context)..line_index]
-                                .iter()
-                                .map(|line| (*line).to_owned())
-                                .collect(),
-                            after_context: lines
-                                [line_index + 1..(line_index + context + 1).min(lines.len())]
-                                .iter()
-                                .map(|line| (*line).to_owned())
-                                .collect(),
-                        });
-                    } else {
+                    if matches.len() == options.max_results as usize {
                         omitted_matches = omitted_matches.saturating_add(1);
+                        continue;
                     }
+                    let context = options.context_lines as usize;
+                    matches.push(SourceMatchSnapshot {
+                        path: source.path.clone(),
+                        line: line_index as u32 + 1,
+                        column: column as u32 + 1,
+                        text: (*line).to_owned(),
+                        before_context: lines[line_index.saturating_sub(context)..line_index]
+                            .iter()
+                            .map(|line| (*line).to_owned())
+                            .collect(),
+                        after_context: lines
+                            [line_index + 1..(line_index + context + 1).min(lines.len())]
+                            .iter()
+                            .map(|line| (*line).to_owned())
+                            .collect(),
+                    });
                 }
             }
         }
@@ -1718,7 +1723,11 @@ impl DebuggerServiceApi for DebuggerService {
                     state.target_debuggers.remove(&debugger_key);
                     Some(debugger.session_id().to_owned())
                 }
-                Some(debugger) => return Ok(debugger.snapshot()),
+                Some(debugger) => {
+                    let mut snapshot = debugger.snapshot();
+                    snapshot.attachment_reused = Some(true);
+                    return Ok(snapshot);
+                }
                 None => None,
             };
             let context = state
@@ -1825,7 +1834,8 @@ impl DebuggerServiceApi for DebuggerService {
             ));
         }
         if let Some(existing) = state.target_debuggers.get(&debugger_key) {
-            let snapshot = existing.snapshot();
+            let mut snapshot = existing.snapshot();
+            snapshot.attachment_reused = Some(true);
             drop(state);
             detach_session(&runtime, &session_key.session_id).await;
             return Ok(snapshot);
@@ -1882,6 +1892,8 @@ impl DebuggerServiceApi for DebuggerService {
             self.publish_breakpoint_application(&context_id, &breakpoint_id)
                 .await;
         }
+        let mut snapshot = snapshot;
+        snapshot.attachment_reused = Some(false);
         Ok(snapshot)
     }
 
@@ -2038,6 +2050,51 @@ impl DebuggerServiceApi for DebuggerService {
             .object_properties(pause_epoch, object_id)
             .await
             .map_err(target_debugger_rpc_error)
+    }
+
+    async fn raw_cdp_request(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        method: String,
+        params: serde_json::Value,
+        validate: bool,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        if validate {
+            validate_raw_cdp_params(&method, &params).map_err(|message| {
+                invalid_params(&format!(
+                    "invalid params for CDP method '{method}': {message}"
+                ))
+            })?;
+        }
+
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let identity = debugger.snapshot();
+        let result = debugger.raw_cdp_request(method, params).await;
+        let is_current = self
+            .state
+            .lock()
+            .await
+            .target_debuggers
+            .get(&(
+                identity.context_id.clone(),
+                identity.connection_id.clone(),
+                identity.target_id.clone(),
+            ))
+            .is_some_and(|current| {
+                current.same_instance(&debugger)
+                    && current.snapshot().connection_generation == identity.connection_generation
+            });
+        if !is_current {
+            return Err(invalid_state(
+                "target connection changed while the CDP request was in flight",
+            ));
+        }
+        result
     }
 
     async fn set_logpoint(
@@ -3205,6 +3262,37 @@ fn cdp_rpc_error(operation: &str, error: JsonRpcError) -> JsonRpcError {
     internal_error(format!("{operation} failed: {error:?}"))
 }
 
+fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(), String> {
+    static INTERFACE: OnceLock<Result<hubrpc::prelude::HubRpcInterfaceSchema, String>> =
+        OnceLock::new();
+    let interface = INTERFACE
+        .get_or_init(|| {
+            crate::protocol_schema::import_typed_cdp_protocol(
+                include_str!("../node_modules/devtools-protocol/json/browser_protocol.json"),
+                include_str!("../node_modules/devtools-protocol/json/js_protocol.json"),
+            )
+            .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let method_schema = interface
+        .methods
+        .get(method)
+        .filter(|schema| schema.result.is_some())
+        .ok_or_else(|| format!("unknown request method '{method}'"))?;
+    let mut schema = method_schema.params.clone();
+    if let (Some(object), Some(components)) = (schema.as_object_mut(), &interface.components) {
+        object.insert(
+            "components".into(),
+            serde_json::to_value(components).map_err(|error| error.to_string())?,
+        );
+    }
+    jsonschema::validator_for(&schema)
+        .map_err(|error| format!("invalid generated schema: {error}"))?
+        .validate(params)
+        .map_err(|error| error.to_string())
+}
+
 fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
     let code = match error {
         TargetDebuggerError::InvalidBreakpointPosition
@@ -3272,6 +3360,27 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_raw_cdp_params_against_generated_protocol_schema() {
+        validate_raw_cdp_params(
+            "Runtime.evaluate",
+            &serde_json::json!({ "expression": "1 + 1", "returnByValue": true }),
+        )
+        .unwrap();
+        validate_raw_cdp_params(
+            "HeapProfiler.getObjectByHeapObjectId",
+            &serde_json::json!({ "objectId": "42" }),
+        )
+        .unwrap();
+
+        let missing =
+            validate_raw_cdp_params("Runtime.evaluate", &serde_json::json!({})).unwrap_err();
+        assert!(missing.contains("expression"), "{missing}");
+        let unknown =
+            validate_raw_cdp_params("Runtime.notACommand", &serde_json::json!({})).unwrap_err();
+        assert!(unknown.contains("unknown request method"), "{unknown}");
+    }
 
     #[test]
     fn migrates_endpoint_only_persistence_to_direct_cdp_configuration() {
