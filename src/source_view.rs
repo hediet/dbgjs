@@ -739,8 +739,9 @@ impl ResolvedSourceView {
     ) -> Result<SourceSnapshotId, SourceViewError> {
         let snapshot = self.model.intern_content(
             &self.contribution,
-            SourceUri::embedded("runtime", generated_url)
-                .expect("runtime source values can be embedded"),
+            SourceUri::parse(generated_url)
+                .or_else(|_| SourceUri::embedded("runtime", generated_url))
+                .expect("runtime source values can be represented"),
             content,
         )?;
         self.generated_snapshots

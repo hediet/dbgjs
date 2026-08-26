@@ -75,6 +75,38 @@ impl SourceUri {
             .strip_prefix(base.as_slice())
             .map(|relative| relative.join("/"))
     }
+
+    pub fn common_ancestor(&self, other: &Self) -> Option<Self> {
+        if self.0.scheme() != other.0.scheme()
+            || self.0.username() != other.0.username()
+            || self.0.password() != other.0.password()
+            || self.0.host_str() != other.0.host_str()
+            || self.0.port_or_known_default() != other.0.port_or_known_default()
+        {
+            return None;
+        }
+        let left = normalized_path_segments(&self.0)?;
+        let right = normalized_path_segments(&other.0)?;
+        let shared = left
+            .iter()
+            .zip(&right)
+            .take_while(|(left, right)| left == right)
+            .map(|(segment, _)| *segment)
+            .collect::<Vec<_>>();
+        let mut ancestor = self.0.clone();
+        ancestor.set_query(None);
+        ancestor.set_fragment(None);
+        ancestor.set_path("/");
+        {
+            let mut segments = ancestor.path_segments_mut().ok()?;
+            segments.clear();
+            for segment in shared {
+                segments.push(segment);
+            }
+            segments.push("");
+        }
+        Some(Self(ancestor))
+    }
 }
 
 fn normalized_path_segments(url: &Url) -> Option<Vec<&str>> {

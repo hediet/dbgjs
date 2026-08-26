@@ -30,6 +30,45 @@ pub struct ContextSourceGraphSnapshot {
     pub projections: Vec<SourceProjection>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CompactedProjectionKind {
+    Identity,
+    SourceMap,
+    Format(String),
+    Edit(String),
+    Offset { line_delta: i64, column_delta: i64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SuffixRewrite {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactedSourceNode {
+    pub id: u32,
+    pub prefix: SourceUri,
+    pub source_count: usize,
+    pub runtime_internal: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactedSourceEdge {
+    pub derived: u32,
+    pub basis: u32,
+    pub kind: CompactedProjectionKind,
+    pub mapping_count: usize,
+    pub suffix_rewrite: Option<SuffixRewrite>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactedSourceGraph {
+    pub roots: Vec<u32>,
+    pub nodes: Vec<CompactedSourceNode>,
+    pub edges: Vec<CompactedSourceEdge>,
+}
+
 pub struct ContextSourceModel {
     content: Arc<ContentStore>,
     state: Mutex<ContextSourceState>,
@@ -141,6 +180,298 @@ impl ContextSourceModel {
         }
     }
 
+    pub fn compacted_graph(&self) -> CompactedSourceGraph {
+        compact_source_graph(&self.graph_snapshot())
+    }
+}
+
+#[derive(Clone)]
+struct ConcreteMapping {
+    derived: SourceUri,
+    basis: SourceUri,
+    kind: CompactedProjectionKind,
+}
+
+#[derive(Clone)]
+struct MappingGroup {
+    mappings: Vec<ConcreteMapping>,
+    derived_prefix: SourceUri,
+    basis_prefix: SourceUri,
+    kind: CompactedProjectionKind,
+    suffix_rewrite: Option<SuffixRewrite>,
+}
+
+fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGraph {
+    let sources = graph
+        .sources
+        .iter()
+        .map(|source| (source.id, source.uri.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let concrete = graph
+        .projections
+        .iter()
+        .filter_map(|projection| {
+            Some(ConcreteMapping {
+                derived: sources.get(&projection.derived)?.clone(),
+                basis: sources.get(&projection.basis)?.clone(),
+                kind: compacted_projection_kind(&projection.kind),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut groups = concrete
+        .iter()
+        .cloned()
+        .map(|mapping| {
+            group_mappings(vec![mapping], &concrete)
+                .expect("a concrete source mapping always has a compact representation")
+        })
+        .collect::<Vec<_>>();
+
+    loop {
+        let mut merged = None;
+        'outer: for left in 0..groups.len() {
+            for right in left + 1..groups.len() {
+                if groups[left].kind != groups[right].kind {
+                    continue;
+                }
+                let mappings = groups[left]
+                    .mappings
+                    .iter()
+                    .chain(&groups[right].mappings)
+                    .cloned()
+                    .collect();
+                if let Some(group) = group_mappings(mappings, &concrete) {
+                    merged = Some((left, right, group));
+                    break 'outer;
+                }
+            }
+        }
+        let Some((left, right, group)) = merged else {
+            break;
+        };
+        groups.remove(right);
+        groups[left] = group;
+    }
+
+    groups.sort_by(|left, right| {
+        (
+            &left.derived_prefix,
+            &left.basis_prefix,
+            &left.kind,
+            &left.suffix_rewrite,
+        )
+            .cmp(&(
+                &right.derived_prefix,
+                &right.basis_prefix,
+                &right.kind,
+                &right.suffix_rewrite,
+            ))
+    });
+    let prefixes = groups
+        .iter()
+        .flat_map(|group| [group.derived_prefix.clone(), group.basis_prefix.clone()])
+        .collect::<BTreeSet<_>>();
+    let prefix_ids = prefixes
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, prefix)| (prefix, index as u32 + 1))
+        .collect::<BTreeMap<_, _>>();
+    let nodes = prefixes
+        .iter()
+        .map(|prefix| {
+            let source_count = groups
+                .iter()
+                .flat_map(|group| &group.mappings)
+                .flat_map(|mapping| [&mapping.derived, &mapping.basis])
+                .filter(|uri| relative_source_path(uri, prefix).is_some())
+                .collect::<BTreeSet<_>>()
+                .len();
+            CompactedSourceNode {
+                id: prefix_ids[prefix],
+                prefix: prefix.clone(),
+                source_count,
+                runtime_internal: is_runtime_internal(prefix),
+            }
+        })
+        .collect::<Vec<_>>();
+    let edges = groups
+        .into_iter()
+        .map(|group| CompactedSourceEdge {
+            derived: prefix_ids[&group.derived_prefix],
+            basis: prefix_ids[&group.basis_prefix],
+            kind: group.kind,
+            mapping_count: group.mappings.len(),
+            suffix_rewrite: group.suffix_rewrite,
+        })
+        .collect::<Vec<_>>();
+    let referenced = edges.iter().map(|edge| edge.basis).collect::<BTreeSet<_>>();
+    let mut roots = nodes
+        .iter()
+        .map(|node| node.id)
+        .filter(|node| !referenced.contains(node))
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        roots.extend(nodes.iter().map(|node| node.id));
+    }
+    CompactedSourceGraph {
+        roots,
+        nodes,
+        edges,
+    }
+}
+
+fn group_mappings(
+    mappings: Vec<ConcreteMapping>,
+    universe: &[ConcreteMapping],
+) -> Option<MappingGroup> {
+    let kind = mappings.first()?.kind.clone();
+    if mappings.iter().any(|mapping| mapping.kind != kind) {
+        return None;
+    }
+    let mut derived_prefix = common_parent(mappings.iter().map(|mapping| &mapping.derived))?;
+    let mut basis_prefix = common_parent(mappings.iter().map(|mapping| &mapping.basis))?;
+    let mut suffix_rewrite = mappings[0]
+        .derived
+        .relative_path_from(&derived_prefix)
+        .zip(mappings[0].basis.relative_path_from(&basis_prefix))
+        .and_then(|(derived, basis)| mapping_rewrite(&derived, &basis));
+    if suffix_rewrite.is_none() && mappings.len() == 1 {
+        derived_prefix = mappings[0].derived.clone();
+        basis_prefix = mappings[0].basis.clone();
+        suffix_rewrite = Some(None);
+    }
+    let mut suffix_rewrite = suffix_rewrite?;
+    if !group_is_valid(
+        &mappings,
+        universe,
+        &kind,
+        &derived_prefix,
+        &basis_prefix,
+        suffix_rewrite.as_ref(),
+    ) {
+        if mappings.len() != 1 {
+            return None;
+        }
+        derived_prefix = mappings[0].derived.clone();
+        basis_prefix = mappings[0].basis.clone();
+        suffix_rewrite = None;
+    }
+    Some(MappingGroup {
+        mappings,
+        derived_prefix,
+        basis_prefix,
+        kind,
+        suffix_rewrite,
+    })
+}
+
+fn group_is_valid(
+    mappings: &[ConcreteMapping],
+    universe: &[ConcreteMapping],
+    kind: &CompactedProjectionKind,
+    derived_prefix: &SourceUri,
+    basis_prefix: &SourceUri,
+    suffix_rewrite: Option<&SuffixRewrite>,
+) -> bool {
+    mappings
+        .iter()
+        .all(|mapping| mapping_matches(mapping, derived_prefix, basis_prefix, suffix_rewrite))
+        && universe.iter().all(|mapping| {
+            mapping.kind != *kind
+                || relative_source_path(&mapping.derived, derived_prefix).is_none()
+                || relative_source_path(&mapping.basis, basis_prefix).is_none()
+                || mapping_matches(mapping, derived_prefix, basis_prefix, suffix_rewrite)
+        })
+}
+
+fn common_parent<'a>(uris: impl Iterator<Item = &'a SourceUri>) -> Option<SourceUri> {
+    let mut uris = uris;
+    let first = uris.next()?;
+    let mut common = first.parent().unwrap_or_else(|| first.clone());
+    for uri in uris {
+        let candidate = uri.parent().unwrap_or_else(|| uri.clone());
+        common = common.common_ancestor(&candidate)?;
+    }
+    Some(common)
+}
+
+fn mapping_matches(
+    mapping: &ConcreteMapping,
+    derived_prefix: &SourceUri,
+    basis_prefix: &SourceUri,
+    rewrite: Option<&SuffixRewrite>,
+) -> bool {
+    let Some(derived) = relative_source_path(&mapping.derived, derived_prefix) else {
+        return false;
+    };
+    let Some(basis) = relative_source_path(&mapping.basis, basis_prefix) else {
+        return false;
+    };
+    rewrite_relative_path(&derived, rewrite) == basis
+}
+
+fn relative_source_path(uri: &SourceUri, prefix: &SourceUri) -> Option<String> {
+    if uri == prefix {
+        Some(String::new())
+    } else {
+        uri.relative_path_from(prefix)
+    }
+}
+
+fn mapping_rewrite(derived: &str, basis: &str) -> Option<Option<SuffixRewrite>> {
+    if derived == basis {
+        return Some(None);
+    }
+    let (derived_stem, derived_suffix) = split_suffix(derived)?;
+    let (basis_stem, basis_suffix) = split_suffix(basis)?;
+    (derived_stem == basis_stem).then(|| {
+        Some(SuffixRewrite {
+            from: derived_suffix.to_owned(),
+            to: basis_suffix.to_owned(),
+        })
+    })
+}
+
+fn split_suffix(path: &str) -> Option<(&str, &str)> {
+    let slash = path.rfind('/').map_or(0, |index| index + 1);
+    let dot = path[slash..].rfind('.').map(|index| slash + index)?;
+    Some((&path[..dot], &path[dot..]))
+}
+
+fn rewrite_relative_path(path: &str, rewrite: Option<&SuffixRewrite>) -> String {
+    let Some(rewrite) = rewrite else {
+        return path.to_owned();
+    };
+    path.strip_suffix(&rewrite.from)
+        .map(|stem| format!("{stem}{}", rewrite.to))
+        .unwrap_or_else(|| path.to_owned())
+}
+
+fn compacted_projection_kind(kind: &ProjectionKind) -> CompactedProjectionKind {
+    match kind {
+        ProjectionKind::Identity { .. } => CompactedProjectionKind::Identity,
+        ProjectionKind::SourceMap { .. } => CompactedProjectionKind::SourceMap,
+        ProjectionKind::Format { formatter } => CompactedProjectionKind::Format(formatter.clone()),
+        ProjectionKind::Edit { edit } => CompactedProjectionKind::Edit(edit.clone()),
+        ProjectionKind::Offset {
+            line_delta,
+            column_delta,
+        } => CompactedProjectionKind::Offset {
+            line_delta: *line_delta,
+            column_delta: *column_delta,
+        },
+    }
+}
+
+fn is_runtime_internal(uri: &SourceUri) -> bool {
+    matches!(
+        uri.as_url().scheme(),
+        "node" | "chrome" | "devtools" | "v8" | "node-internal"
+    )
+}
+
+impl ContextSourceModel {
     pub fn release(&self, contribution: &SourceContributionId) {
         let mut state = self.state.lock().unwrap();
         let Some(contribution) = state.contributions.remove(contribution) else {
@@ -314,5 +645,136 @@ mod tests {
         assert_eq!(model.graph_snapshot().projections.len(), 1);
         model.release(&second);
         assert!(model.graph_snapshot().projections.is_empty());
+    }
+
+    #[test]
+    fn compacts_relative_mappings_with_a_consistent_suffix_rewrite() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let map = model.content_store().intern("map");
+        for name in ["foo", "bar"] {
+            let generated = model
+                .intern_content(
+                    &owner,
+                    SourceUri::parse(&format!("file:///workspace/out/{name}.js")).unwrap(),
+                    model.content_store().intern(&format!("generated {name}")),
+                )
+                .unwrap();
+            let source = model
+                .intern_content(
+                    &owner,
+                    SourceUri::parse(&format!("file:///workspace/src/{name}.ts")).unwrap(),
+                    model.content_store().intern(&format!("source {name}")),
+                )
+                .unwrap();
+            model
+                .add_projection(
+                    &owner,
+                    generated,
+                    source,
+                    ProjectionKind::SourceMap {
+                        map,
+                        source_index: 0,
+                    },
+                )
+                .unwrap();
+        }
+
+        let compacted = model.compacted_graph();
+        assert_eq!(compacted.nodes.len(), 2);
+        assert_eq!(compacted.edges.len(), 1);
+        assert_eq!(compacted.edges[0].mapping_count, 2);
+        assert_eq!(
+            compacted.edges[0].suffix_rewrite,
+            Some(SuffixRewrite {
+                from: ".js".into(),
+                to: ".ts".into(),
+            })
+        );
+        assert!(compacted.nodes.iter().any(|node| {
+            node.prefix.as_str() == "file:///workspace/out/" && node.source_count == 2
+        }));
+        assert!(compacted.nodes.iter().any(|node| {
+            node.prefix.as_str() == "file:///workspace/src/" && node.source_count == 2
+        }));
+    }
+
+    #[test]
+    fn compaction_stops_at_known_relative_path_counterexamples() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let map = model.content_store().intern("map");
+        for (generated_name, source_name) in [("foo", "foo"), ("bar", "renamed")] {
+            let generated = model
+                .intern_content(
+                    &owner,
+                    SourceUri::parse(&format!("file:///workspace/out/{generated_name}.js"))
+                        .unwrap(),
+                    model
+                        .content_store()
+                        .intern(&format!("generated {generated_name}")),
+                )
+                .unwrap();
+            let source = model
+                .intern_content(
+                    &owner,
+                    SourceUri::parse(&format!("file:///workspace/src/{source_name}.ts")).unwrap(),
+                    model
+                        .content_store()
+                        .intern(&format!("source {source_name}")),
+                )
+                .unwrap();
+            model
+                .add_projection(
+                    &owner,
+                    generated,
+                    source,
+                    ProjectionKind::SourceMap {
+                        map,
+                        source_index: 0,
+                    },
+                )
+                .unwrap();
+        }
+
+        let compacted = model.compacted_graph();
+        assert_eq!(compacted.edges.len(), 2);
+        assert!(compacted.edges.iter().all(|edge| edge.mapping_count == 1));
+    }
+
+    #[test]
+    fn marks_only_runtime_scheme_sources_as_internal() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let node = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("node:internal/modules/cjs/loader").unwrap(),
+                model.content_store().intern("internal"),
+            )
+            .unwrap();
+        let app = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("file:///workspace/node_modules/pkg/index.js").unwrap(),
+                model.content_store().intern("dependency"),
+            )
+            .unwrap();
+        model
+            .add_projection(
+                &owner,
+                app,
+                node,
+                ProjectionKind::Identity {
+                    basis: IdentityBasis::DeclaredByProvider("test".into()),
+                },
+            )
+            .unwrap();
+
+        let compacted = model.compacted_graph();
+        assert!(compacted.nodes.iter().any(|node| node.runtime_internal));
+        assert!(compacted.nodes.iter().any(|node| {
+            node.prefix.as_str().contains("node_modules") && !node.runtime_internal
+        }));
     }
 }
