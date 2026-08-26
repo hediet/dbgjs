@@ -11,6 +11,76 @@ use cdp_client::local_rpc::{
 };
 
 #[test]
+fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
+    let root = std::env::temp_dir().join(format!(
+        "jsdbg-context-resolution-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let child = root.join("packages").join("ui");
+    fs::create_dir_all(&child).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    let root_context = run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["context", "create", ".", "Root", "--set"],
+    );
+    let root_id = root.to_string_lossy().to_lowercase();
+    assert_eq!(root_context["id"], root_id.as_ref());
+
+    let child_context = run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &child,
+        &["context", "create", ".", "UI"],
+    );
+    let child_id = child.to_string_lossy().to_lowercase();
+    assert_eq!(child_context["id"], child_id.as_ref());
+
+    let inherited = run_json_in(&cli, &service, &state_file, &child, &["context", "show"]);
+    assert_eq!(inherited["id"], root_id.as_ref());
+    let explicit = run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &child,
+        &["context", "show", "--context", "."],
+    );
+    assert_eq!(explicit["id"], child_id.as_ref());
+
+    let listed = run_json_in(&cli, &service, &state_file, &child, &["context", "list"]);
+    assert_eq!(listed[0]["id"], child_id.as_ref());
+    assert_eq!(listed[0]["kind"], "path");
+    assert_eq!(listed[0]["pathDistance"], 0);
+    assert_eq!(listed[1]["id"], root_id.as_ref());
+    assert_eq!(listed[1]["pathAncestor"], true);
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["context", "delete", "--context", "."],
+    );
+    let stale = run_in(&cli, &service, &state_file, &child, &["context", "show"]);
+    assert!(!stale.0.success());
+    assert!(String::from_utf8_lossy(&stale.2).contains("stale context binding"));
+
+    run_json_in(&cli, &service, &state_file, &child, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+#[test]
 fn cli_spawns_service_and_manages_shared_context_state() {
     let state_file = std::env::temp_dir().join(format!(
         "jsdbg-cli-service-{}-{}.json",
@@ -25,7 +95,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "--context", "shop", "Shop"],
+        &["context", "create", "--context", ":shop", "Shop"],
     );
     assert_eq!(created["id"], "shop");
     assert_eq!(created["revision"], 1);
@@ -50,7 +120,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
             "add",
             "ws://127.0.0.1:9229",
             "--context",
-            "shop",
+            ":shop",
             "--connection",
             "server",
         ],
@@ -64,7 +134,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
             "add",
             "ws://127.0.0.1:9222",
             "--context",
-            "shop",
+            ":shop",
             "--connection",
             "browser",
         ],
@@ -82,7 +152,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
             "--column",
             "1",
             "--context",
-            "shop",
+            ":shop",
         ],
     );
 
@@ -90,7 +160,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &cli,
         &service,
         &state_file,
-        &["context", "show", "--context", "shop"],
+        &["context", "show", "--context", ":shop"],
     );
     assert_eq!(snapshot["revision"], 4);
     assert_eq!(
@@ -513,10 +583,45 @@ fn cli_service_connects_to_live_cdp() {
 }
 
 fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -> Value {
+    run_json_in(
+        cli,
+        service,
+        state_file,
+        &std::env::current_dir().unwrap(),
+        arguments,
+    )
+}
+
+fn run_json_in(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+) -> Value {
+    let (status, stdout, stderr) = run_in(cli, service, state_file, cwd, arguments);
+    assert_success(arguments, status, &stdout, &stderr);
+    serde_json::from_slice(&stdout).unwrap_or_else(|error| {
+        panic!(
+            "invalid JSON for {arguments:?}: {error}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        )
+    })
+}
+
+fn run_in(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+) -> (ExitStatus, Vec<u8>, Vec<u8>) {
     let suffix = unique_suffix();
     let stdout_path = state_file.with_extension(format!("{suffix}.stdout"));
     let stderr_path = state_file.with_extension(format!("{suffix}.stderr"));
     let status = Command::new(cli)
+        .current_dir(cwd)
         .arg("--json")
         .args(arguments)
         .env("JSDBG_SERVICE_EXE", service)
@@ -529,14 +634,7 @@ fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -
     let stderr = fs::read(&stderr_path).unwrap();
     let _ = fs::remove_file(stdout_path);
     let _ = fs::remove_file(stderr_path);
-    assert_success(arguments, status, &stdout, &stderr);
-    serde_json::from_slice(&stdout).unwrap_or_else(|error| {
-        panic!(
-            "invalid JSON for {arguments:?}: {error}\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&stdout),
-            String::from_utf8_lossy(&stderr)
-        )
-    })
+    (status, stdout, stderr)
 }
 
 fn assert_success(arguments: &[&str], status: ExitStatus, stdout: &[u8], stderr: &[u8]) {

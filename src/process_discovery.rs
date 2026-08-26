@@ -178,7 +178,6 @@ async fn query_agent_sessions(
     agent_host_pid: u32,
     copilot_pids: Vec<u32>,
 ) -> Result<Vec<AgentSessionProcess>, ProcessDiscoveryError> {
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(&executable);
     command
         .args(["--input-type=module", "--eval", AGENT_SESSIONS_HELPER])
@@ -188,8 +187,9 @@ async fn query_agent_sessions(
             "JSDBG_COPILOT_PIDS",
             serde_json::to_string(&copilot_pids).expect("process ids always serialize"),
         )
-        .kill_on_drop(true)
-        .creation_flags(CREATE_NO_WINDOW);
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
     let output = tokio::time::timeout(AGENT_SESSION_QUERY_TIMEOUT, command.output())
         .await
         .map_err(|_| ProcessDiscoveryError::Ipc("agent session query timed out".to_owned()))?

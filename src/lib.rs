@@ -1,6 +1,7 @@
 pub mod connection_provider;
 pub mod content_store;
 pub mod context_engine;
+pub mod context_identity;
 pub use cdp_protocol as cdp;
 pub use cdp_protocol::protocol_schema;
 pub mod cdp_runtime;

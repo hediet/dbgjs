@@ -47,13 +47,20 @@ export class DaemonClient {
 		this.hub.close();
 	}
 
-	public async listContexts(): Promise<readonly ContextSummary[]> {
-		return parseContextSummaries(await this.call("list_contexts", {}));
+	public async listContexts(cwd?: string): Promise<readonly ContextSummary[]> {
+		return parseContextSummaries(await this.call("list_contexts", {
+			cwd: cwd ?? null,
+		}));
 	}
 
-	public async putContext(contextId: string, displayName: string): Promise<ContextSnapshot> {
+	public async putContext(
+		contextId: string,
+		kind: "path" | "named",
+		displayName: string,
+	): Promise<ContextSnapshot> {
 		return parseContextSnapshot(await this.call("put_context", {
 			contextId,
+			kind,
 			displayName,
 		}));
 	}

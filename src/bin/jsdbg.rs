@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
@@ -6,13 +7,18 @@ use std::path::Path;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
+use cdp_client::context_identity::{
+    ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
+    resolve_context_expression,
+};
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::service_api::{
-    BreakpointSpec, ConnectionConfiguration, CpuProfileSnapshot, DebuggerServiceApiClient,
-    EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector,
-    HeapPathCost, HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress,
-    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel,
-    ProcessRole, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    BreakpointSpec, ConnectionConfiguration, ContextSummary, CpuProfileSnapshot,
+    DebuggerServiceApiClient, EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult,
+    HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection, HeapPathOptions,
+    HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions, ObservationCursor,
+    ObservationResult, PlaywrightChannel, ProcessRole, StepKind, TargetDebuggerPhase,
+    TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,15 +43,31 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1).collect::<Vec<_>>();
     let output = OutputFormat::from_arguments(&mut arguments);
-    let scope_options = extract_scope_options(&mut arguments)?;
+    let mut scope_options = extract_scope_options(&mut arguments)?;
     let state_file = default_state_file();
     let selection_file = state_file.with_extension("selection.json");
+    let cwd = env::current_dir()?;
+    let normalized_cwd = normalize_absolute_path(&cwd)?;
+    if !is_context_create(&arguments)
+        && let Some(expression) = scope_options.context.take()
+    {
+        scope_options.context = Some(resolve_context_expression(&expression, &cwd)?.id);
+    } else if command_requires_context(&arguments) {
+        let client = ensure_service(&state_file).await?;
+        scope_options.context =
+            Some(resolve_implicit_context(&client, &selection_file, &normalized_cwd).await?);
+    }
+    if !is_context_create(&arguments)
+        && let Some(context) = scope_options.context.as_deref()
+    {
+        activate_selection_scope(&selection_file, &normalized_cwd, context)?;
+    }
     match arguments.as_slice() {
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace") => {
             let context_id = required_option("--context", scope_options.context.as_ref())?;
             let client = ensure_service(&state_file).await?;
             rpc(client.get_context(context_id.clone()).await)?;
-            select_context(&selection_file, context_id)?;
+            select_context(&selection_file, &context_id)?;
             println!("Context: {context_id}");
         }
         [set, target] if set == "set" && target == "target" => {
@@ -946,15 +968,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [context, list] if context == "context" && list == "list" => {
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.list_contexts().await)?)?;
+            output.print(&rpc(client
+                .list_contexts(Some(normalized_cwd.clone()))
+                .await)?)?;
         }
         [context, create, options @ ..] if context == "context" && create == "create" => {
-            let context_id = required_option("--context", scope_options.context.as_ref())?;
-            let (display_name, set_default) = parse_context_create_options(options)?;
+            let (expression, display_name, set_default) =
+                parse_context_create_options(scope_options.context.as_ref(), options)?;
+            let ContextIdentity {
+                id: context_id,
+                kind,
+            } = resolve_context_expression(&expression, &cwd)?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client.put_context(context_id.clone(), display_name).await)?;
+            let snapshot = rpc(client
+                .put_context(context_id.clone(), kind, display_name)
+                .await)?;
             if set_default {
-                select_context(&selection_file, context_id)?;
+                select_context(&selection_file, &context_id)?;
             }
             output.print(&snapshot)?;
         }
@@ -1484,6 +1514,34 @@ struct CliSelection {
     log_scope: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionStore {
+    schema_version: u32,
+    #[serde(default)]
+    cwd_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    active_scopes: BTreeMap<String, String>,
+    #[serde(default)]
+    scopes: BTreeMap<String, CliSelection>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyCliSelection {
+    #[serde(default, alias = "workspace")]
+    context: Option<String>,
+    #[serde(default)]
+    connection: Option<String>,
+    target: Option<String>,
+    #[serde(default)]
+    watches: Vec<String>,
+    #[serde(default)]
+    log_cursor: u64,
+    #[serde(default)]
+    log_scope: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedScope {
     context: String,
@@ -1542,6 +1600,28 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
     }
 }
 
+fn is_context_create(arguments: &[String]) -> bool {
+    matches!(
+        arguments,
+        [context, create, ..] if context == "context" && create == "create"
+    )
+}
+
+fn command_requires_context(arguments: &[String]) -> bool {
+    let kind = scope_option_kind(arguments);
+    if !kind.context {
+        return false;
+    }
+    !matches!(
+        arguments,
+        [context, operation, ..]
+            if context == "context" && matches!(operation.as_str(), "create" | "list")
+    ) && !matches!(
+        arguments,
+        [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace")
+    )
+}
+
 fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io::Error> {
     let kind = scope_option_kind(arguments);
     let mut options = ScopeOptions::default();
@@ -1590,7 +1670,11 @@ fn parse_set_option(options: &[String]) -> Result<bool, io::Error> {
     }
 }
 
-fn parse_context_create_options(options: &[String]) -> Result<(Option<String>, bool), io::Error> {
+fn parse_context_create_options(
+    option_expression: Option<&String>,
+    options: &[String],
+) -> Result<(String, Option<String>, bool), io::Error> {
+    let mut expression = option_expression.cloned();
     let mut display_name = None;
     let mut set_default = false;
     for option in options {
@@ -1607,14 +1691,25 @@ fn parse_context_create_options(options: &[String]) -> Result<(Option<String>, b
                 io::ErrorKind::InvalidInput,
                 format!("unknown context create option '{option}'"),
             ));
+        } else if expression.is_none() {
+            expression = Some(option.clone());
         } else if display_name.replace(option.clone()).is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "context create accepts at most one display name",
+                "context create accepts one expression and at most one display name",
             ));
         }
     }
-    Ok((display_name, set_default))
+    Ok((
+        expression.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "context create requires a path or :<id> expression",
+            )
+        })?,
+        display_name,
+        set_default,
+    ))
 }
 
 fn log_scope(scope: &ResolvedScope, snapshot: &TargetDebuggerSnapshot) -> String {
@@ -1625,24 +1720,130 @@ fn log_scope(scope: &ResolvedScope, snapshot: &TargetDebuggerSnapshot) -> String
 }
 
 fn load_selection(path: &Path) -> Result<CliSelection, Box<dyn std::error::Error>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(CliSelection::default()),
-        Err(error) => Err(error.into()),
-    }
+    let cwd = normalized_cwd()?;
+    let store = load_selection_store(path, &cwd)?;
+    let context = store
+        .active_scopes
+        .get(&cwd)
+        .or_else(|| nearest_binding(&store, &cwd).map(|(_, context)| context));
+    let mut selection = context
+        .and_then(|context| store.scopes.get(&scope_key(&cwd, context)))
+        .cloned()
+        .unwrap_or_default();
+    selection.context = context.cloned();
+    Ok(selection)
 }
 
 fn write_selection(
     path: &Path,
     selection: &CliSelection,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let cwd = normalized_cwd()?;
+    let mut store = load_selection_store(path, &cwd)?;
+    if let Some(context) = selection.context.as_ref() {
+        store.active_scopes.insert(cwd.clone(), context.clone());
+        store
+            .scopes
+            .insert(scope_key(&cwd, context), selection.clone());
+    }
+    write_selection_store(path, &store)
+}
+
+fn write_selection_store(
+    path: &Path,
+    store: &SelectionStore,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut file = AtomicWriteFile::open(path)?;
-    file.write_all(&serde_json::to_vec_pretty(selection)?)?;
+    file.write_all(&serde_json::to_vec_pretty(store)?)?;
     file.commit()?;
     Ok(())
+}
+
+fn activate_selection_scope(
+    path: &Path,
+    cwd: &str,
+    context: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = load_selection_store(path, cwd)?;
+    store
+        .active_scopes
+        .insert(cwd.to_owned(), context.to_owned());
+    store
+        .scopes
+        .entry(scope_key(cwd, context))
+        .or_insert_with(|| CliSelection {
+            context: Some(context.to_owned()),
+            ..CliSelection::default()
+        });
+    write_selection_store(path, &store)
+}
+
+fn load_selection_store(
+    path: &Path,
+    cwd: &str,
+) -> Result<SelectionStore, Box<dyn std::error::Error>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(SelectionStore {
+                schema_version: 2,
+                ..SelectionStore::default()
+            });
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        == Some(2)
+    {
+        return Ok(serde_json::from_value(value)?);
+    }
+
+    let legacy: LegacyCliSelection = serde_json::from_value(value)?;
+    let mut store = SelectionStore {
+        schema_version: 2,
+        ..SelectionStore::default()
+    };
+    if let Some(context) = legacy.context {
+        let selection = CliSelection {
+            context: Some(context.clone()),
+            connection: legacy.connection,
+            target: legacy.target,
+            watches: legacy.watches,
+            log_cursor: legacy.log_cursor,
+            log_scope: legacy.log_scope,
+        };
+        store.cwd_bindings.insert(cwd.to_owned(), context.clone());
+        store.active_scopes.insert(cwd.to_owned(), context.clone());
+        store.scopes.insert(scope_key(cwd, &context), selection);
+    }
+    write_selection_store(path, &store)?;
+    Ok(store)
+}
+
+fn normalized_cwd() -> Result<String, Box<dyn std::error::Error>> {
+    Ok(normalize_absolute_path(&env::current_dir()?)?)
+}
+
+fn scope_key(cwd: &str, context: &str) -> String {
+    format!("{cwd}\0{context}")
+}
+
+fn nearest_binding<'a>(store: &'a SelectionStore, cwd: &str) -> Option<(&'a str, &'a String)> {
+    path_and_parents(cwd)
+        .ok()?
+        .into_iter()
+        .find_map(|directory| {
+            store
+                .cwd_bindings
+                .get_key_value(&directory)
+                .map(|(binding, context)| (binding.as_str(), context))
+        })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1678,6 +1879,44 @@ fn selected_or_explicit_context(
     explicit_context
         .or(load_selection(selection_file)?.context)
         .ok_or_else(|| io::Error::other("no context is selected; use --context <id>").into())
+}
+
+async fn resolve_implicit_context(
+    client: &DebuggerServiceApiClient,
+    selection_file: &Path,
+    cwd: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let store = load_selection_store(selection_file, cwd)?;
+    let contexts = rpc(client.list_contexts(Some(cwd.to_owned())).await)?;
+    select_implicit_context(&store, cwd, &contexts)
+}
+
+fn select_implicit_context(
+    store: &SelectionStore,
+    cwd: &str,
+    contexts: &[ContextSummary],
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some((binding, context)) = nearest_binding(&store, cwd) {
+        if contexts.iter().any(|candidate| candidate.id == *context) {
+            return Ok(context.clone());
+        }
+        return Err(io::Error::other(format!(
+            "stale context binding at '{binding}' refers to missing context '{context}'; replace it with 'jsdbg set context --context <expression>' from that directory"
+        ))
+        .into());
+    }
+    contexts
+        .iter()
+        .find(|context| {
+            context.kind == ContextKind::Path && context.path_ancestor == Some(true)
+        })
+        .map(|context| context.id.clone())
+        .ok_or_else(|| {
+            io::Error::other(
+                "no context applies to the current directory; use --context <path|:id>, create a path context, or set a cwd binding",
+            )
+            .into()
+        })
 }
 
 fn selected_or_explicit_connection(
@@ -1820,16 +2059,22 @@ fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), io::Error> {
 }
 
 fn select_context(path: &Path, context_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut selection = load_selection(path)?;
-    if selection.context.as_deref() != Some(context_id) {
-        selection.connection = None;
-        selection.target = None;
-        selection.watches.clear();
-        selection.log_cursor = 0;
-        selection.log_scope = None;
-    }
-    selection.context = Some(context_id.to_owned());
-    write_selection(path, &selection)
+    let cwd = normalized_cwd()?;
+    let mut store = load_selection_store(path, &cwd)?;
+    store
+        .cwd_bindings
+        .insert(cwd.clone(), context_id.to_owned());
+    store
+        .active_scopes
+        .insert(cwd.clone(), context_id.to_owned());
+    store
+        .scopes
+        .entry(scope_key(&cwd, context_id))
+        .or_insert_with(|| CliSelection {
+            context: Some(context_id.to_owned()),
+            ..CliSelection::default()
+        });
+    write_selection_store(path, &store)
 }
 
 fn select_scope(
@@ -1871,14 +2116,9 @@ async fn resolve_scope(
     let context = match options.context.as_ref().or(selection.context.as_ref()) {
         Some(context) => context.clone(),
         None => {
-            let contexts = rpc(client.list_contexts().await)?;
-            match contexts.as_slice() {
-                [context] => context.id.clone(),
-                [] => return Err("no debugger context exists; create one first".into()),
-                _ => {
-                    return Err("multiple contexts exist; use --context <id> or select one".into());
-                }
-            }
+            return Err(
+                "no context applies to the current directory; use --context <path|:id>".into(),
+            );
         }
     };
     let snapshot = rpc(client.get_context(context.clone()).await)?;
@@ -3747,9 +3987,9 @@ commands:
   jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   jsdbg process attach <process-id> [--context <id>] [--set]
   jsdbg context list
-  jsdbg context create --context <id> [display-name] [--set]
-  jsdbg context show [--context <id>]
-  jsdbg context delete [--context <id>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg context create <path|:id> [display-name] [--set]
+  jsdbg context show [--context <path|:id>]
+  jsdbg context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg state get [--context <id>]
   jsdbg state watch [--context <id>] [--after-revision <revision>]
   jsdbg events --after-revision <revision> [--context <id>]
@@ -3816,18 +4056,21 @@ target scope:
 #[cfg(test)]
 mod tests {
     use super::{
-        CliSelection, ResolvedScope, ScopeOptions, apply_scope_selection, extract_scope_options,
-        parse_chrome_options, parse_context_create_options, parse_context_option,
-        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
-        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
-        parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
-        parse_process_attach_options, parse_process_list_options, parse_screenshot_capture_options,
-        png_dimensions, resolve_target_scope, split_heap_reference_cli,
+        CliSelection, ResolvedScope, ScopeOptions, SelectionStore, activate_selection_scope,
+        apply_scope_selection, extract_scope_options, load_selection_store, parse_chrome_options,
+        parse_context_create_options, parse_context_option, parse_coverage_show_options,
+        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
+        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
+        parse_heap_select_options, parse_heap_string_options, parse_process_attach_options,
+        parse_process_list_options, parse_screenshot_capture_options, png_dimensions,
+        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
     };
+    use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
-        HeapEdgePolicy, HeapPathCost, HeapPathDirection, TargetSnapshot,
+        ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection, TargetSnapshot,
     };
+    use std::fs;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -4211,13 +4454,158 @@ mod tests {
     #[test]
     fn parses_context_creation_selection_policy_independently_of_the_name() {
         assert_eq!(
-            parse_context_create_options(&arguments(&["Heap analysis", "--set"])).unwrap(),
-            (Some("Heap analysis".to_owned()), true)
+            parse_context_create_options(
+                Some(&":heap".to_owned()),
+                &arguments(&["Heap analysis", "--set"])
+            )
+            .unwrap(),
+            (":heap".to_owned(), Some("Heap analysis".to_owned()), true)
         );
         assert_eq!(
-            parse_context_create_options(&arguments(&["--set"])).unwrap(),
-            (None, true)
+            parse_context_create_options(None, &arguments(&[".", "--set"])).unwrap(),
+            (".".to_owned(), None, true)
         );
+    }
+
+    #[test]
+    fn implicit_context_resolution_prioritizes_bindings_and_reports_stale_ones() {
+        let cwd = "/work/shop/packages/ui";
+        let mut store = SelectionStore {
+            schema_version: 2,
+            ..SelectionStore::default()
+        };
+        store
+            .cwd_bindings
+            .insert("/work/shop".into(), "incident".into());
+        let contexts = vec![
+            context_summary(
+                "/work/shop/packages/ui",
+                ContextKind::Path,
+                Some(0),
+                Some(true),
+            ),
+            context_summary("incident", ContextKind::Named, None, None),
+        ];
+        assert_eq!(
+            select_implicit_context(&store, cwd, &contexts).unwrap(),
+            "incident"
+        );
+
+        store
+            .cwd_bindings
+            .insert("/work/shop/packages".into(), "missing".into());
+        let error = select_implicit_context(&store, cwd, &contexts)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("stale context binding at '/work/shop/packages'"));
+        assert!(error.contains("missing context 'missing'"));
+    }
+
+    #[test]
+    fn implicit_context_resolution_has_no_sole_named_context_fallback() {
+        let store = SelectionStore {
+            schema_version: 2,
+            ..SelectionStore::default()
+        };
+        let contexts = vec![context_summary("only", ContextKind::Named, None, None)];
+        assert!(
+            select_implicit_context(&store, "/work/unrelated", &contexts)
+                .unwrap_err()
+                .to_string()
+                .contains("no context applies")
+        );
+    }
+
+    #[test]
+    fn legacy_global_selection_migrates_to_the_current_cwd_only() {
+        let path = std::env::temp_dir().join(format!(
+            "jsdbg-selection-migration-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(
+            &path,
+            br#"{"workspace":"legacy","connection":"server","target":"main","watches":["x"]}"#,
+        )
+        .unwrap();
+        let store = load_selection_store(&path, "/work/shop").unwrap();
+        assert_eq!(
+            store.cwd_bindings.get("/work/shop").map(String::as_str),
+            Some("legacy")
+        );
+        assert!(!store.cwd_bindings.contains_key("/work/other"));
+        assert_eq!(store.schema_version, 2);
+        let migrated: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(migrated["schemaVersion"], 2);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn activating_an_explicit_context_preserves_separate_view_state() {
+        let path = std::env::temp_dir().join(format!(
+            "jsdbg-selection-scope-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cwd = "/work/shop";
+        let mut store = SelectionStore {
+            schema_version: 2,
+            ..SelectionStore::default()
+        };
+        store.active_scopes.insert(cwd.into(), "first".into());
+        store.scopes.insert(
+            super::scope_key(cwd, "first"),
+            CliSelection {
+                context: Some("first".into()),
+                watches: vec!["firstWatch".into()],
+                ..CliSelection::default()
+            },
+        );
+        super::write_selection_store(&path, &store).unwrap();
+
+        activate_selection_scope(&path, cwd, "second").unwrap();
+        let updated = load_selection_store(&path, cwd).unwrap();
+        assert_eq!(
+            updated.active_scopes.get(cwd).map(String::as_str),
+            Some("second")
+        );
+        assert_eq!(
+            updated.scopes[&super::scope_key(cwd, "first")].watches,
+            ["firstWatch"]
+        );
+        assert_eq!(
+            updated.scopes[&super::scope_key(cwd, "second")]
+                .context
+                .as_deref(),
+            Some("second")
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    fn context_summary(
+        id: &str,
+        kind: ContextKind,
+        path_distance: Option<u32>,
+        path_ancestor: Option<bool>,
+    ) -> ContextSummary {
+        ContextSummary {
+            agent_instance_id: "agent".into(),
+            id: id.into(),
+            kind,
+            path_distance,
+            path_ancestor,
+            display_name: id.into(),
+            revision: 1,
+            connection_count: 0,
+            breakpoint_count: 0,
+        }
     }
 
     #[test]

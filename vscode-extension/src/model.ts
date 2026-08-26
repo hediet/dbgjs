@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { posix, win32 } from "node:path";
 import type { TargetNodeSnapshot } from "./apiTypes.js";
 
 export interface TargetReference {
@@ -8,10 +9,20 @@ export interface TargetReference {
 	readonly targetId: string;
 }
 
-export function computeWorkspaceContextId(workspaceUris: readonly string[]): string {
-	const normalized = [...workspaceUris].sort().join("\n");
-	const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-	return `vscode-${digest}`;
+export function normalizeContextPath(value: string): string {
+	if (/^[A-Za-z]:[^\\/]/.test(value)) {
+		throw new Error("Drive-relative Windows context paths are not supported");
+	}
+	if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\") || value.startsWith("//")) {
+		const normalized = win32.normalize(value).toLowerCase();
+		return /^\\\\[^\\]+\\[^\\]+\\$/.test(normalized)
+			? normalized.slice(0, -1)
+			: normalized;
+	}
+	if (value.startsWith("/")) {
+		return posix.normalize(value).toLowerCase();
+	}
+	throw new Error("Context path must be absolute");
 }
 
 export function breakpointId(path: string, line: number, column: number): string {

@@ -1,6 +1,9 @@
 export interface ContextSummary {
 	readonly agentInstanceId: string;
 	readonly id: string;
+	readonly kind: "path" | "named";
+	readonly pathDistance?: number;
+	readonly pathAncestor?: boolean;
 	readonly displayName: string;
 	readonly revision: number;
 	readonly connectionCount: number;
@@ -203,12 +206,26 @@ export function parseContextSummaries(value: unknown): readonly ContextSummary[]
 		return {
 			agentInstanceId: string(object.agentInstanceId, "agentInstanceId"),
 			id: string(object.id, "id"),
+			kind: contextKind(object.kind),
+			...(object.pathDistance == null
+				? {}
+				: { pathDistance: number(object.pathDistance, "pathDistance") }),
+			...(object.pathAncestor == null
+				? {}
+				: { pathAncestor: boolean(object.pathAncestor, "pathAncestor") }),
 			displayName: string(object.displayName, "displayName"),
 			revision: number(object.revision, "revision"),
 			connectionCount: number(object.connectionCount, "connectionCount"),
 			breakpointCount: number(object.breakpointCount, "breakpointCount"),
 		};
 	});
+}
+
+function contextKind(value: unknown): "path" | "named" {
+	if (value === "path" || value === "named") {
+		return value;
+	}
+	throw new Error(`Expected context kind, got ${JSON.stringify(value)}`);
 }
 
 export function parseContextSnapshot(value: unknown): ContextSnapshot {

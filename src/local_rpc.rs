@@ -636,7 +636,11 @@ mod tests {
         };
 
         let created = client
-            .put_context("shop".into(), Some("Shop".into()))
+            .put_context(
+                "shop".into(),
+                crate::context_identity::ContextKind::Named,
+                Some("Shop".into()),
+            )
             .await
             .unwrap();
         assert_eq!(created.revision, 1);

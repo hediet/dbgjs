@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { ContextSnapshot } from "./apiTypes.js";
 import { DaemonClient, defaultServiceStateFile } from "./daemonClient.js";
 import { ensureDaemonProcess } from "./daemonProcess.js";
-import { computeWorkspaceContextId } from "./model.js";
+import { normalizeContextPath } from "./model.js";
 
 const contextIdStateKey = "jsdbg.workspaceContextId";
 
@@ -25,13 +25,9 @@ export class WorkspaceContextController implements vscode.Disposable {
 		private readonly extensionContext: vscode.ExtensionContext,
 		private readonly log: (message: string) => void,
 	) {
-		const workspaceUris = workspaceIdentityUris();
-		const stored = extensionContext.workspaceState.get<string>(contextIdStateKey);
-		this.contextId = stored ?? computeWorkspaceContextId(workspaceUris);
+		this.contextId = singleFolderContextId();
 		this.displayName = workspaceDisplayName();
-		if (stored === undefined) {
-			void extensionContext.workspaceState.update(contextIdStateKey, this.contextId);
-		}
+		void extensionContext.workspaceState.update(contextIdStateKey, undefined);
 		void this.ensureReady();
 	}
 
@@ -130,7 +126,7 @@ export class WorkspaceContextController implements vscode.Disposable {
 					this.setError(new Error("jsdbg daemon connection closed"));
 				}
 			});
-			this.adoptSnapshot(await client.putContext(this.contextId, this.displayName));
+			this.adoptSnapshot(await client.putContext(this.contextId, "path", this.displayName));
 			void this.observe();
 		} catch (error) {
 			this.clientValue = undefined;
@@ -177,15 +173,12 @@ export class WorkspaceContextController implements vscode.Disposable {
 	}
 }
 
-function workspaceIdentityUris(): readonly string[] {
-	if (vscode.workspace.workspaceFile !== undefined) {
-		return [vscode.workspace.workspaceFile.toString()];
-	}
+function singleFolderContextId(): string {
 	const folders = vscode.workspace.workspaceFolders;
-	if (folders !== undefined && folders.length > 0) {
-		return folders.map((folder) => folder.uri.toString());
+	if (folders?.length !== 1) {
+		throw new Error("jsdbg requires exactly one workspace folder; multi-root and untitled workspace context selection is not yet defined");
 	}
-	return ["untitled-workspace"];
+	return normalizeContextPath(folders[0]!.uri.fsPath);
 }
 
 function workspaceDisplayName(): string {

@@ -12,17 +12,21 @@ import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
-	computeWorkspaceContextId,
 	findTargetNode,
+	normalizeContextPath,
 	targetKey,
 	targetReference,
 } from "../model.js";
 
-test("workspace context identity is stable across folder ordering", () => {
-	const first = computeWorkspaceContextId(["file:///b", "file:///a"]);
-	const second = computeWorkspaceContextId(["file:///a", "file:///b"]);
-	assert.equal(first, second);
-	assert.match(first, /^vscode-[0-9a-f]{16}$/);
+test("workspace context identity uses lexical lowercase absolute paths", () => {
+	assert.equal(normalizeContextPath("/Work/Shop/../Store"), "/work/store");
+	assert.equal(normalizeContextPath("D:\\Src\\Shop\\..\\Store"), "d:\\src\\store");
+	assert.equal(
+		normalizeContextPath("\\\\Server\\Share\\Shop\\..\\Store"),
+		"\\\\server\\share\\store",
+	);
+	assert.equal(normalizeContextPath("\\\\Server\\Share"), "\\\\server\\share");
+	assert.throws(() => normalizeContextPath("D:relative"), /Drive-relative/);
 });
 
 test("empty context observations represent idle long-poll timeouts", () => {

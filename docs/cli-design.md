@@ -135,8 +135,9 @@ transports.
 ### 4.2 Debug context
 
 A durable, user-facing scope that groups debugger intent and observations across
-zero or more runtime connections. Context IDs such as `shop`, `tests`, or
-`incident-42` are stable debugger-local identities.
+zero or more runtime connections. A path context uses its lexically normalized
+absolute project path as identity. A named non-path context uses a normalized ID
+entered with `:<id>` expression syntax.
 
 A context owns:
 
@@ -149,17 +150,16 @@ A context owns:
 - One provider-qualified, versioned source graph and its cache policy.
 
 A context can be created before any runtime is available, disconnected from all
-runtimes, and reconnected later without losing this state. `cwd` or workspace
-metadata may help find likely contexts, but is not context identity.
+runtimes, and reconnected later without losing this state. For path contexts,
+the normalized cwd or workspace folder is the context identity.
 
 ```text
---context shop
+--context :incident-42
 ```
 
-Explicit context selection always wins. If no context is explicit, the client
-may use a configured current context or an unambiguous workspace match. It must
-fail with candidate IDs when selection is ambiguous; it must not create or pick
-a context merely because two contexts share a `cwd`.
+Explicit context selection always wins. Otherwise the nearest explicit cwd
+binding wins over the nearest registered path context at the cwd or a parent.
+There is no global or sole-context fallback.
 
 ### 4.3 Connection
 
@@ -470,22 +470,27 @@ shared desired breakpoints again. Other connections continue unaffected.
 
 ### 7.1 Create or select a context
 
-A context can be created without connecting:
+A path context can be created without connecting:
 
 ```text
-jsdbg context create --context shop --workspace <path>
-jsdbg --context shop status
+cd <path>
+jsdbg context create .
+jsdbg status
 ```
 
-The workspace is discovery metadata, not identity. Conceptually, resolution is:
+Paths are resolved lexically, lowercased, and made absolute without requiring
+filesystem existence or resolving symlinks. A named non-path context uses
+explicit colon syntax, for example `jsdbg context create :incident-42`.
+Resolution precedence is:
 
-1. Use an explicit context ID when supplied.
-2. Otherwise use an explicitly configured current context when valid.
-3. Otherwise use workspace/cwd matching only if it yields exactly one context.
-4. Otherwise fail with `context_required` or `ambiguous_context` and candidates.
+1. Resolve an explicit `--context <path|:id>` expression.
+2. Use the nearest cwd binding created by `--set`.
+3. Use the nearest registered path context at the cwd or one of its parents.
+4. Fail with `context_required`.
 
-The exact persistence and command syntax are deferred, but explicit precedence
-and ambiguity behavior are required.
+Bindings always take precedence over automatic path matching. A stale binding
+is an explicit error, and an unrelated context is never selected merely because
+it is the only registered context.
 
 ### 7.2 Connect to an endpoint
 
@@ -1659,19 +1664,20 @@ frontend. The user creates the durable context before either runtime is
 available:
 
 ```text
-> jsdbg context create --context shop --workspace D:\src\shop
-Created context shop (disconnected)
+> cd D:\src\shop
+> jsdbg context create .
+Created context d:\src\shop (disconnected)
 
-> jsdbg -c shop breakpoint set src/shared/validation.ts:41
+> jsdbg breakpoint set src/shared/validation.ts:41
 Created bp-1 [pending]
-Scope: all eligible targets in context shop
+Scope: all eligible targets in context d:\src\shop
 Source: workspace:src/shared/validation.ts@sha256:8ab4...
 Live bindings: none
 ```
 
-`--workspace` helps future implicit context lookup and contributes workspace
-snapshots, but `shop` is the identity. If another context has the same workspace,
-an invocation without `-c shop` must report ambiguity.
+The normalized absolute project path is the identity. Commands from descendants
+inherit this path context unless a nearer path context or any applicable cwd
+binding takes precedence.
 
 The API and browser are then added as independent connections:
 
