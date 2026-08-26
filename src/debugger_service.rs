@@ -20,6 +20,7 @@ use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
     ContextTransitionError, EffectCompletion, RuntimeObservation, UserCommand, reduce_context,
 };
+use crate::context_source_model::ContextSourceModel;
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointSpec, BreakpointStatus, ConnectionConfiguration,
@@ -493,6 +494,7 @@ fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> Conte
 #[derive(Clone, Default)]
 struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
+    source_models: BTreeMap<String, Arc<ContextSourceModel>>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
     target_debuggers: BTreeMap<(String, String, String), TargetDebuggerHandle>,
     history: BTreeMap<String, VecDeque<ContextObservation>>,
@@ -669,6 +671,7 @@ impl DebuggerServiceApi for DebuggerService {
         }
         self.complete_request(&mut state, &context_id, &options, 0);
         state.history.remove(&context_id);
+        state.source_models.remove(&context_id);
         state
             .target_debuggers
             .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
@@ -1605,7 +1608,7 @@ impl DebuggerServiceApi for DebuggerService {
             .resolve_target_id(&context_id, &connection_id, &target_id)
             .await?;
         let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
-        let (runtime, generation, waiting_for_debugger, failed_session) = {
+        let (runtime, generation, waiting_for_debugger, failed_session, source_model) = {
             let mut state = self.state.lock().await;
             let failed_session = match state.target_debuggers.get(&debugger_key).cloned() {
                 Some(debugger)
@@ -1620,7 +1623,6 @@ impl DebuggerServiceApi for DebuggerService {
                 Some(debugger) => return Ok(debugger.snapshot()),
                 None => None,
             };
-            let state = &*state;
             let context = state
                 .contexts
                 .get(&context_id)
@@ -1632,19 +1634,27 @@ impl DebuggerServiceApi for DebuggerService {
             if !connection.targets.contains_key(&target_id) {
                 return Err(not_found("target", &target_id));
             }
+            let generation = connection.generation;
+            let waiting_for_debugger = matches!(
+                &connection.configuration,
+                ConnectionConfiguration::Node { .. }
+            );
             let runtime = state
                 .runtimes
                 .get(&(context_id.clone(), connection_id.clone()))
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
+            let source_model = state
+                .source_models
+                .entry(context_id.clone())
+                .or_insert_with(|| Arc::new(ContextSourceModel::new()))
+                .clone();
             (
                 runtime,
-                connection.generation,
-                matches!(
-                    &connection.configuration,
-                    ConnectionConfiguration::Node { .. }
-                ),
+                generation,
+                waiting_for_debugger,
                 failed_session,
+                source_model,
             )
         };
         if let Some(session_id) = failed_session {
@@ -1688,6 +1698,7 @@ impl DebuggerServiceApi for DebuggerService {
             session,
             session_key.clone(),
             waiting_for_debugger,
+            source_model,
         )
         .await
         {
@@ -2868,6 +2879,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                 )
             })
             .collect(),
+        source_models: BTreeMap::new(),
         runtimes: BTreeMap::new(),
         target_debuggers: BTreeMap::new(),
         history: BTreeMap::new(),

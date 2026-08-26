@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 use sourcemap::{DecodedMap, RawToken, SourceMap, decode_slice};
 
 use crate::content_store::{ContentHash, ContentStore, ContentStoreStats};
+use crate::context_source_model::{ContextSourceModel, SourceContributionId};
 use crate::source_graph::{
-    IdentityBasis, ProjectionKind, SourceFileStore, SourceFileStoreError, SourceGraph,
-    SourceGraphError, SourceSnapshot, SourceSnapshotId, SourceUri,
+    IdentityBasis, ProjectionId, ProjectionKind, RouteLimits, RouteSearch, SourceFileStoreError,
+    SourceGraphError, SourceProjection, SourceSnapshot, SourceSnapshotId, SourceUri,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -154,7 +155,7 @@ pub struct GeneratedSourceInput<'a> {
 
 type ReverseIndex = BTreeMap<(String, Position), Vec<Position>>;
 
-struct MapProjection {
+pub(crate) struct MapProjection {
     shape: MapShape,
     map: SourceMap,
     content: ContentHash,
@@ -183,15 +184,15 @@ struct FormatProjection {
 
 pub struct ResolvedSourceView {
     policy: ResolutionPolicy,
+    model: Arc<ContextSourceModel>,
+    contribution: SourceContributionId,
     store: Arc<ContentStore>,
-    source_files: SourceFileStore,
-    source_graph: SourceGraph,
     workspace: BTreeMap<String, ContentHash>,
     files: BTreeMap<String, ResolvedSourceFile>,
     generated: BTreeMap<String, GeneratedProjection>,
     generated_snapshots: BTreeMap<String, SourceSnapshotId>,
     resolved_snapshots: BTreeMap<(String, ContentHash), SourceSnapshotId>,
-    maps: Vec<MapProjection>,
+    maps: Vec<Arc<MapProjection>>,
     diagnostics: Vec<SourceDiagnostic>,
     reverse_index_builds: AtomicUsize,
 }
@@ -199,17 +200,19 @@ pub struct ResolvedSourceView {
 impl ResolvedSourceView {
     pub fn new(
         policy: ResolutionPolicy,
-        store: Arc<ContentStore>,
+        model: Arc<ContextSourceModel>,
+        contribution: SourceContributionId,
         workspace: BTreeMap<String, String>,
     ) -> Self {
+        let store = model.content_store().clone();
         let workspace = workspace
             .into_iter()
             .map(|(logical_url, content)| (logical_url, store.intern(&content)))
             .collect();
         Self {
             policy,
-            source_files: SourceFileStore::new(store.clone()),
-            source_graph: SourceGraph::new(),
+            model,
+            contribution,
             store,
             workspace,
             files: BTreeMap::new(),
@@ -234,12 +237,21 @@ impl ResolvedSourceView {
         &self.store
     }
 
-    pub fn source_snapshot(&self, id: SourceSnapshotId) -> Option<&SourceSnapshot> {
-        self.source_files.snapshot(id)
+    pub fn source_snapshot(&self, id: SourceSnapshotId) -> Option<SourceSnapshot> {
+        self.model.snapshot(id)
     }
 
-    pub fn source_graph(&self) -> &SourceGraph {
-        &self.source_graph
+    pub fn find_routes(
+        &self,
+        start: SourceSnapshotId,
+        targets: &BTreeSet<SourceSnapshotId>,
+        limits: RouteLimits,
+    ) -> Result<RouteSearch, SourceGraphError> {
+        self.model.find_routes(start, targets, limits)
+    }
+
+    pub fn projection(&self, id: ProjectionId) -> Option<SourceProjection> {
+        self.model.projection(id)
     }
 
     pub fn generated_snapshot(&self, generated_url: &str) -> Option<SourceSnapshotId> {
@@ -322,7 +334,8 @@ impl ResolvedSourceView {
                     }],
                 },
             );
-            self.source_graph.add_projection(
+            self.model.add_projection(
+                &self.contribution,
                 formatted_snapshot,
                 generated_snapshot,
                 ProjectionKind::Format {
@@ -356,7 +369,8 @@ impl ResolvedSourceView {
                     steps: vec![ProjectionStep::Identity],
                 },
             );
-            self.source_graph.add_projection(
+            self.model.add_projection(
+                &self.contribution,
                 generated_snapshot,
                 resolved_snapshot,
                 ProjectionKind::Identity {
@@ -548,31 +562,34 @@ impl ResolvedSourceView {
     }
 
     fn add_source_map(&mut self, raw_map: &[u8]) -> Result<MapId, SourceViewError> {
-        let decoded = decode_slice(raw_map)
-            .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
-        let shape = map_shape(raw_map);
-        let map = match decoded {
-            DecodedMap::Regular(map) => map,
-            DecodedMap::Index(index) => index
-                .flatten()
-                .map_err(|error| SourceViewError::InvalidIndexedSourceMap(error.to_string()))?,
-            DecodedMap::Hermes(_) => {
-                return Err(SourceViewError::InvalidSourceMap(
-                    "Hermes source maps are not part of this prototype".into(),
-                ));
-            }
-        };
-        let id = MapId(self.maps.len());
         let encoded = std::str::from_utf8(raw_map)
             .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
         let content = self.store.intern(encoded);
-        self.maps.push(MapProjection {
-            shape,
-            map,
-            content,
-            encoded_bytes: raw_map.len(),
-            reverse: OnceLock::new(),
-        });
+        let projection = self.model.cached_source_map(content, || {
+            let decoded = decode_slice(raw_map)
+                .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
+            let shape = map_shape(raw_map);
+            let map = match decoded {
+                DecodedMap::Regular(map) => map,
+                DecodedMap::Index(index) => index
+                    .flatten()
+                    .map_err(|error| SourceViewError::InvalidIndexedSourceMap(error.to_string()))?,
+                DecodedMap::Hermes(_) => {
+                    return Err(SourceViewError::InvalidSourceMap(
+                        "Hermes source maps are not part of this prototype".into(),
+                    ));
+                }
+            };
+            Ok(MapProjection {
+                shape,
+                map,
+                content,
+                encoded_bytes: raw_map.len(),
+                reverse: OnceLock::new(),
+            })
+        })?;
+        let id = MapId(self.maps.len());
+        self.maps.push(projection);
         Ok(id)
     }
 
@@ -619,7 +636,8 @@ impl ResolvedSourceView {
             let resolved_snapshot =
                 self.register_resolved_candidates(&logical_url, &candidates, path.content)?;
             self.merge_file(&logical_url, SourceKind::Authored, candidates, path);
-            self.source_graph.add_projection(
+            self.model.add_projection(
+                &self.contribution,
                 generated_snapshot,
                 resolved_snapshot,
                 ProjectionKind::SourceMap {
@@ -719,12 +737,12 @@ impl ResolvedSourceView {
         generated_url: &str,
         content: ContentHash,
     ) -> Result<SourceSnapshotId, SourceViewError> {
-        let snapshot = self.source_files.intern_content(
+        let snapshot = self.model.intern_content(
+            &self.contribution,
             SourceUri::embedded("runtime", generated_url)
                 .expect("runtime source values can be embedded"),
             content,
         )?;
-        self.source_graph.add_source(snapshot);
         self.generated_snapshots
             .insert(generated_url.to_owned(), snapshot);
         Ok(snapshot)
@@ -741,10 +759,9 @@ impl ResolvedSourceView {
             .expect("logical source values can be embedded");
         let mut projected = None;
         for candidate in candidates {
-            let snapshot = self
-                .source_files
-                .intern_content(uri.clone(), candidate.content)?;
-            self.source_graph.add_source(snapshot);
+            let snapshot =
+                self.model
+                    .intern_content(&self.contribution, uri.clone(), candidate.content)?;
             self.resolved_snapshots
                 .insert((logical_url.to_owned(), candidate.content), snapshot);
             if candidate.content == projected_content {
@@ -769,6 +786,12 @@ impl ResolvedSourceView {
             })
             .into_iter()
             .collect()
+    }
+}
+
+impl Drop for ResolvedSourceView {
+    fn drop(&mut self) {
+        self.model.release(&self.contribution);
     }
 }
 
@@ -1030,7 +1053,6 @@ mod tests {
         let generated = view.generated_snapshot("file:///app.js").unwrap();
         let resolved = view.resolved_snapshot("file:///app.js").unwrap();
         let routes = view
-            .source_graph()
             .find_routes(
                 generated,
                 &BTreeSet::from([resolved]),
@@ -1038,7 +1060,6 @@ mod tests {
             )
             .unwrap();
         let projection = view
-            .source_graph()
             .projection(routes.routes[0].hops[0].projection)
             .unwrap();
         assert!(matches!(
@@ -1094,7 +1115,6 @@ mod tests {
             Some(view.files()["src/app.ts"].primary.content)
         );
         let routes = view
-            .source_graph()
             .find_routes(
                 runtime,
                 &BTreeSet::from([authored]),
@@ -1103,7 +1123,6 @@ mod tests {
             .unwrap();
         assert_eq!(routes.routes.len(), 1);
         let projection = view
-            .source_graph()
             .projection(routes.routes[0].hops[0].projection)
             .unwrap();
         assert!(matches!(
@@ -1123,11 +1142,7 @@ mod tests {
             "src/offline.ts".into(),
             "export const offline = true;".into(),
         );
-        let mut view = ResolvedSourceView::new(
-            ResolutionPolicy::PreferSourcesContent,
-            Arc::new(ContentStore::default()),
-            workspace,
-        );
+        let mut view = view_with_workspace(ResolutionPolicy::PreferSourcesContent, workspace);
         view.add_generated(GeneratedSourceInput {
             url: "bundle.js",
             content: "const offline=true;",
@@ -1139,7 +1154,6 @@ mod tests {
         let generated = view.generated_snapshot("bundle.js").unwrap();
         let authored = view.resolved_snapshot("src/offline.ts").unwrap();
         let routes = view
-            .source_graph()
             .find_routes(
                 authored,
                 &BTreeSet::from([generated]),
@@ -1149,8 +1163,7 @@ mod tests {
 
         assert_eq!(routes.routes.len(), 1);
         assert!(matches!(
-            view.source_graph()
-                .projection(routes.routes[0].hops[0].projection)
+            view.projection(routes.routes[0].hops[0].projection)
                 .unwrap()
                 .kind,
             ProjectionKind::SourceMap { .. }
@@ -1219,9 +1232,7 @@ mod tests {
         let map = regular_map("src/app.ts", Some("runtime snapshot"), &[(0, 0, 0, 0)]);
         let mut workspace = BTreeMap::new();
         workspace.insert("src/app.ts".into(), "dirty workspace".into());
-        let store = Arc::new(ContentStore::default());
-        let mut view =
-            ResolvedSourceView::new(ResolutionPolicy::PreferSourcesContent, store, workspace);
+        let mut view = view_with_workspace(ResolutionPolicy::PreferSourcesContent, workspace);
         view.add_generated(GeneratedSourceInput {
             url: "bundle.js",
             content: "compiled",
@@ -1249,8 +1260,7 @@ mod tests {
         ] {
             let mut workspace = BTreeMap::new();
             workspace.insert("src/app.ts".into(), "matching".into());
-            let mut view =
-                ResolvedSourceView::new(policy, Arc::new(ContentStore::default()), workspace);
+            let mut view = view_with_workspace(policy, workspace);
             view.add_generated(GeneratedSourceInput {
                 url: "bundle.js",
                 content: "compiled",
@@ -1323,7 +1333,48 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(view.source_graph().projection_count(), 2);
+        assert_eq!(view.model.graph_snapshot().projections.len(), 2);
+    }
+
+    #[test]
+    fn identical_maps_and_sources_are_shared_across_views() {
+        let model = Arc::new(ContextSourceModel::new());
+        let map = regular_map(
+            "src/app.ts",
+            Some("export const value = 1;"),
+            &[(0, 0, 0, 0)],
+        );
+        let mut first = ResolvedSourceView::new(
+            ResolutionPolicy::PreferSourcesContent,
+            model.clone(),
+            SourceContributionId::new("target-a"),
+            BTreeMap::new(),
+        );
+        let mut second = ResolvedSourceView::new(
+            ResolutionPolicy::PreferSourcesContent,
+            model.clone(),
+            SourceContributionId::new("target-b"),
+            BTreeMap::new(),
+        );
+        for view in [&mut first, &mut second] {
+            view.add_generated(GeneratedSourceInput {
+                url: "https://example.test/app.js",
+                content: "export const value=1;",
+                source_map: Some(&map),
+                minified: false,
+            })
+            .unwrap();
+        }
+
+        assert_eq!(model.decoded_source_map_count(), 1);
+        assert_eq!(model.graph_snapshot().sources.len(), 2);
+        assert_eq!(model.graph_snapshot().projections.len(), 1);
+
+        drop(first);
+        assert_eq!(model.graph_snapshot().sources.len(), 2);
+        drop(second);
+        assert!(model.graph_snapshot().sources.is_empty());
+        assert_eq!(model.content_stats().unique_contents, 0);
     }
 
     #[test]
@@ -1352,7 +1403,6 @@ mod tests {
         let runtime = view.generated_snapshot("min.js").unwrap();
         let formatted = view.resolved_snapshot("min.js?formatted").unwrap();
         let routes = view
-            .source_graph()
             .find_routes(
                 runtime,
                 &BTreeSet::from([formatted]),
@@ -1360,7 +1410,6 @@ mod tests {
             )
             .unwrap();
         let projection = view
-            .source_graph()
             .projection(routes.routes[0].hops[0].projection)
             .unwrap();
         assert!(matches!(projection.kind, ProjectionKind::Format { .. }));
@@ -1385,12 +1434,7 @@ mod tests {
             &[(0, 0, 0, 0)],
         );
         let second = first.clone();
-        let store = Arc::new(ContentStore::default());
-        let mut view = ResolvedSourceView::new(
-            ResolutionPolicy::PreferSourcesContent,
-            store,
-            BTreeMap::new(),
-        );
+        let mut view = view_with_workspace(ResolutionPolicy::PreferSourcesContent, BTreeMap::new());
         for (url, generated, map) in [
             ("first.js", "const x=1;", first.as_slice()),
             ("second.js", "var x=1;", second.as_slice()),
@@ -1461,7 +1505,19 @@ mod tests {
     }
 
     fn empty_view(policy: ResolutionPolicy) -> ResolvedSourceView {
-        ResolvedSourceView::new(policy, Arc::new(ContentStore::default()), BTreeMap::new())
+        view_with_workspace(policy, BTreeMap::new())
+    }
+
+    fn view_with_workspace(
+        policy: ResolutionPolicy,
+        workspace: BTreeMap<String, String>,
+    ) -> ResolvedSourceView {
+        ResolvedSourceView::new(
+            policy,
+            Arc::new(ContextSourceModel::new()),
+            SourceContributionId::new("test-view"),
+            workspace,
+        )
     }
 
     fn regular_map(

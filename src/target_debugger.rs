@@ -20,7 +20,7 @@ use crate::cdp::{
     RuntimeGetPropertiesParams, RuntimeRemoteObject,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
-use crate::content_store::ContentStore;
+use crate::context_source_model::ContextSourceModel;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
 use crate::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptKey,
@@ -85,10 +85,12 @@ impl TargetDebuggerHandle {
         session: CdpDebuggerSession,
         session_key: SessionKey,
         waiting_for_debugger: bool,
+        source_model: Arc<ContextSourceModel>,
     ) -> Result<Self, TargetDebuggerError> {
         let sources = SourceEffectInterpreter::new(
             SourceEffectOptions::default(),
-            Arc::new(ContentStore::default()),
+            source_model,
+            format!("{connection_id}/{target_id}"),
         );
         let mut driver = DebuggerDriver::new(
             Arc::new(DebuggerState::before_connection_generation(

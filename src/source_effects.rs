@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 
 use crate::content_store::ContentStore;
+use crate::context_source_model::{ContextSourceModel, SourceContributionId};
 use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
@@ -49,6 +50,8 @@ struct ProjectedOffset {
 
 pub struct SourceEffectInterpreter {
     options: SourceEffectOptions,
+    model: Arc<ContextSourceModel>,
+    contribution_prefix: String,
     store: Arc<ContentStore>,
     views: BTreeMap<EffectId, RetainedView>,
 }
@@ -150,9 +153,16 @@ impl GeneratedOffsetIndex {
 }
 
 impl SourceEffectInterpreter {
-    pub fn new(options: SourceEffectOptions, store: Arc<ContentStore>) -> Self {
+    pub fn new(
+        options: SourceEffectOptions,
+        model: Arc<ContextSourceModel>,
+        contribution_prefix: impl Into<String>,
+    ) -> Self {
+        let store = model.content_store().clone();
         Self {
             options,
+            model,
+            contribution_prefix: contribution_prefix.into(),
             store,
             views: BTreeMap::new(),
         }
@@ -170,7 +180,14 @@ impl SourceEffectInterpreter {
             } => {
                 let mut view = ResolvedSourceView::new(
                     self.options.policy,
-                    self.store.clone(),
+                    self.model.clone(),
+                    SourceContributionId::new(format!(
+                        "{}/{}/{}/{}",
+                        self.contribution_prefix,
+                        script.session.session_id,
+                        script.script_id,
+                        effect_id.0
+                    )),
                     self.options.workspace.clone(),
                 );
                 view.add_generated(GeneratedSourceInput {
@@ -736,7 +753,8 @@ mod tests {
         let mut state = Arc::new(DebuggerState::default());
         let mut interpreter = SourceEffectInterpreter::new(
             SourceEffectOptions::default(),
-            Arc::new(ContentStore::default()),
+            Arc::new(ContextSourceModel::new()),
+            "test-target",
         );
 
         state = apply(&state, Input::Connected, &mut revisions).state;

@@ -71,6 +71,15 @@ impl ContentStore {
             unique_utf8_bytes: self.unique_utf8_bytes.load(Ordering::Relaxed),
         }
     }
+
+    pub fn retain(&self, mut keep: impl FnMut(ContentHash) -> bool) {
+        let mut content = self.content.lock().unwrap();
+        content.retain(|hash, _| keep(*hash));
+        self.unique_utf8_bytes.store(
+            content.values().map(|value| value.len()).sum(),
+            Ordering::Relaxed,
+        );
+    }
 }
 
 fn content_hash(bytes: &[u8]) -> ContentHash {

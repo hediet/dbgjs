@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cdp_client::content_store::ContentStore;
+use cdp_client::context_source_model::{ContextSourceModel, SourceContributionId};
 use cdp_client::source_view::{
     GeneratedSourceInput, Position, ResolutionPolicy, ResolvedSourceView,
 };
@@ -17,10 +17,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let source = "export const value = 42;\n".repeat(8_000);
     let map = synthetic_map(&source, 50_000)?;
-    let store = Arc::new(ContentStore::default());
     let mut view = ResolvedSourceView::new(
         ResolutionPolicy::PreferSourcesContent,
-        store,
+        Arc::new(ContextSourceModel::new()),
+        SourceContributionId::new("synthetic"),
         BTreeMap::new(),
     );
 
@@ -50,10 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sourcemap::DecodedMap::Hermes(_) => (0, 0),
         };
 
-        let store = Arc::new(ContentStore::default());
         let mut view = ResolvedSourceView::new(
             ResolutionPolicy::PreferSourcesContent,
-            store,
+            Arc::new(ContextSourceModel::new()),
+            SourceContributionId::new("benchmark"),
             BTreeMap::new(),
         );
         let started = Instant::now();

@@ -255,6 +255,20 @@ impl SourceFileStore {
         &self.content
     }
 
+    pub fn snapshots(&self) -> impl Iterator<Item = &SourceSnapshot> {
+        self.snapshots.values()
+    }
+
+    pub fn remove_snapshot(&mut self, id: SourceSnapshotId) -> Option<SourceSnapshot> {
+        let snapshot = self.snapshots.remove(&id)?;
+        self.by_identity
+            .remove(&(snapshot.uri.clone(), snapshot.revision.clone()));
+        if self.heads.get(&snapshot.uri) == Some(&id) {
+            self.heads.remove(&snapshot.uri);
+        }
+        Some(snapshot)
+    }
+
     fn intern_revision(&mut self, uri: SourceUri, revision: SourceRevision) -> SourceSnapshotId {
         let identity = (uri.clone(), revision.clone());
         if let Some(existing) = self.by_identity.get(&identity).copied() {
@@ -455,6 +469,40 @@ impl SourceGraph {
         self.projections.get(&id)
     }
 
+    pub fn projections(&self) -> impl Iterator<Item = &SourceProjection> {
+        self.projections.values()
+    }
+
+    pub fn remove_projection(&mut self, id: ProjectionId) -> Option<SourceProjection> {
+        let projection = self.projections.remove(&id)?;
+        self.projection_index.remove(&(
+            projection.derived,
+            projection.basis,
+            projection.kind.clone(),
+        ));
+        remove_index_entry(&mut self.dependencies, projection.derived, id);
+        remove_index_entry(&mut self.dependents, projection.basis, id);
+        Some(projection)
+    }
+
+    pub fn remove_source(&mut self, source: SourceSnapshotId) -> Result<bool, SourceGraphError> {
+        self.require_source(source)?;
+        let has_edges = self
+            .dependencies
+            .get(&source)
+            .is_some_and(|edges| !edges.is_empty())
+            || self
+                .dependents
+                .get(&source)
+                .is_some_and(|edges| !edges.is_empty());
+        if has_edges {
+            return Err(SourceGraphError::SourceHasProjections(source));
+        }
+        self.dependencies.remove(&source);
+        self.dependents.remove(&source);
+        Ok(self.sources.remove(&source))
+    }
+
     pub fn find_routes(
         &self,
         start: SourceSnapshotId,
@@ -465,6 +513,7 @@ impl SourceGraph {
         for target in targets {
             self.require_source(*target)?;
         }
+
         if limits.max_routes == 0 {
             return Err(SourceGraphError::ZeroRouteLimit);
         }
@@ -604,10 +653,28 @@ struct RouteCandidate {
     visited: BTreeSet<SourceSnapshotId>,
 }
 
+fn remove_index_entry(
+    index: &mut BTreeMap<SourceSnapshotId, BTreeSet<ProjectionId>>,
+    source: SourceSnapshotId,
+    projection: ProjectionId,
+) {
+    let remove_key = if let Some(entries) = index.get_mut(&source) {
+        entries.remove(&projection);
+        entries.is_empty()
+    } else {
+        false
+    };
+    if remove_key {
+        index.remove(&source);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SourceGraphError {
     #[error("source snapshot {0:?} is not registered in the graph")]
     UnknownSource(SourceSnapshotId),
+    #[error("source snapshot {0:?} still participates in projections")]
+    SourceHasProjections(SourceSnapshotId),
     #[error("source snapshot {0:?} cannot project to itself")]
     SelfProjection(SourceSnapshotId),
     #[error("projection from {derived:?} to {basis:?} would create a dependency cycle")]
