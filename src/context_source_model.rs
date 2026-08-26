@@ -138,6 +138,25 @@ impl ContextSourceModel {
         kind: ProjectionKind,
     ) -> Result<ProjectionId, SourceGraphError> {
         let mut state = self.state.lock().unwrap();
+        if let ProjectionKind::SourceMap { map, .. } = &kind
+            && let Some(existing) = state.graph.projections().find_map(|projection| {
+                if projection.derived != derived {
+                    return None;
+                }
+                match projection.kind {
+                    ProjectionKind::SourceMap {
+                        map: existing_map, ..
+                    } if existing_map != *map => Some(existing_map),
+                    _ => None,
+                }
+            })
+        {
+            return Err(SourceGraphError::ConflictingSourceMap {
+                snapshot: derived,
+                existing,
+                contributed: *map,
+            });
+        }
         let projection = state.graph.add_projection(derived, basis, kind)?;
         let inserted = state
             .contributions
@@ -645,6 +664,64 @@ mod tests {
         assert_eq!(model.graph_snapshot().projections.len(), 1);
         model.release(&second);
         assert!(model.graph_snapshot().projections.is_empty());
+    }
+
+    #[test]
+    fn rejects_conflicting_maps_for_the_same_source_revision() {
+        let model = ContextSourceModel::new();
+        let first = SourceContributionId::new("target-a");
+        let second = SourceContributionId::new("target-b");
+        let generated_hash = model.content_store().intern("generated");
+        let generated_uri = SourceUri::parse("https://example.test/app.js").unwrap();
+        let generated = model
+            .intern_content(&first, generated_uri.clone(), generated_hash)
+            .unwrap();
+        model
+            .intern_content(&second, generated_uri, generated_hash)
+            .unwrap();
+        let first_source = model
+            .intern_content(
+                &first,
+                SourceUri::parse("file:///workspace/src/app.ts").unwrap(),
+                model.content_store().intern("source"),
+            )
+            .unwrap();
+        let second_source = model
+            .intern_content(
+                &second,
+                SourceUri::parse("file:///workspace/other/app.ts").unwrap(),
+                model.content_store().intern("other source"),
+            )
+            .unwrap();
+        model
+            .add_projection(
+                &first,
+                generated,
+                first_source,
+                ProjectionKind::SourceMap {
+                    map: model.content_store().intern("first map"),
+                    source_index: 0,
+                },
+            )
+            .unwrap();
+        let error = model
+            .add_projection(
+                &second,
+                generated,
+                second_source,
+                ProjectionKind::SourceMap {
+                    map: model.content_store().intern("second map"),
+                    source_index: 0,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SourceGraphError::ConflictingSourceMap {
+                snapshot,
+                ..
+            } if snapshot == generated
+        ));
     }
 
     #[test]

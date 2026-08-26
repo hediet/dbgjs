@@ -369,14 +369,16 @@ impl ResolvedSourceView {
                     steps: vec![ProjectionStep::Identity],
                 },
             );
-            self.model.add_projection(
-                &self.contribution,
-                generated_snapshot,
-                resolved_snapshot,
-                ProjectionKind::Identity {
-                    basis: IdentityBasis::EqualContent(generated_content),
-                },
-            )?;
+            if generated_snapshot != resolved_snapshot {
+                self.model.add_projection(
+                    &self.contribution,
+                    generated_snapshot,
+                    resolved_snapshot,
+                    ProjectionKind::Identity {
+                        basis: IdentityBasis::EqualContent(generated_content),
+                    },
+                )?;
+            }
             self.generated.insert(
                 input.url.into(),
                 GeneratedProjection::Identity { resolved_url },
@@ -1053,6 +1055,7 @@ mod tests {
         );
         let generated = view.generated_snapshot("file:///app.js").unwrap();
         let resolved = view.resolved_snapshot("file:///app.js").unwrap();
+        assert_eq!(generated, resolved);
         let routes = view
             .find_routes(
                 generated,
@@ -1060,15 +1063,7 @@ mod tests {
                 crate::source_graph::RouteLimits::default(),
             )
             .unwrap();
-        let projection = view
-            .projection(routes.routes[0].hops[0].projection)
-            .unwrap();
-        assert!(matches!(
-            projection.kind,
-            ProjectionKind::Identity {
-                basis: IdentityBasis::EqualContent(_)
-            }
-        ));
+        assert!(routes.routes[0].hops.is_empty());
     }
 
     #[test]

@@ -707,6 +707,14 @@ pub enum SourceGraphError {
     UnknownSource(SourceSnapshotId),
     #[error("source snapshot {0:?} still participates in projections")]
     SourceHasProjections(SourceSnapshotId),
+    #[error(
+        "source snapshot {snapshot:?} already uses source map {existing:?}, not {contributed:?}"
+    )]
+    ConflictingSourceMap {
+        snapshot: SourceSnapshotId,
+        existing: ContentHash,
+        contributed: ContentHash,
+    },
     #[error("source snapshot {0:?} cannot project to itself")]
     SelfProjection(SourceSnapshotId),
     #[error("projection from {derived:?} to {basis:?} would create a dependency cycle")]

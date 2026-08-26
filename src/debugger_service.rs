@@ -20,10 +20,11 @@ use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
     ContextTransitionError, EffectCompletion, RuntimeObservation, UserCommand, reduce_context,
 };
-use crate::context_source_model::ContextSourceModel;
+use crate::context_source_model::{CompactedProjectionKind, ContextSourceModel};
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
-    BreakpointSnapshot, BreakpointSpec, BreakpointStatus, ConnectionConfiguration,
+    BreakpointSnapshot, BreakpointSpec, BreakpointStatus, CompactedSourceEdgeSnapshot,
+    CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
     ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
     ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot, DebuggerServiceApi,
     EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult,
@@ -33,8 +34,8 @@ use crate::service_api::{
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
     ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceDisplayOptions,
     SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot, SourceSearchOptions,
-    SourceSearchSnapshot, SourceSnapshotInfo, StepKind as ApiStepKind, TargetDebuggerSnapshot,
-    TargetSnapshot, TargetWaitPredicate, VariableSnapshot,
+    SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot, StepKind as ApiStepKind,
+    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, VariableSnapshot,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -1257,6 +1258,57 @@ impl DebuggerServiceApi for DebuggerService {
             }
         }
         Ok(sources.into_values().collect())
+    }
+
+    async fn show_source_graph(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+    ) -> Result<CompactedSourceGraphSnapshot, JsonRpcError> {
+        let model = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state.source_models.get(&context_id).cloned()
+        };
+        let Some(model) = model else {
+            return Ok(CompactedSourceGraphSnapshot {
+                roots: Vec::new(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            });
+        };
+        let graph = model.compacted_graph();
+        Ok(CompactedSourceGraphSnapshot {
+            roots: graph.roots,
+            nodes: graph
+                .nodes
+                .into_iter()
+                .map(|node| CompactedSourceNodeSnapshot {
+                    id: node.id,
+                    prefix: node.prefix.as_str().to_owned(),
+                    source_count: u32::try_from(node.source_count).unwrap_or(u32::MAX),
+                    runtime_internal: node.runtime_internal,
+                })
+                .collect(),
+            edges: graph
+                .edges
+                .into_iter()
+                .map(|edge| CompactedSourceEdgeSnapshot {
+                    derived: edge.derived,
+                    basis: edge.basis,
+                    kind: compacted_projection_label(&edge.kind),
+                    mapping_count: u32::try_from(edge.mapping_count).unwrap_or(u32::MAX),
+                    suffix_rewrite: edge.suffix_rewrite.map(|rewrite| {
+                        SourceSuffixRewriteSnapshot {
+                            from: rewrite.from,
+                            to: rewrite.to,
+                        }
+                    }),
+                })
+                .collect(),
+        })
     }
 
     async fn show_source(
@@ -2982,6 +3034,7 @@ fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
     if Path::new(path).is_absolute() {
         return Ok(PathBuf::from(path));
     }
+
     if let Ok(url) = url::Url::parse(path) {
         if url.scheme() != "file" {
             return Err(invalid_params(
@@ -2993,6 +3046,19 @@ fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
             .map_err(|_| invalid_params("source file URL is invalid"));
     }
     Ok(PathBuf::from(path))
+}
+
+fn compacted_projection_label(kind: &CompactedProjectionKind) -> String {
+    match kind {
+        CompactedProjectionKind::Identity => "identity".to_owned(),
+        CompactedProjectionKind::SourceMap => "source map".to_owned(),
+        CompactedProjectionKind::Format(formatter) => format!("format ({formatter})"),
+        CompactedProjectionKind::Edit(edit) => format!("edit ({edit})"),
+        CompactedProjectionKind::Offset {
+            line_delta,
+            column_delta,
+        } => format!("offset ({line_delta:+} lines, {column_delta:+} columns)"),
+    }
 }
 
 fn source_content_range(

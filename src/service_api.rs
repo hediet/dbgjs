@@ -474,6 +474,40 @@ pub struct SourceGraphViewSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct CompactedSourceGraphSnapshot {
+    pub roots: Vec<u32>,
+    pub nodes: Vec<CompactedSourceNodeSnapshot>,
+    pub edges: Vec<CompactedSourceEdgeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactedSourceNodeSnapshot {
+    pub id: u32,
+    pub prefix: String,
+    pub source_count: u32,
+    pub runtime_internal: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactedSourceEdgeSnapshot {
+    pub derived: u32,
+    pub basis: u32,
+    pub kind: String,
+    pub mapping_count: u32,
+    pub suffix_rewrite: Option<SourceSuffixRewriteSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSuffixRewriteSnapshot {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SourceMappingSnapshot {
     pub connection_id: String,
     pub target_id: String,
@@ -1158,6 +1192,10 @@ pub trait DebuggerServiceApi {
         context_id: String,
         path: Option<String>,
     ) -> Result<Vec<SourceSnapshotInfo>, JsonRpcError>;
+
+    async fn show_source_graph(
+        context_id: String,
+    ) -> Result<CompactedSourceGraphSnapshot, JsonRpcError>;
 
     async fn show_source(
         context_id: String,

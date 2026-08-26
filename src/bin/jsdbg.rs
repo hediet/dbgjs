@@ -1310,6 +1310,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.explain_source(context_id, path).await)?)?;
         }
+        [source, graph] if source == "source" && graph == "graph" => {
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.show_source_graph(context_id).await)?)?;
+        }
+        [source, map, show] if source == "source" && map == "map" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.show_source_graph(context_id).await)?)?;
+        }
         [source, map, arguments @ ..] if source == "source" && map == "map" => {
             let (path, line, column) = parse_source_map_arguments(arguments)?;
             let client = ensure_service(&state_file).await?;
@@ -3937,6 +3949,7 @@ commands:
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
+  jsdbg source graph|map show [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
   jsdbg source map <path> <line> <column> [--context <id>]

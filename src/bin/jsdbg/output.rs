@@ -1,6 +1,7 @@
 use cdp_client::service_api::{
-    AgentSessionSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionStatus,
-    ConsoleMessageSnapshot, ContextSnapshot, ContextSummary, CoverageSnapshot,
+    AgentSessionSnapshot, BreakpointStatus, CompactedSourceEdgeSnapshot,
+    CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
+    ConnectionStatus, ConsoleMessageSnapshot, ContextSnapshot, ContextSummary, CoverageSnapshot,
     CpuProfileFunctionSnapshot, CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
     HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry,
     HeapDiffSnapshot, HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot,
@@ -12,6 +13,7 @@ use cdp_client::service_api::{
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -515,6 +517,113 @@ impl HumanOutput for Vec<SourceGraphViewSnapshot> {
             }
         }
     }
+}
+
+impl HumanOutput for CompactedSourceGraphSnapshot {
+    fn print_human(&self) {
+        print!("{}", render_compacted_source_graph(self));
+    }
+}
+
+fn render_compacted_source_graph(graph: &CompactedSourceGraphSnapshot) -> String {
+    if graph.nodes.is_empty() {
+        return "No source mappings are currently retained.\n".to_owned();
+    }
+    let mut output = String::new();
+    let nodes = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id, node))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = BTreeMap::<u32, Vec<&CompactedSourceEdgeSnapshot>>::new();
+    for edge in &graph.edges {
+        edges.entry(edge.derived).or_default().push(edge);
+    }
+    for outgoing in edges.values_mut() {
+        outgoing.sort_by_key(|edge| {
+            (
+                edge.kind.as_str(),
+                nodes.get(&edge.basis).map(|node| node.prefix.as_str()),
+                edge.basis,
+            )
+        });
+    }
+    let mut visited = BTreeSet::new();
+    for (index, root) in graph.roots.iter().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        render_source_graph_node(&mut output, *root, "", &nodes, &edges, &mut visited);
+    }
+    output
+}
+
+fn render_source_graph_node(
+    output: &mut String,
+    id: u32,
+    indent: &str,
+    nodes: &BTreeMap<u32, &CompactedSourceNodeSnapshot>,
+    edges: &BTreeMap<u32, Vec<&CompactedSourceEdgeSnapshot>>,
+    visited: &mut BTreeSet<u32>,
+) {
+    let Some(node) = nodes.get(&id) else {
+        return;
+    };
+    writeln!(output, "{}", source_graph_node_label(node)).unwrap();
+    if !visited.insert(id) {
+        return;
+    }
+    let outgoing = edges.get(&id).map(Vec::as_slice).unwrap_or_default();
+    for (index, edge) in outgoing.iter().enumerate() {
+        let last = index + 1 == outgoing.len();
+        let branch = if last { "└─" } else { "├─" };
+        let child_indent = format!("{indent}{}", if last { "   " } else { "│  " });
+        let Some(target) = nodes.get(&edge.basis) else {
+            continue;
+        };
+        write!(
+            output,
+            "{indent}{branch} {} → ",
+            source_graph_edge_label(edge)
+        )
+        .unwrap();
+        if visited.contains(&edge.basis) {
+            writeln!(output, "{} ↩", source_graph_node_label(target)).unwrap();
+        } else {
+            render_source_graph_node(output, edge.basis, &child_indent, nodes, edges, visited);
+        }
+    }
+}
+
+fn source_graph_node_label(node: &CompactedSourceNodeSnapshot) -> String {
+    format!(
+        "#{} {}  [{} source{}]{}",
+        node.id,
+        node.prefix,
+        node.source_count,
+        if node.source_count == 1 { "" } else { "s" },
+        if node.runtime_internal {
+            " [internal]"
+        } else {
+            ""
+        }
+    )
+}
+
+fn source_graph_edge_label(edge: &CompactedSourceEdgeSnapshot) -> String {
+    let rewrite = edge
+        .suffix_rewrite
+        .as_ref()
+        .map_or_else(String::new, |rewrite| {
+            format!(", {} → {}", rewrite.from, rewrite.to)
+        });
+    format!(
+        "{}  [{} mapping{}{}]",
+        edge.kind,
+        edge.mapping_count,
+        if edge.mapping_count == 1 { "" } else { "s" },
+        rewrite
+    )
 }
 
 impl HumanOutput for Vec<SourceMappingSnapshot> {
@@ -2747,17 +2856,76 @@ mod tests {
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, aggregate_coverage_entries, coverage_entries,
         effective_file_metrics, heap_path_lines, looks_minified_identifier, page_logs,
-        process_tree_lines, process_trees_json, render_heap_classes_human, style_process_label,
-        style_session_label,
+        process_tree_lines, process_trees_json, render_compacted_source_graph,
+        render_heap_classes_human, style_process_label, style_session_label,
     };
     use cdp_client::service_api::{
-        AgentSessionSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
+        AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
+        CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
         CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, HeapClassAnalysisSnapshot,
         HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapNodeSnapshot,
         HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
         ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
+        SourceSuffixRewriteSnapshot,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn source_graph_renders_a_spanning_forest_with_references() {
+        let graph = CompactedSourceGraphSnapshot {
+            roots: vec![1, 3],
+            nodes: vec![
+                CompactedSourceNodeSnapshot {
+                    id: 1,
+                    prefix: "file:///workspace/out/".into(),
+                    source_count: 2,
+                    runtime_internal: false,
+                },
+                CompactedSourceNodeSnapshot {
+                    id: 2,
+                    prefix: "file:///workspace/src/".into(),
+                    source_count: 2,
+                    runtime_internal: false,
+                },
+                CompactedSourceNodeSnapshot {
+                    id: 3,
+                    prefix: "node:internal/modules/".into(),
+                    source_count: 1,
+                    runtime_internal: true,
+                },
+            ],
+            edges: vec![
+                CompactedSourceEdgeSnapshot {
+                    derived: 1,
+                    basis: 2,
+                    kind: "source map".into(),
+                    mapping_count: 2,
+                    suffix_rewrite: Some(SourceSuffixRewriteSnapshot {
+                        from: ".js".into(),
+                        to: ".ts".into(),
+                    }),
+                },
+                CompactedSourceEdgeSnapshot {
+                    derived: 3,
+                    basis: 2,
+                    kind: "identity".into(),
+                    mapping_count: 1,
+                    suffix_rewrite: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            render_compacted_source_graph(&graph),
+            "\
+#1 file:///workspace/out/  [2 sources]
+└─ source map  [2 mappings, .js → .ts] → #2 file:///workspace/src/  [2 sources]
+
+#3 node:internal/modules/  [1 source] [internal]
+└─ identity  [1 mapping] → #2 file:///workspace/src/  [2 sources] ↩
+"
+        );
+    }
 
     #[test]
     fn process_tree_uses_virtual_window_nodes() {

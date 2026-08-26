@@ -229,6 +229,15 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
     assert_eq!(matches["matches"].as_array().unwrap().len(), 1);
     assert_eq!(matches["omittedMatches"], 0);
     assert_eq!(matches["searchedSources"], 1);
+    let source_graph = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["source", "map", "show", "--context", "managed"],
+    );
+    assert_eq!(source_graph["roots"], serde_json::json!([]));
+    assert_eq!(source_graph["nodes"], serde_json::json!([]));
+    assert_eq!(source_graph["edges"], serde_json::json!([]));
 
     let configured_revision = configured["revision"].as_u64().unwrap().to_string();
     let deleted = run_json(
