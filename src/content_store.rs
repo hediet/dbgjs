@@ -7,15 +7,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ContentId([u8; 32]);
+pub struct ContentHash([u8; 32]);
 
-impl ContentId {
+impl ContentHash {
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }
 
-impl fmt::Debug for ContentId {
+impl fmt::Debug for ContentHash {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in &self.0[..8] {
             write!(formatter, "{byte:02x}")?;
@@ -34,16 +34,16 @@ pub struct ContentStoreStats {
 
 #[derive(Default)]
 pub struct ContentStore {
-    content: Mutex<HashMap<ContentId, Arc<str>>>,
+    content: Mutex<HashMap<ContentHash, Arc<str>>>,
     intern_requests: AtomicUsize,
     materializations: AtomicUsize,
     unique_utf8_bytes: AtomicUsize,
 }
 
 impl ContentStore {
-    pub fn intern(&self, text: &str) -> ContentId {
+    pub fn intern(&self, text: &str) -> ContentHash {
         self.intern_requests.fetch_add(1, Ordering::Relaxed);
-        let id = content_id(text.as_bytes());
+        let id = content_hash(text.as_bytes());
         let mut content = self.content.lock().unwrap();
         content.entry(id).or_insert_with(|| {
             self.unique_utf8_bytes
@@ -53,12 +53,12 @@ impl ContentStore {
         id
     }
 
-    pub fn get(&self, id: ContentId) -> Option<Arc<str>> {
+    pub fn get(&self, id: ContentHash) -> Option<Arc<str>> {
         self.materializations.fetch_add(1, Ordering::Relaxed);
         self.content.lock().unwrap().get(&id).cloned()
     }
 
-    pub fn contains(&self, id: ContentId) -> bool {
+    pub fn contains(&self, id: ContentHash) -> bool {
         self.content.lock().unwrap().contains_key(&id)
     }
 
@@ -73,8 +73,8 @@ impl ContentStore {
     }
 }
 
-fn content_id(bytes: &[u8]) -> ContentId {
-    ContentId(Sha256::digest(bytes).into())
+fn content_hash(bytes: &[u8]) -> ContentHash {
+    ContentHash(Sha256::digest(bytes).into())
 }
 
 #[cfg(test)]

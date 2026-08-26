@@ -2,21 +2,121 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
-use crate::content_store::{ContentId, ContentStore};
+use crate::content_store::{ContentHash, ContentStore};
 
-/// A provider-qualified address such as a file URL or a CDP-script URL.
-///
-/// Qualification is part of the string so the graph does not need a separate
-/// namespace object merely to prevent providers from colliding.
+/// An absolute, normalized source address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct SourcePath(String);
+pub struct SourceUri(Url);
 
-impl SourcePath {
-    pub fn new(value: impl Into<String>) -> Result<Self, SourcePathError> {
+impl SourceUri {
+    pub fn parse(value: &str) -> Result<Self, SourceUriError> {
+        Ok(Self(Url::parse(value)?))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn as_url(&self) -> &Url {
+        &self.0
+    }
+
+    pub fn from_file_path(path: impl AsRef<std::path::Path>) -> Result<Self, SourceUriError> {
+        Url::from_file_path(path)
+            .map(Self)
+            .map_err(|()| SourceUriError::InvalidFilePath)
+    }
+
+    /// Embeds a provider value that is not itself an absolute URL.
+    pub fn embedded(namespace: &str, value: &str) -> Result<Self, SourceUriError> {
+        if namespace.is_empty() {
+            return Err(SourceUriError::EmptyNamespace);
+        }
+        let mut url = Url::parse("source://embedded/").expect("static source URL is valid");
+        url.set_host(Some(namespace))
+            .map_err(|_| SourceUriError::InvalidNamespace(namespace.to_owned()))?;
+        url.path_segments_mut()
+            .expect("source URL is hierarchical")
+            .push(value);
+        Ok(Self(url))
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        let mut parent = self.0.clone();
+        parent.set_query(None);
+        parent.set_fragment(None);
+        let mut segments = parent.path_segments_mut().ok()?;
+        segments.pop_if_empty();
+        segments.pop();
+        segments.push("");
+        drop(segments);
+        Some(Self(parent))
+    }
+
+    pub fn is_subpath_of(&self, ancestor: &Self) -> bool {
+        self.relative_path_from(ancestor)
+            .is_some_and(|path| !path.is_empty())
+    }
+
+    pub fn relative_path_from(&self, ancestor: &Self) -> Option<String> {
+        if self.0.scheme() != ancestor.0.scheme()
+            || self.0.username() != ancestor.0.username()
+            || self.0.password() != ancestor.0.password()
+            || self.0.host_str() != ancestor.0.host_str()
+            || self.0.port_or_known_default() != ancestor.0.port_or_known_default()
+        {
+            return None;
+        }
+        let source = normalized_path_segments(&self.0)?;
+        let base = normalized_path_segments(&ancestor.0)?;
+        source
+            .strip_prefix(base.as_slice())
+            .map(|relative| relative.join("/"))
+    }
+}
+
+fn normalized_path_segments(url: &Url) -> Option<Vec<&str>> {
+    let mut segments = url.path_segments()?.collect::<Vec<_>>();
+    while segments.last() == Some(&"") {
+        segments.pop();
+    }
+    Some(segments)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SourceUriError {
+    #[error("invalid source URL: {0}")]
+    Parse(#[from] url::ParseError),
+    #[error("filesystem path cannot be represented as a file URL")]
+    InvalidFilePath,
+    #[error("embedded source namespace must not be empty")]
+    EmptyNamespace,
+    #[error("invalid embedded source namespace '{0}'")]
+    InvalidNamespace(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SourceSnapshotId(pub u64);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum SourceRevision {
+    Content(ContentHash),
+    Version {
+        namespace: RevisionNamespace,
+        value: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RevisionNamespace(String);
+
+impl RevisionNamespace {
+    pub fn new(value: impl Into<String>) -> Result<Self, RevisionNamespaceError> {
         let value = value.into();
         if value.is_empty() {
-            return Err(SourcePathError::Empty);
+            return Err(RevisionNamespaceError::Empty);
         }
         Ok(Self(value))
     }
@@ -27,32 +127,23 @@ impl SourcePath {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum SourcePathError {
-    #[error("source path must not be empty")]
+pub enum RevisionNamespaceError {
+    #[error("revision namespace must not be empty")]
     Empty,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct SourceSnapshotId(pub u64);
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum SourceRevision {
-    Content(ContentId),
-    Opaque(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSnapshot {
     pub id: SourceSnapshotId,
-    pub path: SourcePath,
+    pub uri: SourceUri,
     pub revision: SourceRevision,
 }
 
 impl SourceSnapshot {
-    pub fn content_id(&self) -> Option<ContentId> {
+    pub fn content_hash(&self) -> Option<ContentHash> {
         match &self.revision {
             SourceRevision::Content(content) => Some(*content),
-            SourceRevision::Opaque(_) => None,
+            SourceRevision::Version { .. } => None,
         }
     }
 }
@@ -65,8 +156,8 @@ pub struct SourceFileStore {
     content: Arc<ContentStore>,
     next_snapshot_id: u64,
     snapshots: BTreeMap<SourceSnapshotId, SourceSnapshot>,
-    by_identity: BTreeMap<(SourcePath, SourceRevision), SourceSnapshotId>,
-    heads: BTreeMap<SourcePath, SourceSnapshotId>,
+    by_identity: BTreeMap<(SourceUri, SourceRevision), SourceSnapshotId>,
+    heads: BTreeMap<SourceUri, SourceSnapshotId>,
 }
 
 impl SourceFileStore {
@@ -80,72 +171,74 @@ impl SourceFileStore {
         }
     }
 
-    pub fn intern_text(&mut self, path: SourcePath, text: &str) -> SourceSnapshotId {
+    pub fn intern_text(&mut self, uri: SourceUri, text: &str) -> SourceSnapshotId {
         let content = self.content.intern(text);
-        self.intern_revision(path, SourceRevision::Content(content))
+        self.intern_revision(uri, SourceRevision::Content(content))
     }
 
     pub fn intern_content(
         &mut self,
-        path: SourcePath,
-        content: ContentId,
+        uri: SourceUri,
+        content: ContentHash,
     ) -> Result<SourceSnapshotId, SourceFileStoreError> {
         if !self.content.contains(content) {
             return Err(SourceFileStoreError::UnknownContent(content));
         }
-        Ok(self.intern_revision(path, SourceRevision::Content(content)))
+        Ok(self.intern_revision(uri, SourceRevision::Content(content)))
     }
 
-    pub fn write_text(&mut self, path: SourcePath, text: &str) -> SourceSnapshotId {
-        let snapshot = self.intern_text(path.clone(), text);
-        self.heads.insert(path, snapshot);
+    pub fn write_text(&mut self, uri: SourceUri, text: &str) -> SourceSnapshotId {
+        let snapshot = self.intern_text(uri.clone(), text);
+        self.heads.insert(uri, snapshot);
         snapshot
     }
 
-    pub fn intern_opaque(
+    pub fn intern_version(
         &mut self,
-        path: SourcePath,
-        revision: impl Into<String>,
+        uri: SourceUri,
+        namespace: RevisionNamespace,
+        value: impl Into<String>,
     ) -> Result<SourceSnapshotId, SourceFileStoreError> {
-        let revision = revision.into();
-        if revision.is_empty() {
-            return Err(SourceFileStoreError::EmptyOpaqueRevision);
+        let value = value.into();
+        if value.is_empty() {
+            return Err(SourceFileStoreError::EmptyVersion);
         }
-        Ok(self.intern_revision(path, SourceRevision::Opaque(revision)))
+        Ok(self.intern_revision(uri, SourceRevision::Version { namespace, value }))
     }
 
-    pub fn write_opaque(
+    pub fn write_version(
         &mut self,
-        path: SourcePath,
-        revision: impl Into<String>,
+        uri: SourceUri,
+        namespace: RevisionNamespace,
+        value: impl Into<String>,
     ) -> Result<SourceSnapshotId, SourceFileStoreError> {
-        let snapshot = self.intern_opaque(path.clone(), revision)?;
-        self.heads.insert(path, snapshot);
+        let snapshot = self.intern_version(uri.clone(), namespace, value)?;
+        self.heads.insert(uri, snapshot);
         Ok(snapshot)
     }
 
     pub fn set_head(
         &mut self,
-        path: &SourcePath,
+        uri: &SourceUri,
         snapshot: SourceSnapshotId,
     ) -> Result<(), SourceFileStoreError> {
         let candidate = self
             .snapshots
             .get(&snapshot)
             .ok_or(SourceFileStoreError::UnknownSnapshot(snapshot))?;
-        if &candidate.path != path {
+        if &candidate.uri != uri {
             return Err(SourceFileStoreError::PathMismatch {
                 snapshot,
-                expected: path.clone(),
-                actual: candidate.path.clone(),
+                expected: uri.clone(),
+                actual: candidate.uri.clone(),
             });
         }
-        self.heads.insert(path.clone(), snapshot);
+        self.heads.insert(uri.clone(), snapshot);
         Ok(())
     }
 
-    pub fn head(&self, path: &SourcePath) -> Option<SourceSnapshotId> {
-        self.heads.get(path).copied()
+    pub fn head(&self, uri: &SourceUri) -> Option<SourceSnapshotId> {
+        self.heads.get(uri).copied()
     }
 
     pub fn snapshot(&self, id: SourceSnapshotId) -> Option<&SourceSnapshot> {
@@ -154,7 +247,7 @@ impl SourceFileStore {
 
     pub fn content(&self, id: SourceSnapshotId) -> Option<Arc<str>> {
         self.snapshot(id)
-            .and_then(SourceSnapshot::content_id)
+            .and_then(SourceSnapshot::content_hash)
             .and_then(|content| self.content.get(content))
     }
 
@@ -162,8 +255,8 @@ impl SourceFileStore {
         &self.content
     }
 
-    fn intern_revision(&mut self, path: SourcePath, revision: SourceRevision) -> SourceSnapshotId {
-        let identity = (path.clone(), revision.clone());
+    fn intern_revision(&mut self, uri: SourceUri, revision: SourceRevision) -> SourceSnapshotId {
+        let identity = (uri.clone(), revision.clone());
         if let Some(existing) = self.by_identity.get(&identity).copied() {
             return existing;
         }
@@ -174,7 +267,7 @@ impl SourceFileStore {
             id,
             SourceSnapshot {
                 id,
-                path: path.clone(),
+                uri: uri.clone(),
                 revision,
             },
         );
@@ -186,16 +279,16 @@ impl SourceFileStore {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SourceFileStoreError {
     #[error("content {0:?} does not exist in the content store")]
-    UnknownContent(ContentId),
-    #[error("opaque source revision must not be empty")]
-    EmptyOpaqueRevision,
+    UnknownContent(ContentHash),
+    #[error("provider revision value must not be empty")]
+    EmptyVersion,
     #[error("source snapshot {0:?} does not exist")]
     UnknownSnapshot(SourceSnapshotId),
     #[error("source snapshot {snapshot:?} belongs to {actual:?}, not expected path {expected:?}")]
     PathMismatch {
         snapshot: SourceSnapshotId,
-        expected: SourcePath,
-        actual: SourcePath,
+        expected: SourceUri,
+        actual: SourceUri,
     },
 }
 
@@ -204,14 +297,14 @@ pub struct ProjectionId(pub u64);
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IdentityBasis {
-    EqualContent(ContentId),
+    EqualContent(ContentHash),
     DeclaredByProvider(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ProjectionKind {
     Identity { basis: IdentityBasis },
-    SourceMap { map: ContentId, source_index: u32 },
+    SourceMap { map: ContentHash, source_index: u32 },
     Format { formatter: String },
     Edit { edit: String },
     Offset { line_delta: i64, column_delta: i64 },
@@ -532,16 +625,16 @@ pub enum SourceGraphError {
 mod tests {
     use super::*;
 
-    fn path(value: &str) -> SourcePath {
-        SourcePath::new(value).unwrap()
+    fn uri(value: &str) -> SourceUri {
+        SourceUri::parse(value).unwrap()
     }
 
     #[test]
     fn mutable_heads_preserve_immutable_cas_snapshots() {
         let content = Arc::new(ContentStore::default());
         let mut files = SourceFileStore::new(content);
-        let workspace_path = path("file:///workspace/src/app.ts");
-        let mirror_path = path("cas-source:///app.ts");
+        let workspace_path = uri("file:///workspace/src/app.ts");
+        let mirror_path = uri("cas-source:///app.ts");
 
         let first = files.write_text(workspace_path.clone(), "export const value = 1;");
         let mirror = files.intern_text(mirror_path, "export const value = 1;");
@@ -549,8 +642,8 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(
-            files.snapshot(first).unwrap().content_id(),
-            files.snapshot(mirror).unwrap().content_id()
+            files.snapshot(first).unwrap().content_hash(),
+            files.snapshot(mirror).unwrap().content_hash()
         );
         assert_eq!(files.head(&workspace_path), Some(second));
         assert_eq!(&*files.content(first).unwrap(), "export const value = 1;");
@@ -573,14 +666,58 @@ mod tests {
         let mut files = SourceFileStore::new(content.clone());
 
         let snapshot = files
-            .intern_content(path("resolved-source:app.js"), content_id)
+            .intern_content(uri("resolved-source:app.js"), content_id)
             .unwrap();
 
         assert_eq!(
-            files.snapshot(snapshot).unwrap().content_id(),
+            files.snapshot(snapshot).unwrap().content_hash(),
             Some(content_id)
         );
         assert_eq!(content.stats().intern_requests, 1);
+    }
+
+    #[test]
+    fn source_uris_preserve_url_identity_and_hierarchy() {
+        let root = uri("file:///workspace/src/");
+        let child = uri("file:///workspace/src/editor/model.ts");
+        let sibling = uri("file:///workspace/test/model.ts");
+
+        assert!(child.is_subpath_of(&root));
+        assert_eq!(
+            child.relative_path_from(&root).as_deref(),
+            Some("editor/model.ts")
+        );
+        assert!(!sibling.is_subpath_of(&root));
+        assert_eq!(
+            child.parent().unwrap().as_str(),
+            "file:///workspace/src/editor/"
+        );
+    }
+
+    #[test]
+    fn provider_versions_are_namespaced() {
+        let content = Arc::new(ContentStore::default());
+        let mut files = SourceFileStore::new(content);
+        let source = uri("debugger-memory://context/document/1");
+        let editor = RevisionNamespace::new("editor").unwrap();
+        let cdp = RevisionNamespace::new("cdp").unwrap();
+
+        let first = files
+            .intern_version(source.clone(), editor.clone(), "42")
+            .unwrap();
+        assert_eq!(
+            files.intern_version(source.clone(), editor, "42").unwrap(),
+            first
+        );
+        assert_ne!(files.intern_version(source, cdp, "42").unwrap(), first);
+    }
+
+    #[test]
+    fn embeds_non_url_provider_values() {
+        let embedded = SourceUri::embedded("resolved", "../src/app.ts?raw").unwrap();
+        assert_eq!(embedded.as_url().scheme(), "source");
+        assert_eq!(embedded.as_url().host_str(), Some("resolved"));
+        assert!(embedded.as_str().contains("..%2Fsrc%2Fapp.ts%3Fraw"));
     }
 
     #[test]
@@ -588,19 +725,19 @@ mod tests {
         let content = Arc::new(ContentStore::default());
         let mut files = SourceFileStore::new(content);
         let authored = files.intern_text(
-            path("file:///workspace/src/app.ts"),
+            uri("file:///workspace/src/app.ts"),
             "export const value: number = 1;",
         );
         let dist = files.intern_text(
-            path("file:///workspace/dist/app.js"),
+            uri("file:///workspace/dist/app.js"),
             "export const value = 1;",
         );
         let runtime = files.intern_text(
-            path("cdp://generation-1/session-7/script-42"),
+            uri("cdp://generation-1/session-7/script-42"),
             "export const value = 1;",
         );
         let source_map = files.content_store().intern(r#"{"version":3}"#);
-        let dist_content = files.snapshot(dist).unwrap().content_id().unwrap();
+        let dist_content = files.snapshot(dist).unwrap().content_hash().unwrap();
 
         let mut graph = SourceGraph::new();
         for source in [authored, dist, runtime] {
@@ -655,12 +792,12 @@ mod tests {
     fn one_source_can_reach_multiple_runtime_endpoints() {
         let content = Arc::new(ContentStore::default());
         let mut files = SourceFileStore::new(content);
-        let authored = files.intern_text(path("file:///src/app.ts"), "source");
-        let dist = files.intern_text(path("file:///dist/app.js"), "generated");
-        let page = files.intern_text(path("cdp://page/script-1"), "generated");
-        let worker = files.intern_text(path("cdp://worker/script-1"), "generated");
+        let authored = files.intern_text(uri("file:///src/app.ts"), "source");
+        let dist = files.intern_text(uri("file:///dist/app.js"), "generated");
+        let page = files.intern_text(uri("cdp://page/script-1"), "generated");
+        let worker = files.intern_text(uri("cdp://worker/script-1"), "generated");
         let map = files.content_store().intern("map");
-        let dist_content = files.snapshot(dist).unwrap().content_id().unwrap();
+        let dist_content = files.snapshot(dist).unwrap().content_hash().unwrap();
 
         let mut graph = SourceGraph::new();
         for source in [authored, dist, page, worker] {

@@ -30,7 +30,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process"
 tokio-tungstenite = "0.28"
 terminal_size = "0.4"
 unicode-width = "0.2"
-url = "2"
+url = { version = "2", features = ["serde"] }
 oxc_allocator = "0.146.0"
 oxc_ast = "0.146.0"
 oxc_parser = "0.146.0"

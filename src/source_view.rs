@@ -6,10 +6,10 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 use sourcemap::{DecodedMap, RawToken, SourceMap, decode_slice};
 
-use crate::content_store::{ContentId, ContentStore, ContentStoreStats};
+use crate::content_store::{ContentHash, ContentStore, ContentStoreStats};
 use crate::source_graph::{
     IdentityBasis, ProjectionKind, SourceFileStore, SourceFileStoreError, SourceGraph,
-    SourceGraphError, SourcePath, SourceSnapshot, SourceSnapshotId,
+    SourceGraphError, SourceSnapshot, SourceSnapshotId, SourceUri,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -51,7 +51,7 @@ pub enum ProjectionStep {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectionPath {
     pub generated_url: String,
-    pub content: ContentId,
+    pub content: ContentHash,
     pub steps: Vec<ProjectionStep>,
 }
 
@@ -66,7 +66,7 @@ pub enum Provenance {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentCandidate {
-    pub content: ContentId,
+    pub content: ContentHash,
     pub provenance: Provenance,
 }
 
@@ -157,7 +157,7 @@ type ReverseIndex = BTreeMap<(String, Position), Vec<Position>>;
 struct MapProjection {
     shape: MapShape,
     map: SourceMap,
-    content: ContentId,
+    content: ContentHash,
     encoded_bytes: usize,
     reverse: OnceLock<ReverseIndex>,
 }
@@ -186,11 +186,11 @@ pub struct ResolvedSourceView {
     store: Arc<ContentStore>,
     source_files: SourceFileStore,
     source_graph: SourceGraph,
-    workspace: BTreeMap<String, ContentId>,
+    workspace: BTreeMap<String, ContentHash>,
     files: BTreeMap<String, ResolvedSourceFile>,
     generated: BTreeMap<String, GeneratedProjection>,
     generated_snapshots: BTreeMap<String, SourceSnapshotId>,
-    resolved_snapshots: BTreeMap<(String, ContentId), SourceSnapshotId>,
+    resolved_snapshots: BTreeMap<(String, ContentHash), SourceSnapshotId>,
     maps: Vec<MapProjection>,
     diagnostics: Vec<SourceDiagnostic>,
     reverse_index_builds: AtomicUsize,
@@ -694,7 +694,7 @@ impl ResolvedSourceView {
                 projection_paths: Vec::new(),
             });
 
-        let mut by_content: HashMap<ContentId, ContentCandidate> =
+        let mut by_content: HashMap<ContentHash, ContentCandidate> =
             std::iter::once(file.primary.clone())
                 .chain(file.alternatives.iter().cloned())
                 .map(|candidate| (candidate.content, candidate))
@@ -717,11 +717,11 @@ impl ResolvedSourceView {
     fn register_generated_snapshot(
         &mut self,
         generated_url: &str,
-        content: ContentId,
+        content: ContentHash,
     ) -> Result<SourceSnapshotId, SourceViewError> {
         let snapshot = self.source_files.intern_content(
-            SourcePath::new(format!("runtime-source:{generated_url}"))
-                .expect("provider prefix makes source path non-empty"),
+            SourceUri::embedded("runtime", generated_url)
+                .expect("runtime source values can be embedded"),
             content,
         )?;
         self.source_graph.add_source(snapshot);
@@ -734,15 +734,16 @@ impl ResolvedSourceView {
         &mut self,
         logical_url: &str,
         candidates: &[ContentCandidate],
-        projected_content: ContentId,
+        projected_content: ContentHash,
     ) -> Result<SourceSnapshotId, SourceViewError> {
-        let path = SourcePath::new(format!("resolved-source:{logical_url}"))
-            .expect("provider prefix makes source path non-empty");
+        let uri = SourceUri::parse(logical_url)
+            .or_else(|_| SourceUri::embedded("resolved", logical_url))
+            .expect("logical source values can be embedded");
         let mut projected = None;
         for candidate in candidates {
             let snapshot = self
                 .source_files
-                .intern_content(path.clone(), candidate.content)?;
+                .intern_content(uri.clone(), candidate.content)?;
             self.source_graph.add_source(snapshot);
             self.resolved_snapshots
                 .insert((logical_url.to_owned(), candidate.content), snapshot);
@@ -1089,7 +1090,7 @@ mod tests {
         let runtime = view.generated_snapshot("file:///bundle.js").unwrap();
         let authored = view.resolved_snapshot("src/app.ts").unwrap();
         assert_eq!(
-            view.source_snapshot(authored).unwrap().content_id(),
+            view.source_snapshot(authored).unwrap().content_hash(),
             Some(view.files()["src/app.ts"].primary.content)
         );
         let routes = view
