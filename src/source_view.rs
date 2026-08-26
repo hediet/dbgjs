@@ -638,15 +638,17 @@ impl ResolvedSourceView {
             let resolved_snapshot =
                 self.register_resolved_candidates(&logical_url, &candidates, path.content)?;
             self.merge_file(&logical_url, SourceKind::Authored, candidates, path);
-            self.model.add_projection(
-                &self.contribution,
-                generated_snapshot,
-                resolved_snapshot,
-                ProjectionKind::SourceMap {
-                    map: map_content,
-                    source_index,
-                },
-            )?;
+            if generated_snapshot != resolved_snapshot {
+                self.model.add_projection(
+                    &self.contribution,
+                    generated_snapshot,
+                    resolved_snapshot,
+                    ProjectionKind::SourceMap {
+                        map: map_content,
+                        source_index,
+                    },
+                )?;
+            }
         }
         Ok(())
     }
@@ -794,6 +796,7 @@ impl ResolvedSourceView {
 
 impl Drop for ResolvedSourceView {
     fn drop(&mut self) {
+        self.maps.clear();
         self.model.release(&self.contribution);
     }
 }
@@ -1371,6 +1374,32 @@ mod tests {
         drop(second);
         assert!(model.graph_snapshot().sources.is_empty());
         assert_eq!(model.content_stats().unique_contents, 0);
+    }
+
+    #[test]
+    fn source_map_identity_does_not_create_a_self_projection() {
+        let model = Arc::new(ContextSourceModel::new());
+        let content = "export const value = 1;";
+        let map = regular_map("file:///app.js", Some(content), &[(0, 0, 0, 0)]);
+        let mut view = ResolvedSourceView::new(
+            ResolutionPolicy::PreferSourcesContent,
+            model.clone(),
+            SourceContributionId::new("identity-map"),
+            BTreeMap::new(),
+        );
+        view.add_generated(GeneratedSourceInput {
+            url: "file:///app.js",
+            content,
+            source_map: Some(&map),
+            minified: false,
+        })
+        .unwrap();
+
+        assert_eq!(
+            view.generated_snapshot("file:///app.js"),
+            view.resolved_snapshot("file:///app.js")
+        );
+        assert!(model.graph_snapshot().projections.is_empty());
     }
 
     #[test]

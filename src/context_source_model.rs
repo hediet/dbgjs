@@ -511,14 +511,13 @@ impl ContextSourceModel {
                 state.files.remove_snapshot(snapshot);
             }
         }
-        let retained_content = retained_content_hashes(&state);
+        let mut retained_content = retained_content_hashes(&state);
         drop(state);
+        let mut maps = self.decoded_maps.lock().unwrap();
+        maps.retain(|_, map| map.strong_count() > 0);
+        retained_content.extend(maps.keys().copied());
         self.content
             .retain(|content| retained_content.contains(&content));
-        self.decoded_maps
-            .lock()
-            .unwrap()
-            .retain(|content, map| retained_content.contains(content) && map.strong_count() > 0);
     }
 
     pub(crate) fn cached_source_map<E>(
