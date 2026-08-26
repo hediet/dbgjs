@@ -1,7 +1,40 @@
 # Idea: promise and pending-work debugging
 
-Status: design exploration only. This document does not define committed CLI
-syntax or an implementation plan.
+Status: a bounded, evidence-only subset is implemented. The broader lifecycle,
+history, provenance, and policy design below remains exploratory.
+
+## Implemented bounded subset
+
+The implementation deliberately consists of two observers that produce the
+same `PromiseSnapshot` value:
+
+- `jsdbg promise inspect <remote-object-id>` reads the current engine-supplied
+  internal properties for an existing live reference. Recognized V8
+  `[[PromiseState]]`/`[[PromiseStatus]]` evidence yields `pending`,
+  `fulfilled`, or `rejected`; missing or unfamiliar evidence yields `unknown`.
+  Fulfillment values and rejection reasons use a bounded preview and retain an
+  existing remote-object reference when one is available.
+- `jsdbg promise list [<capture>] [--state <state>]` scans an existing immutable
+  heap capture for exact promise-like V8 node names. It reports only nodes
+  strongly reachable from the snapshot root, reuses capture-scoped heap
+  references, and reads state/result edges only when the snapshot explicitly
+  exposes recognized engine names. The returned references compose with the
+  existing `heap refs`, `heap retainer-path`, and `heap dominators` operations.
+
+Both observers report their evidence and use the classification
+`indeterminate`; the subset has no historical evidence with which to claim
+that a pending promise is hung, abandoned, or still doing useful work. List
+size defaults to 100 and settlement previews default to 120 characters, with
+CLI options to lower or raise those explicit bounds.
+
+This subset does not wrap the global `Promise`, count awaits or reactions,
+continuously track production targets, infer promise age, materialize heap
+objects into new live handles, or introduce another source model. Heap captures
+made without engine internals can still enumerate promise-like nodes, but their
+state remains `unknown`. Current V8 snapshots may expose
+`reactions_or_result` without a separate state bit; because that edge cannot
+distinguish a fulfilled `Error` value from a rejection reason, this subset
+correctly leaves those nodes `unknown` and a state-filtered query may be empty.
 
 ## Motivation
 

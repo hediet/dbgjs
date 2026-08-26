@@ -15,6 +15,7 @@ pub mod heap_snapshot;
 pub mod language_intelligence;
 pub mod local_rpc;
 pub mod process_discovery;
+pub mod promise_debugging;
 pub mod service_api;
 pub mod session_transport;
 pub mod source_effects;

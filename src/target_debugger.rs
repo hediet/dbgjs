@@ -31,6 +31,7 @@ use crate::heap_graph::{
     PathOptions, TextMatcher, TraversalDirection, parse_heap_graph,
 };
 use crate::heap_snapshot::{HeapConstructorGroup, parse_constructor_groups};
+use crate::promise_debugging::{inspect_heap_promises, inspect_live_promise};
 use crate::service_api::{
     ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
     CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
@@ -43,11 +44,11 @@ use crate::service_api::{
     HeapNodeSelector, HeapNodeSnapshot, HeapPathCost, HeapPathDirection, HeapPathOptions,
     HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection, HeapReferenceSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
-    HeapTraversalDirection, PauseSnapshot, ScopeSnapshot, ScreenshotSnapshot,
-    SourceContentSnapshot, SourceExcerpt, SourceExcerptLine, SourceGraphViewSnapshot,
-    SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot, TargetScriptStatus,
-    TargetWaitPredicate, VariableSnapshot,
+    HeapTraversalDirection, PauseSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, PromiseState,
+    ScopeSnapshot, ScreenshotSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
+    SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
+    TargetScriptStatus, TargetWaitPredicate, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -264,6 +265,25 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn inspect_promise(
+        &self,
+        pause_epoch: Option<u64>,
+        object_id: String,
+        max_preview_length: u32,
+    ) -> Result<PromiseSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::InspectPromise {
+                pause_epoch,
+                object_id,
+                max_preview_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn source_content(
         &self,
         path: String,
@@ -413,6 +433,27 @@ impl TargetDebuggerHandle {
                 capture_id,
                 filter,
                 no_cache,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn select_promises(
+        &self,
+        capture_id: String,
+        state: Option<PromiseState>,
+        limit: u32,
+        max_preview_length: u32,
+    ) -> Result<PromiseSelectionSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::SelectPromises {
+                capture_id,
+                state,
+                limit,
+                max_preview_length,
                 response,
             })
             .await
@@ -810,6 +851,12 @@ enum TargetCommand {
         object_id: String,
         response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
     },
+    InspectPromise {
+        pause_epoch: Option<u64>,
+        object_id: String,
+        max_preview_length: u32,
+        response: oneshot::Sender<Result<PromiseSnapshot, TargetDebuggerError>>,
+    },
     SourceContent {
         path: String,
         response: oneshot::Sender<Result<Option<SourceContentSnapshot>, TargetDebuggerError>>,
@@ -862,6 +909,13 @@ enum TargetCommand {
         filter: Option<String>,
         no_cache: bool,
         response: oneshot::Sender<Result<HeapClassSnapshot, TargetDebuggerError>>,
+    },
+    SelectPromises {
+        capture_id: String,
+        state: Option<PromiseState>,
+        limit: u32,
+        max_preview_length: u32,
+        response: oneshot::Sender<Result<PromiseSelectionSnapshot, TargetDebuggerError>>,
     },
     SelectHeapNodes {
         capture_id: String,
@@ -1241,6 +1295,22 @@ async fn run_target(
                 response,
             })) => {
                 let result = object_properties(&driver, &session_key, pause_epoch, object_id).await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::InspectPromise {
+                pause_epoch,
+                object_id,
+                max_preview_length,
+                response,
+            })) => {
+                let result = inspect_promise(
+                    &driver,
+                    &session_key,
+                    pause_epoch,
+                    object_id,
+                    max_preview_length,
+                )
+                .await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::Click { selector, response })) => {
@@ -1739,6 +1809,36 @@ async fn run_target(
                         }
                     }
                     Ok(snapshot)
+                }
+                .await;
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::SelectPromises {
+                capture_id,
+                state,
+                limit,
+                max_preview_length,
+                response,
+            })) => {
+                let result = async {
+                    let (graph, graph_parse_duration, used_cached_graph) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    let (promises, total_promises) = inspect_heap_promises(
+                        &graph,
+                        &capture_id,
+                        state,
+                        limit,
+                        max_preview_length,
+                    )
+                    .map_err(heap_analysis_error)?;
+                    Ok(PromiseSelectionSnapshot {
+                        capture_id,
+                        omitted_promise_count: total_promises.saturating_sub(promises.len() as u64),
+                        total_promises,
+                        promises,
+                        graph_parse_duration_micros: graph_parse_duration.as_micros() as u64,
+                        used_cached_graph,
+                    })
                 }
                 .await;
                 let _ = response.send(result);
@@ -3904,6 +4004,33 @@ async fn object_properties(
                 .map(|value| variable_snapshot(property.name, value))
         })
         .collect())
+}
+
+async fn inspect_promise(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    object_id: String,
+    max_preview_length: u32,
+) -> Result<PromiseSnapshot, TargetDebuggerError> {
+    if let Some(pause_epoch) = pause_epoch {
+        require_pause(driver, session_key, pause_epoch)?;
+    }
+    let mut params = RuntimeGetPropertiesParams::new(object_id.clone());
+    params.own_properties = Some(true);
+    let result = driver
+        .client()
+        .runtime_get_properties(params)
+        .await
+        .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
+    if let Some(exception) = result.exception_details {
+        return Err(TargetDebuggerError::Properties(exception.text));
+    }
+    Ok(inspect_live_promise(
+        object_id,
+        result.internal_properties.unwrap_or_default(),
+        max_preview_length,
+    ))
 }
 
 fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {

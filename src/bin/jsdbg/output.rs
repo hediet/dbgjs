@@ -7,9 +7,9 @@ use cdp_client::service_api::{
     HeapDiffSnapshot, HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot,
     HeapPathSnapshot, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
-    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceGraphViewSnapshot, SourceLocation,
-    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot,
+    PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt,
+    SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
+    SourceSnapshotInfo, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -692,6 +692,78 @@ impl HumanOutput for HeapCaptureResult {
             self.timing.taking_duration_micros as f64 / 1_000_000.0,
             self.timing.retrieving_duration_micros as f64 / 1_000_000.0,
         );
+    }
+}
+
+impl HumanOutput for PromiseSnapshot {
+    fn print_human(&self) {
+        println!("{}", promise_line(self));
+        for evidence in &self.evidence {
+            println!("  evidence: {:?}: {}", evidence.source, evidence.detail);
+        }
+    }
+}
+
+impl HumanOutput for PromiseSelectionSnapshot {
+    fn print_human(&self) {
+        println!(
+            "{} of {} retained promise(s) selected from '{}' (graph {} in {}).",
+            self.promises.len(),
+            self.total_promises,
+            self.capture_id,
+            if self.used_cached_graph {
+                "reused"
+            } else {
+                "parsed"
+            },
+            format_profile_time(self.graph_parse_duration_micros),
+        );
+        for promise in &self.promises {
+            println!("{}", promise_line(promise));
+        }
+        if self.omitted_promise_count > 0 {
+            println!("... {} promises omitted", self.omitted_promise_count);
+        }
+    }
+}
+
+fn promise_line(promise: &PromiseSnapshot) -> String {
+    let settlement = promise
+        .settlement
+        .as_ref()
+        .map_or_else(String::new, |value| {
+            let preview = value.preview.as_deref().unwrap_or("<no preview>");
+            let truncated = if value.truncated { "..." } else { "" };
+            let reference = value
+                .reference
+                .as_deref()
+                .map(|reference| format!(" ({reference})"))
+                .unwrap_or_default();
+            format!(", settlement:{preview}{truncated}{reference}")
+        });
+    format!(
+        "{}  state:{}, classification:{}{settlement}",
+        promise.reference,
+        promise_state_name(promise.state),
+        promise_classification_name(promise.classification),
+    )
+}
+
+fn promise_state_name(state: cdp_client::service_api::PromiseState) -> &'static str {
+    use cdp_client::service_api::PromiseState;
+    match state {
+        PromiseState::Pending => "pending",
+        PromiseState::Fulfilled => "fulfilled",
+        PromiseState::Rejected => "rejected",
+        PromiseState::Unknown => "unknown",
+    }
+}
+
+fn promise_classification_name(
+    classification: cdp_client::service_api::PromiseClassification,
+) -> &'static str {
+    match classification {
+        cdp_client::service_api::PromiseClassification::Indeterminate => "indeterminate",
     }
 }
 

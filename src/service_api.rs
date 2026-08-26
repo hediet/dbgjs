@@ -659,6 +659,76 @@ pub struct VariableSnapshot {
     pub object_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseState {
+    Pending,
+    Fulfilled,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseOrigin {
+    Live,
+    HeapSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseClassification {
+    Indeterminate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseEvidenceSource {
+    LiveInternalProperty,
+    HeapNode,
+    HeapEdge,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseEvidenceSnapshot {
+    pub source: PromiseEvidenceSource,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseValueSnapshot {
+    pub kind: String,
+    pub preview: Option<String>,
+    pub truncated: bool,
+    pub reference: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseSnapshot {
+    pub reference: String,
+    pub origin: PromiseOrigin,
+    pub state: PromiseState,
+    pub settlement: Option<PromiseValueSnapshot>,
+    pub retained: Option<bool>,
+    pub classification: PromiseClassification,
+    pub evidence: Vec<PromiseEvidenceSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseSelectionSnapshot {
+    pub capture_id: String,
+    pub promises: Vec<PromiseSnapshot>,
+    pub total_promises: u64,
+    pub omitted_promise_count: u64,
+    pub graph_parse_duration_micros: u64,
+    pub used_cached_graph: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverageSnapshot {
@@ -1302,6 +1372,15 @@ pub trait DebuggerServiceApi {
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, JsonRpcError>;
 
+    async fn inspect_promise(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: Option<u64>,
+        object_id: String,
+        max_preview_length: u32,
+    ) -> Result<PromiseSnapshot, JsonRpcError>;
+
     async fn set_logpoint(
         context_id: String,
         connection_id: String,
@@ -1434,6 +1513,16 @@ pub trait DebuggerServiceApi {
         filter: Option<String>,
         no_cache: bool,
     ) -> Result<HeapClassSnapshot, JsonRpcError>;
+
+    async fn select_promises(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        state: Option<PromiseState>,
+        limit: u32,
+        max_preview_length: u32,
+    ) -> Result<PromiseSelectionSnapshot, JsonRpcError>;
 
     async fn select_heap_nodes(
         context_id: String,

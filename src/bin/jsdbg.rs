@@ -7,13 +7,14 @@ use std::path::Path;
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
+use cdp_client::promise_debugging::{DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH};
 use cdp_client::service_api::{
     BreakpointSpec, ConnectionConfiguration, CpuProfileSnapshot, DebuggerServiceApiClient,
     EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector,
     HeapPathCost, HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel,
-    ProcessRole, SourceDisplayOptions, SourceSearchOptions, StepKind, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetWaitPredicate,
+    ProcessRole, PromiseState, SourceDisplayOptions, SourceSearchOptions, StepKind,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -179,6 +180,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     expression.clone(),
                 )
                 .await)?)?;
+        }
+        [promise, inspect, object_id, options @ ..]
+            if promise == "promise" && inspect == "inspect" =>
+        {
+            let max_preview_length = parse_promise_preview_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            let promise = rpc(client
+                .inspect_promise(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    pause_epoch(&snapshot),
+                    object_id.clone(),
+                    max_preview_length,
+                )
+                .await)?;
+            output.print(&promise)?;
         }
         [target, logpoint, id, source, line, column, expression]
             if target == "target" && logpoint == "logpoint" =>
@@ -553,6 +580,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?;
             output.print(&selection)?;
+        }
+        [promise, list, options @ ..] if promise == "promise" && list == "list" => {
+            let options = parse_promise_list_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let promises = rpc(client
+                .select_promises(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id,
+                    options.state,
+                    options.limit,
+                    options.max_preview_length,
+                )
+                .await)?;
+            output.print(&promises)?;
         }
         [heap, show, reference, options @ ..] if heap == "heap" && show == "show" => {
             let (capture_id, heap_object_id) = split_heap_reference_cli(reference)?;
@@ -2817,6 +2862,89 @@ fn parse_u32_option(values: &[String], index: usize, option: &str) -> Result<u32
         })
 }
 
+fn parse_promise_preview_options(arguments: &[String]) -> Result<u32, io::Error> {
+    let mut max_preview_length = DEFAULT_PROMISE_PREVIEW_LENGTH;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--max-preview-length" => {
+                index += 1;
+                max_preview_length = parse_u32_option(arguments, index, "--max-preview-length")?;
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown promise option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(max_preview_length)
+}
+
+struct PromiseListOptions {
+    capture_id: String,
+    state: Option<PromiseState>,
+    limit: u32,
+    max_preview_length: u32,
+}
+
+fn parse_promise_list_options(arguments: &[String]) -> Result<PromiseListOptions, io::Error> {
+    let mut capture_id = ".".to_owned();
+    let mut state = None;
+    let mut limit = DEFAULT_PROMISE_LIMIT;
+    let mut max_preview_length = DEFAULT_PROMISE_PREVIEW_LENGTH;
+    let mut index = 0;
+    if arguments
+        .first()
+        .is_some_and(|argument| !argument.starts_with("--"))
+    {
+        capture_id = arguments[0].clone();
+        index = 1;
+    }
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--state" => {
+                index += 1;
+                state = Some(match arguments.get(index).map(String::as_str) {
+                    Some("pending") => PromiseState::Pending,
+                    Some("fulfilled") => PromiseState::Fulfilled,
+                    Some("rejected") => PromiseState::Rejected,
+                    Some("unknown") => PromiseState::Unknown,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--state requires pending, fulfilled, rejected, or unknown",
+                        ));
+                    }
+                });
+            }
+            "--limit" => {
+                index += 1;
+                limit = parse_u32_option(arguments, index, "--limit")?;
+            }
+            "--max-preview-length" => {
+                index += 1;
+                max_preview_length = parse_u32_option(arguments, index, "--max-preview-length")?;
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown promise option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(PromiseListOptions {
+        capture_id,
+        state,
+        limit,
+        max_preview_length,
+    })
+}
+
 fn parse_u64_option(values: &[String], index: usize, option: &str) -> Result<u64, io::Error> {
     values
         .get(index)
@@ -3963,6 +4091,7 @@ commands:
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
   jsdbg target eval|watch <expression> [target scope]
+  jsdbg promise inspect <remote-object-id> [--max-preview-length <count>] [target scope]
   jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
   jsdbg log [--after <cursor>] [--limit <count>] [target scope]
@@ -3979,6 +4108,7 @@ commands:
   jsdbg profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [target scope]
   jsdbg profile export [<name>] --output <path> [target scope]
   jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
+  jsdbg promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
   jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
   jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
   jsdbg heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
@@ -3992,7 +4122,7 @@ commands:
 
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
-  Accepted by target, log, screenshot, coverage, profile, and heap commands.
+  Accepted by target, log, screenshot, coverage, profile, promise, and heap commands.
   --connection is only needed when the target selector is ambiguous."
 }
 
@@ -4004,13 +4134,14 @@ mod tests {
         parse_coverage_show_options, parse_cpu_profile_sampling_interval,
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
         parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
-        parse_process_attach_options, parse_process_list_options, parse_screenshot_capture_options,
-        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
-        png_dimensions, resolve_target_scope, split_heap_reference_cli,
+        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
+        parse_promise_preview_options, parse_screenshot_capture_options, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, png_dimensions,
+        resolve_target_scope, split_heap_reference_cli,
     };
     use cdp_client::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
-        HeapEdgePolicy, HeapPathCost, HeapPathDirection, TargetSnapshot,
+        HeapEdgePolicy, HeapPathCost, HeapPathDirection, PromiseState, TargetSnapshot,
     };
 
     fn arguments(values: &[&str]) -> Vec<String> {
@@ -4026,6 +4157,29 @@ mod tests {
             Some(std::path::PathBuf::from("renderer.png"))
         );
         assert_eq!(parse_screenshot_capture_options(&[]).unwrap().output, None);
+    }
+
+    #[test]
+    fn parses_bounded_promise_options() {
+        assert_eq!(parse_promise_preview_options(&arguments(&[])).unwrap(), 120);
+        assert_eq!(
+            parse_promise_preview_options(&arguments(&["--max-preview-length", "7"])).unwrap(),
+            7
+        );
+        let options = parse_promise_list_options(&arguments(&[
+            "capture",
+            "--state",
+            "rejected",
+            "--limit",
+            "8",
+            "--max-preview-length",
+            "32",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id, "capture");
+        assert_eq!(options.state, Some(PromiseState::Rejected));
+        assert_eq!(options.limit, 8);
+        assert_eq!(options.max_preview_length, 32);
     }
 
     #[test]
