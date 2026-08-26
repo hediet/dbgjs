@@ -1,6 +1,8 @@
 use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::context_identity::ContextKind;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -83,6 +85,9 @@ pub enum ProcessRole {
 pub struct ContextSummary {
     pub agent_instance_id: String,
     pub id: String,
+    pub kind: ContextKind,
+    pub path_distance: Option<u32>,
+    pub path_ancestor: Option<bool>,
     pub display_name: String,
     pub revision: u64,
     pub connection_count: u32,
@@ -1125,10 +1130,11 @@ pub trait DebuggerServiceApi {
 
     async fn discover_vscode_process_trees() -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError>;
 
-    async fn list_contexts() -> Result<Vec<ContextSummary>, JsonRpcError>;
+    async fn list_contexts(cwd: Option<String>) -> Result<Vec<ContextSummary>, JsonRpcError>;
 
     async fn put_context(
         context_id: String,
+        kind: ContextKind,
         display_name: Option<String>,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 

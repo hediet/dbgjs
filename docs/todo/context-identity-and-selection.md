@@ -1,7 +1,7 @@
 # Refactoring: path-based context identity and cwd-local selection
 
-Status: agreed design direction, not yet implemented. Exact CLI spelling and
-the persisted registry schema may still change.
+Status: implemented in the Rust CLI/service and the single-folder VS Code
+extension. Multi-root and untitled VS Code policy remains deferred.
 
 ## Motivation
 
@@ -362,12 +362,28 @@ workspace URI. Behavior for multi-root and untitled workspaces is deferred.
 
 ## Deferred choices
 
-- The exact on-disk schema and location for cwd selections.
-- The validation and normalization grammar for `:<id>`.
-- Cross-platform treatment of drive-relative Windows paths such as `C:foo`.
-- UNC path normalization and separator normalization.
-- Whether structured `context list` output is sorted by default or includes raw
-  registry order as an option.
 - Multi-root and untitled VS Code workspace context expressions.
 - A possible future VS Code context suffix setting.
 - A possible future mapping of contexts to multiple daemons.
+
+## Implemented decisions
+
+- Named IDs are lowercased and accept ASCII letters, digits, `.`, `_`, and `-`.
+- Unix absolute paths use `/`; Windows drive and UNC paths use `\`. Both path
+  components and roots are lowercased, and both slash forms are accepted within
+  Windows paths.
+- Drive-relative Windows paths such as `C:foo` are rejected because resolving
+  them requires drive-specific process state that is not represented by the
+  command cwd.
+- Windows root-relative paths such as `\logs` and `/logs` use the current cwd's
+  drive root. They never use per-drive shell cwd state.
+- UNC paths are normalized lexically as `\\server\share\...`; no server, share,
+  directory, or symlink is queried.
+- Structured and human `context list` output use the same deterministic ranked
+  order and expose `kind`, `pathDistance`, and `pathAncestor`.
+- Service persistence schema 3 stores context kind. Schema 1 and 2 contexts
+  migrate as named contexts, preserving the meaning of legacy short IDs.
+- CLI selection persistence schema 2 stores cwd bindings separately from
+  cwd/context view state. A legacy global selection migrates once to a binding
+  for the cwd of the first CLI invocation that reads it; it is never retained as
+  a machine-global fallback.

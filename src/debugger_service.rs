@@ -20,6 +20,9 @@ use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
     ContextTransitionError, EffectCompletion, RuntimeObservation, UserCommand, reduce_context,
 };
+use crate::context_identity::{
+    ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
+};
 use crate::context_source_model::{CompactedProjectionKind, ContextSourceModel};
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
@@ -496,6 +499,7 @@ fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> Conte
 struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
     source_models: BTreeMap<String, Arc<ContextSourceModel>>,
+    context_kinds: BTreeMap<String, ContextKind>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
     target_debuggers: BTreeMap<(String, String, String), TargetDebuggerHandle>,
     history: BTreeMap<String, VecDeque<ContextObservation>>,
@@ -520,30 +524,70 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))
     }
 
-    async fn list_contexts(&self, _ctx: &CallCtx) -> Result<Vec<ContextSummary>, JsonRpcError> {
+    async fn list_contexts(
+        &self,
+        _ctx: &CallCtx,
+        cwd: Option<String>,
+    ) -> Result<Vec<ContextSummary>, JsonRpcError> {
         let state = self.state.lock().await;
-        Ok(state
+        let mut contexts = state
             .contexts
             .iter()
             .map(|(id, context)| ContextSummary {
                 agent_instance_id: self.agent_instance_id.clone(),
                 id: id.clone(),
+                kind: state
+                    .context_kinds
+                    .get(id)
+                    .copied()
+                    .unwrap_or(ContextKind::Named),
+                path_distance: cwd.as_deref().and_then(|cwd| {
+                    (state.context_kinds.get(id) == Some(&ContextKind::Path))
+                        .then(|| path_relation(cwd, id))
+                        .flatten()
+                        .map(|relation| relation.distance)
+                }),
+                path_ancestor: cwd.as_deref().and_then(|cwd| {
+                    (state.context_kinds.get(id) == Some(&ContextKind::Path))
+                        .then(|| path_relation(cwd, id))
+                        .flatten()
+                        .map(|relation| relation.ancestor)
+                }),
                 display_name: context.display_name.clone(),
                 revision: context.revision,
                 connection_count: context.connections.len() as u32,
                 breakpoint_count: context.breakpoints.len() as u32,
             })
-            .collect())
+            .collect::<Vec<_>>();
+        contexts.sort_by(|left, right| {
+            left.kind
+                .cmp(&right.kind)
+                .then_with(|| match (cwd.as_deref(), left.kind) {
+                    (Some(cwd), ContextKind::Path) => {
+                        compare_context_paths(cwd, &left.id, &right.id)
+                    }
+                    _ => left.id.cmp(&right.id),
+                })
+        });
+        Ok(contexts)
     }
 
     async fn put_context(
         &self,
         _ctx: &CallCtx,
         context_id: String,
+        kind: ContextKind,
         display_name: Option<String>,
     ) -> Result<ContextSnapshot, JsonRpcError> {
-        validate_id("context", &context_id)?;
+        validate_context_identity(&context_id, kind)?;
         let mut state = self.state.lock().await;
+        if let Some(existing) = state.context_kinds.get(&context_id)
+            && existing != &kind
+        {
+            return Err(invalid_state(&format!(
+                "context '{context_id}' is already registered as {existing:?}"
+            )));
+        }
         let previous = state.clone();
         let context = state
             .contexts
@@ -556,6 +600,7 @@ impl DebuggerServiceApi for DebuggerService {
         )
         .map_err(transition_rpc_error)?;
         let result = self.commit_context(&mut state, &context_id, transition);
+        state.context_kinds.insert(context_id.clone(), kind);
         self.persist_or_restore(&mut state, previous)?;
         Ok(result)
     }
@@ -670,6 +715,7 @@ impl DebuggerServiceApi for DebuggerService {
         if state.contexts.remove(&context_id).is_none() {
             return Err(not_found("context", &context_id));
         }
+        state.context_kinds.remove(&context_id);
         self.complete_request(&mut state, &context_id, &options, 0);
         state.history.remove(&context_id);
         state.source_models.remove(&context_id);
@@ -2750,6 +2796,8 @@ struct StoredCompletedRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredContextState {
+    #[serde(default = "default_context_kind")]
+    kind: ContextKind,
     display_name: String,
     revision: u64,
     connections: BTreeMap<String, StoredConnectionState>,
@@ -2802,7 +2850,7 @@ struct StoredConnectionStateV1 {
 impl From<&ServiceState> for StoredServiceState {
     fn from(state: &ServiceState) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             contexts: state
                 .contexts
                 .iter()
@@ -2810,6 +2858,11 @@ impl From<&ServiceState> for StoredServiceState {
                     (
                         id.clone(),
                         StoredContextState {
+                            kind: state
+                                .context_kinds
+                                .get(id)
+                                .copied()
+                                .unwrap_or(ContextKind::Named),
                             display_name: context.display_name.clone(),
                             revision: context.revision,
                             connections: context
@@ -2872,13 +2925,18 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .ok_or(ServicePersistenceError::MissingSchemaVersion)?;
     let stored = match schema_version {
         1 => migrate_v1(serde_json::from_slice(&bytes)?),
-        2 => serde_json::from_slice(&bytes)?,
+        2 | 3 => serde_json::from_slice(&bytes)?,
         version => return Err(ServicePersistenceError::UnsupportedSchema(version as u32)),
     };
     let completed_requests = stored
         .completed_requests
         .into_iter()
         .map(|request| ((request.context_id, request.request_id), request.revision))
+        .collect();
+    let context_kinds = stored
+        .contexts
+        .iter()
+        .map(|(id, context)| (id.clone(), context.kind))
         .collect();
     Ok(ServiceState {
         contexts: stored
@@ -2932,6 +2990,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             })
             .collect(),
         source_models: BTreeMap::new(),
+        context_kinds,
         runtimes: BTreeMap::new(),
         target_debuggers: BTreeMap::new(),
         history: BTreeMap::new(),
@@ -2943,9 +3002,13 @@ fn stored_default_true() -> bool {
     true
 }
 
+fn default_context_kind() -> ContextKind {
+    ContextKind::Named
+}
+
 fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
     StoredServiceState {
-        schema_version: 2,
+        schema_version: 3,
         contexts: stored
             .contexts
             .into_iter()
@@ -2953,6 +3016,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
                 (
                     id,
                     StoredContextState {
+                        kind: ContextKind::Named,
                         display_name: context.display_name,
                         revision: context.revision,
                         connections: context
@@ -3007,6 +3071,27 @@ fn validate_id(kind: &str, id: &str) -> Result<(), JsonRpcError> {
         return Err(invalid_params(&format!(
             "{kind} id must contain only ASCII letters, digits, '-', '_', or '.'"
         )));
+    }
+    Ok(())
+}
+
+fn validate_context_identity(id: &str, kind: ContextKind) -> Result<(), JsonRpcError> {
+    match kind {
+        ContextKind::Named => {
+            validate_id("context", id)?;
+            if id != id.to_ascii_lowercase() {
+                return Err(invalid_params("named context id must be lowercase"));
+            }
+        }
+        ContextKind::Path => {
+            let normalized = normalize_absolute_path(Path::new(id))
+                .map_err(|error| invalid_params(&error.to_string()))?;
+            if normalized != id {
+                return Err(invalid_params(
+                    "path context id must be a lexically normalized lowercase absolute path",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -3217,6 +3302,7 @@ mod tests {
         .unwrap();
 
         let state = load_state(&path).unwrap();
+        assert_eq!(state.context_kinds["legacy"], ContextKind::Named);
         let connection = &state.contexts["legacy"].connections["browser"];
         assert_eq!(
             connection.configuration,

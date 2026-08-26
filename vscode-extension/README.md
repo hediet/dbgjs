@@ -5,7 +5,8 @@ projection over the long-lived Rust `jsdbg-service`.
 
 ## Implemented
 
-- One stable jsdbg context per VS Code workspace.
+- One path-identified jsdbg context per single-folder VS Code workspace, shared
+  with terminal commands run from that folder.
 - Automatic startup and direct HubRPC connection to the daemon's authenticated
   local endpoint.
 - A target explorer that shows every connection and a canonical parent/opener
@@ -35,8 +36,11 @@ The daemon publishes the authoritative target forest. The extension reconciles
 root sessions for the workspace, while each DAP adapter starts nested sessions
 for its direct descendants.
 
-On activation, the extension ensures that `jsdbg-service` is running and creates
-or retrieves a stable debug context derived from the root workspace folder. The
+On activation, the extension requires exactly one workspace folder, ensures that
+`jsdbg-service` is running, and creates or retrieves the context whose identity
+is that folder's lexically normalized, lowercased absolute path. It does not
+query filesystem identity or resolve symlinks. Multi-root and untitled workspace
+selection is intentionally deferred and reported as an error. The
 endpoint state file is only used internally to discover the daemon's local
 transport and authentication token.
 
