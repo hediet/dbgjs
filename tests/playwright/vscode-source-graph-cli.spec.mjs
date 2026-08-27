@@ -156,6 +156,24 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 		expect(graph).not.toMatch(/\n[├└]─ source source:\/\/runtime\//);
 		expect(graph).not.toContain("~up");
 		expect(graph.trimEnd().split("\n").length).toBeGreaterThan(2);
+		const loadedTree = await runCli(
+			"Render the loaded runtime source tree.",
+			["source", "tree", "loaded", "--max-lines", "30", "--no-trim"],
+			environment,
+		);
+		expect(loadedTree).not.toContain("No loaded sources are currently observed.");
+		expect(loadedTree).toContain("https://main.vscode-cdn.net/");
+		expect(loadedTree).toContain("workbench.web.main.internal.js");
+		const resolvedTree = await runCli(
+			"Render the terminal sources reached through all known projections.",
+			["source", "tree", "resolved", "--max-lines", "30", "--no-trim"],
+			environment,
+		);
+		expect(resolvedTree).not.toContain(
+			"No resolved sources are currently observed.",
+		);
+		expect(resolvedTree).toContain("https://main.vscode-cdn.net/");
+		expect(resolvedTree).toMatch(/sourcemaps\/[^/]+\/src/);
 	} finally {
 		await recordOperation("Stop services and remove temporary state.", async () => {
 			await run(cli, ["service", "stop"], environment, { timeoutMs: 10_000 });

@@ -18,7 +18,7 @@ use cdp_client::service_api::{
     HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection, HeapPathOptions,
     HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions, ObservationCursor,
     ObservationResult, PlaywrightChannel, ProcessRole, SourceDisplayOptions, SourceSearchOptions,
-    StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    SourceTreeKind, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,7 @@ mod output;
 
 use output::{
     CoverageOutputOptions, CpuProfileOutputOptions, CpuProfileSort, CpuProfileView,
-    HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions,
+    HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions, SourceTreeOutputOptions,
 };
 
 #[tokio::main]
@@ -1310,12 +1310,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .list_sources(context_id, parse_source_list_options(options)?)
                 .await)?)?;
         }
+        [source, tree, arguments @ ..] if source == "source" && tree == "tree" => {
+            let (kind, options) = parse_source_tree_options(arguments)?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            let tree = rpc(client.show_source_tree(context_id, kind).await)?;
+            output.print_source_tree(&tree, options)?;
+        }
         [source, resolve, arguments @ ..] if source == "source" && resolve == "resolve" => {
             let path = parse_source_path_arguments(arguments, "source resolve")?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.list_sources(context_id, Some(path)).await)?)?;
+            output.print(&rpc(client.resolve_sources(context_id, path).await)?)?;
         }
         [source, endpoints, arguments @ ..] if source == "source" && endpoints == "endpoints" => {
             let path = parse_source_path_arguments(arguments, "source endpoints")?;
@@ -2573,6 +2581,60 @@ fn parse_source_list_options(values: &[String]) -> Result<Option<String>, io::Er
         index += 1;
     }
     Ok(path)
+}
+
+fn parse_source_tree_options(
+    values: &[String],
+) -> Result<(SourceTreeKind, SourceTreeOutputOptions), io::Error> {
+    let mut kind = None;
+    let mut all = false;
+    let mut max_lines = 300_usize;
+    let mut trim_width = true;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "loaded" if kind.is_none() => kind = Some(SourceTreeKind::Loaded),
+            "resolved" if kind.is_none() => kind = Some(SourceTreeKind::Resolved),
+            "--all" => all = true,
+            "--no-trim" => trim_width = false,
+            "--max-lines" => {
+                index += 1;
+                max_lines = required_source_option(values, index, "--max-lines")?
+                    .parse()
+                    .map_err(|error| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("invalid --max-lines value: {error}"),
+                        )
+                    })?;
+                if max_lines == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--max-lines must be positive",
+                    ));
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(invalid_option("source tree", option));
+            }
+            value => return Err(unexpected_argument("source tree", value)),
+        }
+        index += 1;
+    }
+    let kind = kind.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source tree requires <loaded|resolved>",
+        )
+    })?;
+    Ok((
+        kind,
+        SourceTreeOutputOptions {
+            all,
+            max_lines,
+            trim_width,
+        },
+    ))
 }
 
 fn parse_source_path_arguments(values: &[String], command: &str) -> Result<String, io::Error> {
@@ -4294,6 +4356,7 @@ commands:
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
+  jsdbg source tree <loaded|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   jsdbg source graph [--uncompacted] [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
@@ -4356,7 +4419,8 @@ mod tests {
         parse_heap_select_options, parse_heap_string_options, parse_process_attach_options,
         parse_process_list_options, parse_raw_cdp_options, parse_screenshot_capture_options,
         parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
-        png_dimensions, resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        parse_source_tree_options, png_dimensions, resolve_target_scope, select_implicit_context,
+        split_heap_reference_cli,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -4407,6 +4471,26 @@ mod tests {
             Some("renderer".to_owned())
         );
         assert!(parse_context_option(&arguments(&["renderer"])).is_err());
+    }
+
+    #[test]
+    fn parses_source_tree_kind_and_output_bounds() {
+        let (kind, options) =
+            parse_source_tree_options(&arguments(&["resolved", "--max-lines", "42", "--no-trim"]))
+                .unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Resolved);
+        assert_eq!(options.max_lines, 42);
+        assert!(!options.all);
+        assert!(!options.trim_width);
+
+        let (kind, options) = parse_source_tree_options(&arguments(&["loaded", "--all"])).unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Loaded);
+        assert!(options.all);
+        assert!(options.trim_width);
+
+        assert!(parse_source_tree_options(&arguments(&["loaded", "--max-lines", "0"])).is_err());
+        assert!(parse_source_tree_options(&arguments(&["unknown"])).is_err());
+        assert!(parse_source_tree_options(&[]).is_err());
     }
 
     #[test]

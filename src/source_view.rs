@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sourcemap::{DecodedMap, RawToken, SourceMap, decode_slice};
 
 use crate::content_store::{ContentHash, ContentStore, ContentStoreStats};
-use crate::context_source_model::{ContextSourceModel, SourceContributionId};
+use crate::context_source_model::{ContextSourceModel, SourceContributionId, SourceSnapshotRole};
 use crate::source_graph::{
     IdentityBasis, ProjectionId, ProjectionKind, RouteLimits, RouteSearch, SourceFileStoreError,
     SourceGraphError, SourceProjection, SourceSnapshot, SourceSnapshotId, SourceUri,
@@ -771,6 +771,8 @@ impl ResolvedSourceView {
                 .expect("runtime source values can be represented"),
             content,
         )?;
+        self.model
+            .mark_snapshot_role(&self.contribution, snapshot, SourceSnapshotRole::Loaded)?;
         self.generated_snapshots
             .insert(generated_url.to_owned(), snapshot);
         Ok(snapshot)

@@ -23,7 +23,9 @@ use crate::context_engine::{
 use crate::context_identity::{
     ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
 };
-use crate::context_source_model::{CompactedProjectionKind, ContextSourceModel};
+use crate::context_source_model::{
+    CompactedProjectionKind, ContextSourceGraphSnapshot, ContextSourceModel,
+};
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointSnapshot, BreakpointSpec, BreakpointStatus, CompactedSourceEdgeSnapshot,
@@ -37,9 +39,10 @@ use crate::service_api::{
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
     ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceDisplayOptions,
     SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot, SourceSearchOptions,
-    SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot, StepKind as ApiStepKind,
-    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot, SourceTreeKind,
+    SourceTreeSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot,
+    TargetWaitPredicate, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, VariableSnapshot,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
@@ -1413,28 +1416,60 @@ impl DebuggerServiceApi for DebuggerService {
         if roots.is_empty() {
             roots.extend(graph.sources.iter().map(|source| source.id.0));
         }
-        Ok(UncompactedSourceGraphSnapshot {
-            roots,
-            nodes: graph
-                .sources
+        Ok(uncompacted_graph_snapshot(graph, roots))
+    }
+
+    async fn show_source_tree(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        kind: SourceTreeKind,
+    ) -> Result<SourceTreeSnapshot, JsonRpcError> {
+        let model = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state.source_models.get(&context_id).cloned()
+        };
+        let sources = model.map_or_else(Vec::new, |model| match kind {
+            SourceTreeKind::Loaded => model.loaded_sources(),
+            SourceTreeKind::Resolved => model.resolved_loaded_sources(),
+        });
+        Ok(SourceTreeSnapshot {
+            kind,
+            sources: sources
                 .into_iter()
-                .map(|source| UncompactedSourceNodeSnapshot {
-                    id: source.id.0,
-                    uri: source.uri.display(),
-                    revision: source_revision_snapshot(source.revision),
-                })
-                .collect(),
-            edges: graph
-                .projections
-                .into_iter()
-                .map(|projection| UncompactedSourceEdgeSnapshot {
-                    id: projection.id.0,
-                    derived: projection.derived.0,
-                    basis: projection.basis.0,
-                    projection: projection_snapshot(projection.kind),
-                })
+                .map(uncompacted_source_node_snapshot)
                 .collect(),
         })
+    }
+
+    async fn resolve_sources(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        source: String,
+    ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
+        let model = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state.source_models.get(&context_id).cloned()
+        };
+        let Some(model) = model else {
+            return Ok(UncompactedSourceGraphSnapshot {
+                roots: Vec::new(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            });
+        };
+        let selection = model.resolve_sources(&source);
+        Ok(uncompacted_graph_snapshot(
+            selection.graph,
+            selection.roots.into_iter().map(|source| source.0).collect(),
+        ))
     }
 
     async fn show_source(
@@ -3280,6 +3315,40 @@ fn compacted_projection_label(kind: &CompactedProjectionKind) -> String {
             line_delta,
             column_delta,
         } => format!("offset ({line_delta:+} lines, {column_delta:+} columns)"),
+    }
+}
+
+fn uncompacted_graph_snapshot(
+    graph: ContextSourceGraphSnapshot,
+    roots: Vec<u64>,
+) -> UncompactedSourceGraphSnapshot {
+    UncompactedSourceGraphSnapshot {
+        roots,
+        nodes: graph
+            .sources
+            .into_iter()
+            .map(uncompacted_source_node_snapshot)
+            .collect(),
+        edges: graph
+            .projections
+            .into_iter()
+            .map(|projection| UncompactedSourceEdgeSnapshot {
+                id: projection.id.0,
+                derived: projection.derived.0,
+                basis: projection.basis.0,
+                projection: projection_snapshot(projection.kind),
+            })
+            .collect(),
+    }
+}
+
+fn uncompacted_source_node_snapshot(
+    source: crate::source_graph::SourceSnapshot,
+) -> UncompactedSourceNodeSnapshot {
+    UncompactedSourceNodeSnapshot {
+        id: source.id.0,
+        uri: source.uri.display(),
+        revision: source_revision_snapshot(source.revision),
     }
 }
 

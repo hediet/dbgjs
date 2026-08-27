@@ -564,6 +564,22 @@ pub enum UncompactedProjectionSnapshot {
     Offset { line_delta: i64, column_delta: i64 },
 }
 
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceTreeKind {
+    Loaded,
+    Resolved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTreeSnapshot {
+    pub kind: SourceTreeKind,
+    pub sources: Vec<UncompactedSourceNodeSnapshot>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceMappingSnapshot {
@@ -1260,6 +1276,16 @@ pub trait DebuggerServiceApi {
 
     async fn show_uncompacted_source_graph(
         context_id: String,
+    ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError>;
+
+    async fn show_source_tree(
+        context_id: String,
+        kind: SourceTreeKind,
+    ) -> Result<SourceTreeSnapshot, JsonRpcError>;
+
+    async fn resolve_sources(
+        context_id: String,
+        source: String,
     ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError>;
 
     async fn show_source(

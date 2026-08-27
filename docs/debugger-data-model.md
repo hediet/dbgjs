@@ -615,9 +615,11 @@ endpoints and from human-friendly logical paths. Its catalog is an index over
 the graph, not a separate per-connection source model.
 
 Live generated scripts remain owned by their connection and attachment. Each
-contributes an endpoint to the shared graph. Workspace, source-map, formatted,
-edited, and cached evidence can remain in the graph while all connections are
-offline.
+contribution marks its runtime snapshot with the `loaded` role in the shared
+graph. This role uses the same contribution lifetime and reference counting as
+snapshots and projections; there is no separate endpoint registry. Workspace,
+source-map, formatted, edited, and cached evidence can remain in the graph while
+all connections are offline.
 
 Every script observed through `Debugger.scriptParsed` contributes a
 provider-versioned snapshot immediately, including scripts without source maps
@@ -639,6 +641,20 @@ snapshots of the same URI.
 `jsdbg source graph --uncompacted` prints every retained snapshot and concrete
 projection, including revision identities but never source contents.
 
+`jsdbg source tree loaded` prints the URI hierarchy of snapshots carrying an
+active `loaded` role. `jsdbg source tree resolved` follows every authoritative
+`derived -> basis` projection from those snapshots and prints the terminal
+snapshots. Consequently, a loaded script without a projection appears in both
+trees. Both commands use the shared bounded-tree renderer: `--max-lines`
+controls vertical pruning, `--no-trim` preserves full line widths, and `--all`
+disables both kinds of trimming. Their JSON form always contains the complete
+selected snapshot set.
+
+`jsdbg source resolve <uri>` performs the same source-level traversal for every
+retained revision matching that URI and returns its concrete projection
+subgraph. `jsdbg source map <uri> <line> <column>` adds a position to that
+operation and maps it through the projections.
+
 Relative source-map entries are canonicalized against the resolved source-map
 URL after applying `sourceRoot`. The graph therefore uses absolute provider
 URLs where resolution is possible; collision-safe `source://` identities are
@@ -649,7 +665,13 @@ interface SourceGraphState {
 	readonly catalog: SourceCatalogState;
 	readonly snapshots: ReadonlyMap<SourceSnapshotId, SourceSnapshotState>;
 	readonly projections: readonly SourceProjectionEdgeState[];
-	readonly liveEndpoints: readonly RuntimeSourceEndpoint[];
+	readonly contributions: ReadonlyMap<SourceContributionId, SourceContributionState>;
+}
+
+interface SourceContributionState {
+	readonly snapshots: ReadonlySet<SourceSnapshotId>;
+	readonly projections: ReadonlySet<SourceProjectionId>;
+	readonly snapshotRoles: ReadonlyMap<SourceSnapshotId, ReadonlySet<"loaded">>;
 }
 
 interface SourceCatalogState {
@@ -673,11 +695,6 @@ interface SourceProjectionEdgeState {
 	readonly from: SourceSnapshotRef;
 	readonly to: SourceSnapshotRef;
 	readonly quality: MappingQuality;
-}
-
-interface RuntimeSourceEndpoint {
-	readonly script: ScriptRef;
-	readonly generatedSnapshot: DetailState<SourceSnapshotRef>;
 }
 
 interface RuntimeScriptState {

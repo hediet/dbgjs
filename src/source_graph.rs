@@ -548,6 +548,17 @@ impl SourceGraph {
         self.projections.values()
     }
 
+    pub fn dependencies(
+        &self,
+        source: SourceSnapshotId,
+    ) -> impl Iterator<Item = &SourceProjection> {
+        self.dependencies
+            .get(&source)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.projections.get(id))
+    }
+
     pub fn remove_projection(&mut self, id: ProjectionId) -> Option<SourceProjection> {
         let projection = self.projections.remove(&id)?;
         self.projection_index.remove(&(
@@ -665,7 +676,7 @@ impl SourceGraph {
         Ok(RouteSearch { status, routes })
     }
 
-    fn require_source(&self, source: SourceSnapshotId) -> Result<(), SourceGraphError> {
+    pub(crate) fn require_source(&self, source: SourceSnapshotId) -> Result<(), SourceGraphError> {
         if self.sources.contains(&source) {
             Ok(())
         } else {

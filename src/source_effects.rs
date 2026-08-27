@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 
 use crate::content_store::ContentStore;
-use crate::context_source_model::{ContextSourceModel, SourceContributionId};
+use crate::context_source_model::{ContextSourceModel, SourceContributionId, SourceSnapshotRole};
 use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
@@ -358,9 +358,13 @@ impl SourceEffectInterpreter {
             let SourceRevision::Version { namespace, value } = revision.clone() else {
                 unreachable!("runtime observations always use provider versions");
             };
-            self.model
+            let snapshot = self
+                .model
                 .intern_version(&contribution, uri.clone(), namespace, value)
                 .expect("runtime source revisions are non-empty");
+            self.model
+                .mark_snapshot_role(&contribution, snapshot, SourceSnapshotRole::Loaded)
+                .expect("runtime source snapshot is registered");
             self.runtime_sources.insert(
                 key,
                 RuntimeSourceObservation {

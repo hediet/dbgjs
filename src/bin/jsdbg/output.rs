@@ -8,10 +8,10 @@ use cdp_client::service_api::{
     HeapPathSnapshot, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
     ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceGraphViewSnapshot, SourceLocation,
-    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot,
+    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+    UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -77,6 +77,13 @@ pub struct HeapClassOutputOptions {
     pub max_lines: usize,
     pub instances: bool,
     pub sort_by_instances: bool,
+    pub trim_width: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct SourceTreeOutputOptions {
+    pub all: bool,
+    pub max_lines: usize,
     pub trim_width: bool,
 }
 
@@ -382,6 +389,18 @@ impl OutputFormat {
         }
         Ok(())
     }
+
+    pub fn print_source_tree(
+        &self,
+        snapshot: &SourceTreeSnapshot,
+        options: SourceTreeOutputOptions,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => print_source_tree_human(snapshot, options),
+            Self::Json => println!("{}", serde_json::to_string_pretty(snapshot)?),
+        }
+        Ok(())
+    }
 }
 
 fn page_logs(
@@ -536,6 +555,188 @@ impl HumanOutput for UncompactedSourceGraphSnapshot {
     fn print_human(&self) {
         print!("{}", render_uncompacted_source_graph(self));
     }
+}
+
+#[derive(Clone, Default)]
+struct SourceTreeMetrics {
+    sources: usize,
+    snapshots: usize,
+}
+
+impl TreeAggregate for SourceTreeMetrics {
+    fn merge(&mut self, other: &Self) {
+        self.sources += other.sources;
+        self.snapshots += other.snapshots;
+    }
+}
+
+struct SourceTreeStyle;
+
+impl BoundedTreeStyle<SourceTreeMetrics, ()> for SourceTreeStyle {
+    fn sort_weight(&self, aggregate: &SourceTreeMetrics) -> u64 {
+        aggregate.sources as u64
+    }
+
+    fn expansion_weight(&self, node: &BoundedTree<SourceTreeMetrics, ()>, _: bool) -> u64 {
+        if node.children().is_empty() {
+            0
+        } else {
+            node.aggregate().sources as u64
+        }
+    }
+
+    fn render_node(
+        &self,
+        label: &str,
+        node: &BoundedTree<SourceTreeMetrics, ()>,
+        _: &str,
+        _: bool,
+    ) -> String {
+        if node.leaf().is_some() {
+            let snapshots = node.aggregate().snapshots;
+            if snapshots > 1 {
+                format!("{label}  [{snapshots} snapshots]")
+            } else {
+                label.to_owned()
+            }
+        } else {
+            format!(
+                "{label}/  [{}]",
+                source_tree_metrics_label(node.aggregate())
+            )
+        }
+    }
+
+    fn render_leaf_children(
+        &self,
+        _: &str,
+        _: &BoundedTree<SourceTreeMetrics, ()>,
+        _: usize,
+        _: bool,
+    ) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn render_omitted(
+        &self,
+        hidden_items: usize,
+        _: usize,
+        aggregate: &SourceTreeMetrics,
+    ) -> String {
+        format!(
+            "[{hidden_items} items, {}]",
+            source_tree_metrics_label(aggregate)
+        )
+    }
+
+    fn render_all_pruned(
+        &self,
+        child_count: usize,
+        _: usize,
+        aggregate: &SourceTreeMetrics,
+    ) -> String {
+        format!(
+            "[all {child_count} children pruned, {}]",
+            source_tree_metrics_label(aggregate)
+        )
+    }
+}
+
+fn print_source_tree_human(snapshot: &SourceTreeSnapshot, options: SourceTreeOutputOptions) {
+    for line in source_tree_lines(snapshot, options) {
+        println!("{line}");
+    }
+}
+
+fn source_tree_lines(
+    snapshot: &SourceTreeSnapshot,
+    options: SourceTreeOutputOptions,
+) -> Vec<String> {
+    if snapshot.sources.is_empty() {
+        return vec![format!(
+            "No {} sources are currently observed.",
+            match snapshot.kind {
+                cdp_client::service_api::SourceTreeKind::Loaded => "loaded",
+                cdp_client::service_api::SourceTreeKind::Resolved => "resolved",
+            }
+        )];
+    }
+    let mut by_uri = BTreeMap::<String, usize>::new();
+    for source in &snapshot.sources {
+        *by_uri.entry(source.uri.clone()).or_default() += 1;
+    }
+    let mut tree = BoundedTree::default();
+    for (uri, snapshot_count) in by_uri {
+        tree.insert(
+            source_tree_components(&uri),
+            SourceTreeMetrics {
+                sources: 1,
+                snapshots: snapshot_count,
+            },
+            (),
+        );
+    }
+    let maximum_lines = if options.all {
+        usize::MAX
+    } else {
+        options.max_lines
+    };
+    let trim_width = options.trim_width && !options.all;
+    tree.render_with_options(
+        &SourceTreeStyle,
+        false,
+        TreeRenderOptions::terminal(maximum_lines, trim_width),
+    )
+}
+
+fn source_tree_metrics_label(metrics: &SourceTreeMetrics) -> String {
+    if metrics.snapshots > metrics.sources {
+        format!(
+            "{} source{}, {} snapshots",
+            metrics.sources,
+            if metrics.sources == 1 { "" } else { "s" },
+            metrics.snapshots
+        )
+    } else {
+        format!(
+            "{} source{}",
+            metrics.sources,
+            if metrics.sources == 1 { "" } else { "s" }
+        )
+    }
+}
+
+fn source_tree_components(uri: &str) -> Vec<String> {
+    let Ok(url) = url::Url::parse(uri) else {
+        return uri
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .map(str::to_owned)
+            .collect();
+    };
+    if url.cannot_be_a_base() {
+        return vec![uri.to_owned()];
+    }
+    let root = url[..url::Position::BeforePath].to_owned();
+    let mut components = vec![root];
+    components.extend(
+        url.path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|component| !component.is_empty())
+            .map(str::to_owned),
+    );
+    if let Some(last) = components.last_mut() {
+        if let Some(query) = url.query() {
+            last.push('?');
+            last.push_str(query);
+        }
+        if let Some(fragment) = url.fragment() {
+            last.push('#');
+            last.push_str(fragment);
+        }
+    }
+    components
 }
 
 fn render_uncompacted_source_graph(graph: &UncompactedSourceGraphSnapshot) -> String {
@@ -3064,11 +3265,11 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
 mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
-        ProcessTreeOutputOptions, aggregate_coverage_entries, coverage_entries,
-        effective_file_metrics, heap_path_lines, looks_minified_identifier, page_logs,
-        process_tree_lines, process_trees_json, render_compacted_source_graph,
-        render_heap_classes_human, render_uncompacted_source_graph, style_process_label,
-        style_session_label,
+        ProcessTreeOutputOptions, SourceTreeOutputOptions, aggregate_coverage_entries,
+        coverage_entries, effective_file_metrics, heap_path_lines, looks_minified_identifier,
+        page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
+        render_heap_classes_human, render_uncompacted_source_graph, source_tree_lines,
+        style_process_label, style_session_label,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -3077,7 +3278,8 @@ mod tests {
         HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapNodeSnapshot,
         HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
         ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
-        SourceSuffixRewriteSnapshot, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+        SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
+        UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
         UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
         UncompactedSourceRevisionSnapshot,
     };
@@ -3295,6 +3497,95 @@ mod tests {
 └─ projection #2 identity [declared by node] → #2 file:///workspace/src/app.ts  [content:2222222222222222] ↩
 "
         );
+    }
+
+    #[test]
+    fn source_tree_groups_uri_paths_and_reports_multiple_revisions() {
+        let revision = |value: &str| UncompactedSourceRevisionSnapshot::Version {
+            namespace: "test".into(),
+            value: value.into(),
+        };
+        let snapshot = SourceTreeSnapshot {
+            kind: SourceTreeKind::Loaded,
+            sources: vec![
+                UncompactedSourceNodeSnapshot {
+                    id: 1,
+                    uri: "https://example.test/src/a.ts".into(),
+                    revision: revision("1"),
+                },
+                UncompactedSourceNodeSnapshot {
+                    id: 2,
+                    uri: "https://example.test/src/a.ts".into(),
+                    revision: revision("2"),
+                },
+                UncompactedSourceNodeSnapshot {
+                    id: 3,
+                    uri: "https://example.test/src/nested/b.ts".into(),
+                    revision: revision("1"),
+                },
+                UncompactedSourceNodeSnapshot {
+                    id: 4,
+                    uri: "source://runtime/anonymous/4".into(),
+                    revision: revision("1"),
+                },
+            ],
+        };
+
+        let lines = source_tree_lines(
+            &snapshot,
+            SourceTreeOutputOptions {
+                all: true,
+                max_lines: 1,
+                trim_width: true,
+            },
+        );
+        assert_eq!(
+            lines,
+            [
+                "├─ https://example.test/src/  [2 sources, 3 snapshots]",
+                "│  ├─ a.ts  [2 snapshots]",
+                "│  └─ nested/b.ts",
+                "└─ source://runtime/anonymous/4",
+            ]
+        );
+    }
+
+    #[test]
+    fn source_tree_honors_line_budget_unless_all_is_requested() {
+        let snapshot = SourceTreeSnapshot {
+            kind: SourceTreeKind::Resolved,
+            sources: (0..20)
+                .map(|id| UncompactedSourceNodeSnapshot {
+                    id,
+                    uri: format!("file:///workspace/src/module-{id}/index.ts"),
+                    revision: UncompactedSourceRevisionSnapshot::Version {
+                        namespace: "test".into(),
+                        value: id.to_string(),
+                    },
+                })
+                .collect(),
+        };
+        let pruned = source_tree_lines(
+            &snapshot,
+            SourceTreeOutputOptions {
+                all: false,
+                max_lines: 5,
+                trim_width: false,
+            },
+        );
+        let complete = source_tree_lines(
+            &snapshot,
+            SourceTreeOutputOptions {
+                all: true,
+                max_lines: 5,
+                trim_width: false,
+            },
+        );
+
+        assert!(pruned.len() <= 5);
+        assert!(pruned.iter().any(|line| line.contains("pruned")));
+        assert!(complete.len() > 5);
+        assert!(complete.iter().all(|line| !line.contains("pruned")));
     }
 
     #[test]

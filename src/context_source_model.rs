@@ -22,12 +22,24 @@ impl SourceContributionId {
 struct SourceContribution {
     snapshots: BTreeSet<SourceSnapshotId>,
     projections: BTreeSet<ProjectionId>,
+    snapshot_roles: BTreeMap<SourceSnapshotRole, BTreeSet<SourceSnapshotId>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceSnapshotRole {
+    Loaded,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextSourceGraphSnapshot {
     pub sources: Vec<SourceSnapshot>,
     pub projections: Vec<SourceProjection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContextSourceGraphSelection {
+    pub roots: Vec<SourceSnapshotId>,
+    pub graph: ContextSourceGraphSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -195,6 +207,34 @@ impl ContextSourceModel {
         Ok(projection)
     }
 
+    pub fn mark_snapshot_role(
+        &self,
+        contribution: &SourceContributionId,
+        snapshot: SourceSnapshotId,
+        role: SourceSnapshotRole,
+    ) -> Result<(), SourceGraphError> {
+        let mut state = self.state.lock().unwrap();
+        state.graph.require_source(snapshot)?;
+        let inserted = state
+            .contributions
+            .entry(contribution.clone())
+            .or_default()
+            .snapshots
+            .insert(snapshot);
+        if inserted {
+            *state.snapshot_references.entry(snapshot).or_default() += 1;
+        }
+        state
+            .contributions
+            .get_mut(contribution)
+            .expect("contribution was inserted above")
+            .snapshot_roles
+            .entry(role)
+            .or_default()
+            .insert(snapshot);
+        Ok(())
+    }
+
     pub fn snapshot(&self, id: SourceSnapshotId) -> Option<SourceSnapshot> {
         self.state.lock().unwrap().files.snapshot(id).cloned()
     }
@@ -227,6 +267,96 @@ impl ContextSourceModel {
     pub fn compacted_graph(&self) -> CompactedSourceGraph {
         compact_source_graph(&self.graph_snapshot())
     }
+
+    pub fn loaded_sources(&self) -> Vec<SourceSnapshot> {
+        let state = self.state.lock().unwrap();
+        let loaded = contribution_snapshots_with_role(&state, SourceSnapshotRole::Loaded);
+        snapshots_by_id(&state, &loaded)
+    }
+
+    pub fn resolved_loaded_sources(&self) -> Vec<SourceSnapshot> {
+        let state = self.state.lock().unwrap();
+        let loaded = contribution_snapshots_with_role(&state, SourceSnapshotRole::Loaded);
+        let resolved = terminal_dependencies(&state.graph, &loaded);
+        snapshots_by_id(&state, &resolved)
+    }
+
+    pub fn resolve_sources(&self, selector: &str) -> ContextSourceGraphSelection {
+        let state = self.state.lock().unwrap();
+        let roots = state
+            .files
+            .snapshots()
+            .filter(|source| source.uri.as_str() == selector || source.uri.display() == selector)
+            .map(|source| source.id)
+            .collect::<BTreeSet<_>>();
+        let selected = reachable_dependencies(&state.graph, &roots);
+        let projections = state
+            .graph
+            .projections()
+            .filter(|projection| {
+                selected.contains(&projection.derived) && selected.contains(&projection.basis)
+            })
+            .cloned()
+            .collect();
+        ContextSourceGraphSelection {
+            roots: roots.into_iter().collect(),
+            graph: ContextSourceGraphSnapshot {
+                sources: snapshots_by_id(&state, &selected),
+                projections,
+            },
+        }
+    }
+}
+
+fn contribution_snapshots_with_role(
+    state: &ContextSourceState,
+    role: SourceSnapshotRole,
+) -> BTreeSet<SourceSnapshotId> {
+    state
+        .contributions
+        .values()
+        .filter_map(|contribution| contribution.snapshot_roles.get(&role))
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn snapshots_by_id(
+    state: &ContextSourceState,
+    ids: &BTreeSet<SourceSnapshotId>,
+) -> Vec<SourceSnapshot> {
+    ids.iter()
+        .filter_map(|id| state.files.snapshot(*id).cloned())
+        .collect()
+}
+
+fn reachable_dependencies(
+    graph: &SourceGraph,
+    roots: &BTreeSet<SourceSnapshotId>,
+) -> BTreeSet<SourceSnapshotId> {
+    let mut selected = BTreeSet::new();
+    let mut pending = roots.iter().copied().collect::<Vec<_>>();
+    while let Some(current) = pending.pop() {
+        if !selected.insert(current) {
+            continue;
+        }
+        pending.extend(
+            graph
+                .dependencies(current)
+                .map(|projection| projection.basis),
+        );
+    }
+    selected
+}
+
+fn terminal_dependencies(
+    graph: &SourceGraph,
+    roots: &BTreeSet<SourceSnapshotId>,
+) -> BTreeSet<SourceSnapshotId> {
+    reachable_dependencies(graph, roots)
+        .into_iter()
+        .filter(|source| graph.dependencies(*source).next().is_none())
+        .collect()
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1300,5 +1430,106 @@ mod tests {
         assert!(compacted.nodes.iter().any(|node| {
             node.prefix.as_str().contains("node_modules") && !node.runtime_internal
         }));
+    }
+
+    #[test]
+    fn loaded_roles_resolve_to_terminal_dependencies_and_are_collected() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let generated = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/out/app.js").unwrap(),
+                model.content_store().intern("generated"),
+            )
+            .unwrap();
+        let intermediate = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/src/app.ts").unwrap(),
+                model.content_store().intern("intermediate"),
+            )
+            .unwrap();
+        let first_leaf = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("file:///workspace/src/app.ts").unwrap(),
+                model.content_store().intern("first leaf"),
+            )
+            .unwrap();
+        let second_leaf = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("file:///workspace/src/helper.ts").unwrap(),
+                model.content_store().intern("second leaf"),
+            )
+            .unwrap();
+        let kind = || ProjectionKind::Identity {
+            basis: IdentityBasis::DeclaredByProvider("test".into()),
+        };
+        model
+            .add_projection(&owner, generated, intermediate, kind())
+            .unwrap();
+        model
+            .add_projection(&owner, intermediate, first_leaf, kind())
+            .unwrap();
+        model
+            .add_projection(&owner, generated, second_leaf, kind())
+            .unwrap();
+        model
+            .mark_snapshot_role(&owner, generated, SourceSnapshotRole::Loaded)
+            .unwrap();
+        model
+            .mark_snapshot_role(&owner, generated, SourceSnapshotRole::Loaded)
+            .unwrap();
+
+        assert_eq!(
+            model
+                .loaded_sources()
+                .into_iter()
+                .map(|source| source.id)
+                .collect::<Vec<_>>(),
+            [generated]
+        );
+        assert_eq!(
+            model
+                .resolved_loaded_sources()
+                .into_iter()
+                .map(|source| source.id)
+                .collect::<Vec<_>>(),
+            [first_leaf, second_leaf]
+        );
+
+        let resolved = model.resolve_sources("https://example.test/out/app.js");
+        assert_eq!(resolved.roots, [generated]);
+        assert_eq!(resolved.graph.sources.len(), 4);
+        assert_eq!(resolved.graph.projections.len(), 3);
+
+        model.release(&owner);
+        assert!(model.loaded_sources().is_empty());
+        assert!(model.resolved_loaded_sources().is_empty());
+    }
+
+    #[test]
+    fn projectionless_loaded_sources_are_already_resolved() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let source = model
+            .intern_version(
+                &owner,
+                SourceUri::parse("https://example.test/unmapped.js").unwrap(),
+                RevisionNamespace::new("cdp-script").unwrap(),
+                "script-1",
+            )
+            .unwrap();
+        model
+            .mark_snapshot_role(&owner, source, SourceSnapshotRole::Loaded)
+            .unwrap();
+
+        assert_eq!(
+            model.resolved_loaded_sources()[0].id,
+            source,
+            "an unmapped runtime source is its own terminal resolution"
+        );
     }
 }
