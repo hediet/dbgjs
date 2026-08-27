@@ -14,6 +14,7 @@
     "test:e2e:vscode-coverage": "playwright test tests/playwright/vscode-coverage-cli.spec.mjs",
     "test:e2e:vscode-heap": "playwright test tests/playwright/vscode-heap-cli.spec.mjs",
     "test:e2e:vscode-profile": "playwright test tests/playwright/vscode-profile-cli.spec.mjs",
+    "test:e2e:vscode-source-graph": "playwright test tests/playwright/vscode-source-graph-cli.spec.mjs",
     "test:e2e:extension-host-coverage": "playwright test tests/playwright/vscode-extension-host-coverage-cli.spec.mjs",
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
