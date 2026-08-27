@@ -79,12 +79,6 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 			],
 			environment,
 		);
-		await retryCli(
-			"Wait for the vscode.dev workbench.",
-			["target", "click", ".monaco-workbench"],
-			environment,
-			60_000,
-		);
 		const pageTarget = await findPageTargetId(
 			cli,
 			"vscode-source-graph",
@@ -96,6 +90,12 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 			"Select the vscode.dev page instead of its extension-host worker.",
 			["set", "target", "--target", pageTarget],
 			environment,
+		);
+		await retryCli(
+			"Wait for the vscode.dev workbench.",
+			["target", "click", ".monaco-workbench"],
+			environment,
+			60_000,
 		);
 		await runCli(
 			"Start precise coverage so loaded runtime scripts are observed.",
