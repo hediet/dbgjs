@@ -1333,7 +1333,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .into_iter()
                 .map(|node| CompactedSourceNodeSnapshot {
                     id: node.id,
-                    prefix: node.prefix.as_str().to_owned(),
+                    prefix: node.prefix.display(),
                     source_count: u32::try_from(node.source_count).unwrap_or(u32::MAX),
                     runtime_internal: node.runtime_internal,
                 })

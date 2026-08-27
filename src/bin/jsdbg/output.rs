@@ -532,7 +532,7 @@ impl HumanOutput for CompactedSourceGraphSnapshot {
 
 fn render_compacted_source_graph(graph: &CompactedSourceGraphSnapshot) -> String {
     if graph.nodes.is_empty() {
-        return "No source mappings are currently retained.\n".to_owned();
+        return "No sources are currently observed.\n".to_owned();
     }
     let mut output = String::new();
     let nodes = graph

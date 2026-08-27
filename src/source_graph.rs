@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -21,6 +22,39 @@ impl SourceUri {
 
     pub fn as_url(&self) -> &Url {
         &self.0
+    }
+
+    /// Returns a human-facing source address without the collision-safe
+    /// encoding used for embedded provider paths.
+    pub fn display(&self) -> String {
+        if self.0.scheme() != "source" {
+            return self.as_str().to_owned();
+        }
+        let path = self
+            .0
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .map(|segment| {
+                let segment = percent_decode_str(segment).decode_utf8_lossy();
+                match segment.as_ref() {
+                    "~dot" => ".".to_owned(),
+                    "~up" => "..".to_owned(),
+                    value if value.starts_with("~~") => value[1..].to_owned(),
+                    value => value.to_owned(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        if self.0.host_str() == Some("resolved") {
+            path
+        } else {
+            format!(
+                "source://{}/{}",
+                self.0.host_str().unwrap_or("embedded"),
+                path
+            )
+        }
     }
 
     pub fn from_file_path(path: impl AsRef<std::path::Path>) -> Result<Self, SourceUriError> {
@@ -842,6 +876,19 @@ mod tests {
         assert_ne!(
             SourceUri::embedded("resolved", "../src/app.ts").unwrap(),
             SourceUri::embedded("resolved", "src/app.ts").unwrap()
+        );
+        assert_eq!(embedded.display(), "../src/app.ts?raw");
+        assert_eq!(
+            SourceUri::embedded("resolved", "../../../src/vs/")
+                .unwrap()
+                .display(),
+            "../../../src/vs/"
+        );
+        assert_eq!(
+            SourceUri::embedded("runtime", "anonymous/session/script")
+                .unwrap()
+                .display(),
+            "source://runtime/anonymous/session/script"
         );
     }
 

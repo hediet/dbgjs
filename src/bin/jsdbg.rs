@@ -4284,7 +4284,7 @@ commands:
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
-  jsdbg source graph|map show [--context <id>]
+  jsdbg source graph [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
   jsdbg source map <path> <line> <column> [--context <id>]

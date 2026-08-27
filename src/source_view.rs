@@ -150,6 +150,7 @@ pub struct GeneratedSourceInput<'a> {
     pub url: &'a str,
     pub content: &'a str,
     pub source_map: Option<&'a [u8]>,
+    pub source_map_url: Option<&'a str>,
     pub minified: bool,
 }
 
@@ -288,7 +289,12 @@ impl ResolvedSourceView {
         if let Some(raw_map) = input.source_map {
             match self.add_source_map(raw_map) {
                 Ok(map_id) => {
-                    self.add_mapped_files(input.url, generated_snapshot, map_id)?;
+                    self.add_mapped_files(
+                        input.url,
+                        generated_snapshot,
+                        map_id,
+                        input.source_map_url,
+                    )?;
                     self.generated
                         .insert(input.url.into(), GeneratedProjection::SourceMap { map_id });
                     return Ok(());
@@ -320,8 +326,14 @@ impl ResolvedSourceView {
                     },
                 },
             ];
-            let formatted_snapshot =
-                self.register_resolved_candidates(&resolved_url, &candidates, formatted_content)?;
+            let formatted_snapshot = self.register_resolved_candidates(
+                &resolved_url,
+                SourceUri::parse(&resolved_url)
+                    .or_else(|_| SourceUri::embedded("resolved", &resolved_url))
+                    .expect("formatted source values can be represented"),
+                &candidates,
+                formatted_content,
+            )?;
             self.merge_file(
                 &resolved_url,
                 SourceKind::FormattedFallback,
@@ -357,8 +369,14 @@ impl ResolvedSourceView {
                     url: input.url.into(),
                 },
             }];
-            let resolved_snapshot =
-                self.register_resolved_candidates(&resolved_url, &candidates, generated_content)?;
+            let resolved_snapshot = self.register_resolved_candidates(
+                &resolved_url,
+                SourceUri::parse(&resolved_url)
+                    .or_else(|_| SourceUri::embedded("resolved", &resolved_url))
+                    .expect("runtime source values can be represented"),
+                &candidates,
+                generated_content,
+            )?;
             self.merge_file(
                 &resolved_url,
                 SourceKind::Identity,
@@ -600,6 +618,7 @@ impl ResolvedSourceView {
         generated_url: &str,
         generated_snapshot: SourceSnapshotId,
         map_id: MapId,
+        source_map_url: Option<&str>,
     ) -> Result<(), SourceViewError> {
         let map = &self.maps[map_id.0];
         let mut discovered = Vec::new();
@@ -635,8 +654,12 @@ impl ResolvedSourceView {
         }
         let map_content = self.maps[map_id.0].content;
         for (source_index, logical_url, candidates, path) in discovered {
-            let resolved_snapshot =
-                self.register_resolved_candidates(&logical_url, &candidates, path.content)?;
+            let resolved_snapshot = self.register_resolved_candidates(
+                &logical_url,
+                canonical_source_uri(source_map_url, &logical_url),
+                &candidates,
+                path.content,
+            )?;
             self.merge_file(&logical_url, SourceKind::Authored, candidates, path);
             if generated_snapshot != resolved_snapshot {
                 self.model.add_projection(
@@ -756,12 +779,10 @@ impl ResolvedSourceView {
     fn register_resolved_candidates(
         &mut self,
         logical_url: &str,
+        uri: SourceUri,
         candidates: &[ContentCandidate],
         projected_content: ContentHash,
     ) -> Result<SourceSnapshotId, SourceViewError> {
-        let uri = SourceUri::parse(logical_url)
-            .or_else(|_| SourceUri::embedded("resolved", logical_url))
-            .expect("logical source values can be embedded");
         let mut projected = None;
         for candidate in candidates {
             let snapshot =
@@ -792,6 +813,20 @@ impl ResolvedSourceView {
             .into_iter()
             .collect()
     }
+}
+
+fn canonical_source_uri(source_map_url: Option<&str>, logical_url: &str) -> SourceUri {
+    if let Ok(uri) = SourceUri::parse(logical_url) {
+        return uri;
+    }
+    if let Some(base) = source_map_url
+        && let Ok(base) = url::Url::parse(base)
+        && let Ok(uri) = base.join(&logical_url.replace('\\', "/"))
+        && let Ok(uri) = SourceUri::parse(uri.as_str())
+    {
+        return uri;
+    }
+    SourceUri::embedded("resolved", logical_url).expect("logical source values can be embedded")
 }
 
 impl Drop for ResolvedSourceView {
@@ -1045,6 +1080,7 @@ mod tests {
             url: "file:///app.js",
             content: "const answer = 42;",
             source_map: None,
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1081,6 +1117,7 @@ mod tests {
             url: "file:///bundle.js",
             content: "var answer=42;",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1146,6 +1183,7 @@ mod tests {
             url: "bundle.js",
             content: "const offline=true;",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1185,6 +1223,7 @@ mod tests {
             url: "bundle.js",
             content: "0123456789abcdef",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1208,6 +1247,7 @@ mod tests {
             url: "bundle.js",
             content: "call();",
             source_map: Some(&bytes),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1236,6 +1276,7 @@ mod tests {
             url: "bundle.js",
             content: "compiled",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1264,6 +1305,7 @@ mod tests {
                 url: "bundle.js",
                 content: "compiled",
                 source_map: Some(&map),
+                source_map_url: None,
                 minified: false,
             })
             .unwrap();
@@ -1313,6 +1355,7 @@ mod tests {
             url: "bundle.js",
             content: "first();\nsecond();",
             source_map: Some(&indexed),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1360,6 +1403,7 @@ mod tests {
                 url: "https://example.test/app.js",
                 content: "export const value=1;",
                 source_map: Some(&map),
+                source_map_url: None,
                 minified: false,
             })
             .unwrap();
@@ -1391,6 +1435,7 @@ mod tests {
             url: "file:///app.js",
             content,
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1409,6 +1454,7 @@ mod tests {
             url: "min.js",
             content: "function f(){return 42;}",
             source_map: None,
+            source_map_url: None,
             minified: true,
         })
         .unwrap();
@@ -1468,6 +1514,7 @@ mod tests {
                 url,
                 content: generated,
                 source_map: Some(map),
+                source_map_url: None,
                 minified: false,
             })
             .unwrap();
@@ -1515,6 +1562,7 @@ mod tests {
             url: "large.js",
             content: "x",
             source_map: Some(&raw),
+            source_map_url: None,
             minified: false,
         })
         .unwrap();
@@ -1527,6 +1575,35 @@ mod tests {
         assert!(before.estimated_decoded_token_bytes <= 10_000 * size_of::<RawToken>());
         let _ = view.reverse("src/large.ts", Position::ZERO);
         assert_eq!(view.memory_report().reverse_indexes_built, 1);
+    }
+
+    #[test]
+    fn source_map_paths_use_the_resolved_map_url_as_their_base() {
+        let map = regular_map(
+            "../../../src/vs/nls.ts",
+            Some("export const message = 'hello';"),
+            &[(0, 0, 0, 0)],
+        );
+        let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+        view.add_generated(GeneratedSourceInput {
+            url: "https://main.vscode-cdn.net/stable/commit/out/vs/workbench/workbench.js",
+            content: "const message='hello';",
+            source_map: Some(&map),
+            source_map_url: Some(
+                "https://main.vscode-cdn.net/sourcemaps/commit/core/vs/workbench/workbench.js.map",
+            ),
+            minified: false,
+        })
+        .unwrap();
+
+        let source = view
+            .resolved_snapshot("../../../src/vs/nls.ts")
+            .and_then(|snapshot| view.source_snapshot(snapshot))
+            .unwrap();
+        assert_eq!(
+            source.uri.as_str(),
+            "https://main.vscode-cdn.net/sourcemaps/commit/src/vs/nls.ts"
+        );
     }
 
     fn empty_view(policy: ResolutionPolicy) -> ResolvedSourceView {

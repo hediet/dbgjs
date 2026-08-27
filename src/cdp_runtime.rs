@@ -488,25 +488,28 @@ impl CdpDebuggerSession {
                     ))
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
-                let (source_map, source_map_error) = match source_map_url {
+                let (source_map, resolved_source_map_url, source_map_error) = match source_map_url {
                     Some(source_map_url) => {
                         match self
                             .load_source_map(generated_url, script_hash, source_map_url)
                             .await
                         {
-                            Ok(source_map) => (Some(Arc::from(source_map)), None),
+                            Ok((source_map, resolved_url)) => {
+                                (Some(Arc::from(source_map)), Some(resolved_url), None)
+                            }
                             Err(error) if error.is_source_map_unavailable() => {
-                                (None, Some(error.to_string()))
+                                (None, None, Some(error.to_string()))
                             }
                             Err(error) => return Err(error),
                         }
                     }
-                    None => (None, None),
+                    None => (None, None, None),
                 };
                 Ok(Some(Input::ScriptSourceFetched {
                     effect_id: *effect_id,
                     content: Arc::from(source.script_source),
                     source_map,
+                    source_map_url: resolved_source_map_url,
                     source_map_error,
                 }))
             }
@@ -596,9 +599,10 @@ impl CdpDebuggerSession {
         generated_url: &str,
         script_hash: &str,
         source_map_url: &str,
-    ) -> Result<Vec<u8>, CdpRuntimeError> {
+    ) -> Result<(Vec<u8>, String), CdpRuntimeError> {
         if source_map_url.starts_with("data:") {
-            return decode_source_map_data_url(source_map_url);
+            return decode_source_map_data_url(source_map_url)
+                .map(|source_map| (source_map, generated_url.to_owned()));
         }
 
         let resolved_url = resolve_source_map_url(generated_url, source_map_url)?;
@@ -623,7 +627,7 @@ impl CdpDebuggerSession {
                                 path.display()
                             );
                         }
-                        return Ok(source_map);
+                        return Ok((source_map, resolved_url));
                     }
                     eprintln!("ignoring invalid source-map cache entry {}", path.display());
                     if let Err(error) = tokio::fs::remove_file(path).await {
@@ -671,7 +675,7 @@ impl CdpDebuggerSession {
         } else {
             eprintln!("not caching invalid or unsupported source map {resolved_url}");
         }
-        Ok(bytes)
+        Ok((bytes, resolved_url))
     }
 
     async fn load_source_map_via_cdp(

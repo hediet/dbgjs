@@ -10,6 +10,7 @@ use crate::debugger_engine::{
     DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
+use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
 use crate::source_view::{
     GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
     ResolvedSourceView, SourceViewError,
@@ -48,12 +49,19 @@ struct ProjectedOffset {
     content: Arc<str>,
 }
 
+struct RuntimeSourceObservation {
+    contribution: SourceContributionId,
+    uri: SourceUri,
+    revision: SourceRevision,
+}
+
 pub struct SourceEffectInterpreter {
     options: SourceEffectOptions,
     model: Arc<ContextSourceModel>,
     contribution_prefix: String,
     store: Arc<ContentStore>,
     views: BTreeMap<EffectId, RetainedView>,
+    runtime_sources: BTreeMap<ScriptKey, RuntimeSourceObservation>,
 }
 
 struct GeneratedOffsetIndex {
@@ -165,6 +173,7 @@ impl SourceEffectInterpreter {
             contribution_prefix: contribution_prefix.into(),
             store,
             views: BTreeMap::new(),
+            runtime_sources: BTreeMap::new(),
         }
     }
 
@@ -176,6 +185,7 @@ impl SourceEffectInterpreter {
                 generated_url,
                 content,
                 source_map,
+                source_map_url,
                 ..
             } => {
                 let mut view = ResolvedSourceView::new(
@@ -194,6 +204,7 @@ impl SourceEffectInterpreter {
                     url: generated_url,
                     content,
                     source_map: source_map.as_deref(),
+                    source_map_url: source_map_url.as_deref(),
                     minified: source_map.is_none() && self.options.format_unmapped_sources,
                 })?;
                 let logical_sources = view
@@ -294,6 +305,71 @@ impl SourceEffectInterpreter {
             .collect();
         self.views
             .retain(|view_id, _| retained_ids.contains(view_id));
+
+        let desired = state
+            .scripts
+            .iter()
+            .filter(|(_, script)| !matches!(script.source, ScriptSourceState::Resolved(_)))
+            .map(|(key, script)| {
+                let uri = source_uri(&script.url, key);
+                let revision = SourceRevision::Version {
+                    namespace: RevisionNamespace::new("cdp-script")
+                        .expect("static revision namespace is valid"),
+                    value: if script.hash.is_empty() {
+                        format!(
+                            "anonymous:{}:{}:{}:{}",
+                            key.session.connection_generation,
+                            key.session.session_id,
+                            key.script_id,
+                            script.version
+                        )
+                    } else {
+                        script.hash.clone()
+                    },
+                };
+                (key.clone(), (uri, revision))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let stale = self
+            .runtime_sources
+            .iter()
+            .filter(|(key, observation)| {
+                desired.get(*key).is_none_or(|(uri, revision)| {
+                    observation.uri != *uri || observation.revision != *revision
+                })
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in stale {
+            if let Some(observation) = self.runtime_sources.remove(&key) {
+                self.model.release(&observation.contribution);
+            }
+        }
+
+        for (key, (uri, revision)) in desired {
+            if self.runtime_sources.contains_key(&key) {
+                continue;
+            }
+            let contribution = SourceContributionId::new(format!(
+                "{}/runtime/{}/{}",
+                self.contribution_prefix, key.session.session_id, key.script_id
+            ));
+            let SourceRevision::Version { namespace, value } = revision.clone() else {
+                unreachable!("runtime observations always use provider versions");
+            };
+            self.model
+                .intern_version(&contribution, uri.clone(), namespace, value)
+                .expect("runtime source revisions are non-empty");
+            self.runtime_sources.insert(
+                key,
+                RuntimeSourceObservation {
+                    contribution,
+                    uri,
+                    revision,
+                },
+            );
+        }
     }
 
     pub fn retained_view_count(&self) -> usize {
@@ -639,6 +715,30 @@ impl SourceEffectInterpreter {
     }
 }
 
+impl Drop for SourceEffectInterpreter {
+    fn drop(&mut self) {
+        for observation in self.runtime_sources.values() {
+            self.model.release(&observation.contribution);
+        }
+    }
+}
+
+fn source_uri(url: &str, key: &ScriptKey) -> SourceUri {
+    if url.is_empty() {
+        return SourceUri::embedded(
+            "runtime",
+            &format!(
+                "anonymous/{}/{}/{}",
+                key.session.connection_generation, key.session.session_id, key.script_id
+            ),
+        )
+        .expect("runtime source identities can be embedded");
+    }
+    SourceUri::parse(url)
+        .or_else(|_| SourceUri::embedded("runtime", url))
+        .expect("runtime source values can be represented")
+}
+
 fn mapping_quality_label(quality: MappingQuality) -> &'static str {
     match quality {
         MappingQuality::Exact => "exact",
@@ -726,6 +826,110 @@ mod tests {
             Position { line: 1, column: 0 }
         );
     }
+
+    #[test]
+    fn observes_unresolved_runtime_scripts_and_releases_them() {
+        let model = Arc::new(ContextSourceModel::new());
+        let mut interpreter = SourceEffectInterpreter::new(
+            SourceEffectOptions::default(),
+            model.clone(),
+            "test-target",
+        );
+        let state = reduce(&Arc::new(DebuggerState::default()), Input::Connected).state;
+        let state = reduce(
+            &state,
+            Input::SessionAttached {
+                session_id: "session-1".into(),
+                target_id: "target-1".into(),
+                parent_session_id: None,
+                waiting_for_debugger: false,
+            },
+        )
+        .state;
+        let session = state.sessions.keys().next().unwrap().clone();
+        let state = reduce(
+            &state,
+            Input::ScriptParsed {
+                session: session.clone(),
+                script_id: "script-1".into(),
+                url: "https://example.test/app.js".into(),
+                hash: "runtime-hash".into(),
+                source_map_url: None,
+            },
+        )
+        .state;
+
+        interpreter.retain_for_state(&state);
+        let snapshot = model.graph_snapshot();
+        assert_eq!(snapshot.sources.len(), 1);
+        assert_eq!(
+            snapshot.sources[0].revision,
+            SourceRevision::Version {
+                namespace: RevisionNamespace::new("cdp-script").unwrap(),
+                value: "runtime-hash".into(),
+            }
+        );
+        assert_eq!(model.compacted_graph().nodes.len(), 1);
+
+        let state = reduce(&state, Input::SessionDetached { session }).state;
+        interpreter.retain_for_state(&state);
+        assert!(model.graph_snapshot().sources.is_empty());
+    }
+
+    #[test]
+    fn resolved_content_replaces_the_runtime_observation() {
+        let model = Arc::new(ContextSourceModel::new());
+        let mut interpreter = SourceEffectInterpreter::new(
+            SourceEffectOptions::default(),
+            model.clone(),
+            "test-target",
+        );
+        let script = ScriptKey {
+            session: crate::debugger_engine::SessionKey {
+                connection_generation: 1,
+                session_id: "session-1".into(),
+            },
+            script_id: "script-1".into(),
+        };
+        let mut state = DebuggerState::default();
+        Arc::make_mut(&mut state.scripts).insert(
+            script.clone(),
+            Arc::new(crate::debugger_engine::ScriptState {
+                url: "https://example.test/app.js".into(),
+                hash: "runtime-hash".into(),
+                source_map_url: None,
+                version: 1,
+                source: ScriptSourceState::Unresolved,
+            }),
+        );
+        interpreter.retain_for_state(&state);
+        assert_eq!(model.graph_snapshot().sources.len(), 1);
+
+        let content_owner = SourceContributionId::new("test-target/content");
+        let content = model.content_store().intern("const value = 1;");
+        model
+            .intern_content(
+                &content_owner,
+                SourceUri::parse("https://example.test/app.js").unwrap(),
+                content,
+            )
+            .unwrap();
+        Arc::make_mut(Arc::make_mut(&mut state.scripts).get_mut(&script).unwrap()).source =
+            ScriptSourceState::Resolved(crate::debugger_engine::SourceViewState {
+                view_id: EffectId(1),
+                logical_sources: Arc::new(BTreeMap::new()),
+            });
+        interpreter.retain_for_state(&state);
+
+        let snapshot = model.graph_snapshot();
+        assert_eq!(snapshot.sources.len(), 1);
+        assert_eq!(
+            snapshot.sources[0].revision,
+            SourceRevision::Content(content)
+        );
+        model.release(&content_owner);
+    }
+
     use crate::debugger_engine::{
         BreakpointBinding, BreakpointKey, Diagnostic, FrameProjection, RawFrame, SessionPhase,
         reduce,
@@ -842,6 +1046,7 @@ mod tests {
                 effect_id: fetch_id,
                 content: Arc::from("var answer=42;"),
                 source_map: Some(Arc::from(source_map())),
+                source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
             &mut revisions,

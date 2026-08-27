@@ -619,6 +619,13 @@ contributes an endpoint to the shared graph. Workspace, source-map, formatted,
 edited, and cached evidence can remain in the graph while all connections are
 offline.
 
+Every script observed through `Debugger.scriptParsed` contributes a
+provider-versioned snapshot immediately, including scripts without source maps
+and scripts whose content has not been requested. Once a script is hydrated,
+its exact content-addressed snapshot replaces that runtime observation. Target
+or session removal releases its observations, while identical snapshots
+observed by other targets remain retained.
+
 Human graph views derive compacted presentation edges without changing the
 authoritative projections. Corresponding-path edges retain the invariant that
 every known relative path maps to the same relative path, optionally with one
@@ -626,6 +633,11 @@ consistent suffix rewrite. A source-map fan-out such as `bundle.js -> src/*`
 may also collapse to one presentation edge when every known mapping into that
 subtree comes from that bundle. A competing `bundle2.js -> src/*` prevents the
 broader collapse.
+
+Relative source-map entries are canonicalized against the resolved source-map
+URL after applying `sourceRoot`. The graph therefore uses absolute provider
+URLs where resolution is possible; collision-safe `source://` identities are
+reserved for provider values that cannot be represented as absolute URLs.
 
 ```ts
 interface SourceGraphState {

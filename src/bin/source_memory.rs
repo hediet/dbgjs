@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             url,
             content: "x",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })?;
     }
@@ -61,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             url: "benchmark.js",
             content: "",
             source_map: Some(&map),
+            source_map_url: None,
             minified: false,
         })?;
         let build = started.elapsed();

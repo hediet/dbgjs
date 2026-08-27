@@ -115,18 +115,19 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 		);
 		expect(coverage).toMatch(/\.tsx?\s+\d+ HL, \d+ RL/);
 		const graph = await runCli(
-			"Render the shared compacted source-map graph.",
-			["source", "map", "show"],
+			"Render the complete shared compacted source graph.",
+			["source", "graph"],
 			environment,
 		);
-		expect(graph).not.toContain("No source mappings are currently retained.");
+		expect(graph).not.toContain("No sources are currently observed.");
 		expect(graph).toContain("source map");
 		expect(graph).toContain("workbench.web.main.internal.js");
 		expect(graph).toMatch(/\[\d+ mappings, fan-out\]/);
 		expect(graph).toMatch(
-			/source:\/\/resolved\/~up\/~up\/~up\/src\/vs\/\*\s+\[\d+ sources\]/,
+			/https:\/\/main\.vscode-cdn\.net\/sourcemaps\/[^/]+\/src\/vs\/\*\s+\[\d+ sources\]/,
 		);
-		expect(graph.trimEnd().split("\n")).toHaveLength(2);
+		expect(graph).not.toContain("~up");
+		expect(graph.trimEnd().split("\n").length).toBeGreaterThan(2);
 	} finally {
 		await run(cli, ["service", "stop"], environment, { timeoutMs: 10_000 });
 		await browser.close();

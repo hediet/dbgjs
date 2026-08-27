@@ -295,6 +295,8 @@ pub enum Effect {
         generated_url: String,
         content: Arc<str>,
         source_map: Option<Arc<[u8]>>,
+        #[serde(default)]
+        source_map_url: Option<String>,
     },
     MapBreakpoint {
         effect_id: EffectId,
@@ -395,6 +397,8 @@ pub enum Input {
         effect_id: EffectId,
         content: Arc<str>,
         source_map: Option<Arc<[u8]>>,
+        #[serde(default)]
+        source_map_url: Option<String>,
         source_map_error: Option<String>,
     },
     SourceViewBuilt {
@@ -620,6 +624,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             effect_id,
             content,
             source_map,
+            source_map_url,
             source_map_error,
         } => {
             let Some(PendingEffect::FetchScriptSource { script, version }) =
@@ -666,6 +671,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 generated_url: script_state.url.clone(),
                 content,
                 source_map,
+                source_map_url,
             });
         }
         Input::SourceViewBuilt {
@@ -2214,6 +2220,7 @@ mod tests {
                 effect_id: fetch_id,
                 content: Arc::from("compiled"),
                 source_map: Some(Arc::from([])),
+                source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
         );
@@ -2296,6 +2303,7 @@ mod tests {
                 effect_id: fetch_id,
                 content: Arc::from("compiled"),
                 source_map: None,
+                source_map_url: None,
                 source_map_error: None,
             },
         );
@@ -2438,6 +2446,7 @@ mod tests {
                 effect_id: old_fetch,
                 content: Arc::from("old"),
                 source_map: None,
+                source_map_url: None,
                 source_map_error: None,
             },
         );
@@ -2491,6 +2500,7 @@ mod tests {
                 effect_id: old_fetch,
                 content: Arc::from("old"),
                 source_map: None,
+                source_map_url: None,
                 source_map_error: None,
             },
         );
@@ -3104,6 +3114,7 @@ mod tests {
                 effect_id,
                 content: Arc::from("compiled"),
                 source_map: None,
+                source_map_url: None,
                 source_map_error: Some("HTTP 404".into()),
             },
         );
@@ -3178,6 +3189,7 @@ mod tests {
                 effect_id,
                 content: Arc::from("compiled"),
                 source_map: Some(Arc::from([])),
+                source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
         );
