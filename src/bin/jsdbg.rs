@@ -14,7 +14,7 @@ use cdp_client::service_api::{
     HeapPathCost, HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel,
     ProcessRole, PromiseState, SourceDisplayOptions, SourceSearchOptions, StepKind,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 
@@ -181,10 +181,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?)?;
         }
-        [promise, inspect, object_id, options @ ..]
-            if promise == "promise" && inspect == "inspect" =>
-        {
-            let max_preview_length = parse_promise_preview_options(options)?;
+        [value, arguments @ ..] if value == "value" => {
+            let options = parse_value_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
@@ -195,17 +193,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                 )
                 .await)?;
-            let promise = rpc(client
-                .inspect_promise(
+            let value = rpc(client
+                .inspect_value(
                     scope.context,
                     scope.connection,
                     scope.target,
                     pause_epoch(&snapshot),
-                    object_id.clone(),
-                    max_preview_length,
+                    options.selector,
+                    options.max_preview_length,
                 )
                 .await)?;
-            output.print(&promise)?;
+            output.print(&value)?;
         }
         [target, logpoint, id, source, line, column, expression]
             if target == "target" && logpoint == "logpoint" =>
@@ -1555,7 +1553,13 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
     let command = arguments.first().map(String::as_str);
     let operation = arguments.get(1).map(String::as_str);
     match (command, operation) {
-        (Some("target" | "coverage" | "profile" | "heap" | "screenshot" | "log" | "watch"), _)
+        (
+            Some(
+                "target" | "value" | "coverage" | "profile" | "promise" | "heap" | "screenshot"
+                | "log" | "watch",
+            ),
+            _,
+        )
         | (Some("breakpoint"), Some("set"))
         | (Some("set"), Some("target")) => ScopeOptionKind {
             context: true,
@@ -2862,25 +2866,83 @@ fn parse_u32_option(values: &[String], index: usize, option: &str) -> Result<u32
         })
 }
 
-fn parse_promise_preview_options(arguments: &[String]) -> Result<u32, io::Error> {
+struct ValueOptions {
+    selector: ValueSelector,
+    max_preview_length: u32,
+}
+
+fn parse_value_options(arguments: &[String]) -> Result<ValueOptions, io::Error> {
+    let mut expression = None;
+    let mut object_id = None;
+    let mut allow_side_effects = false;
     let mut max_preview_length = DEFAULT_PROMISE_PREVIEW_LENGTH;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--object-id" => {
+                index += 1;
+                object_id = Some(
+                    arguments
+                        .get(index)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--object-id requires a value",
+                            )
+                        })?
+                        .clone(),
+                );
+            }
+            "--allow-side-effects" => allow_side_effects = true,
             "--max-preview-length" => {
                 index += 1;
                 max_preview_length = parse_u32_option(arguments, index, "--max-preview-length")?;
             }
-            option => {
+            argument if argument.starts_with("--") => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("unknown promise option '{option}'"),
+                    format!("unknown value option '{argument}'"),
+                ));
+            }
+            argument if expression.is_none() => expression = Some(argument.to_owned()),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "value accepts exactly one JavaScript expression",
                 ));
             }
         }
         index += 1;
     }
-    Ok(max_preview_length)
+    let selector = match (expression, object_id) {
+        (Some(expression), None) => ValueSelector::Expression {
+            expression,
+            allow_side_effects,
+        },
+        (None, Some(object_id)) if !allow_side_effects => ValueSelector::RemoteObject { object_id },
+        (None, Some(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--allow-side-effects only applies to JavaScript expressions",
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "provide either a JavaScript expression or --object-id, not both",
+            ));
+        }
+        (None, None) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "value requires a JavaScript expression or --object-id",
+            ));
+        }
+    };
+    Ok(ValueOptions {
+        selector,
+        max_preview_length,
+    })
 }
 
 struct PromiseListOptions {
@@ -4091,7 +4153,8 @@ commands:
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
   jsdbg target eval|watch <expression> [target scope]
-  jsdbg promise inspect <remote-object-id> [--max-preview-length <count>] [target scope]
+  jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [target scope]
+  jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [target scope]
   jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
   jsdbg log [--after <cursor>] [--limit <count>] [target scope]
@@ -4122,7 +4185,7 @@ commands:
 
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
-  Accepted by target, log, screenshot, coverage, profile, promise, and heap commands.
+  Accepted by target, value, log, screenshot, coverage, profile, promise, and heap commands.
   --connection is only needed when the target selector is ambiguous."
 }
 
@@ -4135,13 +4198,14 @@ mod tests {
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
         parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
         parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
-        parse_promise_preview_options, parse_screenshot_capture_options, parse_source_grep_options,
-        parse_source_map_arguments, parse_source_show_options, png_dimensions,
-        resolve_target_scope, split_heap_reference_cli,
+        parse_screenshot_capture_options, parse_source_grep_options, parse_source_map_arguments,
+        parse_source_show_options, parse_value_options, png_dimensions, resolve_target_scope,
+        split_heap_reference_cli,
     };
     use cdp_client::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
         HeapEdgePolicy, HeapPathCost, HeapPathDirection, PromiseState, TargetSnapshot,
+        ValueSelector,
     };
 
     fn arguments(values: &[&str]) -> Vec<String> {
@@ -4161,11 +4225,6 @@ mod tests {
 
     #[test]
     fn parses_bounded_promise_options() {
-        assert_eq!(parse_promise_preview_options(&arguments(&[])).unwrap(), 120);
-        assert_eq!(
-            parse_promise_preview_options(&arguments(&["--max-preview-length", "7"])).unwrap(),
-            7
-        );
         let options = parse_promise_list_options(&arguments(&[
             "capture",
             "--state",
@@ -4180,6 +4239,72 @@ mod tests {
         assert_eq!(options.state, Some(PromiseState::Rejected));
         assert_eq!(options.limit, 8);
         assert_eq!(options.max_preview_length, 32);
+    }
+
+    #[test]
+    fn parses_value_selectors_and_side_effect_policy() {
+        let mut scoped = arguments(&[
+            "value",
+            "user.promise",
+            "--context",
+            "app",
+            "--connection",
+            "node",
+            "--target",
+            "$node-root",
+        ]);
+        let scope = extract_scope_options(&mut scoped).unwrap();
+        assert_eq!(scoped, arguments(&["value", "user.promise"]));
+        assert_eq!(
+            scope,
+            ScopeOptions {
+                context: Some("app".to_owned()),
+                connection: Some("node".to_owned()),
+                target: Some("$node-root".to_owned()),
+            }
+        );
+
+        let options = parse_value_options(&arguments(&["user.promise"])).unwrap();
+        assert_eq!(
+            options.selector,
+            ValueSelector::Expression {
+                expression: "user.promise".to_owned(),
+                allow_side_effects: false,
+            }
+        );
+        assert_eq!(options.max_preview_length, 120);
+
+        let options = parse_value_options(&arguments(&[
+            "refresh()",
+            "--allow-side-effects",
+            "--max-preview-length",
+            "40",
+        ]))
+        .unwrap();
+        assert_eq!(
+            options.selector,
+            ValueSelector::Expression {
+                expression: "refresh()".to_owned(),
+                allow_side_effects: true,
+            }
+        );
+        assert_eq!(options.max_preview_length, 40);
+
+        let options = parse_value_options(&arguments(&["--object-id", "{\"id\":1}"])).unwrap();
+        assert_eq!(
+            options.selector,
+            ValueSelector::RemoteObject {
+                object_id: "{\"id\":1}".to_owned(),
+            }
+        );
+        assert!(
+            parse_value_options(&arguments(&[
+                "--object-id",
+                "{\"id\":1}",
+                "--allow-side-effects"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]

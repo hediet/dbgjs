@@ -10,6 +10,7 @@ use cdp_client::service_api::{
     PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
     SourceSnapshotInfo, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    ValueSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -698,9 +699,6 @@ impl HumanOutput for HeapCaptureResult {
 impl HumanOutput for PromiseSnapshot {
     fn print_human(&self) {
         println!("{}", promise_line(self));
-        for evidence in &self.evidence {
-            println!("  evidence: {:?}: {}", evidence.source, evidence.detail);
-        }
     }
 }
 
@@ -1666,6 +1664,46 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
 impl HumanOutput for EvaluationSnapshot {
     fn print_human(&self) {
         println!("{}", render_evaluation(self));
+    }
+}
+
+impl HumanOutput for ValueSnapshot {
+    fn print_human(&self) {
+        if let Some(promise) = &self.promise {
+            println!("Promise <{}>", promise_state_name(promise.state));
+            if let Some(settlement) = &promise.settlement {
+                let label = if promise.state == cdp_client::service_api::PromiseState::Rejected {
+                    "reason"
+                } else {
+                    "value"
+                };
+                let preview = settlement.preview.as_deref().unwrap_or("<no preview>");
+                println!(
+                    "  {label}: {preview}{}",
+                    if settlement.truncated { "..." } else { "" }
+                );
+                if let Some(reference) = &settlement.reference {
+                    println!("  settlement reference: {reference}");
+                }
+            }
+            if let Some(reference) = &self.preview.reference {
+                println!("  reference: {reference}");
+            }
+            return;
+        }
+
+        println!("{}", render_value_snapshot(self));
+        for property in &self.properties {
+            let value = property.value.preview.as_deref().unwrap_or("<no preview>");
+            let truncated = if property.value.truncated { "..." } else { "" };
+            let reference = property
+                .value
+                .reference
+                .as_deref()
+                .map(|reference| format!(" ({reference})"))
+                .unwrap_or_default();
+            println!("  {}: {value}{truncated}{reference}", property.name);
+        }
     }
 }
 
@@ -2819,6 +2857,23 @@ fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
         .or_else(|| evaluation.unserializable_value.clone())
         .or_else(|| evaluation.description.clone())
         .unwrap_or_else(|| evaluation.kind.clone())
+}
+
+fn render_value_snapshot(value: &ValueSnapshot) -> String {
+    let preview = value
+        .preview
+        .preview
+        .as_deref()
+        .or(value.class_name.as_deref())
+        .unwrap_or(&value.preview.kind);
+    let truncated = if value.preview.truncated { "..." } else { "" };
+    let reference = value
+        .preview
+        .reference
+        .as_deref()
+        .map(|reference| format!(" ({reference})"))
+        .unwrap_or_default();
+    format!("{preview}{truncated}{reference}")
 }
 
 fn format_value(value: &serde_json::Value) -> String {

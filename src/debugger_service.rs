@@ -32,11 +32,11 @@ use crate::service_api::{
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
-    PromiseSelectionSnapshot, PromiseSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo,
-    SourceContentSnapshot, SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot,
-    SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
-    SourceSuffixRewriteSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot,
-    TargetWaitPredicate, VariableSnapshot,
+    PromiseSelectionSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot,
+    SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
+    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
+    StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate,
+    ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
@@ -1995,19 +1995,19 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
     }
 
-    async fn inspect_promise(
+    async fn inspect_value(
         &self,
         _ctx: &CallCtx,
         context_id: String,
         connection_id: String,
         target_id: String,
         pause_epoch: Option<u64>,
-        object_id: String,
+        selector: ValueSelector,
         max_preview_length: u32,
-    ) -> Result<PromiseSnapshot, JsonRpcError> {
+    ) -> Result<ValueSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .inspect_promise(pause_epoch, object_id, max_preview_length)
+            .inspect_value(pause_epoch, selector, max_preview_length)
             .await
             .map_err(target_debugger_rpc_error)
     }

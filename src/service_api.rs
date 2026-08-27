@@ -634,6 +634,37 @@ pub struct EvaluationSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ValueSelector {
+    Expression {
+        expression: String,
+        #[serde(rename = "allowSideEffects")]
+        allow_side_effects: bool,
+    },
+    RemoteObject {
+        object_id: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueSnapshot {
+    pub selector: ValueSelector,
+    pub subtype: Option<String>,
+    pub class_name: Option<String>,
+    pub preview: ValuePreviewSnapshot,
+    pub properties: Vec<ValuePropertySnapshot>,
+    pub promise: Option<PromiseSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePropertySnapshot {
+    pub name: String,
+    pub value: ValuePreviewSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenshotSnapshot {
     pub media_type: String,
@@ -681,25 +712,9 @@ pub enum PromiseClassification {
     Indeterminate,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum PromiseEvidenceSource {
-    LiveInternalProperty,
-    HeapNode,
-    HeapEdge,
-    Unavailable,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct PromiseEvidenceSnapshot {
-    pub source: PromiseEvidenceSource,
-    pub detail: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PromiseValueSnapshot {
+pub struct ValuePreviewSnapshot {
     pub kind: String,
     pub preview: Option<String>,
     pub truncated: bool,
@@ -712,10 +727,9 @@ pub struct PromiseSnapshot {
     pub reference: String,
     pub origin: PromiseOrigin,
     pub state: PromiseState,
-    pub settlement: Option<PromiseValueSnapshot>,
+    pub settlement: Option<ValuePreviewSnapshot>,
     pub retained: Option<bool>,
     pub classification: PromiseClassification,
-    pub evidence: Vec<PromiseEvidenceSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1372,14 +1386,14 @@ pub trait DebuggerServiceApi {
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, JsonRpcError>;
 
-    async fn inspect_promise(
+    async fn inspect_value(
         context_id: String,
         connection_id: String,
         target_id: String,
         pause_epoch: Option<u64>,
-        object_id: String,
+        selector: ValueSelector,
         max_preview_length: u32,
-    ) -> Result<PromiseSnapshot, JsonRpcError>;
+    ) -> Result<ValueSnapshot, JsonRpcError>;
 
     async fn set_logpoint(
         context_id: String,

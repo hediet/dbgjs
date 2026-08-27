@@ -16,8 +16,9 @@ use crate::cdp::{
     PageCaptureScreenshotParams, PageCaptureScreenshotParamsFormat, ProfilerEnableParams,
     ProfilerProfile, ProfilerScriptCoverage, ProfilerSetSamplingIntervalParams,
     ProfilerStartParams, ProfilerStartPreciseCoverageParams, ProfilerStopParams,
-    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams,
-    RuntimeGetPropertiesParams, RuntimeRemoteObject,
+    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams, RuntimeExceptionDetails,
+    RuntimeGetPropertiesParams, RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor,
+    RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::context_source_model::ContextSourceModel;
@@ -31,7 +32,9 @@ use crate::heap_graph::{
     PathOptions, TextMatcher, TraversalDirection, parse_heap_graph,
 };
 use crate::heap_snapshot::{HeapConstructorGroup, parse_constructor_groups};
-use crate::promise_debugging::{inspect_heap_promises, inspect_live_promise};
+use crate::promise_debugging::{
+    has_live_promise_evidence, inspect_heap_promises, inspect_live_promise, remote_value_snapshot,
+};
 use crate::service_api::{
     ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
     CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
@@ -44,11 +47,12 @@ use crate::service_api::{
     HeapNodeSelector, HeapNodeSnapshot, HeapPathCost, HeapPathDirection, HeapPathOptions,
     HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection, HeapReferenceSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
-    HeapTraversalDirection, PauseSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, PromiseState,
-    ScopeSnapshot, ScreenshotSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
+    HeapTraversalDirection, PauseSnapshot, PromiseSelectionSnapshot, PromiseState, ScopeSnapshot,
+    ScreenshotSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
-    TargetScriptStatus, TargetWaitPredicate, VariableSnapshot,
+    TargetScriptStatus, TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot,
+    ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -265,17 +269,17 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
-    pub async fn inspect_promise(
+    pub async fn inspect_value(
         &self,
         pause_epoch: Option<u64>,
-        object_id: String,
+        selector: ValueSelector,
         max_preview_length: u32,
-    ) -> Result<PromiseSnapshot, TargetDebuggerError> {
+    ) -> Result<ValueSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
-            .send(TargetCommand::InspectPromise {
+            .send(TargetCommand::InspectValue {
                 pause_epoch,
-                object_id,
+                selector,
                 max_preview_length,
                 response,
             })
@@ -851,11 +855,11 @@ enum TargetCommand {
         object_id: String,
         response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
     },
-    InspectPromise {
+    InspectValue {
         pause_epoch: Option<u64>,
-        object_id: String,
+        selector: ValueSelector,
         max_preview_length: u32,
-        response: oneshot::Sender<Result<PromiseSnapshot, TargetDebuggerError>>,
+        response: oneshot::Sender<Result<ValueSnapshot, TargetDebuggerError>>,
     },
     SourceContent {
         path: String,
@@ -1297,17 +1301,17 @@ async fn run_target(
                 let result = object_properties(&driver, &session_key, pause_epoch, object_id).await;
                 let _ = response.send(result);
             }
-            Next::Command(Some(TargetCommand::InspectPromise {
+            Next::Command(Some(TargetCommand::InspectValue {
                 pause_epoch,
-                object_id,
+                selector,
                 max_preview_length,
                 response,
             })) => {
-                let result = inspect_promise(
+                let result = inspect_value(
                     &driver,
                     &session_key,
                     pause_epoch,
-                    object_id,
+                    selector,
                     max_preview_length,
                 )
                 .await;
@@ -3903,6 +3907,34 @@ async fn evaluate(
     frame_index: u32,
     expression: String,
 ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
+    let result = evaluate_remote(
+        driver,
+        session_key,
+        pause_epoch,
+        frame_index,
+        expression.clone(),
+        true,
+    )
+    .await?;
+    let kind = remote_object_kind(&result);
+    Ok(EvaluationSnapshot {
+        expression,
+        kind,
+        value: result.value,
+        unserializable_value: result.unserializable_value,
+        description: result.description,
+        object_id: result.object_id,
+    })
+}
+
+async fn evaluate_remote(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    frame_index: u32,
+    expression: String,
+    allow_side_effects: bool,
+) -> Result<RuntimeRemoteObject, TargetDebuggerError> {
     let result = if let Some(pause_epoch) = pause_epoch {
         let pause = require_pause(driver, session_key, pause_epoch)?;
         let frame = pause
@@ -3913,41 +3945,36 @@ async fn evaluate(
             DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
         params.return_by_value = Some(false);
         params.generate_preview = Some(true);
+        params.throw_on_side_effect = Some(!allow_side_effects);
         let evaluated = driver
             .client()
             .debugger_evaluate_on_call_frame(params)
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
-            return Err(TargetDebuggerError::Evaluation(exception.text));
+            return Err(TargetDebuggerError::Evaluation(exception_message(
+                exception,
+            )));
         }
         evaluated.result
     } else {
         let mut params = crate::cdp::RuntimeEvaluateParams::new(expression.clone());
         params.return_by_value = Some(false);
         params.generate_preview = Some(true);
+        params.throw_on_side_effect = Some(!allow_side_effects);
         let evaluated = driver
             .client()
             .runtime_evaluate(params)
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
-            return Err(TargetDebuggerError::Evaluation(exception.text));
+            return Err(TargetDebuggerError::Evaluation(exception_message(
+                exception,
+            )));
         }
         evaluated.result
     };
-    let kind = serde_json::to_value(&result.r#type)
-        .ok()
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned());
-    Ok(EvaluationSnapshot {
-        expression,
-        kind,
-        value: result.value,
-        unserializable_value: result.unserializable_value,
-        description: result.description,
-        object_id: result.object_id,
-    })
+    Ok(result)
 }
 
 async fn scope_variables(
@@ -3981,6 +4008,30 @@ async fn object_properties(
     pause_epoch: Option<u64>,
     object_id: String,
 ) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
+    let (properties, _) =
+        get_object_property_descriptors(driver, session_key, pause_epoch, object_id).await?;
+    Ok(properties
+        .into_iter()
+        .filter_map(|property| {
+            property
+                .value
+                .map(|value| variable_snapshot(property.name, value))
+        })
+        .collect())
+}
+
+async fn get_object_property_descriptors(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    object_id: String,
+) -> Result<
+    (
+        Vec<RuntimePropertyDescriptor>,
+        Vec<RuntimeInternalPropertyDescriptor>,
+    ),
+    TargetDebuggerError,
+> {
     if let Some(pause_epoch) = pause_epoch {
         require_pause(driver, session_key, pause_epoch)?;
     }
@@ -3993,51 +4044,129 @@ async fn object_properties(
         .await
         .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
     if let Some(exception) = result.exception_details {
-        return Err(TargetDebuggerError::Properties(exception.text));
+        return Err(TargetDebuggerError::Properties(exception_message(
+            exception,
+        )));
     }
-    Ok(result
-        .result
-        .into_iter()
-        .filter_map(|property| {
-            property
-                .value
-                .map(|value| variable_snapshot(property.name, value))
-        })
-        .collect())
-}
-
-async fn inspect_promise(
-    driver: &DebuggerDriver,
-    session_key: &SessionKey,
-    pause_epoch: Option<u64>,
-    object_id: String,
-    max_preview_length: u32,
-) -> Result<PromiseSnapshot, TargetDebuggerError> {
-    if let Some(pause_epoch) = pause_epoch {
-        require_pause(driver, session_key, pause_epoch)?;
-    }
-    let mut params = RuntimeGetPropertiesParams::new(object_id.clone());
-    params.own_properties = Some(true);
-    let result = driver
-        .client()
-        .runtime_get_properties(params)
-        .await
-        .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
-    if let Some(exception) = result.exception_details {
-        return Err(TargetDebuggerError::Properties(exception.text));
-    }
-    Ok(inspect_live_promise(
-        object_id,
+    Ok((
+        result.result,
         result.internal_properties.unwrap_or_default(),
-        max_preview_length,
     ))
 }
 
-fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {
-    let kind = serde_json::to_value(&value.r#type)
+async fn inspect_value(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    selector: ValueSelector,
+    max_preview_length: u32,
+) -> Result<ValueSnapshot, TargetDebuggerError> {
+    let (remote, selector) = match selector {
+        ValueSelector::Expression {
+            expression,
+            allow_side_effects,
+        } => {
+            let remote = evaluate_remote(
+                driver,
+                session_key,
+                pause_epoch,
+                0,
+                expression.clone(),
+                allow_side_effects,
+            )
+            .await?;
+            (
+                Some(remote),
+                ValueSelector::Expression {
+                    expression,
+                    allow_side_effects,
+                },
+            )
+        }
+        ValueSelector::RemoteObject { object_id } => {
+            if let Some(pause_epoch) = pause_epoch {
+                require_pause(driver, session_key, pause_epoch)?;
+            }
+            (None, ValueSelector::RemoteObject { object_id })
+        }
+    };
+    let object_id = remote
+        .as_ref()
+        .and_then(|value| value.object_id.clone())
+        .or_else(|| match &selector {
+            ValueSelector::RemoteObject { object_id } => Some(object_id.clone()),
+            ValueSelector::Expression { .. } => None,
+        });
+    let (properties, internal_properties) = match &object_id {
+        Some(object_id) => {
+            get_object_property_descriptors(driver, session_key, pause_epoch, object_id.clone())
+                .await?
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    let is_promise = remote
+        .as_ref()
+        .is_some_and(|value| value.subtype == Some(RuntimeRemoteObjectSubtype::Promise))
+        || has_live_promise_evidence(&internal_properties);
+    let promise = if is_promise {
+        object_id.as_ref().map(|object_id| {
+            inspect_live_promise(object_id.clone(), internal_properties, max_preview_length)
+        })
+    } else {
+        None
+    };
+    let subtype = remote
+        .as_ref()
+        .and_then(|value| value.subtype.as_ref())
+        .and_then(serialized_enum_name);
+    let class_name = remote.as_ref().and_then(|value| value.class_name.clone());
+    let preview = remote.as_ref().map_or_else(
+        || ValuePreviewSnapshot {
+            kind: "object".to_owned(),
+            preview: None,
+            truncated: false,
+            reference: object_id.clone(),
+        },
+        |value| remote_value_snapshot(value, max_preview_length),
+    );
+    let properties = properties
+        .into_iter()
+        .filter_map(|property| {
+            property.value.map(|value| ValuePropertySnapshot {
+                name: property.name,
+                value: remote_value_snapshot(&value, max_preview_length),
+            })
+        })
+        .collect();
+    Ok(ValueSnapshot {
+        selector,
+        subtype,
+        class_name,
+        preview,
+        properties,
+        promise,
+    })
+}
+
+fn remote_object_kind(value: &RuntimeRemoteObject) -> String {
+    serialized_enum_name(&value.r#type).unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn exception_message(exception: RuntimeExceptionDetails) -> String {
+    exception
+        .exception
+        .and_then(|value| value.description)
+        .unwrap_or(exception.text)
+}
+
+fn serialized_enum_name(value: &impl serde::Serialize) -> Option<String> {
+    serde_json::to_value(value)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned());
+}
+
+fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {
+    let kind = remote_object_kind(&value);
     VariableSnapshot {
         name,
         kind,

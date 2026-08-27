@@ -1,8 +1,7 @@
 use crate::cdp::{RuntimeInternalPropertyDescriptor, RuntimeRemoteObject};
 use crate::heap_graph::{AnalysisError, HeapGraph, NodeIndex};
 use crate::service_api::{
-    PromiseClassification, PromiseEvidenceSnapshot, PromiseEvidenceSource, PromiseOrigin,
-    PromiseSnapshot, PromiseState, PromiseValueSnapshot,
+    PromiseClassification, PromiseOrigin, PromiseSnapshot, PromiseState, ValuePreviewSnapshot,
 };
 
 pub const DEFAULT_PROMISE_PREVIEW_LENGTH: u32 = 120;
@@ -35,38 +34,6 @@ pub fn inspect_live_promise(
         })
         .flatten();
 
-    let mut evidence = Vec::new();
-    if let Some(property) = state_property {
-        let observed = property
-            .value
-            .as_ref()
-            .and_then(remote_object_text)
-            .unwrap_or("<unavailable>");
-        let (observed, truncated) = bounded_text(observed, max_preview_length);
-        evidence.push(PromiseEvidenceSnapshot {
-            source: PromiseEvidenceSource::LiveInternalProperty,
-            detail: format!(
-                "{}={}{}",
-                property.name,
-                observed,
-                if truncated { "..." } else { "" }
-            ),
-        });
-    } else {
-        evidence.push(PromiseEvidenceSnapshot {
-            source: PromiseEvidenceSource::Unavailable,
-            detail: "engine supplied no recognized promise state property".to_owned(),
-        });
-    }
-    if let Some(property) = result_property
-        && settlement.is_some()
-    {
-        evidence.push(PromiseEvidenceSnapshot {
-            source: PromiseEvidenceSource::LiveInternalProperty,
-            detail: format!("{} is present", property.name),
-        });
-    }
-
     PromiseSnapshot {
         reference: object_id,
         origin: PromiseOrigin::Live,
@@ -74,8 +41,15 @@ pub fn inspect_live_promise(
         settlement,
         retained: None,
         classification: PromiseClassification::Indeterminate,
-        evidence,
     }
+}
+
+pub fn has_live_promise_evidence(
+    internal_properties: &[RuntimeInternalPropertyDescriptor],
+) -> bool {
+    internal_properties
+        .iter()
+        .any(|property| PROMISE_STATE_PROPERTIES.contains(&property.name.as_str()))
 }
 
 pub fn inspect_heap_promises(
@@ -100,10 +74,6 @@ pub fn inspect_heap_promises(
 
         let mut state = PromiseState::Unknown;
         let mut settlement = None;
-        let mut evidence = vec![PromiseEvidenceSnapshot {
-            source: PromiseEvidenceSource::HeapNode,
-            detail: format!("{} node named {}", summary.node_type, summary.raw_name),
-        }];
         for reference in graph.outgoing_references(summary.index)? {
             let Some(name) = reference.name else {
                 continue;
@@ -112,11 +82,6 @@ pub fn inspect_heap_promises(
                 let target = graph.node_summary(reference.target)?;
                 let observed = target.string_value.unwrap_or(target.raw_name);
                 state = promise_state(observed);
-                let (observed, truncated) = bounded_text(observed, max_preview_length);
-                evidence.push(PromiseEvidenceSnapshot {
-                    source: PromiseEvidenceSource::HeapEdge,
-                    detail: format!("{name}={observed}{}", if truncated { "..." } else { "" }),
-                });
             } else if PROMISE_RESULT_PROPERTIES.contains(&name) {
                 settlement = Some(heap_value_snapshot(
                     graph,
@@ -124,10 +89,6 @@ pub fn inspect_heap_promises(
                     reference.target,
                     max_preview_length,
                 )?);
-                evidence.push(PromiseEvidenceSnapshot {
-                    source: PromiseEvidenceSource::HeapEdge,
-                    detail: format!("{name} is present"),
-                });
             }
         }
         if state_filter.is_some_and(|filter| filter != state) {
@@ -135,12 +96,6 @@ pub fn inspect_heap_promises(
         }
         if !matches!(state, PromiseState::Fulfilled | PromiseState::Rejected) {
             settlement = None;
-        }
-        if state == PromiseState::Unknown {
-            evidence.push(PromiseEvidenceSnapshot {
-                source: PromiseEvidenceSource::Unavailable,
-                detail: "snapshot contains no recognized engine state edge".to_owned(),
-            });
         }
         total_promises = total_promises.saturating_add(1);
         if promises.len() < limit as usize {
@@ -151,7 +106,6 @@ pub fn inspect_heap_promises(
                 settlement,
                 retained: Some(true),
                 classification: PromiseClassification::Indeterminate,
-                evidence,
             });
         }
     }
@@ -180,10 +134,10 @@ fn remote_object_text(value: &RuntimeRemoteObject) -> Option<&str> {
         .or(value.description.as_deref())
 }
 
-fn remote_value_snapshot(
+pub fn remote_value_snapshot(
     value: &RuntimeRemoteObject,
     max_preview_length: u32,
-) -> PromiseValueSnapshot {
+) -> ValuePreviewSnapshot {
     let kind = serde_json::to_value(&value.r#type)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
@@ -204,7 +158,7 @@ fn remote_value_snapshot(
         .map_or((None, false), |(preview, truncated)| {
             (Some(preview), truncated)
         });
-    PromiseValueSnapshot {
+    ValuePreviewSnapshot {
         kind,
         preview,
         truncated,
@@ -217,11 +171,11 @@ fn heap_value_snapshot(
     capture_id: &str,
     node: NodeIndex,
     max_preview_length: u32,
-) -> Result<PromiseValueSnapshot, AnalysisError> {
+) -> Result<ValuePreviewSnapshot, AnalysisError> {
     let summary = graph.node_summary(node)?;
     let preview = summary.string_value.unwrap_or(summary.raw_name);
     let (preview, truncated) = bounded_text(preview, max_preview_length);
-    Ok(PromiseValueSnapshot {
+    Ok(ValuePreviewSnapshot {
         kind: summary.node_type.to_owned(),
         preview: Some(preview),
         truncated,
@@ -274,6 +228,12 @@ mod tests {
                 snapshot.classification,
                 PromiseClassification::Indeterminate
             );
+            assert!(
+                serde_json::to_value(&snapshot)
+                    .unwrap()
+                    .get("evidence")
+                    .is_none()
+            );
         }
     }
 
@@ -290,26 +250,20 @@ mod tests {
             9,
         );
         assert_eq!(
-            snapshot.settlement.unwrap().preview.as_deref(),
+            snapshot.settlement.as_ref().unwrap().preview.as_deref(),
             Some("rejection")
         );
-        assert!(snapshot.evidence.iter().any(|item| {
-            item.source == PromiseEvidenceSource::LiveInternalProperty
-                && item.detail.contains("[[PromiseState]]=rejected")
-        }));
+        assert_eq!(
+            snapshot.settlement.as_ref().unwrap().reference.as_deref(),
+            Some("reason:1")
+        );
     }
 
     #[test]
     fn missing_or_unrecognized_evidence_stays_unknown() {
         let snapshot = inspect_live_promise("live:2".to_owned(), Vec::new(), 20);
         assert_eq!(snapshot.state, PromiseState::Unknown);
-        assert_eq!(
-            snapshot.evidence,
-            vec![PromiseEvidenceSnapshot {
-                source: PromiseEvidenceSource::Unavailable,
-                detail: "engine supplied no recognized promise state property".to_owned(),
-            }]
-        );
+        assert!(snapshot.settlement.is_none());
     }
 
     #[test]
