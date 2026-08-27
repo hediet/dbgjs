@@ -558,7 +558,7 @@ fn render_compacted_source_graph(graph: &CompactedSourceGraphSnapshot) -> String
         if index > 0 {
             output.push('\n');
         }
-        render_source_graph_node(&mut output, *root, "", &nodes, &edges, &mut visited);
+        render_source_graph_node(&mut output, *root, "", false, &nodes, &edges, &mut visited);
     }
     output
 }
@@ -567,6 +567,7 @@ fn render_source_graph_node(
     output: &mut String,
     id: u32,
     indent: &str,
+    wildcard: bool,
     nodes: &BTreeMap<u32, &CompactedSourceNodeSnapshot>,
     edges: &BTreeMap<u32, Vec<&CompactedSourceEdgeSnapshot>>,
     visited: &mut BTreeSet<u32>,
@@ -574,7 +575,7 @@ fn render_source_graph_node(
     let Some(node) = nodes.get(&id) else {
         return;
     };
-    writeln!(output, "{}", source_graph_node_label(node)).unwrap();
+    writeln!(output, "{}", source_graph_node_label(node, wildcard)).unwrap();
     if !visited.insert(id) {
         return;
     }
@@ -593,18 +594,41 @@ fn render_source_graph_node(
         )
         .unwrap();
         if visited.contains(&edge.basis) {
-            writeln!(output, "{} ↩", source_graph_node_label(target)).unwrap();
+            writeln!(
+                output,
+                "{} ↩",
+                source_graph_node_label(target, edge.fan_out)
+            )
+            .unwrap();
         } else {
-            render_source_graph_node(output, edge.basis, &child_indent, nodes, edges, visited);
+            render_source_graph_node(
+                output,
+                edge.basis,
+                &child_indent,
+                edge.fan_out,
+                nodes,
+                edges,
+                visited,
+            );
         }
     }
 }
 
-fn source_graph_node_label(node: &CompactedSourceNodeSnapshot) -> String {
+fn source_graph_node_label(node: &CompactedSourceNodeSnapshot, wildcard: bool) -> String {
+    let wildcard = if wildcard {
+        if node.prefix.ends_with('/') {
+            "*"
+        } else {
+            "/*"
+        }
+    } else {
+        ""
+    };
     format!(
-        "#{} {}  [{} source{}]{}",
+        "#{} {}{}  [{} source{}]{}",
         node.id,
         node.prefix,
+        wildcard,
         node.source_count,
         if node.source_count == 1 { "" } else { "s" },
         if node.runtime_internal {
@@ -622,11 +646,13 @@ fn source_graph_edge_label(edge: &CompactedSourceEdgeSnapshot) -> String {
         .map_or_else(String::new, |rewrite| {
             format!(", {} → {}", rewrite.from, rewrite.to)
         });
+    let fan_out = if edge.fan_out { ", fan-out" } else { "" };
     format!(
-        "{}  [{} mapping{}{}]",
+        "{}  [{} mapping{}{}{}]",
         edge.kind,
         edge.mapping_count,
         if edge.mapping_count == 1 { "" } else { "s" },
+        fan_out,
         rewrite
     )
 }
@@ -2921,6 +2947,7 @@ mod tests {
                     basis: 2,
                     kind: "source map".into(),
                     mapping_count: 2,
+                    fan_out: false,
                     suffix_rewrite: Some(SourceSuffixRewriteSnapshot {
                         from: ".js".into(),
                         to: ".ts".into(),
@@ -2931,6 +2958,7 @@ mod tests {
                     basis: 2,
                     kind: "identity".into(),
                     mapping_count: 1,
+                    fan_out: false,
                     suffix_rewrite: None,
                 },
             ],
@@ -2944,6 +2972,43 @@ mod tests {
 
 #3 node:internal/modules/  [1 source] [internal]
 └─ identity  [1 mapping] → #2 file:///workspace/src/  [2 sources] ↩
+"
+        );
+    }
+
+    #[test]
+    fn source_graph_marks_fan_out_subtrees() {
+        let graph = CompactedSourceGraphSnapshot {
+            roots: vec![1],
+            nodes: vec![
+                CompactedSourceNodeSnapshot {
+                    id: 1,
+                    prefix: "https://example.test/bundle.js".into(),
+                    source_count: 1,
+                    runtime_internal: false,
+                },
+                CompactedSourceNodeSnapshot {
+                    id: 2,
+                    prefix: "source://resolved/~up/src/".into(),
+                    source_count: 2,
+                    runtime_internal: false,
+                },
+            ],
+            edges: vec![CompactedSourceEdgeSnapshot {
+                derived: 1,
+                basis: 2,
+                kind: "source map".into(),
+                mapping_count: 2,
+                fan_out: true,
+                suffix_rewrite: None,
+            }],
+        };
+
+        assert_eq!(
+            render_compacted_source_graph(&graph),
+            "\
+#1 https://example.test/bundle.js  [1 source]
+└─ source map  [2 mappings, fan-out] → #2 source://resolved/~up/src/*  [2 sources]
 "
         );
     }

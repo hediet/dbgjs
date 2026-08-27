@@ -619,6 +619,14 @@ contributes an endpoint to the shared graph. Workspace, source-map, formatted,
 edited, and cached evidence can remain in the graph while all connections are
 offline.
 
+Human graph views derive compacted presentation edges without changing the
+authoritative projections. Corresponding-path edges retain the invariant that
+every known relative path maps to the same relative path, optionally with one
+consistent suffix rewrite. A source-map fan-out such as `bundle.js -> src/*`
+may also collapse to one presentation edge when every known mapping into that
+subtree comes from that bundle. A competing `bundle2.js -> src/*` prevents the
+broader collapse.
+
 ```ts
 interface SourceGraphState {
 	readonly catalog: SourceCatalogState;

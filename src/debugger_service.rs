@@ -1346,6 +1346,7 @@ impl DebuggerServiceApi for DebuggerService {
                     basis: edge.basis,
                     kind: compacted_projection_label(&edge.kind),
                     mapping_count: u32::try_from(edge.mapping_count).unwrap_or(u32::MAX),
+                    fan_out: edge.fan_out,
                     suffix_rewrite: edge.suffix_rewrite.map(|rewrite| {
                         SourceSuffixRewriteSnapshot {
                             from: rewrite.from,

@@ -501,6 +501,8 @@ pub struct CompactedSourceEdgeSnapshot {
     pub basis: u32,
     pub kind: String,
     pub mapping_count: u32,
+    #[serde(default)]
+    pub fan_out: bool,
     pub suffix_rewrite: Option<SourceSuffixRewriteSnapshot>,
 }
 

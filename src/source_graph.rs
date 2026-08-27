@@ -37,9 +37,18 @@ impl SourceUri {
         let mut url = Url::parse("source://embedded/").expect("static source URL is valid");
         url.set_host(Some(namespace))
             .map_err(|_| SourceUriError::InvalidNamespace(namespace.to_owned()))?;
-        url.path_segments_mut()
-            .expect("source URL is hierarchical")
-            .push(value);
+        let normalized = value.replace('\\', "/");
+        let mut segments = url.path_segments_mut().expect("source URL is hierarchical");
+        segments.clear();
+        for segment in normalized.split('/') {
+            match segment {
+                "." => segments.push("~dot"),
+                ".." => segments.push("~up"),
+                value if value.starts_with('~') => segments.push(&format!("~{value}")),
+                value => segments.push(value),
+            };
+        }
+        drop(segments);
         Ok(Self(url))
     }
 
@@ -824,7 +833,16 @@ mod tests {
         let embedded = SourceUri::embedded("resolved", "../src/app.ts?raw").unwrap();
         assert_eq!(embedded.as_url().scheme(), "source");
         assert_eq!(embedded.as_url().host_str(), Some("resolved"));
-        assert!(embedded.as_str().contains("..%2Fsrc%2Fapp.ts%3Fraw"));
+        assert_eq!(embedded.as_str(), "source://resolved/~up/src/app.ts%3Fraw");
+        let root = SourceUri::embedded("resolved", "../src/").unwrap();
+        assert_eq!(
+            embedded.relative_path_from(&root).as_deref(),
+            Some("app.ts%3Fraw")
+        );
+        assert_ne!(
+            SourceUri::embedded("resolved", "../src/app.ts").unwrap(),
+            SourceUri::embedded("resolved", "src/app.ts").unwrap()
+        );
     }
 
     #[test]

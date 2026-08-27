@@ -59,6 +59,7 @@ pub struct CompactedSourceEdge {
     pub basis: u32,
     pub kind: CompactedProjectionKind,
     pub mapping_count: usize,
+    pub fan_out: bool,
     pub suffix_rewrite: Option<SuffixRewrite>,
 }
 
@@ -217,6 +218,7 @@ struct MappingGroup {
     derived_prefix: SourceUri,
     basis_prefix: SourceUri,
     kind: CompactedProjectionKind,
+    fan_out: bool,
     suffix_rewrite: Option<SuffixRewrite>,
 }
 
@@ -277,12 +279,14 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
             &left.derived_prefix,
             &left.basis_prefix,
             &left.kind,
+            left.fan_out,
             &left.suffix_rewrite,
         )
             .cmp(&(
                 &right.derived_prefix,
                 &right.basis_prefix,
                 &right.kind,
+                right.fan_out,
                 &right.suffix_rewrite,
             ))
     });
@@ -321,6 +325,7 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
             basis: prefix_ids[&group.basis_prefix],
             kind: group.kind,
             mapping_count: group.mappings.len(),
+            fan_out: group.fan_out,
             suffix_rewrite: group.suffix_rewrite,
         })
         .collect::<Vec<_>>();
@@ -341,6 +346,14 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
 }
 
 fn group_mappings(
+    mappings: Vec<ConcreteMapping>,
+    universe: &[ConcreteMapping],
+) -> Option<MappingGroup> {
+    corresponding_mapping_group(mappings.clone(), universe)
+        .or_else(|| fan_out_mapping_group(mappings, universe))
+}
+
+fn corresponding_mapping_group(
     mappings: Vec<ConcreteMapping>,
     universe: &[ConcreteMapping],
 ) -> Option<MappingGroup> {
@@ -381,7 +394,43 @@ fn group_mappings(
         derived_prefix,
         basis_prefix,
         kind,
+        fan_out: false,
         suffix_rewrite,
+    })
+}
+
+fn fan_out_mapping_group(
+    mappings: Vec<ConcreteMapping>,
+    universe: &[ConcreteMapping],
+) -> Option<MappingGroup> {
+    if mappings.len() < 2 {
+        return None;
+    }
+    let first = mappings.first()?;
+    let derived = first.derived.clone();
+    let kind = first.kind.clone();
+    if first.kind != CompactedProjectionKind::SourceMap
+        || mappings
+            .iter()
+            .any(|mapping| mapping.kind != first.kind || mapping.derived != first.derived)
+    {
+        return None;
+    }
+    let basis_prefix = common_parent(mappings.iter().map(|mapping| &mapping.basis))?;
+    if universe.iter().any(|mapping| {
+        mapping.kind == first.kind
+            && relative_source_path(&mapping.basis, &basis_prefix).is_some()
+            && mapping.derived != first.derived
+    }) {
+        return None;
+    }
+    Some(MappingGroup {
+        mappings,
+        derived_prefix: derived,
+        basis_prefix,
+        kind,
+        fan_out: true,
+        suffix_rewrite: None,
     })
 }
 
@@ -773,6 +822,108 @@ mod tests {
         assert!(compacted.nodes.iter().any(|node| {
             node.prefix.as_str() == "file:///workspace/src/" && node.source_count == 2
         }));
+    }
+
+    #[test]
+    fn compacts_one_bundle_into_an_exclusive_source_subtree() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let map = model.content_store().intern("map");
+        let generated = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/bundle.js").unwrap(),
+                model.content_store().intern("bundle"),
+            )
+            .unwrap();
+        for (index, name) in ["foo", "bar"].into_iter().enumerate() {
+            let source = model
+                .intern_content(
+                    &owner,
+                    SourceUri::embedded("resolved", &format!("../../../src/{name}.ts")).unwrap(),
+                    model.content_store().intern(&format!("source {name}")),
+                )
+                .unwrap();
+            model
+                .add_projection(
+                    &owner,
+                    generated,
+                    source,
+                    ProjectionKind::SourceMap {
+                        map,
+                        source_index: index as u32,
+                    },
+                )
+                .unwrap();
+        }
+
+        let compacted = model.compacted_graph();
+        assert_eq!(compacted.nodes.len(), 2);
+        assert_eq!(compacted.edges.len(), 1);
+        assert_eq!(compacted.edges[0].mapping_count, 2);
+        assert!(compacted.edges[0].fan_out);
+        assert_eq!(
+            compacted
+                .nodes
+                .iter()
+                .find(|node| node.id == compacted.edges[0].basis)
+                .unwrap()
+                .prefix
+                .as_str(),
+            "source://resolved/~up/~up/~up/src/"
+        );
+    }
+
+    #[test]
+    fn fan_out_compaction_stops_at_a_competing_bundle() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let map = model.content_store().intern("map");
+        let first_bundle = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/bundle.js").unwrap(),
+                model.content_store().intern("bundle"),
+            )
+            .unwrap();
+        let second_bundle = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/bundle2.js").unwrap(),
+                model.content_store().intern("bundle 2"),
+            )
+            .unwrap();
+        for (index, (bundle, name)) in [
+            (first_bundle, "foo"),
+            (first_bundle, "bar"),
+            (second_bundle, "baz"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = model
+                .intern_content(
+                    &owner,
+                    SourceUri::embedded("resolved", &format!("../../../src/{name}.ts")).unwrap(),
+                    model.content_store().intern(&format!("source {name}")),
+                )
+                .unwrap();
+            model
+                .add_projection(
+                    &owner,
+                    bundle,
+                    source,
+                    ProjectionKind::SourceMap {
+                        map,
+                        source_index: index as u32,
+                    },
+                )
+                .unwrap();
+        }
+
+        let compacted = model.compacted_graph();
+        assert_eq!(compacted.edges.len(), 3);
+        assert!(compacted.edges.iter().all(|edge| !edge.fan_out));
     }
 
     #[test]
