@@ -37,13 +37,13 @@ use crate::service_api::{
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
-    ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceDisplayOptions,
-    SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot, SourceSearchOptions,
-    SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot, SourceTreeKind,
-    SourceTreeSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot, TargetSnapshot,
-    TargetWaitPredicate, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
-    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot, VariableSnapshot,
+    PromiseSelectionSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot,
+    SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
+    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
+    SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
+    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    UncompactedSourceRevisionSnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
@@ -2212,6 +2212,23 @@ impl DebuggerServiceApi for DebuggerService {
         result
     }
 
+    async fn inspect_value(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        pause_epoch: Option<u64>,
+        selector: ValueSelector,
+        max_preview_length: u32,
+    ) -> Result<ValueSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .inspect_value(pause_epoch, selector, max_preview_length)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
     async fn set_logpoint(
         &self,
         _ctx: &CallCtx,
@@ -2518,6 +2535,24 @@ impl DebuggerServiceApi for DebuggerService {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_classes(capture_id, filter, no_cache)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+
+    async fn select_promises(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        state: Option<PromiseState>,
+        limit: u32,
+        max_preview_length: u32,
+    ) -> Result<PromiseSelectionSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .select_promises(capture_id, state, limit, max_preview_length)
             .await
             .map_err(target_debugger_rpc_error)
     }
