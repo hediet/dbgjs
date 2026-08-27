@@ -150,6 +150,10 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 		expect(graph).toMatch(
 			/https:\/\/main\.vscode-cdn\.net\/sourcemaps\/[^/]+\/src\/vs\/\*\s+\[\d+ sources\]/,
 		);
+		expect(graph).toMatch(/\n├─ source @microsoft\/1ds-core-js\//);
+		expect(graph).toMatch(/\n├─ source anonymous\//);
+		expect(graph).not.toMatch(/\n[├└]─ source https?:\/\//);
+		expect(graph).not.toMatch(/\n[├└]─ source source:\/\/runtime\//);
 		expect(graph).not.toContain("~up");
 		expect(graph.trimEnd().split("\n").length).toBeGreaterThan(2);
 	} finally {

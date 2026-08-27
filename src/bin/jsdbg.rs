@@ -1351,6 +1351,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.show_source_graph(context_id).await)?)?;
         }
+        [source, graph, uncompacted]
+            if source == "source" && graph == "graph" && uncompacted == "--uncompacted" =>
+        {
+            let client = ensure_service(&state_file).await?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client
+                .show_uncompacted_source_graph(context_id)
+                .await)?)?;
+        }
         [source, map, show] if source == "source" && map == "map" && show == "show" => {
             let client = ensure_service(&state_file).await?;
             let context_id =
@@ -4284,7 +4294,7 @@ commands:
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
-  jsdbg source graph [--context <id>]
+  jsdbg source graph [--uncompacted] [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
   jsdbg source map <path> <line> <column> [--context <id>]

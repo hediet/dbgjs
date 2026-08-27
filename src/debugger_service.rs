@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -38,8 +38,11 @@ use crate::service_api::{
     ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot, SourceDisplayOptions,
     SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot, SourceSearchOptions,
     SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot, StepKind as ApiStepKind,
-    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, VariableSnapshot,
+    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
+    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    UncompactedSourceRevisionSnapshot, VariableSnapshot,
 };
+use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
 #[derive(Clone)]
@@ -1332,10 +1335,15 @@ impl DebuggerServiceApi for DebuggerService {
                 .nodes
                 .into_iter()
                 .map(|node| {
-                    let listed_sources = if node.sources.len() <= 10 {
+                    let listed_source_paths = if node.sources.len() <= 10 {
                         node.sources
                             .into_iter()
-                            .map(|source| source.display())
+                            .map(|source| {
+                                source
+                                    .relative_path_from(&node.prefix)
+                                    .filter(|path| !path.is_empty())
+                                    .unwrap_or_else(|| source.display())
+                            })
                             .collect()
                     } else {
                         Vec::new()
@@ -1345,7 +1353,7 @@ impl DebuggerServiceApi for DebuggerService {
                         prefix: node.prefix.display(),
                         source_count: u32::try_from(node.source_count).unwrap_or(u32::MAX),
                         snapshot_count: u32::try_from(node.snapshot_count).unwrap_or(u32::MAX),
-                        listed_sources,
+                        listed_source_paths,
                         runtime_internal: node.runtime_internal,
                     }
                 })
@@ -1365,6 +1373,65 @@ impl DebuggerServiceApi for DebuggerService {
                             to: rewrite.to,
                         }
                     }),
+                })
+                .collect(),
+        })
+    }
+
+    async fn show_uncompacted_source_graph(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+    ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
+        let model = {
+            let state = self.state.lock().await;
+            if !state.contexts.contains_key(&context_id) {
+                return Err(not_found("context", &context_id));
+            }
+            state.source_models.get(&context_id).cloned()
+        };
+        let Some(model) = model else {
+            return Ok(UncompactedSourceGraphSnapshot {
+                roots: Vec::new(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            });
+        };
+        let graph = model.graph_snapshot();
+        let referenced = graph
+            .projections
+            .iter()
+            .map(|projection| projection.basis)
+            .collect::<BTreeSet<_>>();
+        let mut roots = graph
+            .sources
+            .iter()
+            .map(|source| source.id)
+            .filter(|source| !referenced.contains(source))
+            .map(|source| source.0)
+            .collect::<Vec<_>>();
+        if roots.is_empty() {
+            roots.extend(graph.sources.iter().map(|source| source.id.0));
+        }
+        Ok(UncompactedSourceGraphSnapshot {
+            roots,
+            nodes: graph
+                .sources
+                .into_iter()
+                .map(|source| UncompactedSourceNodeSnapshot {
+                    id: source.id.0,
+                    uri: source.uri.display(),
+                    revision: source_revision_snapshot(source.revision),
+                })
+                .collect(),
+            edges: graph
+                .projections
+                .into_iter()
+                .map(|projection| UncompactedSourceEdgeSnapshot {
+                    id: projection.id.0,
+                    derived: projection.derived.0,
+                    basis: projection.basis.0,
+                    projection: projection_snapshot(projection.kind),
                 })
                 .collect(),
         })
@@ -3214,6 +3281,56 @@ fn compacted_projection_label(kind: &CompactedProjectionKind) -> String {
             column_delta,
         } => format!("offset ({line_delta:+} lines, {column_delta:+} columns)"),
     }
+}
+
+fn source_revision_snapshot(revision: SourceRevision) -> UncompactedSourceRevisionSnapshot {
+    match revision {
+        SourceRevision::Content(content) => UncompactedSourceRevisionSnapshot::Content {
+            hash: content_hash_string(content),
+        },
+        SourceRevision::Version { namespace, value } => {
+            UncompactedSourceRevisionSnapshot::Version {
+                namespace: namespace.as_str().to_owned(),
+                value,
+            }
+        }
+    }
+}
+
+fn projection_snapshot(kind: ProjectionKind) -> UncompactedProjectionSnapshot {
+    match kind {
+        ProjectionKind::Identity {
+            basis: IdentityBasis::EqualContent(content),
+        } => UncompactedProjectionSnapshot::IdentityEqualContent {
+            content_hash: content_hash_string(content),
+        },
+        ProjectionKind::Identity {
+            basis: IdentityBasis::DeclaredByProvider(provider),
+        } => UncompactedProjectionSnapshot::IdentityDeclaredByProvider { provider },
+        ProjectionKind::SourceMap { map, source_index } => {
+            UncompactedProjectionSnapshot::SourceMap {
+                map_hash: content_hash_string(map),
+                source_index,
+            }
+        }
+        ProjectionKind::Format { formatter } => UncompactedProjectionSnapshot::Format { formatter },
+        ProjectionKind::Edit { edit } => UncompactedProjectionSnapshot::Edit { edit },
+        ProjectionKind::Offset {
+            line_delta,
+            column_delta,
+        } => UncompactedProjectionSnapshot::Offset {
+            line_delta,
+            column_delta,
+        },
+    }
+}
+
+fn content_hash_string(content: crate::content_store::ContentHash) -> String {
+    content
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn source_content_range(

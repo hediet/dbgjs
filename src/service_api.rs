@@ -494,7 +494,7 @@ pub struct CompactedSourceNodeSnapshot {
     #[serde(default)]
     pub snapshot_count: u32,
     #[serde(default)]
-    pub listed_sources: Vec<String>,
+    pub listed_source_paths: Vec<String>,
     pub runtime_internal: bool,
 }
 
@@ -515,6 +515,53 @@ pub struct CompactedSourceEdgeSnapshot {
 pub struct SourceSuffixRewriteSnapshot {
     pub from: String,
     pub to: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceGraphSnapshot {
+    pub roots: Vec<u64>,
+    pub nodes: Vec<UncompactedSourceNodeSnapshot>,
+    pub edges: Vec<UncompactedSourceEdgeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceNodeSnapshot {
+    pub id: u64,
+    pub uri: String,
+    pub revision: UncompactedSourceRevisionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UncompactedSourceRevisionSnapshot {
+    Content { hash: String },
+    Version { namespace: String, value: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceEdgeSnapshot {
+    pub id: u64,
+    pub derived: u64,
+    pub basis: u64,
+    pub projection: UncompactedProjectionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum UncompactedProjectionSnapshot {
+    IdentityEqualContent { content_hash: String },
+    IdentityDeclaredByProvider { provider: String },
+    SourceMap { map_hash: String, source_index: u32 },
+    Format { formatter: String },
+    Edit { edit: String },
+    Offset { line_delta: i64, column_delta: i64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1210,6 +1257,10 @@ pub trait DebuggerServiceApi {
     async fn show_source_graph(
         context_id: String,
     ) -> Result<CompactedSourceGraphSnapshot, JsonRpcError>;
+
+    async fn show_uncompacted_source_graph(
+        context_id: String,
+    ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError>;
 
     async fn show_source(
         context_id: String,

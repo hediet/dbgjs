@@ -9,7 +9,9 @@ use cdp_client::service_api::{
     ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
     ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceGraphViewSnapshot, SourceLocation,
     SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, UncompactedProjectionSnapshot,
+    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    UncompactedSourceRevisionSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -530,6 +532,131 @@ impl HumanOutput for CompactedSourceGraphSnapshot {
     }
 }
 
+impl HumanOutput for UncompactedSourceGraphSnapshot {
+    fn print_human(&self) {
+        print!("{}", render_uncompacted_source_graph(self));
+    }
+}
+
+fn render_uncompacted_source_graph(graph: &UncompactedSourceGraphSnapshot) -> String {
+    if graph.nodes.is_empty() {
+        return "No sources are currently observed.\n".to_owned();
+    }
+    let nodes = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id, node))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = BTreeMap::<u64, Vec<&UncompactedSourceEdgeSnapshot>>::new();
+    for edge in &graph.edges {
+        edges.entry(edge.derived).or_default().push(edge);
+    }
+    for outgoing in edges.values_mut() {
+        outgoing.sort_by_key(|edge| {
+            (
+                &edge.projection,
+                nodes.get(&edge.basis).map(|node| node.uri.as_str()),
+                edge.basis,
+            )
+        });
+    }
+    let mut output = String::new();
+    let mut visited = BTreeSet::new();
+    for (index, root) in graph.roots.iter().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        render_uncompacted_source_node(&mut output, *root, "", &nodes, &edges, &mut visited);
+    }
+    output
+}
+
+fn render_uncompacted_source_node(
+    output: &mut String,
+    id: u64,
+    indent: &str,
+    nodes: &BTreeMap<u64, &UncompactedSourceNodeSnapshot>,
+    edges: &BTreeMap<u64, Vec<&UncompactedSourceEdgeSnapshot>>,
+    visited: &mut BTreeSet<u64>,
+) {
+    let Some(node) = nodes.get(&id) else {
+        return;
+    };
+    writeln!(output, "{}", uncompacted_source_node_label(node)).unwrap();
+    if !visited.insert(id) {
+        return;
+    }
+    let outgoing = edges.get(&id).map(Vec::as_slice).unwrap_or_default();
+    for (index, edge) in outgoing.iter().enumerate() {
+        let last = index + 1 == outgoing.len();
+        let branch = if last { "└─" } else { "├─" };
+        let child_indent = format!("{indent}{}", if last { "   " } else { "│  " });
+        let Some(target) = nodes.get(&edge.basis) else {
+            continue;
+        };
+        write!(
+            output,
+            "{indent}{branch} projection #{} {} → ",
+            edge.id,
+            uncompacted_projection_label(&edge.projection)
+        )
+        .unwrap();
+        if visited.contains(&edge.basis) {
+            writeln!(output, "{} ↩", uncompacted_source_node_label(target)).unwrap();
+        } else {
+            render_uncompacted_source_node(
+                output,
+                edge.basis,
+                &child_indent,
+                nodes,
+                edges,
+                visited,
+            );
+        }
+    }
+}
+
+fn uncompacted_source_node_label(node: &UncompactedSourceNodeSnapshot) -> String {
+    format!(
+        "#{} {}  [{}]",
+        node.id,
+        node.uri,
+        uncompacted_revision_label(&node.revision)
+    )
+}
+
+fn uncompacted_revision_label(revision: &UncompactedSourceRevisionSnapshot) -> String {
+    match revision {
+        UncompactedSourceRevisionSnapshot::Content { hash } => format!("content:{hash}"),
+        UncompactedSourceRevisionSnapshot::Version { namespace, value } => {
+            format!("{namespace}:{value}")
+        }
+    }
+}
+
+fn uncompacted_projection_label(projection: &UncompactedProjectionSnapshot) -> String {
+    match projection {
+        UncompactedProjectionSnapshot::IdentityEqualContent { content_hash } => {
+            format!("identity [equal content {content_hash}]")
+        }
+        UncompactedProjectionSnapshot::IdentityDeclaredByProvider { provider } => {
+            format!("identity [declared by {provider}]")
+        }
+        UncompactedProjectionSnapshot::SourceMap {
+            map_hash,
+            source_index,
+        } => format!("source map [{map_hash}, source {source_index}]"),
+        UncompactedProjectionSnapshot::Format { formatter } => {
+            format!("format [{formatter}]")
+        }
+        UncompactedProjectionSnapshot::Edit { edit } => format!("edit [{edit}]"),
+        UncompactedProjectionSnapshot::Offset {
+            line_delta,
+            column_delta,
+        } => format!("offset [{line_delta:+} lines, {column_delta:+} columns]"),
+    }
+}
+
 fn render_compacted_source_graph(graph: &CompactedSourceGraphSnapshot) -> String {
     if graph.nodes.is_empty() {
         return "No sources are currently observed.\n".to_owned();
@@ -595,8 +722,8 @@ fn render_source_graph_node(
         return;
     }
     let outgoing = edges.get(&id).map(Vec::as_slice).unwrap_or_default();
-    let visible_sources = (!connected.contains(&id) && node.listed_sources.len() > 1)
-        .then_some(node.listed_sources.as_slice())
+    let visible_sources = (!connected.contains(&id) && node.listed_source_paths.len() > 1)
+        .then_some(node.listed_source_paths.as_slice())
         .unwrap_or_default();
     let child_count = visible_sources.len() + outgoing.len();
     for (index, source) in visible_sources.iter().enumerate() {
@@ -2940,7 +3067,8 @@ mod tests {
         ProcessTreeOutputOptions, aggregate_coverage_entries, coverage_entries,
         effective_file_metrics, heap_path_lines, looks_minified_identifier, page_logs,
         process_tree_lines, process_trees_json, render_compacted_source_graph,
-        render_heap_classes_human, style_process_label, style_session_label,
+        render_heap_classes_human, render_uncompacted_source_graph, style_process_label,
+        style_session_label,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -2949,7 +3077,9 @@ mod tests {
         HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapNodeSnapshot,
         HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
         ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
-        SourceSuffixRewriteSnapshot,
+        SourceSuffixRewriteSnapshot, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+        UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+        UncompactedSourceRevisionSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -2963,7 +3093,7 @@ mod tests {
                     prefix: "file:///workspace/out/".into(),
                     source_count: 2,
                     snapshot_count: 2,
-                    listed_sources: vec![
+                    listed_source_paths: vec![
                         "file:///workspace/out/a.js".into(),
                         "file:///workspace/out/b.js".into(),
                     ],
@@ -2974,7 +3104,7 @@ mod tests {
                     prefix: "file:///workspace/src/".into(),
                     source_count: 2,
                     snapshot_count: 2,
-                    listed_sources: vec![
+                    listed_source_paths: vec![
                         "file:///workspace/src/a.ts".into(),
                         "file:///workspace/src/b.ts".into(),
                     ],
@@ -2985,7 +3115,7 @@ mod tests {
                     prefix: "node:internal/modules/".into(),
                     source_count: 1,
                     snapshot_count: 1,
-                    listed_sources: vec!["node:internal/modules/cjs/loader".into()],
+                    listed_source_paths: vec!["node:internal/modules/cjs/loader".into()],
                     runtime_internal: true,
                 },
             ],
@@ -3034,7 +3164,7 @@ mod tests {
                     prefix: "https://example.test/bundle.js".into(),
                     source_count: 1,
                     snapshot_count: 1,
-                    listed_sources: vec!["https://example.test/bundle.js".into()],
+                    listed_source_paths: vec!["https://example.test/bundle.js".into()],
                     runtime_internal: false,
                 },
                 CompactedSourceNodeSnapshot {
@@ -3042,7 +3172,7 @@ mod tests {
                     prefix: "source://resolved/~up/src/".into(),
                     source_count: 2,
                     snapshot_count: 2,
-                    listed_sources: vec![
+                    listed_source_paths: vec![
                         "source://resolved/~up/src/a.ts".into(),
                         "source://resolved/~up/src/b.ts".into(),
                     ],
@@ -3078,11 +3208,7 @@ mod tests {
                     prefix: "https://example.test/node_modules/".into(),
                     source_count: 3,
                     snapshot_count: 3,
-                    listed_sources: vec![
-                        "https://example.test/node_modules/a.js".into(),
-                        "https://example.test/node_modules/b.js".into(),
-                        "https://example.test/node_modules/c.js".into(),
-                    ],
+                    listed_source_paths: vec!["a.js".into(), "b.js".into(), "c.js".into()],
                     runtime_internal: false,
                 },
                 CompactedSourceNodeSnapshot {
@@ -3090,7 +3216,7 @@ mod tests {
                     prefix: "https://example.test/service.js".into(),
                     source_count: 1,
                     snapshot_count: 5,
-                    listed_sources: vec!["https://example.test/service.js".into()],
+                    listed_source_paths: vec!["https://example.test/service.js".into()],
                     runtime_internal: false,
                 },
             ],
@@ -3101,11 +3227,72 @@ mod tests {
             render_compacted_source_graph(&graph),
             "\
 #1 https://example.test/node_modules/  [3 sources]
-├─ source https://example.test/node_modules/a.js
-├─ source https://example.test/node_modules/b.js
-└─ source https://example.test/node_modules/c.js
+├─ source a.js
+├─ source b.js
+└─ source c.js
 
 #2 https://example.test/service.js  [1 source, 5 snapshots]
+"
+        );
+    }
+
+    #[test]
+    fn uncompacted_source_graph_renders_snapshots_and_concrete_projections() {
+        let graph = UncompactedSourceGraphSnapshot {
+            roots: vec![1, 3],
+            nodes: vec![
+                UncompactedSourceNodeSnapshot {
+                    id: 1,
+                    uri: "https://example.test/out/app.js".into(),
+                    revision: UncompactedSourceRevisionSnapshot::Content {
+                        hash: "1111111111111111".into(),
+                    },
+                },
+                UncompactedSourceNodeSnapshot {
+                    id: 2,
+                    uri: "file:///workspace/src/app.ts".into(),
+                    revision: UncompactedSourceRevisionSnapshot::Content {
+                        hash: "2222222222222222".into(),
+                    },
+                },
+                UncompactedSourceNodeSnapshot {
+                    id: 3,
+                    uri: "node:internal/modules/cjs/loader".into(),
+                    revision: UncompactedSourceRevisionSnapshot::Version {
+                        namespace: "cdp-script".into(),
+                        value: "runtime-1".into(),
+                    },
+                },
+            ],
+            edges: vec![
+                UncompactedSourceEdgeSnapshot {
+                    id: 1,
+                    derived: 1,
+                    basis: 2,
+                    projection: UncompactedProjectionSnapshot::SourceMap {
+                        map_hash: "aaaaaaaaaaaaaaaa".into(),
+                        source_index: 0,
+                    },
+                },
+                UncompactedSourceEdgeSnapshot {
+                    id: 2,
+                    derived: 3,
+                    basis: 2,
+                    projection: UncompactedProjectionSnapshot::IdentityDeclaredByProvider {
+                        provider: "node".into(),
+                    },
+                },
+            ],
+        };
+
+        assert_eq!(
+            render_uncompacted_source_graph(&graph),
+            "\
+#1 https://example.test/out/app.js  [content:1111111111111111]
+└─ projection #1 source map [aaaaaaaaaaaaaaaa, source 0] → #2 file:///workspace/src/app.ts  [content:2222222222222222]
+
+#3 node:internal/modules/cjs/loader  [cdp-script:runtime-1]
+└─ projection #2 identity [declared by node] → #2 file:///workspace/src/app.ts  [content:2222222222222222] ↩
 "
         );
     }

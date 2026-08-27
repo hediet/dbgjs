@@ -633,8 +633,11 @@ consistent suffix rewrite. A source-map fan-out such as `bundle.js -> src/*`
 may also collapse to one presentation edge when every known mapping into that
 subtree comes from that bundle. A competing `bundle2.js -> src/*` prevents the
 broader collapse. Isolated sources are grouped beneath the shallowest safe URI
-ancestor; small groups list their exact member URLs. Presentation counts
-distinguish unique source URIs from multiple retained snapshots of the same URI.
+ancestor; small groups list their member paths relative to that ancestor.
+Presentation counts distinguish unique source URIs from multiple retained
+snapshots of the same URI.
+`jsdbg source graph --uncompacted` prints every retained snapshot and concrete
+projection, including revision identities but never source contents.
 
 Relative source-map entries are canonicalized against the resolved source-map
 URL after applying `sourceRoot`. The graph therefore uses absolute provider
