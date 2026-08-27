@@ -553,12 +553,26 @@ fn render_compacted_source_graph(graph: &CompactedSourceGraphSnapshot) -> String
             )
         });
     }
+    let connected = graph
+        .edges
+        .iter()
+        .flat_map(|edge| [edge.derived, edge.basis])
+        .collect::<BTreeSet<_>>();
     let mut visited = BTreeSet::new();
     for (index, root) in graph.roots.iter().enumerate() {
         if index > 0 {
             output.push('\n');
         }
-        render_source_graph_node(&mut output, *root, "", false, &nodes, &edges, &mut visited);
+        render_source_graph_node(
+            &mut output,
+            *root,
+            "",
+            false,
+            &nodes,
+            &edges,
+            &connected,
+            &mut visited,
+        );
     }
     output
 }
@@ -570,6 +584,7 @@ fn render_source_graph_node(
     wildcard: bool,
     nodes: &BTreeMap<u32, &CompactedSourceNodeSnapshot>,
     edges: &BTreeMap<u32, Vec<&CompactedSourceEdgeSnapshot>>,
+    connected: &BTreeSet<u32>,
     visited: &mut BTreeSet<u32>,
 ) {
     let Some(node) = nodes.get(&id) else {
@@ -580,8 +595,18 @@ fn render_source_graph_node(
         return;
     }
     let outgoing = edges.get(&id).map(Vec::as_slice).unwrap_or_default();
-    for (index, edge) in outgoing.iter().enumerate() {
-        let last = index + 1 == outgoing.len();
+    let visible_sources = (!connected.contains(&id) && node.listed_sources.len() > 1)
+        .then_some(node.listed_sources.as_slice())
+        .unwrap_or_default();
+    let child_count = visible_sources.len() + outgoing.len();
+    for (index, source) in visible_sources.iter().enumerate() {
+        let last = index + 1 == child_count;
+        let branch = if last { "└─" } else { "├─" };
+        writeln!(output, "{indent}{branch} source {source}").unwrap();
+    }
+    for (edge_index, edge) in outgoing.iter().enumerate() {
+        let index = visible_sources.len() + edge_index;
+        let last = index + 1 == child_count;
         let branch = if last { "└─" } else { "├─" };
         let child_indent = format!("{indent}{}", if last { "   " } else { "│  " });
         let Some(target) = nodes.get(&edge.basis) else {
@@ -608,6 +633,7 @@ fn render_source_graph_node(
                 edge.fan_out,
                 nodes,
                 edges,
+                connected,
                 visited,
             );
         }
@@ -624,13 +650,23 @@ fn source_graph_node_label(node: &CompactedSourceNodeSnapshot, wildcard: bool) -
     } else {
         ""
     };
+    let snapshots = if node.snapshot_count > node.source_count {
+        format!(
+            ", {} snapshot{}",
+            node.snapshot_count,
+            if node.snapshot_count == 1 { "" } else { "s" }
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "#{} {}{}  [{} source{}]{}",
+        "#{} {}{}  [{} source{}{}]{}",
         node.id,
         node.prefix,
         wildcard,
         node.source_count,
         if node.source_count == 1 { "" } else { "s" },
+        snapshots,
         if node.runtime_internal {
             " [internal]"
         } else {
@@ -2926,18 +2962,30 @@ mod tests {
                     id: 1,
                     prefix: "file:///workspace/out/".into(),
                     source_count: 2,
+                    snapshot_count: 2,
+                    listed_sources: vec![
+                        "file:///workspace/out/a.js".into(),
+                        "file:///workspace/out/b.js".into(),
+                    ],
                     runtime_internal: false,
                 },
                 CompactedSourceNodeSnapshot {
                     id: 2,
                     prefix: "file:///workspace/src/".into(),
                     source_count: 2,
+                    snapshot_count: 2,
+                    listed_sources: vec![
+                        "file:///workspace/src/a.ts".into(),
+                        "file:///workspace/src/b.ts".into(),
+                    ],
                     runtime_internal: false,
                 },
                 CompactedSourceNodeSnapshot {
                     id: 3,
                     prefix: "node:internal/modules/".into(),
                     source_count: 1,
+                    snapshot_count: 1,
+                    listed_sources: vec!["node:internal/modules/cjs/loader".into()],
                     runtime_internal: true,
                 },
             ],
@@ -2985,12 +3033,19 @@ mod tests {
                     id: 1,
                     prefix: "https://example.test/bundle.js".into(),
                     source_count: 1,
+                    snapshot_count: 1,
+                    listed_sources: vec!["https://example.test/bundle.js".into()],
                     runtime_internal: false,
                 },
                 CompactedSourceNodeSnapshot {
                     id: 2,
                     prefix: "source://resolved/~up/src/".into(),
                     source_count: 2,
+                    snapshot_count: 2,
+                    listed_sources: vec![
+                        "source://resolved/~up/src/a.ts".into(),
+                        "source://resolved/~up/src/b.ts".into(),
+                    ],
                     runtime_internal: false,
                 },
             ],
@@ -3009,6 +3064,48 @@ mod tests {
             "\
 #1 https://example.test/bundle.js  [1 source]
 └─ source map  [2 mappings, fan-out] → #2 source://resolved/~up/src/*  [2 sources]
+"
+        );
+    }
+
+    #[test]
+    fn source_graph_lists_members_of_small_isolated_groups() {
+        let graph = CompactedSourceGraphSnapshot {
+            roots: vec![1, 2],
+            nodes: vec![
+                CompactedSourceNodeSnapshot {
+                    id: 1,
+                    prefix: "https://example.test/node_modules/".into(),
+                    source_count: 3,
+                    snapshot_count: 3,
+                    listed_sources: vec![
+                        "https://example.test/node_modules/a.js".into(),
+                        "https://example.test/node_modules/b.js".into(),
+                        "https://example.test/node_modules/c.js".into(),
+                    ],
+                    runtime_internal: false,
+                },
+                CompactedSourceNodeSnapshot {
+                    id: 2,
+                    prefix: "https://example.test/service.js".into(),
+                    source_count: 1,
+                    snapshot_count: 5,
+                    listed_sources: vec!["https://example.test/service.js".into()],
+                    runtime_internal: false,
+                },
+            ],
+            edges: Vec::new(),
+        };
+
+        assert_eq!(
+            render_compacted_source_graph(&graph),
+            "\
+#1 https://example.test/node_modules/  [3 sources]
+├─ source https://example.test/node_modules/a.js
+├─ source https://example.test/node_modules/b.js
+└─ source https://example.test/node_modules/c.js
+
+#2 https://example.test/service.js  [1 source, 5 snapshots]
 "
         );
     }

@@ -1331,11 +1331,23 @@ impl DebuggerServiceApi for DebuggerService {
             nodes: graph
                 .nodes
                 .into_iter()
-                .map(|node| CompactedSourceNodeSnapshot {
-                    id: node.id,
-                    prefix: node.prefix.display(),
-                    source_count: u32::try_from(node.source_count).unwrap_or(u32::MAX),
-                    runtime_internal: node.runtime_internal,
+                .map(|node| {
+                    let listed_sources = if node.sources.len() <= 10 {
+                        node.sources
+                            .into_iter()
+                            .map(|source| source.display())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    CompactedSourceNodeSnapshot {
+                        id: node.id,
+                        prefix: node.prefix.display(),
+                        source_count: u32::try_from(node.source_count).unwrap_or(u32::MAX),
+                        snapshot_count: u32::try_from(node.snapshot_count).unwrap_or(u32::MAX),
+                        listed_sources,
+                        runtime_internal: node.runtime_internal,
+                    }
                 })
                 .collect(),
             edges: graph

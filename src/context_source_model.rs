@@ -50,6 +50,8 @@ pub struct CompactedSourceNode {
     pub id: u32,
     pub prefix: SourceUri,
     pub source_count: usize,
+    pub snapshot_count: usize,
+    pub sources: Vec<SourceUri>,
     pub runtime_internal: bool,
 }
 
@@ -227,7 +229,7 @@ impl ContextSourceModel {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ConcreteMapping {
     derived: SourceUri,
     basis: SourceUri,
@@ -262,14 +264,34 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
             })
         })
         .collect::<Vec<_>>();
-    let mut groups = concrete
-        .iter()
-        .cloned()
-        .map(|mapping| {
-            group_mappings(vec![mapping], &concrete, &known_sources)
-                .expect("a concrete source mapping always has a compact representation")
-        })
-        .collect::<Vec<_>>();
+    let mut groups = Vec::new();
+    let mut fan_out_mappings = BTreeSet::new();
+    let mut source_map_candidates =
+        BTreeMap::<(SourceUri, CompactedProjectionKind), Vec<ConcreteMapping>>::new();
+    for mapping in &concrete {
+        if mapping.kind == CompactedProjectionKind::SourceMap {
+            source_map_candidates
+                .entry((mapping.derived.clone(), mapping.kind.clone()))
+                .or_default()
+                .push(mapping.clone());
+        }
+    }
+    for mappings in source_map_candidates.into_values() {
+        if let Some(group) = fan_out_mapping_group(mappings, &concrete, &known_sources) {
+            fan_out_mappings.extend(group.mappings.iter().cloned());
+            groups.push(group);
+        }
+    }
+    groups.extend(
+        concrete
+            .iter()
+            .filter(|mapping| !fan_out_mappings.contains(*mapping))
+            .cloned()
+            .map(|mapping| {
+                group_mappings(vec![mapping], &concrete, &known_sources)
+                    .expect("a concrete source mapping always has a compact representation")
+            }),
+    );
 
     loop {
         let mut merged = None;
@@ -345,7 +367,7 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
     let nodes = prefixes
         .iter()
         .map(|prefix| {
-            let source_count = graph
+            let snapshot_count = graph
                 .sources
                 .iter()
                 .filter(|source| prefix_sources[prefix].contains(&source.uri))
@@ -353,7 +375,9 @@ fn compact_source_graph(graph: &ContextSourceGraphSnapshot) -> CompactedSourceGr
             CompactedSourceNode {
                 id: prefix_ids[prefix],
                 prefix: prefix.clone(),
-                source_count,
+                source_count: prefix_sources[prefix].len(),
+                snapshot_count,
+                sources: prefix_sources[prefix].iter().cloned().collect(),
                 runtime_internal: is_runtime_internal(prefix),
             }
         })
@@ -468,14 +492,15 @@ fn fan_out_mapping_group(
     }) {
         return None;
     }
+    let mapped_basis = universe
+        .iter()
+        .filter(|mapping| mapping.kind == kind && mapping.derived == derived)
+        .map(|mapping| mapping.basis.clone())
+        .collect::<BTreeSet<_>>();
     if known_sources
         .iter()
         .filter(|source| relative_source_path(source, &basis_prefix).is_some())
-        .any(|source| {
-            !universe.iter().any(|mapping| {
-                mapping.kind == kind && mapping.derived == derived && mapping.basis == *source
-            })
-        })
+        .any(|source| !mapped_basis.contains(source))
     {
         return None;
     }
@@ -534,7 +559,7 @@ fn compact_isolated_sources(
         })
         .collect::<BTreeSet<_>>();
 
-    isolated.iter().fold(BTreeMap::new(), |mut groups, source| {
+    let groups = isolated.iter().fold(BTreeMap::new(), |mut groups, source| {
         let prefix = candidates
             .iter()
             .filter(|candidate| relative_source_path(source, candidate).is_some())
@@ -551,7 +576,17 @@ fn compact_isolated_sources(
             .or_insert_with(BTreeSet::new)
             .insert(source.clone());
         groups
-    })
+    });
+    groups
+        .into_iter()
+        .map(|(prefix, sources)| {
+            if sources.len() == 1 {
+                (sources.first().cloned().unwrap(), sources)
+            } else {
+                (prefix, sources)
+            }
+        })
+        .collect()
 }
 
 fn source_ancestors(source: &SourceUri) -> Vec<SourceUri> {
@@ -796,6 +831,27 @@ mod tests {
         assert_eq!(compacted.nodes.len(), 1);
         assert_eq!(compacted.nodes[0].prefix.as_str(), "https://example.test/");
         assert_eq!(compacted.nodes[0].source_count, 2);
+        assert_eq!(compacted.nodes[0].snapshot_count, 2);
+    }
+
+    #[test]
+    fn distinguishes_source_uris_from_their_snapshots() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let uri = SourceUri::parse("https://example.test/app.js").unwrap();
+        let namespace = RevisionNamespace::new("cdp-script").unwrap();
+        model
+            .intern_version(&owner, uri.clone(), namespace.clone(), "hash-1")
+            .unwrap();
+        model
+            .intern_version(&owner, uri.clone(), namespace, "hash-2")
+            .unwrap();
+
+        let compacted = model.compacted_graph();
+        assert_eq!(compacted.nodes.len(), 1);
+        assert_eq!(compacted.nodes[0].prefix, uri);
+        assert_eq!(compacted.nodes[0].source_count, 1);
+        assert_eq!(compacted.nodes[0].snapshot_count, 2);
     }
 
     #[test]

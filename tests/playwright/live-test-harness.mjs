@@ -152,6 +152,7 @@ function chromeCandidates() {
 
 export function run(command, args, extraEnvironment, options = {}) {
 	return new Promise((resolve, reject) => {
+		const startedAt = performance.now();
 		const child = spawn(command, args, {
 			cwd: process.cwd(),
 			env: { ...process.env, ...extraEnvironment },
@@ -180,7 +181,12 @@ export function run(command, args, extraEnvironment, options = {}) {
 		});
 		child.once("exit", (code) => {
 			if (timer !== undefined) clearTimeout(timer);
-			resolve({ code, output, timedOut });
+			resolve({
+				code,
+				output,
+				timedOut,
+				durationMs: performance.now() - startedAt,
+			});
 		});
 	});
 }

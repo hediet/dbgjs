@@ -491,6 +491,10 @@ pub struct CompactedSourceNodeSnapshot {
     pub id: u32,
     pub prefix: String,
     pub source_count: u32,
+    #[serde(default)]
+    pub snapshot_count: u32,
+    #[serde(default)]
+    pub listed_sources: Vec<String>,
     pub runtime_internal: bool,
 }
 

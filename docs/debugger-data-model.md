@@ -632,7 +632,9 @@ every known relative path maps to the same relative path, optionally with one
 consistent suffix rewrite. A source-map fan-out such as `bundle.js -> src/*`
 may also collapse to one presentation edge when every known mapping into that
 subtree comes from that bundle. A competing `bundle2.js -> src/*` prevents the
-broader collapse.
+broader collapse. Isolated sources are grouped beneath the shallowest safe URI
+ancestor; small groups list their exact member URLs. Presentation counts
+distinguish unique source URIs from multiple retained snapshots of the same URI.
 
 Relative source-map entries are canonicalized against the resolved source-map
 URL after applying `sourceRoot`. The graph therefore uses absolute provider
@@ -1687,13 +1689,13 @@ The Rust prototype currently implements important subsets of this model:
   managed lifecycle and breakpoint operations.
 - Public source listing, generated-to-authored mapping, content display, grep,
   safe atomic export, and reloadable-cache eviction.
+- A context-wide provider-qualified, versioned source graph with typed
+  projections, contribution-based cleanup, and compacted human rendering.
 
 The following target-model pieces are not yet implemented:
 
 - Unconnected HubRPC/DAP breakpoint workflows.
 - Source-map path catalog discovery independent of full source hydration.
-- The shared provider-qualified, versioned source graph with typed projections
-  and live endpoints from every connection.
 - Immutable detail artifacts for scopes, properties, and coverage.
 - Native HubRPC server streaming and cancellation. The debugger currently
   exposes the same cursor semantics through cancellation-safe unary long
