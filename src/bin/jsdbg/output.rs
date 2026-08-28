@@ -1536,15 +1536,15 @@ impl HumanOutput for ConnectionListOutput {
             println!(
                 "{} {}  [{}]  kind={}  generation={}  targets={}",
                 if connection.selected { "*" } else { " " },
-                connection.id,
-                connection_status(&connection.status),
+                terminal_text(&connection.id),
+                terminal_text(&connection_status(&connection.status)),
                 connection_configuration_kind(&connection.configuration),
                 connection.generation,
                 connection.target_count,
             );
             println!(
                 "    {}",
-                connection_configuration(&connection.configuration)
+                terminal_text(&connection_configuration(&connection.configuration))
             );
         }
     }
@@ -3763,7 +3763,7 @@ mod tests {
         looks_minified_identifier, page_logs, process_tree_lines, process_trees_json,
         render_compacted_source_graph, render_evaluation, render_heap_classes_human,
         render_uncompacted_source_graph, render_value_snapshot, source_tree_lines,
-        style_process_label, style_session_label,
+        style_process_label, style_session_label, terminal_text,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -3779,6 +3779,14 @@ mod tests {
         UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot, ValueSelector, ValueSnapshot,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn terminal_text_escapes_control_sequences() {
+        assert_eq!(
+            terminal_text("\u{1b}]8;;https://evil.test\u{7}label"),
+            "\\u{1b}]8;;https://evil.test\\u{7}label"
+        );
+    }
 
     #[test]
     fn evaluation_and_value_snapshot_share_bounded_preview_rendering() {
