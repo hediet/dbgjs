@@ -957,7 +957,7 @@ impl StringReconstruction<'_> {
                         .min(MAX_RECONSTRUCTED_STRING_BYTES);
                     self.append(parent, depth + 1, &mut parent_value)?;
                     self.max_chars = original_max_chars;
-                    self.truncated = original_truncated;
+                    self.truncated = original_truncated || self.uncertain;
                     if parent_value.chars().count()
                         < offset.saturating_add(length.min(original_max_chars))
                     {
