@@ -13,6 +13,9 @@ const ITERATIONS: usize = 10;
 const MANY_HIT_LINES: usize = 10_000;
 const MANY_HIT_RESULTS: usize = 5_000;
 const MANY_HIT_ITERATIONS: usize = 3;
+const RARE_EOF_SMALL_LINES: usize = 20_000;
+const RARE_EOF_LARGE_LINES: usize = RARE_EOF_SMALL_LINES * 4;
+const RARE_EOF_ITERATIONS: usize = 5;
 
 fn main() {
     let contents = (0..UNIQUE_CONTENTS)
@@ -68,6 +71,7 @@ fn main() {
     );
 
     benchmark_many_hit_materialization();
+    benchmark_rare_eof_fallback();
 }
 
 fn benchmark_many_hit_materialization() {
@@ -161,4 +165,56 @@ fn repeated_line_collection(
             )
         })
         .collect()
+}
+
+fn benchmark_rare_eof_fallback() {
+    let small = rare_eof_elapsed(RARE_EOF_SMALL_LINES);
+    let large = rare_eof_elapsed(RARE_EOF_LARGE_LINES);
+    let growth = large.as_secs_f64() / small.as_secs_f64();
+    println!(
+        "newline-fallback-rare-eof: {RARE_EOF_SMALL_LINES} lines {small:?}, \
+         {RARE_EOF_LARGE_LINES} lines {large:?}, {growth:.2}x time for 4x input"
+    );
+    assert!(
+        growth < 8.0,
+        "newline fallback grew {growth:.2}x for 4x input; expected near-linear behavior"
+    );
+}
+
+fn rare_eof_elapsed(lines: usize) -> std::time::Duration {
+    let content = Arc::<str>::from(format!(
+        "{}rare-marker",
+        "ordinary payload\r\n".repeat(lines)
+    ));
+    let document = SearchDocument {
+        identity: SourceIdentity {
+            path: "src/generated/rare-eof.ts".to_owned(),
+            connection_id: None,
+            target_id: None,
+            kind: "authored".to_owned(),
+            provenance: "benchmark fixture".to_owned(),
+        },
+        content_hash: ContentHash::of_bytes(content.as_bytes()),
+        content,
+    };
+    let query = SearchQuery {
+        pattern: "rare-marker|never\\r?\\nmatches".to_owned(),
+        regex: true,
+        case_sensitive: true,
+        max_results: 10,
+        context_lines: 0,
+    };
+    let warmup = search(vec![document.clone()], &query, &SearchControl::default()).unwrap();
+    assert_eq!(warmup.total_matches, 1);
+
+    let started = Instant::now();
+    for _ in 0..RARE_EOF_ITERATIONS {
+        black_box(search(
+            black_box(vec![document.clone()]),
+            black_box(&query),
+            &SearchControl::default(),
+        ))
+        .unwrap();
+    }
+    started.elapsed()
 }

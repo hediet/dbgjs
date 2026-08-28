@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use grep_matcher::{LineTerminator, Matcher};
+use grep_matcher::{LineTerminator, Match, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
@@ -183,7 +183,7 @@ struct ContentMatches {
 }
 
 struct CompiledMatcher {
-    candidate: RegexMatcher,
+    candidate: Option<RegexMatcher>,
     exact: RegexMatcher,
 }
 
@@ -244,6 +244,89 @@ struct ContentMatchSink<'a> {
     total: &'a mut u64,
     matcher_error: &'a mut Option<String>,
     interrupted: &'a mut Option<SearchError>,
+}
+
+struct SinglePassState {
+    line_start: usize,
+    line_end: usize,
+    next_line_start: Option<usize>,
+    line_number: u32,
+    has_line: bool,
+    locations: Vec<MatchLocation>,
+    total: u64,
+    interruption: Option<SearchError>,
+    max_results: usize,
+}
+
+impl SinglePassState {
+    fn new(content: &[u8], max_results: usize) -> Self {
+        let mut state = Self {
+            line_start: 0,
+            line_end: 0,
+            next_line_start: None,
+            line_number: 1,
+            has_line: !content.is_empty(),
+            locations: Vec::with_capacity(max_results.min(64)),
+            total: 0,
+            interruption: None,
+            max_results,
+        };
+        if state.has_line {
+            state.update_line_bounds(content);
+        }
+        state
+    }
+
+    fn record(&mut self, content: &[u8], matched: Match) {
+        while self
+            .next_line_start
+            .is_some_and(|next_line_start| matched.start() >= next_line_start)
+        {
+            let next_line_start = self.next_line_start.unwrap();
+            if next_line_start == content.len() {
+                self.has_line = false;
+                return;
+            }
+            self.line_start = next_line_start;
+            self.line_number = self.line_number.saturating_add(1);
+            self.update_line_bounds(content);
+        }
+        if self.has_line {
+            self.record_in_line(matched);
+        }
+    }
+
+    fn update_line_bounds(&mut self, content: &[u8]) {
+        let Some(newline) = content[self.line_start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|offset| self.line_start + offset)
+        else {
+            self.line_end = content.len();
+            self.next_line_start = None;
+            return;
+        };
+        self.line_end = if newline > self.line_start && content[newline - 1] == b'\r' {
+            newline - 1
+        } else {
+            newline
+        };
+        self.next_line_start = Some(newline + 1);
+    }
+
+    fn record_in_line(&mut self, matched: Match) {
+        if matched.start() > self.line_end || matched.end() > self.line_end {
+            return;
+        }
+        self.total = self.total.saturating_add(1);
+        if self.locations.len() < self.max_results {
+            self.locations.push(MatchLocation {
+                line: self.line_number,
+                column: matched.start().saturating_sub(self.line_start) as u32 + 1,
+                length: matched.end().saturating_sub(matched.start()) as u32,
+            });
+        }
+    }
 }
 
 impl Sink for ContentMatchSink<'_> {
@@ -432,13 +515,7 @@ fn build_matcher(query: &SearchQuery) -> Result<CompiledMatcher, SearchError> {
         .multi_line(true)
         .case_insensitive(!query.case_sensitive)
         .fixed_strings(!query.regex);
-    let candidate = line_builder.build(&query.pattern).unwrap_or_else(|_| {
-        RegexMatcherBuilder::new()
-            .crlf(true)
-            .multi_line(true)
-            .build("")
-            .expect("the match-all candidate regex is valid")
-    });
+    let candidate = line_builder.build(&query.pattern).ok();
     Ok(CompiledMatcher { candidate, exact })
 }
 
@@ -452,6 +529,43 @@ fn search_content(
     if let Some(interruption) = control.interruption() {
         return Err(interruption);
     }
+    let (locations, total) = match matcher.candidate.as_ref() {
+        Some(candidate) => search_candidate_lines(
+            content.content.as_bytes(),
+            candidate,
+            &matcher.exact,
+            max_results,
+            control,
+        )?,
+        None => search_single_pass(
+            content.content.as_bytes(),
+            &matcher.exact,
+            max_results,
+            control,
+        )?,
+    };
+    let line_ranges = if locations.is_empty() {
+        Vec::new()
+    } else {
+        build_line_ranges(&content.content, control)?
+    };
+    Ok(ContentMatches {
+        hash,
+        content: content.content,
+        line_ranges,
+        identities: content.identities,
+        locations,
+        total,
+    })
+}
+
+fn search_candidate_lines(
+    content: &[u8],
+    candidate: &RegexMatcher,
+    exact: &RegexMatcher,
+    max_results: usize,
+    control: &SearchControl,
+) -> Result<(Vec<MatchLocation>, u64), SearchError> {
     let mut locations = Vec::with_capacity(max_results.min(64));
     let mut total = 0_u64;
     let mut matcher_error = None;
@@ -461,13 +575,13 @@ fn search_content(
         .line_terminator(LineTerminator::crlf())
         .binary_detection(BinaryDetection::none())
         .build();
-    let mut reader = InterruptibleReader::new(content.content.as_bytes(), control);
+    let mut reader = InterruptibleReader::new(content, control);
     let search_result = searcher.search_reader(
-        &matcher.candidate,
+        candidate,
         &mut reader,
         ContentMatchSink {
-            matcher: &matcher.exact,
-            content: content.content.as_bytes(),
+            matcher: exact,
+            content,
             control,
             max_results,
             locations: &mut locations,
@@ -486,19 +600,44 @@ fn search_content(
         return Err(SearchError::Search(error));
     }
     search_result.map_err(|error| SearchError::Search(error.to_string()))?;
-    let line_ranges = if locations.is_empty() {
-        Vec::new()
-    } else {
-        build_line_ranges(&content.content, control)?
-    };
-    Ok(ContentMatches {
-        hash,
-        content: content.content,
-        line_ranges,
-        identities: content.identities,
-        locations,
-        total,
-    })
+    Ok((locations, total))
+}
+
+fn search_single_pass(
+    content: &[u8],
+    exact: &RegexMatcher,
+    max_results: usize,
+    control: &SearchControl,
+) -> Result<(Vec<MatchLocation>, u64), SearchError> {
+    let mut reader = InterruptibleReader::new(content, control);
+    let mut buffer = [0_u8; CANCELLATION_CHECK_BYTES];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(reader
+                    .interruption
+                    .unwrap_or_else(|| SearchError::Search(error.to_string())));
+            }
+        }
+    }
+    let mut state = SinglePassState::new(content, max_results);
+    exact
+        .find_iter(content, |matched| {
+            if let Some(interruption) = control.interruption() {
+                state.interruption = Some(interruption);
+                return false;
+            }
+            state.record(content, matched);
+            true
+        })
+        .map_err(|error| SearchError::Search(error.to_string()))?;
+    if let Some(interruption) = state.interruption {
+        return Err(interruption);
+    }
+    control.check()?;
+    Ok((state.locations, state.total))
 }
 
 fn build_line_ranges(
@@ -692,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_all_lines_for_newline_capable_patterns() {
+    fn scans_newline_capable_patterns_once_with_same_line_results() {
         let content: Arc<str> = "head\r\nfoo\r\nbar".into();
 
         let mut alternative = query(r"foo|\n");
@@ -740,6 +879,33 @@ mod tests {
                 .map(|hit| (hit.line, hit.column, hit.match_length))
                 .collect::<Vec<_>>(),
             [(1, 1, 0), (2, 1, 3), (3, 4, 0)]
+        );
+    }
+
+    #[test]
+    fn finds_a_rare_same_line_fallback_match_near_eof() {
+        let content = Arc::<str>::from(format!(
+            "{}rare-marker",
+            "ordinary payload\r\n".repeat(20_000)
+        ));
+        let mut options = query("rare-marker|never\\r?\\nmatches");
+        options.regex = true;
+
+        let result = search(
+            vec![document("rare.ts", content)],
+            &options,
+            &SearchControl::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.total_matches, 1);
+        assert_eq!(
+            result
+                .hits
+                .iter()
+                .map(|hit| (hit.line, hit.column, hit.match_length))
+                .collect::<Vec<_>>(),
+            [(20_001, 1, 11)]
         );
     }
 
