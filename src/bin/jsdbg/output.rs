@@ -1,5 +1,5 @@
 use cdp_client::service_api::{
-    AgentSessionSnapshot, BreakpointStatus, CompactedSourceEdgeSnapshot,
+    AgentSessionSnapshot, BreakpointPendingReason, BreakpointStatus, CompactedSourceEdgeSnapshot,
     CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
     ConnectionStatus, ConsoleMessageSnapshot, ContextSnapshot, ContextSummary, CoverageSnapshot,
     CpuProfileFunctionSnapshot, CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
@@ -188,10 +188,12 @@ impl OutputFormat {
                     if let Some(source) = &breakpoint.source {
                         println!();
                         print_source_excerpt(&format!("Breakpoint {}", breakpoint.id), source);
-                    } else if matches!(breakpoint.status, TargetBreakpointStatus::Pending) {
+                    } else if !matches!(breakpoint.status, TargetBreakpointStatus::Installed { .. })
+                    {
                         println!(
-                            "Breakpoint {} is still pending: no loaded script resolved '{}'.",
-                            breakpoint.id, breakpoint.source_url
+                            "Breakpoint {}: {}",
+                            breakpoint.id,
+                            target_breakpoint_status(&breakpoint.status)
                         );
                     }
                 }
@@ -2103,6 +2105,25 @@ impl HumanOutput for ContextSnapshot {
                     breakpoint.column,
                     breakpoint_status(&breakpoint.status)
                 );
+                if let Some(reason) = &breakpoint.pending_reason {
+                    print_breakpoint_pending_reason(reason, "      ");
+                }
+                for application in &breakpoint.applications {
+                    if let Some(mapping) = &application.mapping {
+                        println!(
+                            "      {} / {} gen {} / script {} v{} -> {}:{}:{} via {}",
+                            application.connection_id,
+                            application.target_id,
+                            application.connection_generation,
+                            application.script_id,
+                            application.script_version,
+                            mapping.generated_url,
+                            mapping.generated_line,
+                            mapping.generated_column,
+                            mapping.projection.join(" -> ")
+                        );
+                    }
+                }
             }
 
             fn breakpoint_status(status: &BreakpointStatus) -> String {
@@ -2189,12 +2210,7 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
                 breakpoint.column,
                 target_breakpoint_status(&breakpoint.status)
             );
-            if matches!(breakpoint.status, TargetBreakpointStatus::Pending) {
-                println!(
-                    "      waiting for a loaded script that resolves '{}'",
-                    breakpoint.source_url
-                );
-            }
+            print_target_breakpoint_explanation(breakpoint);
         }
     }
     match &snapshot.pause {
@@ -3582,12 +3598,118 @@ fn target_phase(phase: &TargetDebuggerPhase) -> String {
 
 fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
     match status {
-        TargetBreakpointStatus::Pending => "pending".to_owned(),
+        TargetBreakpointStatus::WaitingForScript => "waiting for script".to_owned(),
+        TargetBreakpointStatus::SourceNotFound { .. } => "source not found".to_owned(),
+        TargetBreakpointStatus::AmbiguousSource { candidates, .. } => {
+            format!("ambiguous source; {} candidates", candidates.len())
+        }
+        TargetBreakpointStatus::Unmapped { .. } => "source found but location unmapped".to_owned(),
+        TargetBreakpointStatus::Applicable { mapping_count } => {
+            format!("applicable; {mapping_count} mapping(s)")
+        }
+        TargetBreakpointStatus::Installing { application_count } => {
+            format!("installing; {application_count} application(s)")
+        }
         TargetBreakpointStatus::Installed { binding_count } => {
             let suffix = if *binding_count == 1 { "" } else { "s" };
             format!("installed; {binding_count} binding{suffix}")
         }
         TargetBreakpointStatus::Failed { message } => format!("failed: {message}"),
+    }
+}
+
+fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &str) {
+    match reason {
+        BreakpointPendingReason::WaitingForTarget => {
+            println!("{indent}waiting for an eligible target")
+        }
+        BreakpointPendingReason::WaitingForScript => {
+            println!("{indent}waiting for target scripts and source maps")
+        }
+        BreakpointPendingReason::SourceNotFound { diagnostics } => {
+            println!("{indent}source not found in loaded scripts");
+            for diagnostic in diagnostics {
+                println!("{indent}- {diagnostic}");
+            }
+        }
+        BreakpointPendingReason::AmbiguousSource {
+            candidates,
+            omitted_candidate_count,
+        } => {
+            println!("{indent}source is ambiguous; qualify one candidate:");
+            for candidate in candidates {
+                println!(
+                    "{indent}- {} [{}; {}]",
+                    candidate.source_url, candidate.content_hash, candidate.provenance
+                );
+            }
+            if *omitted_candidate_count > 0 {
+                println!("{indent}- … and {omitted_candidate_count} more");
+            }
+        }
+        BreakpointPendingReason::Unmapped { diagnostics } => {
+            println!("{indent}source matched, but the requested location is unmapped");
+            for diagnostic in diagnostics {
+                println!("{indent}- {diagnostic}");
+            }
+        }
+        BreakpointPendingReason::Applicable => {
+            println!("{indent}mapped and ready for physical application")
+        }
+        BreakpointPendingReason::Installing => {
+            println!("{indent}mapped; physical breakpoint installation is in progress")
+        }
+        BreakpointPendingReason::Failed { message } => println!("{indent}failed: {message}"),
+    }
+}
+
+fn print_target_breakpoint_explanation(
+    breakpoint: &cdp_client::service_api::TargetBreakpointSnapshot,
+) {
+    match &breakpoint.status {
+        TargetBreakpointStatus::WaitingForScript => {
+            println!(
+                "      waiting for a loaded script that resolves '{}'",
+                breakpoint.source_url
+            );
+        }
+        TargetBreakpointStatus::SourceNotFound { diagnostics }
+        | TargetBreakpointStatus::Unmapped { diagnostics } => {
+            for diagnostic in diagnostics {
+                println!("      {diagnostic}");
+            }
+        }
+        TargetBreakpointStatus::AmbiguousSource {
+            candidates,
+            omitted_candidate_count,
+        } => {
+            for candidate in candidates {
+                println!(
+                    "      candidate {} [{}; {}]",
+                    candidate.source_url, candidate.content_hash, candidate.provenance
+                );
+            }
+            if *omitted_candidate_count > 0 {
+                println!("      … and {omitted_candidate_count} more");
+            }
+        }
+        TargetBreakpointStatus::Applicable { .. }
+        | TargetBreakpointStatus::Installing { .. }
+        | TargetBreakpointStatus::Installed { .. }
+        | TargetBreakpointStatus::Failed { .. } => {}
+    }
+    for application in &breakpoint.applications {
+        if let Some(mapping) = &application.mapping {
+            println!(
+                "      script {} v{} -> {}:{}:{} via {}",
+                application.script_id,
+                application.script_version,
+                mapping.generated_url,
+                mapping.generated_line,
+                mapping.generated_column,
+                mapping.projection.join(" -> ")
+            );
+        }
     }
 }
 

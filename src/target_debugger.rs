@@ -24,8 +24,9 @@ use crate::cdp_runtime::CdpDebuggerSession;
 use crate::context_source_model::ContextSourceModel;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
 use crate::debugger_engine::{
-    BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptKey,
-    ScriptSourceState, SessionKey, SessionPhase, StepKind,
+    BreakpointAssessmentStatus, BreakpointBinding, BreakpointKey, BreakpointMapping,
+    BreakpointSourceCandidate, DebuggerState, FrameProjection, Input, ScriptKey, ScriptSourceState,
+    SessionKey, SessionPhase, StepKind,
 };
 use crate::heap_graph::{
     AggregateBy, CostPolicy, EdgePolicy, HeapGraph, NodeIndex, NodeSelector, PathDirection,
@@ -36,10 +37,12 @@ use crate::promise_debugging::{
     has_live_promise_evidence, inspect_heap_promises, inspect_live_promise, remote_value_snapshot,
 };
 use crate::service_api::{
-    ConsoleMessageSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
-    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
-    CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot, CpuProfileNodeSnapshot,
-    CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
+    BreakpointApplicationSnapshot, BreakpointApplicationStatus, BreakpointMappingSnapshot,
+    BreakpointScriptAssessmentSnapshot, BreakpointScriptAssessmentStatus,
+    BreakpointSourceCandidateSnapshot, ConsoleMessageSnapshot, CoverageAnalysisSnapshot,
+    CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot,
+    CpuProfileAnalysisSnapshot, CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot,
+    CpuProfileNodeSnapshot, CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
     FrameProjectionSnapshot, FrameSnapshot, HeapAggregateBy, HeapAggregateEntrySnapshot,
     HeapAggregateSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot, HeapClassSnapshot,
     HeapClassSnapshotEntry, HeapDiffEntrySnapshot, HeapDiffSnapshot, HeapDominatorSnapshot,
@@ -845,21 +848,25 @@ impl TargetDebuggerHandle {
 
     pub async fn settle(&self, maximum: Duration) -> TargetDebuggerSnapshot {
         let mut snapshots = self.snapshots.clone();
-        let settled =
-            tokio::time::timeout(maximum, async {
-                loop {
-                    let current = snapshots.borrow_and_update().clone();
-                    if current.breakpoints.iter().all(|breakpoint| {
-                        !matches!(breakpoint.status, TargetBreakpointStatus::Pending)
-                    }) {
-                        return current;
-                    }
-                    if snapshots.changed().await.is_err() {
-                        return snapshots.borrow().clone();
-                    }
+        let settled = tokio::time::timeout(maximum, async {
+            loop {
+                let current = snapshots.borrow_and_update().clone();
+                if current.breakpoints.iter().all(|breakpoint| {
+                    !matches!(
+                        breakpoint.status,
+                        TargetBreakpointStatus::WaitingForScript
+                            | TargetBreakpointStatus::Applicable { .. }
+                            | TargetBreakpointStatus::Installing { .. }
+                    )
+                }) {
+                    return current;
                 }
-            })
-            .await;
+                if snapshots.changed().await.is_err() {
+                    return snapshots.borrow().clone();
+                }
+            }
+        })
+        .await;
         settled.unwrap_or_else(|_| snapshots.borrow().clone())
     }
 
@@ -4685,6 +4692,113 @@ fn predicate_matches(snapshot: &TargetDebuggerSnapshot, predicate: &TargetWaitPr
     }
 }
 
+fn breakpoint_candidate_snapshot(
+    candidate: &BreakpointSourceCandidate,
+) -> BreakpointSourceCandidateSnapshot {
+    BreakpointSourceCandidateSnapshot {
+        source_url: candidate.source_url.clone(),
+        content_hash: format!("{:?}", candidate.content.content),
+        provenance: format!("{:?}", candidate.content.provenance),
+    }
+}
+
+fn breakpoint_mapping_snapshot(
+    source_url: &str,
+    requested: Position,
+    mapping: &BreakpointMapping,
+) -> BreakpointMappingSnapshot {
+    BreakpointMappingSnapshot {
+        source_url: source_url.to_owned(),
+        requested_line: requested.line.saturating_add(1),
+        requested_column: requested.column.saturating_add(1),
+        generated_url: mapping.generated_url.clone(),
+        generated_line: mapping.generated_position.line.saturating_add(1),
+        generated_column: mapping.generated_position.column.saturating_add(1),
+        quality: mapping.quality.clone(),
+        projection: mapping.projection.clone(),
+    }
+}
+
+fn target_breakpoint_assessment_status(
+    assessments: &[BreakpointScriptAssessmentSnapshot],
+) -> TargetBreakpointStatus {
+    if let Some((candidates, omitted_candidate_count)) =
+        assessments
+            .iter()
+            .find_map(|assessment| match &assessment.status {
+                BreakpointScriptAssessmentStatus::AmbiguousSource {
+                    candidates,
+                    omitted_candidate_count,
+                } => Some((candidates.clone(), *omitted_candidate_count)),
+                _ => None,
+            })
+    {
+        return TargetBreakpointStatus::AmbiguousSource {
+            candidates,
+            omitted_candidate_count,
+        };
+    }
+    let unmapped = assessments
+        .iter()
+        .filter_map(|assessment| match &assessment.status {
+            BreakpointScriptAssessmentStatus::Unmapped { diagnostics, .. } => {
+                Some(diagnostics.iter().cloned())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if !unmapped.is_empty() {
+        return TargetBreakpointStatus::Unmapped {
+            diagnostics: unmapped,
+        };
+    }
+    let mapping_count = assessments
+        .iter()
+        .map(|assessment| match &assessment.status {
+            BreakpointScriptAssessmentStatus::Applicable { mappings, .. } => mappings.len(),
+            BreakpointScriptAssessmentStatus::Mapping { .. } => 1,
+            _ => 0,
+        })
+        .sum::<usize>();
+    if mapping_count > 0 {
+        return TargetBreakpointStatus::Applicable {
+            mapping_count: u32::try_from(mapping_count).unwrap_or(u32::MAX),
+        };
+    }
+    if let Some(message) = assessments
+        .iter()
+        .find_map(|assessment| match &assessment.status {
+            BreakpointScriptAssessmentStatus::Failed { message } => Some(message.clone()),
+            _ => None,
+        })
+    {
+        return TargetBreakpointStatus::Failed { message };
+    }
+    if assessments.is_empty()
+        || assessments.iter().any(|assessment| {
+            matches!(
+                assessment.status,
+                BreakpointScriptAssessmentStatus::WaitingForScript
+                    | BreakpointScriptAssessmentStatus::Mapping { .. }
+            )
+        })
+    {
+        return TargetBreakpointStatus::WaitingForScript;
+    }
+    let diagnostics = assessments
+        .iter()
+        .filter_map(|assessment| match &assessment.status {
+            BreakpointScriptAssessmentStatus::SourceNotFound { diagnostics } => {
+                Some(diagnostics.iter().cloned())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    TargetBreakpointStatus::SourceNotFound { diagnostics }
+}
+
 fn snapshot(
     context_id: &str,
     connection_id: &str,
@@ -4723,6 +4837,128 @@ fn snapshot(
         .iter()
         .filter(|(key, _)| key.client_id == context_id)
         .map(|(key, breakpoint)| {
+            let assessments = breakpoint
+                .assessments
+                .iter()
+                .filter_map(|(script_key, assessment)| {
+                    let script = state.scripts.get(script_key)?;
+                    Some(BreakpointScriptAssessmentSnapshot {
+                        connection_id: connection_id.to_owned(),
+                        target_id: target_id.to_owned(),
+                        connection_generation,
+                        script_id: script_key.script_id.clone(),
+                        script_url: script.url.clone(),
+                        script_version: assessment.script_version,
+                        status: match &assessment.status {
+                            BreakpointAssessmentStatus::WaitingForScript => {
+                                BreakpointScriptAssessmentStatus::WaitingForScript
+                            }
+                            BreakpointAssessmentStatus::SourceNotFound { diagnostics } => {
+                                BreakpointScriptAssessmentStatus::SourceNotFound {
+                                    diagnostics: diagnostics.as_ref().clone(),
+                                }
+                            }
+                            BreakpointAssessmentStatus::AmbiguousSource {
+                                candidates,
+                                omitted_candidate_count,
+                            } => BreakpointScriptAssessmentStatus::AmbiguousSource {
+                                candidates: candidates
+                                    .iter()
+                                    .map(breakpoint_candidate_snapshot)
+                                    .collect(),
+                                omitted_candidate_count: u32::try_from(*omitted_candidate_count)
+                                    .unwrap_or(u32::MAX),
+                            },
+                            BreakpointAssessmentStatus::Mapping { candidate, .. } => {
+                                BreakpointScriptAssessmentStatus::Mapping {
+                                    candidate: breakpoint_candidate_snapshot(candidate),
+                                }
+                            }
+                            BreakpointAssessmentStatus::Unmapped {
+                                candidate,
+                                diagnostics,
+                            } => BreakpointScriptAssessmentStatus::Unmapped {
+                                candidate: breakpoint_candidate_snapshot(candidate),
+                                diagnostics: diagnostics.as_ref().clone(),
+                            },
+                            BreakpointAssessmentStatus::Applicable {
+                                candidate,
+                                mappings,
+                            } => BreakpointScriptAssessmentStatus::Applicable {
+                                candidate: breakpoint_candidate_snapshot(candidate),
+                                mappings: mappings
+                                    .iter()
+                                    .map(|mapping| {
+                                        breakpoint_mapping_snapshot(
+                                            &breakpoint.source_url,
+                                            breakpoint.position,
+                                            mapping,
+                                        )
+                                    })
+                                    .collect(),
+                            },
+                            BreakpointAssessmentStatus::Failed { message } => {
+                                BreakpointScriptAssessmentStatus::Failed {
+                                    message: message.clone(),
+                                }
+                            }
+                        },
+                    })
+                })
+                .collect::<Vec<_>>();
+            let applications = breakpoint
+                .bindings
+                .iter()
+                .filter_map(|(physical, binding)| {
+                    let script = state.scripts.get(&physical.script)?;
+                    let mapping =
+                        breakpoint
+                            .assessments
+                            .get(&physical.script)
+                            .and_then(|assessment| match &assessment.status {
+                                BreakpointAssessmentStatus::Applicable { mappings, .. } => mappings
+                                    .iter()
+                                    .find(|mapping| mapping.generated_position == physical.position)
+                                    .map(|mapping| {
+                                        breakpoint_mapping_snapshot(
+                                            &breakpoint.source_url,
+                                            breakpoint.position,
+                                            mapping,
+                                        )
+                                    }),
+                                _ => None,
+                            });
+                    Some(BreakpointApplicationSnapshot {
+                        connection_id: connection_id.to_owned(),
+                        target_id: target_id.to_owned(),
+                        connection_generation,
+                        script_id: physical.script.script_id.clone(),
+                        script_url: script.url.clone(),
+                        script_version: physical.script_version,
+                        generated_line: physical.position.line.saturating_add(1),
+                        generated_column: physical.position.column.saturating_add(1),
+                        mapping,
+                        status: match binding {
+                            BreakpointBinding::WaitingForRemoval(_) => {
+                                BreakpointApplicationStatus::Removing
+                            }
+                            BreakpointBinding::PendingInstall(_) => {
+                                BreakpointApplicationStatus::Installing
+                            }
+                            BreakpointBinding::Installed { backend_id } => {
+                                BreakpointApplicationStatus::Installed {
+                                    backend_id: backend_id.clone(),
+                                }
+                            }
+                            BreakpointBinding::Failed { message } => {
+                                BreakpointApplicationStatus::Failed {
+                                    message: message.clone(),
+                                }
+                            }
+                        },
+                    })
+                })
+                .collect::<Vec<_>>();
             let installed = breakpoint
                 .bindings
                 .values()
@@ -4741,8 +4977,12 @@ fn snapshot(
                 }
             } else if let Some(message) = failure {
                 TargetBreakpointStatus::Failed { message }
+            } else if !applications.is_empty() {
+                TargetBreakpointStatus::Installing {
+                    application_count: u32::try_from(applications.len()).unwrap_or(u32::MAX),
+                }
             } else {
-                TargetBreakpointStatus::Pending
+                target_breakpoint_assessment_status(&assessments)
             };
             TargetBreakpointSnapshot {
                 id: key.breakpoint_id.clone(),
@@ -4751,6 +4991,8 @@ fn snapshot(
                 column: breakpoint.position.column.saturating_add(1),
                 status,
                 source: None,
+                assessments,
+                applications,
             }
         })
         .collect();

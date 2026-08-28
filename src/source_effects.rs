@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use crate::content_store::ContentStore;
 use crate::context_source_model::{ContextSourceModel, SourceContributionId, SourceSnapshotRole};
 use crate::debugger_engine::{
-    DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
+    BreakpointMapping, DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
@@ -239,18 +239,34 @@ impl SourceEffectInterpreter {
                 ..
             } => {
                 let retained = self.view_for(*view_id, script)?;
-                let generated_positions = retained
+                let mappings = retained
                     .view
                     .reverse(source_url, *position)
                     .into_iter()
                     .filter(|candidate| candidate.source_url == retained.generated_url)
-                    .map(|candidate| candidate.position)
-                    .collect::<BTreeSet<_>>()
+                    .map(|candidate| BreakpointMapping {
+                        generated_position: candidate.position,
+                        quality: mapping_quality_label(candidate.quality).to_owned(),
+                        generated_url: candidate.projection.generated_url.clone(),
+                        projection: candidate
+                            .projection
+                            .steps
+                            .iter()
+                            .map(projection_step_label)
+                            .collect(),
+                    })
+                    .collect::<Vec<_>>();
+                let mappings = mappings
                     .into_iter()
+                    .fold(BTreeMap::new(), |mut result, mapping| {
+                        result.entry(mapping.generated_position).or_insert(mapping);
+                        result
+                    })
+                    .into_values()
                     .collect();
-                Ok(Some(Input::BreakpointMapped {
+                Ok(Some(Input::BreakpointMappingAssessed {
                     effect_id: *effect_id,
-                    generated_positions,
+                    mappings,
                 }))
             }
             Effect::MapFrame {

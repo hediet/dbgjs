@@ -30,12 +30,12 @@ use crate::context_source_model::{
 };
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
-    BreakpointSnapshot, BreakpointSpec, BreakpointStatus, CompactedSourceEdgeSnapshot,
-    CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
-    ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
-    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot, DebuggerServiceApi,
-    EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult,
-    HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
+    BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
+    CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot,
+    ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot,
+    ContextObservation, ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot,
+    DebuggerServiceApi, EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot,
+    HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
@@ -3286,9 +3286,14 @@ fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> Contex
                 } else {
                     BreakpointStatus::Disabled
                 },
+                pending_reason: breakpoint
+                    .enabled
+                    .then_some(BreakpointPendingReason::WaitingForTarget),
                 enabled: breakpoint.enabled,
                 condition: breakpoint.condition.clone(),
                 target_selector: breakpoint.target_selector.clone(),
+                targets: Vec::new(),
+                applications: Vec::new(),
             })
             .collect(),
     }
@@ -3337,6 +3342,11 @@ fn service_snapshot(
                 )
             })
             .count() as u32;
+        breakpoint.targets = applications.clone();
+        breakpoint.applications = applications
+            .iter()
+            .flat_map(|target| target.applications.iter().cloned())
+            .collect();
         breakpoint.status = if applications.is_empty() {
             BreakpointStatus::Pending
         } else if installed == applications.len() as u32 {
@@ -3360,8 +3370,98 @@ fn service_snapshot(
         } else {
             BreakpointStatus::Pending
         };
+        breakpoint.pending_reason = match breakpoint.status {
+            BreakpointStatus::Bound { .. } | BreakpointStatus::Disabled => None,
+            BreakpointStatus::Failed { ref message } => Some(BreakpointPendingReason::Failed {
+                message: message.clone(),
+            }),
+            _ => Some(breakpoint_pending_reason(&applications)),
+        };
     }
     Some(result)
+}
+
+fn breakpoint_pending_reason(
+    applications: &[crate::service_api::TargetBreakpointSnapshot],
+) -> BreakpointPendingReason {
+    use crate::service_api::TargetBreakpointStatus;
+
+    if applications.is_empty() {
+        return BreakpointPendingReason::WaitingForTarget;
+    }
+    if let Some((candidates, omitted_candidate_count)) =
+        applications
+            .iter()
+            .find_map(|application| match &application.status {
+                TargetBreakpointStatus::AmbiguousSource {
+                    candidates,
+                    omitted_candidate_count,
+                } => Some((candidates.clone(), *omitted_candidate_count)),
+                _ => None,
+            })
+    {
+        return BreakpointPendingReason::AmbiguousSource {
+            candidates,
+            omitted_candidate_count,
+        };
+    }
+    if applications.iter().any(|application| {
+        matches!(
+            application.status,
+            TargetBreakpointStatus::Installing { .. }
+        )
+    }) {
+        return BreakpointPendingReason::Installing;
+    }
+    if applications.iter().any(|application| {
+        matches!(
+            application.status,
+            TargetBreakpointStatus::Applicable { .. }
+        )
+    }) {
+        return BreakpointPendingReason::Applicable;
+    }
+    let unmapped = applications
+        .iter()
+        .filter_map(|application| match &application.status {
+            TargetBreakpointStatus::Unmapped { diagnostics } => Some(diagnostics.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if !unmapped.is_empty() {
+        return BreakpointPendingReason::Unmapped {
+            diagnostics: unmapped,
+        };
+    }
+    if applications
+        .iter()
+        .any(|application| matches!(application.status, TargetBreakpointStatus::WaitingForScript))
+    {
+        return BreakpointPendingReason::WaitingForScript;
+    }
+    let diagnostics = applications
+        .iter()
+        .filter_map(|application| match &application.status {
+            TargetBreakpointStatus::SourceNotFound { diagnostics } => {
+                Some(diagnostics.iter().cloned())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    if !diagnostics.is_empty() {
+        return BreakpointPendingReason::SourceNotFound { diagnostics };
+    }
+    applications
+        .iter()
+        .find_map(|application| match &application.status {
+            TargetBreakpointStatus::Failed { message } => Some(BreakpointPendingReason::Failed {
+                message: message.clone(),
+            }),
+            _ => None,
+        })
+        .unwrap_or(BreakpointPendingReason::WaitingForScript)
 }
 
 #[derive(Serialize, Deserialize)]

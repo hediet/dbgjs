@@ -24,8 +24,8 @@ use cdp_client::service_api::{
     HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, PromiseState,
     SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetAttachOptions,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate, ValueInspectionOptions,
-    ValueSelector,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus,
+    TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -4601,17 +4601,37 @@ async fn put_selected_breakpoint(
         )
         .await)?;
     if let Some(scope) = scope {
-        let snapshot = rpc(client
-            .wait_target(
-                scope.context,
-                scope.connection,
-                scope.target.clone(),
-                TargetWaitPredicate::BreakpointInstalled {
-                    breakpoint_id: breakpoint_id.to_owned(),
-                },
-                30_000,
-            )
-            .await)?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let snapshot = loop {
+            let snapshot = rpc(client
+                .get_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            let settled = snapshot
+                .breakpoints
+                .iter()
+                .find(|breakpoint| breakpoint.id == breakpoint_id)
+                .is_some_and(|breakpoint| match breakpoint.status {
+                    TargetBreakpointStatus::WaitingForScript => snapshot
+                        .scripts
+                        .iter()
+                        .all(|script| !matches!(script.status, TargetScriptStatus::Pending)),
+                    TargetBreakpointStatus::SourceNotFound { .. }
+                    | TargetBreakpointStatus::AmbiguousSource { .. }
+                    | TargetBreakpointStatus::Unmapped { .. }
+                    | TargetBreakpointStatus::Installed { .. }
+                    | TargetBreakpointStatus::Failed { .. } => true,
+                    TargetBreakpointStatus::Applicable { .. }
+                    | TargetBreakpointStatus::Installing { .. } => false,
+                });
+            if settled || tokio::time::Instant::now() >= deadline {
+                break snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
         output.print_target_with_breakpoint_sources(
             &snapshot,
             &scope.target,

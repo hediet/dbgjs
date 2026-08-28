@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::source_view::{ContentCandidate, Position};
 
 const MAX_DIAGNOSTICS: usize = 1024;
+pub const MAX_BREAKPOINT_CANDIDATES: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EffectId(pub u64);
@@ -122,6 +123,53 @@ pub enum BreakpointBinding {
     Failed { message: String },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BreakpointSourceCandidate {
+    pub source_url: String,
+    pub content: ContentCandidate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BreakpointMapping {
+    pub generated_position: Position,
+    pub quality: String,
+    pub generated_url: String,
+    pub projection: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BreakpointAssessmentStatus {
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Arc<Vec<String>>,
+    },
+    AmbiguousSource {
+        candidates: Arc<Vec<BreakpointSourceCandidate>>,
+        omitted_candidate_count: usize,
+    },
+    Mapping {
+        effect_id: EffectId,
+        candidate: BreakpointSourceCandidate,
+    },
+    Unmapped {
+        candidate: BreakpointSourceCandidate,
+        diagnostics: Arc<Vec<String>>,
+    },
+    Applicable {
+        candidate: BreakpointSourceCandidate,
+        mappings: Arc<Vec<BreakpointMapping>>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BreakpointAssessment {
+    pub script_version: u64,
+    pub status: BreakpointAssessmentStatus,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BreakpointState {
     pub generation: u64,
@@ -129,6 +177,7 @@ pub struct BreakpointState {
     pub position: Position,
     pub condition: Option<String>,
     pub pending_mappings: Arc<BTreeMap<ScriptKey, EffectId>>,
+    pub assessments: Arc<BTreeMap<ScriptKey, BreakpointAssessment>>,
     pub bindings: Arc<BTreeMap<PhysicalBreakpointKey, BreakpointBinding>>,
 }
 
@@ -226,6 +275,7 @@ enum PendingEffect {
         breakpoint_generation: u64,
         script: ScriptKey,
         version: u64,
+        source_url: String,
     },
     InstallBreakpoint {
         physical: PhysicalBreakpointKey,
@@ -418,6 +468,10 @@ pub enum Input {
         effect_id: EffectId,
         generated_positions: Vec<Position>,
     },
+    BreakpointMappingAssessed {
+        effect_id: EffectId,
+        mappings: Vec<BreakpointMapping>,
+    },
     BreakpointInstalled {
         effect_id: EffectId,
         backend_id: String,
@@ -492,6 +546,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             for breakpoint in breakpoints.values_mut() {
                 let breakpoint = Arc::make_mut(breakpoint);
                 breakpoint.pending_mappings = Arc::new(BTreeMap::new());
+                breakpoint.assessments = Arc::new(BTreeMap::new());
                 breakpoint.bindings = Arc::new(BTreeMap::new());
             }
             state.breakpoints = Arc::new(breakpoints);
@@ -606,7 +661,11 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     source: ScriptSourceState::Unresolved,
                 }),
             );
-            if script_has_breakpoint_demand(&state, &key) || script_has_frame_demand(&state, &key) {
+            let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+            for breakpoint in breakpoint_keys {
+                reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
+            }
+            if script_has_frame_demand(&state, &key) {
                 schedule_source_hydration(&mut state, &key, false, &mut effects);
             }
         }
@@ -700,7 +759,10 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 view_id: effect_id,
                 logical_sources: Arc::new(logical_sources),
             });
-            schedule_mappings_for_script(&mut state, &script, &mut effects);
+            let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+            for breakpoint in breakpoint_keys {
+                reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
+            }
             schedule_frame_mappings_for_script(&mut state, &script, &mut effects);
         }
         Input::SetBreakpoint {
@@ -723,17 +785,11 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     position,
                     condition,
                     pending_mappings: Arc::new(BTreeMap::new()),
+                    assessments: Arc::new(BTreeMap::new()),
                     bindings: Arc::new(BTreeMap::new()),
                 }),
             );
-            let scripts: Vec<_> = state.scripts.keys().cloned().collect();
-            for script in scripts {
-                if script_has_source(&state, &script, &key) {
-                    schedule_mapping(&mut state, &key, &script, &mut effects);
-                } else if script_may_expose_breakpoint(&state, &script, &key) {
-                    schedule_source_hydration(&mut state, &script, true, &mut effects);
-                }
-            }
+            reconcile_breakpoint(&mut state, &key, &mut effects);
         }
         Input::RemoveBreakpoint { key } => {
             release_breakpoint(&mut state, &key, &mut effects);
@@ -743,36 +799,32 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             effect_id,
             generated_positions,
         } => {
-            let Some(PendingEffect::MapBreakpoint {
-                breakpoint,
-                breakpoint_generation,
-                script,
-                version,
-            }) = take_pending(&mut state, effect_id)
-            else {
-                stale_effect(&mut state, effect_id);
-                return finish(state, effects);
-            };
-            if state.scripts.get(&script).map(|value| value.version) != Some(version) {
-                stale_effect(&mut state, effect_id);
-                return finish(state, effects);
-            }
-            let Some(breakpoint_state) = state.breakpoints.get(&breakpoint).cloned() else {
-                stale_effect(&mut state, effect_id);
-                return finish(state, effects);
-            };
-            if breakpoint_state.generation != breakpoint_generation {
-                stale_effect(&mut state, effect_id);
-                return finish(state, effects);
-            }
-            let mut breakpoints = (*state.breakpoints).clone();
-            Arc::make_mut(breakpoints.get_mut(&breakpoint).unwrap()).pending_mappings =
-                Arc::new(without_key(&breakpoint_state.pending_mappings, &script));
-            state.breakpoints = Arc::new(breakpoints);
-
-            for position in generated_positions {
-                bind_physical(&mut state, &breakpoint, &script, position, &mut effects);
-            }
+            let generated_url = state
+                .pending
+                .get(&effect_id)
+                .and_then(|pending| match pending {
+                    PendingEffect::MapBreakpoint { script, .. } => {
+                        state.scripts.get(script).map(|script| script.url.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let mappings = generated_positions
+                .into_iter()
+                .map(|generated_position| BreakpointMapping {
+                    generated_position,
+                    quality: "unknown".to_owned(),
+                    generated_url: generated_url.clone(),
+                    projection: vec!["unavailable".to_owned()],
+                })
+                .collect();
+            complete_breakpoint_mapping(&mut state, effect_id, mappings, &mut effects);
+        }
+        Input::BreakpointMappingAssessed {
+            effect_id,
+            mappings,
+        } => {
+            complete_breakpoint_mapping(&mut state, effect_id, mappings, &mut effects);
         }
         Input::BreakpointInstalled {
             effect_id,
@@ -985,6 +1037,10 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                         .unwrap()
                         .source = ScriptSourceState::Failed(message.clone());
                     fail_raw_frames_for_script(&mut state, &script, message);
+                    let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+                    for breakpoint in breakpoint_keys {
+                        reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
+                    }
                 }
                 PendingEffect::FetchScriptSource { .. } | PendingEffect::BuildSourceView { .. } => {
                 }
@@ -993,6 +1049,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     breakpoint_generation,
                     script,
                     version,
+                    ..
                 } => {
                     if state.scripts.get(&script).map(|value| value.version) == Some(version)
                         && state
@@ -1008,6 +1065,19 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                             .unwrap()
                             .pending_mappings =
                             Arc::new(without_key(&breakpoint_state.pending_mappings, &script));
+                        let breakpoint_state = state.breakpoints[&breakpoint].clone();
+                        Arc::make_mut(&mut state.breakpoints)
+                            .get_mut(&breakpoint)
+                            .map(Arc::make_mut)
+                            .unwrap()
+                            .assessments = Arc::new(with_insert(
+                            &breakpoint_state.assessments,
+                            script,
+                            BreakpointAssessment {
+                                script_version: version,
+                                status: BreakpointAssessmentStatus::Failed { message },
+                            },
+                        ));
                     }
                 }
                 PendingEffect::InstallBreakpoint { physical } => {
@@ -1107,20 +1177,317 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
     finish(state, effects)
 }
 
-fn schedule_mappings_for_script(
+fn complete_breakpoint_mapping(
     state: &mut DebuggerState,
-    script: &ScriptKey,
+    effect_id: EffectId,
+    mappings: Vec<BreakpointMapping>,
     effects: &mut Vec<Effect>,
 ) {
-    let breakpoint_keys: Vec<_> = state
-        .breakpoints
-        .keys()
-        .filter(|key| script_has_source(state, script, key))
-        .cloned()
-        .collect();
-    for breakpoint in breakpoint_keys {
-        schedule_mapping(state, &breakpoint, script, effects);
+    let Some(PendingEffect::MapBreakpoint {
+        breakpoint,
+        breakpoint_generation,
+        script,
+        version,
+        ..
+    }) = take_pending(state, effect_id)
+    else {
+        stale_effect(state, effect_id);
+        return;
+    };
+    if state.scripts.get(&script).map(|value| value.version) != Some(version) {
+        stale_effect(state, effect_id);
+        return;
     }
+    let Some(breakpoint_state) = state.breakpoints.get(&breakpoint).cloned() else {
+        stale_effect(state, effect_id);
+        return;
+    };
+    if breakpoint_state.generation != breakpoint_generation {
+        stale_effect(state, effect_id);
+        return;
+    }
+    let Some(assessment) = breakpoint_state.assessments.get(&script) else {
+        stale_effect(state, effect_id);
+        return;
+    };
+    let BreakpointAssessmentStatus::Mapping {
+        effect_id: expected,
+        candidate,
+    } = &assessment.status
+    else {
+        stale_effect(state, effect_id);
+        return;
+    };
+    if *expected != effect_id || assessment.script_version != version {
+        stale_effect(state, effect_id);
+        return;
+    }
+    let candidate = candidate.clone();
+    let status = if mappings.is_empty() {
+        BreakpointAssessmentStatus::Unmapped {
+            candidate,
+            diagnostics: Arc::new(vec![format!(
+                "source matched script '{}' version {version}, but {}:{} has no reverse mapping",
+                state.scripts[&script].url,
+                breakpoint_state.position.line.saturating_add(1),
+                breakpoint_state.position.column.saturating_add(1)
+            )]),
+        }
+    } else {
+        BreakpointAssessmentStatus::Applicable {
+            candidate,
+            mappings: Arc::new(mappings.clone()),
+        }
+    };
+    let breakpoint_mut = Arc::make_mut(&mut state.breakpoints)
+        .get_mut(&breakpoint)
+        .map(Arc::make_mut)
+        .unwrap();
+    breakpoint_mut.pending_mappings =
+        Arc::new(without_key(&breakpoint_state.pending_mappings, &script));
+    breakpoint_mut.assessments = Arc::new(with_insert(
+        &breakpoint_state.assessments,
+        script.clone(),
+        BreakpointAssessment {
+            script_version: version,
+            status,
+        },
+    ));
+
+    for mapping in mappings {
+        bind_physical(
+            state,
+            &breakpoint,
+            &script,
+            mapping.generated_position,
+            effects,
+        );
+    }
+}
+
+fn reconcile_breakpoint(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(breakpoint_state) = state.breakpoints.get(breakpoint).cloned() else {
+        return;
+    };
+    release_breakpoint(state, breakpoint, effects);
+    {
+        let breakpoint_mut = Arc::make_mut(&mut state.breakpoints)
+            .get_mut(breakpoint)
+            .map(Arc::make_mut)
+            .expect("breakpoint remains present while reconciling");
+        breakpoint_mut.pending_mappings = Arc::new(BTreeMap::new());
+        breakpoint_mut.assessments = Arc::new(BTreeMap::new());
+        breakpoint_mut.bindings = Arc::new(BTreeMap::new());
+    }
+
+    let scripts = state
+        .scripts
+        .iter()
+        .map(|(key, script)| (key.clone(), script.clone()))
+        .collect::<Vec<_>>();
+    let mut exact_by_script = BTreeMap::<ScriptKey, Vec<BreakpointSourceCandidate>>::new();
+    let mut friendly_by_script = BTreeMap::<ScriptKey, Vec<BreakpointSourceCandidate>>::new();
+    let mut hydrate = Vec::new();
+
+    for (script_key, script) in &scripts {
+        match &script.source {
+            ScriptSourceState::Resolved(view) => {
+                for (source_url, content) in view.logical_sources.iter() {
+                    let candidate = BreakpointSourceCandidate {
+                        source_url: source_url.clone(),
+                        content: content.clone(),
+                    };
+                    if source_urls_match(source_url, &breakpoint_state.source_url) {
+                        exact_by_script
+                            .entry(script_key.clone())
+                            .or_default()
+                            .push(candidate);
+                    } else if friendly_source_matches(source_url, &breakpoint_state.source_url) {
+                        friendly_by_script
+                            .entry(script_key.clone())
+                            .or_default()
+                            .push(candidate);
+                    }
+                }
+            }
+            ScriptSourceState::Unresolved => {
+                if script_may_expose_breakpoint(state, script_key, breakpoint) {
+                    hydrate.push(script_key.clone());
+                }
+            }
+            ScriptSourceState::Failed(_)
+            | ScriptSourceState::Pending(_)
+            | ScriptSourceState::Loaded { .. } => {}
+        }
+    }
+
+    let uses_exact_match = !exact_by_script.is_empty();
+    let matching_by_script = if uses_exact_match {
+        &exact_by_script
+    } else {
+        &friendly_by_script
+    };
+    let candidates = deduplicate_candidates(matching_by_script.values().flatten().cloned());
+    let unresolved_candidate_scripts = scripts.iter().any(|(script_key, script)| {
+        matches!(
+            script.source,
+            ScriptSourceState::Unresolved
+                | ScriptSourceState::Pending(_)
+                | ScriptSourceState::Loaded { .. }
+        ) && script_may_expose_breakpoint(state, script_key, breakpoint)
+    });
+
+    if candidates.len() > 1 {
+        let omitted_candidate_count = candidates.len().saturating_sub(MAX_BREAKPOINT_CANDIDATES);
+        let candidates = Arc::new(
+            candidates
+                .into_iter()
+                .take(MAX_BREAKPOINT_CANDIDATES)
+                .collect::<Vec<_>>(),
+        );
+        for (script_key, script) in &scripts {
+            let status = if matching_by_script.contains_key(script_key) {
+                BreakpointAssessmentStatus::AmbiguousSource {
+                    candidates: candidates.clone(),
+                    omitted_candidate_count,
+                }
+            } else {
+                assessment_without_candidate(script, &breakpoint_state.source_url)
+            };
+            set_breakpoint_assessment(
+                state,
+                breakpoint,
+                script_key.clone(),
+                script.version,
+                status,
+            );
+        }
+    } else if let Some(candidate) = candidates.into_iter().next() {
+        if !uses_exact_match && unresolved_candidate_scripts {
+            for (script_key, script) in &scripts {
+                let status = if matching_by_script.contains_key(script_key)
+                    || script_may_expose_breakpoint(state, script_key, breakpoint)
+                {
+                    BreakpointAssessmentStatus::WaitingForScript
+                } else {
+                    assessment_without_candidate(script, &breakpoint_state.source_url)
+                };
+                set_breakpoint_assessment(
+                    state,
+                    breakpoint,
+                    script_key.clone(),
+                    script.version,
+                    status,
+                );
+            }
+        } else {
+            for (script_key, script) in &scripts {
+                let selected = matching_by_script
+                    .get(script_key)
+                    .and_then(|items| {
+                        items.iter().find(|item| {
+                            item.source_url == candidate.source_url
+                                && item.content.content == candidate.content.content
+                        })
+                    })
+                    .cloned();
+                if let Some(selected) = selected {
+                    schedule_mapping(state, breakpoint, script_key, selected, effects);
+                } else {
+                    set_breakpoint_assessment(
+                        state,
+                        breakpoint,
+                        script_key.clone(),
+                        script.version,
+                        assessment_without_candidate(script, &breakpoint_state.source_url),
+                    );
+                }
+            }
+        }
+    } else {
+        for (script_key, script) in &scripts {
+            set_breakpoint_assessment(
+                state,
+                breakpoint,
+                script_key.clone(),
+                script.version,
+                assessment_without_candidate(script, &breakpoint_state.source_url),
+            );
+        }
+    }
+
+    for script in hydrate {
+        schedule_source_hydration(state, &script, true, effects);
+    }
+}
+
+fn assessment_without_candidate(
+    script: &ScriptState,
+    requested_source: &str,
+) -> BreakpointAssessmentStatus {
+    match &script.source {
+        ScriptSourceState::Unresolved
+        | ScriptSourceState::Pending(_)
+        | ScriptSourceState::Loaded { .. } => BreakpointAssessmentStatus::WaitingForScript,
+        ScriptSourceState::Failed(message) => BreakpointAssessmentStatus::Failed {
+            message: message.clone(),
+        },
+        ScriptSourceState::Resolved(view) => BreakpointAssessmentStatus::SourceNotFound {
+            diagnostics: Arc::new(vec![format!(
+                "script '{}' version {} exposes {} source(s), none matching '{}'",
+                script.url,
+                script.version,
+                view.logical_sources.len(),
+                requested_source
+            )]),
+        },
+    }
+}
+
+fn set_breakpoint_assessment(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    script: ScriptKey,
+    script_version: u64,
+    status: BreakpointAssessmentStatus,
+) {
+    let breakpoint_state = state.breakpoints[breakpoint].clone();
+    Arc::make_mut(&mut state.breakpoints)
+        .get_mut(breakpoint)
+        .map(Arc::make_mut)
+        .unwrap()
+        .assessments = Arc::new(with_insert(
+        &breakpoint_state.assessments,
+        script,
+        BreakpointAssessment {
+            script_version,
+            status,
+        },
+    ));
+}
+
+fn deduplicate_candidates(
+    candidates: impl Iterator<Item = BreakpointSourceCandidate>,
+) -> Vec<BreakpointSourceCandidate> {
+    let mut result = Vec::new();
+    for candidate in candidates {
+        if !result.iter().any(|existing: &BreakpointSourceCandidate| {
+            existing.source_url == candidate.source_url
+                && existing.content.content == candidate.content.content
+        }) {
+            result.push(candidate);
+        }
+    }
+    result.sort_by(|left, right| {
+        left.source_url.cmp(&right.source_url).then_with(|| {
+            format!("{:?}", left.content.content).cmp(&format!("{:?}", right.content.content))
+        })
+    });
+    result
 }
 
 fn schedule_source_hydration(
@@ -1164,13 +1531,6 @@ fn schedule_source_hydration(
     });
 }
 
-fn script_has_breakpoint_demand(state: &DebuggerState, script: &ScriptKey) -> bool {
-    state
-        .breakpoints
-        .keys()
-        .any(|breakpoint| script_may_expose_breakpoint(state, script, breakpoint))
-}
-
 fn script_may_expose_breakpoint(
     state: &DebuggerState,
     script: &ScriptKey,
@@ -1196,26 +1556,6 @@ fn script_has_frame_demand(state: &DebuggerState, script: &ScriptKey) -> bool {
             })
         })
     })
-}
-
-fn script_has_source(
-    state: &DebuggerState,
-    script: &ScriptKey,
-    breakpoint: &BreakpointKey,
-) -> bool {
-    let Some(breakpoint) = state.breakpoints.get(breakpoint) else {
-        return false;
-    };
-    let Some(script) = state.scripts.get(script) else {
-        return false;
-    };
-    match &script.source {
-        ScriptSourceState::Resolved(view) => view
-            .logical_sources
-            .keys()
-            .any(|source| source_urls_match(source, &breakpoint.source_url)),
-        _ => false,
-    }
 }
 
 fn schedule_frame_mappings_for_script(
@@ -1344,6 +1684,7 @@ fn schedule_mapping(
     state: &mut DebuggerState,
     breakpoint: &BreakpointKey,
     script: &ScriptKey,
+    candidate: BreakpointSourceCandidate,
     effects: &mut Vec<Effect>,
 ) {
     let breakpoint_state = state.breakpoints.get(breakpoint).unwrap().clone();
@@ -1354,12 +1695,7 @@ fn schedule_mapping(
     let ScriptSourceState::Resolved(view) = &script_state.source else {
         return;
     };
-    let source_url = view
-        .logical_sources
-        .keys()
-        .find(|source| source_urls_match(source, &breakpoint_state.source_url))
-        .cloned()
-        .unwrap_or_else(|| breakpoint_state.source_url.clone());
+    let source_url = candidate.source_url.clone();
     let effect_id = allocate_effect(
         state,
         PendingEffect::MapBreakpoint {
@@ -1367,16 +1703,28 @@ fn schedule_mapping(
             breakpoint_generation: breakpoint_state.generation,
             script: script.clone(),
             version: script_state.version,
+            source_url: source_url.clone(),
         },
     );
-    Arc::make_mut(&mut state.breakpoints)
+    let breakpoint_mut = Arc::make_mut(&mut state.breakpoints)
         .get_mut(breakpoint)
         .map(Arc::make_mut)
-        .unwrap()
-        .pending_mappings = Arc::new(with_insert(
+        .unwrap();
+    breakpoint_mut.pending_mappings = Arc::new(with_insert(
         &breakpoint_state.pending_mappings,
         script.clone(),
         effect_id,
+    ));
+    breakpoint_mut.assessments = Arc::new(with_insert(
+        &breakpoint_state.assessments,
+        script.clone(),
+        BreakpointAssessment {
+            script_version: script_state.version,
+            status: BreakpointAssessmentStatus::Mapping {
+                effect_id,
+                candidate,
+            },
+        },
     ));
     effects.push(Effect::MapBreakpoint {
         effect_id,
@@ -1393,6 +1741,32 @@ fn source_urls_match(left: &str, right: &str) -> bool {
         || comparable_file_path(left)
             .zip(comparable_file_path(right))
             .is_some_and(|(left, right)| left == right)
+}
+
+fn friendly_source_matches(candidate: &str, requested: &str) -> bool {
+    let candidate = friendly_source_path(candidate);
+    let requested = friendly_source_path(requested);
+    if candidate.is_empty() || requested.is_empty() {
+        return false;
+    }
+    candidate == requested
+        || candidate.ends_with(&format!("/{requested}"))
+        || requested.ends_with(&format!("/{candidate}"))
+}
+
+fn friendly_source_path(value: &str) -> String {
+    let path = url::Url::parse(value)
+        .ok()
+        .map(|url| {
+            percent_encoding::percent_decode_str(url.path())
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| value.to_owned());
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_owned()
 }
 
 fn comparable_file_path(value: &str) -> Option<String> {
@@ -1580,6 +1954,7 @@ fn release_script_version(
             let breakpoint = Arc::make_mut(breakpoint);
             breakpoint.pending_mappings =
                 Arc::new(without_key(&breakpoint.pending_mappings, script));
+            breakpoint.assessments = Arc::new(without_key(&breakpoint.assessments, script));
         }
         return;
     }
@@ -1588,6 +1963,7 @@ fn release_script_version(
     for breakpoint in Arc::make_mut(&mut state.breakpoints).values_mut() {
         let breakpoint = Arc::make_mut(breakpoint);
         breakpoint.pending_mappings = Arc::new(without_key(&breakpoint.pending_mappings, script));
+        breakpoint.assessments = Arc::new(without_key(&breakpoint.assessments, script));
         breakpoint.bindings = Arc::new(
             breakpoint
                 .bindings
@@ -1828,6 +2204,14 @@ fn detach_session(state: &mut DebuggerState, session: &SessionKey) {
                 .iter()
                 .filter(|(script, _)| !scripts_to_remove.contains(*script))
                 .map(|(key, value)| (key.clone(), *value))
+                .collect(),
+        );
+        breakpoint.assessments = Arc::new(
+            breakpoint
+                .assessments
+                .iter()
+                .filter(|(script, _)| !scripts_to_remove.contains(*script))
+                .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         );
         breakpoint.bindings = Arc::new(
@@ -2750,6 +3134,241 @@ mod tests {
     }
 
     #[test]
+    fn reparsed_script_rejects_late_mapping_assessment() {
+        let (state, session, script, _) = resolved_script();
+        let key = breakpoint_key();
+        let mapping = reduce(
+            &state,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "src/app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let Effect::MapBreakpoint {
+            effect_id: old_mapping,
+            ..
+        } = mapping.effects[0]
+        else {
+            panic!("expected mapping");
+        };
+
+        let reparsed = reduce(
+            &mapping.state,
+            Input::ScriptParsed {
+                session,
+                script_id: script.script_id.clone(),
+                url: "bundle.js".into(),
+                hash: "new".into(),
+                source_map_url: Some("bundle.js.map".into()),
+            },
+        );
+        assert_eq!(
+            reparsed.state.breakpoints[&key].assessments[&script].script_version,
+            2
+        );
+        assert!(matches!(
+            reparsed.state.breakpoints[&key].assessments[&script].status,
+            BreakpointAssessmentStatus::WaitingForScript
+        ));
+
+        let late = reduce(
+            &reparsed.state,
+            Input::BreakpointMappingAssessed {
+                effect_id: old_mapping,
+                mappings: vec![BreakpointMapping {
+                    generated_position: Position { line: 9, column: 9 },
+                    quality: "exact".into(),
+                    generated_url: "bundle.js".into(),
+                    projection: vec!["source map".into()],
+                }],
+            },
+        );
+        assert!(late.state.breakpoints[&key].bindings.is_empty());
+        assert_eq!(
+            late.state.breakpoints[&key].assessments[&script].script_version,
+            2
+        );
+        assert!(matches!(
+            late.state.diagnostics.last(),
+            Some(Diagnostic::IgnoredStaleEffect {
+                effect_id
+            }) if *effect_id == old_mapping
+        ));
+    }
+
+    #[test]
+    fn ambiguous_source_candidates_are_bounded_without_mapping() {
+        let (state, session) = configured_session();
+        let key = breakpoint_key();
+        let intent = reduce(
+            &state,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let parsed = reduce(
+            &intent.state,
+            Input::ScriptParsed {
+                session,
+                script_id: "1".into(),
+                url: "bundle.js".into(),
+                hash: "hash".into(),
+                source_map_url: Some("bundle.js.map".into()),
+            },
+        );
+        let Effect::FetchScriptSource {
+            effect_id: fetch, ..
+        } = parsed.effects[0]
+        else {
+            panic!("breakpoint demand should hydrate the script");
+        };
+        let fetched = reduce(
+            &parsed.state,
+            Input::ScriptSourceFetched {
+                effect_id: fetch,
+                content: Arc::from("compiled"),
+                source_map: Some(Arc::from([])),
+                source_map_url: Some("bundle.js.map".into()),
+                source_map_error: None,
+            },
+        );
+        let Effect::BuildSourceView {
+            effect_id: view, ..
+        } = fetched.effects[0]
+        else {
+            panic!("expected source view");
+        };
+        let store = crate::content_store::ContentStore::default();
+        let sources = (0..MAX_BREAKPOINT_CANDIDATES + 3)
+            .map(|index| {
+                let source_url = format!("webpack:///candidate-{index}/app.ts");
+                (
+                    source_url.clone(),
+                    ContentCandidate {
+                        content: store.intern(&format!("source {index}")),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: source_url,
+                        },
+                    },
+                )
+            })
+            .collect();
+        let built = reduce(
+            &fetched.state,
+            Input::SourceViewBuilt {
+                effect_id: view,
+                logical_sources: sources,
+            },
+        );
+        assert!(built.effects.is_empty());
+        let assessment = built.state.breakpoints[&key]
+            .assessments
+            .values()
+            .next()
+            .unwrap();
+        let BreakpointAssessmentStatus::AmbiguousSource {
+            candidates,
+            omitted_candidate_count,
+        } = &assessment.status
+        else {
+            panic!("friendly source must remain ambiguous");
+        };
+        assert_eq!(candidates.len(), MAX_BREAKPOINT_CANDIDATES);
+        assert_eq!(*omitted_candidate_count, 3);
+        assert!(built.state.physical_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn competing_candidate_invalidates_inflight_physical_install() {
+        let (state, session) = configured_session();
+        let first = resolved_script_with_source(
+            &state,
+            &session,
+            "one",
+            "one.js",
+            "webpack:///one/app.ts",
+            "first",
+        );
+        let key = breakpoint_key();
+        let intent = reduce(
+            &first,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let Effect::MapBreakpoint {
+            effect_id: mapping, ..
+        } = intent.effects[0]
+        else {
+            panic!("first candidate should map");
+        };
+        let mapped = reduce(
+            &intent.state,
+            Input::BreakpointMapped {
+                effect_id: mapping,
+                generated_positions: vec![Position::ZERO],
+            },
+        );
+        let Effect::InstallBreakpoint {
+            effect_id: install, ..
+        } = mapped.effects[0]
+        else {
+            panic!("mapping should start installation");
+        };
+
+        let second = resolved_script_with_source(
+            &mapped.state,
+            &session,
+            "two",
+            "two.js",
+            "webpack:///two/app.ts",
+            "second",
+        );
+        assert!(matches!(
+            second.breakpoints[&key]
+                .assessments
+                .values()
+                .find_map(|assessment| match &assessment.status {
+                    BreakpointAssessmentStatus::AmbiguousSource { .. } => Some(()),
+                    _ => None,
+                }),
+            Some(())
+        ));
+        assert!(second.breakpoints[&key].bindings.is_empty());
+
+        let late = reduce(
+            &second,
+            Input::BreakpointInstalled {
+                effect_id: install,
+                backend_id: "stale-backend".into(),
+            },
+        );
+        assert!(matches!(
+            late.effects.as_slice(),
+            [Effect::RemoveBreakpoint { .. }]
+        ));
+        assert!(late.state.breakpoints[&key].bindings.is_empty());
+        assert!(
+            late.state.breakpoints[&key]
+                .assessments
+                .values()
+                .all(|assessment| matches!(
+                    assessment.status,
+                    BreakpointAssessmentStatus::AmbiguousSource { .. }
+                        | BreakpointAssessmentStatus::SourceNotFound { .. }
+                ))
+        );
+    }
+
+    #[test]
     fn failed_effects_leave_terminal_or_retryable_state() {
         let (state, session, script, _) = resolved_script();
         let key = breakpoint_key();
@@ -3215,6 +3834,79 @@ mod tests {
             },
         );
         (resolved.state, session, script, view_id)
+    }
+
+    fn resolved_script_with_source(
+        state: &Arc<DebuggerState>,
+        session: &SessionKey,
+        script_id: &str,
+        generated_url: &str,
+        source_url: &str,
+        content: &str,
+    ) -> Arc<DebuggerState> {
+        let parsed = reduce(
+            state,
+            Input::ScriptParsed {
+                session: session.clone(),
+                script_id: script_id.into(),
+                url: generated_url.into(),
+                hash: format!("{script_id}-hash"),
+                source_map_url: Some(format!("{generated_url}.map")),
+            },
+        );
+        let script = ScriptKey {
+            session: session.clone(),
+            script_id: script_id.into(),
+        };
+        let fetch = parsed
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::FetchScriptSource {
+                    effect_id,
+                    script: candidate,
+                    ..
+                } if candidate == &script => Some(*effect_id),
+                _ => None,
+            })
+            .map(|effect_id| (parsed.state.clone(), effect_id))
+            .unwrap_or_else(|| {
+                let requested = reduce(
+                    &parsed.state,
+                    Input::RequestScriptSource {
+                        script: script.clone(),
+                    },
+                );
+                (requested.state, requested.effects[0].effect_id())
+            });
+        let fetched = reduce(
+            &fetch.0,
+            Input::ScriptSourceFetched {
+                effect_id: fetch.1,
+                content: Arc::from("compiled"),
+                source_map: Some(Arc::from([])),
+                source_map_url: Some(format!("{generated_url}.map")),
+                source_map_error: None,
+            },
+        );
+        let view = fetched.effects[0].effect_id();
+        let store = crate::content_store::ContentStore::default();
+        reduce(
+            &fetched.state,
+            Input::SourceViewBuilt {
+                effect_id: view,
+                logical_sources: BTreeMap::from([(
+                    source_url.into(),
+                    ContentCandidate {
+                        content: store.intern(content),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: source_url.into(),
+                        },
+                    },
+                )]),
+            },
+        )
+        .state
     }
 
     fn breakpoint_key() -> BreakpointKey {

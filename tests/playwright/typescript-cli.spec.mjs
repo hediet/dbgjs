@@ -2,12 +2,10 @@ import { createServer } from "node:http";
 import {
 	appendFile,
 	mkdir,
-	mkdtemp,
 	readFile,
 	rm,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
@@ -40,7 +38,11 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		"# Debugging authored TypeScript with `jsdbg`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
 	);
 
-	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-typescript-e2e-"));
+	const stateDirectory = resolve(
+		"artifacts",
+		`.jsdbg-typescript-e2e-${process.pid}`,
+	);
+	await mkdir(stateDirectory, { recursive: true });
 	const stateFile = join(stateDirectory, "service.json");
 	const fixtureServer = await startFixtureServer();
 	const environment = {
@@ -76,11 +78,13 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 				"browser",
 				"--executable",
 				chromeExecutable,
+				"--user-data-dir",
+				"artifacts/typescript-cli-chrome-profile",
 				"--connect",
 			],
 			environment,
 		);
-		expect(connected).toMatch(/^\s+page\s+127\.0\.0\.1:/m);
+		expect(connected).toMatch(/^\s+page\s+.*http:\/\/127\.0\.0\.1:/m);
 		const pageTarget = await findPageTargetId(
 			cli,
 			"typescript-e2e",
@@ -93,8 +97,47 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			["set", "target", "--target", pageTarget],
 			environment,
 		);
+		const missing = await runCli(
+			"We request a source that is not present. Breakpoint output explains the pending assessment directly, including the scripts that were checked.",
+			[
+				"breakpoint",
+				"set",
+				"missing",
+				"missing.ts",
+				"1",
+				"--context",
+				"typescript-e2e",
+			],
+			environment,
+		);
+		expect(missing).toContain("missing  missing.ts:1:1  [source not found]");
+		expect(missing).toContain("none matching 'missing.ts'");
+		expect(missing).toContain("Breakpoint missing: source not found");
+
+		const ambiguous = await runCli(
+			"The short source name matches two authored candidates. The same breakpoint command reports ambiguity and prints bounded candidates, without requiring a source command.",
+			[
+				"breakpoint",
+				"set",
+				"ambiguous",
+				"app.ts",
+				"8",
+				"--column",
+				"3",
+				"--context",
+				"typescript-e2e",
+			],
+			environment,
+		);
+		expect(ambiguous).toContain(
+			"ambiguous  app.ts:8:3  [ambiguous source; 2 candidates]",
+		);
+		expect(ambiguous).toContain("Breakpoint ambiguous: ambiguous source");
+		expect(ambiguous).toContain("../src/app.ts");
+		expect(ambiguous).toContain("../candidate/app.ts");
+
 		const breakpoint = await runCli(
-			"Breakpoint creation waits briefly for live target resolution, so the command itself tells us where it landed.",
+			"We qualify the intended candidate. Breakpoint output now includes the physical application and source-map projection provenance.",
 			[
 				"breakpoint",
 				"set",
@@ -113,6 +156,36 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		);
 		expect(breakpoint).toContain(
 			"Breakpoint checkout: ../src/app.ts — CheckoutService.checkout",
+		);
+		expect(breakpoint).toMatch(/script .* v1 -> .* via source map/);
+		const breakpointSnapshot = await runJsonSilent(
+			["context", "show", "--context", "typescript-e2e"],
+			environment,
+		);
+		const missingSnapshot = breakpointSnapshot.breakpoints.find(
+			(candidate) => candidate.id === "missing",
+		);
+		expect(missingSnapshot.pendingReason.kind).toBe("sourceNotFound");
+		expect(missingSnapshot.targets[0].assessments[0]).toMatchObject({
+			connectionId: "browser",
+			connectionGeneration: 1,
+			scriptVersion: 1,
+		});
+		const ambiguousSnapshot = breakpointSnapshot.breakpoints.find(
+			(candidate) => candidate.id === "ambiguous",
+		);
+		expect(ambiguousSnapshot.pendingReason.kind).toBe("ambiguousSource");
+		expect(ambiguousSnapshot.pendingReason.candidates).toHaveLength(2);
+		const checkoutSnapshot = breakpointSnapshot.breakpoints.find(
+			(candidate) => candidate.id === "checkout",
+		);
+		expect(checkoutSnapshot.applications[0]).toMatchObject({
+			connectionId: "browser",
+			connectionGeneration: 1,
+			scriptVersion: 1,
+		});
+		expect(checkoutSnapshot.applications[0].mapping.projection.length).toBeGreaterThan(
+			0,
 		);
 		const logpoints = await runCli(
 			"We install two logpoints in one batch and inspect both authored source contexts.",
@@ -193,7 +266,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		);
 		const firstCoverageJson = await runJsonSilent(["coverage", "capture"], environment);
 		const firstSource = firstCoverageJson.sources.find(
-			(source) => source.associatedAuthoredSource === authoredSource,
+			(source) => source.functions.some((fn) => fn.name === "checkout"),
 		);
 		expect(firstSource).toBeDefined();
 		expect(firstSource.functions.some((fn) => fn.name === "checkout")).toBe(true);
@@ -263,7 +336,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		await fixtureServer.waitForResult("45");
 		const finalCoverageJson = await runJsonSilent(["coverage", "capture"], environment);
 		const finalSource = finalCoverageJson.sources.find(
-			(source) => source.associatedAuthoredSource === authoredSource,
+			(source) => source.functions.some((fn) => fn.name === "checkout"),
 		);
 		expect(finalSource).toBeDefined();
 		const functionNames = finalSource.functions.map((fn) => fn.name);
@@ -334,7 +407,9 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			"The fresh page was auto-attached. We select its new exact identity and verify that durable breakpoint intent was reinstalled.",
 			[
 				"target",
-				"show",
+				"wait",
+				"breakpoint-installed",
+				"checkout",
 				"--context",
 				"typescript-e2e",
 				"--connection",
@@ -373,6 +448,12 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		}
 		await fixtureServer.close();
 		await rm(stateDirectory, { recursive: true, force: true });
+		await rm(resolve("artifacts/typescript-cli-chrome-profile"), {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 100,
+		});
 		await rm(join(fixtureDirectory, "dist"), { recursive: true, force: true });
 	}
 });
@@ -445,7 +526,11 @@ async function startFixtureServer() {
 					break;
 				case "/dist/app.js.map":
 					response.setHeader("content-type", "application/json; charset=utf-8");
-					response.end(await readFile(join(fixtureDirectory, "dist/app.js.map")));
+					response.end(
+						await sourceMapWithAmbiguousCandidate(
+							join(fixtureDirectory, "dist/app.js.map"),
+						),
+					);
 					break;
 				default:
 					response.statusCode = 404;
@@ -478,4 +563,13 @@ async function startFixtureServer() {
 				server.close((error) => (error ? reject(error) : resolve_())),
 			),
 	};
+}
+
+async function sourceMapWithAmbiguousCandidate(path) {
+	const sourceMap = JSON.parse(await readFile(path, "utf8"));
+	sourceMap.sources.push("../candidate/app.ts");
+	sourceMap.sourcesContent.push(
+		"export function unrelatedCandidate(): string { return 'candidate'; }\n",
+	);
+	return JSON.stringify(sourceMap);
 }

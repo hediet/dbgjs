@@ -376,9 +376,15 @@ pub struct BreakpointSnapshot {
     pub line: u32,
     pub column: u32,
     pub status: BreakpointStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reason: Option<BreakpointPendingReason>,
     pub enabled: bool,
     pub condition: Option<String>,
     pub target_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<TargetBreakpointSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applications: Vec<BreakpointApplicationSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -390,6 +396,28 @@ pub enum BreakpointStatus {
     PartiallyBound { application_count: u32 },
     Bound { application_count: u32 },
     Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointPendingReason {
+    WaitingForTarget,
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Unmapped {
+        diagnostics: Vec<String>,
+    },
+    Applicable,
+    Installing,
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -670,6 +698,95 @@ pub struct TargetBreakpointSnapshot {
     pub column: u32,
     pub status: TargetBreakpointStatus,
     pub source: Option<SourceExcerpt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assessments: Vec<BreakpointScriptAssessmentSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applications: Vec<BreakpointApplicationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSourceCandidateSnapshot {
+    pub source_url: String,
+    pub content_hash: String,
+    pub provenance: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointMappingSnapshot {
+    pub source_url: String,
+    pub requested_line: u32,
+    pub requested_column: u32,
+    pub generated_url: String,
+    pub generated_line: u32,
+    pub generated_column: u32,
+    pub quality: String,
+    pub projection: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointScriptAssessmentSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub script_id: String,
+    pub script_url: String,
+    pub script_version: u64,
+    pub status: BreakpointScriptAssessmentStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointScriptAssessmentStatus {
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Mapping {
+        candidate: BreakpointSourceCandidateSnapshot,
+    },
+    Unmapped {
+        candidate: BreakpointSourceCandidateSnapshot,
+        diagnostics: Vec<String>,
+    },
+    Applicable {
+        candidate: BreakpointSourceCandidateSnapshot,
+        mappings: Vec<BreakpointMappingSnapshot>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointApplicationSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub script_id: String,
+    pub script_url: String,
+    pub script_version: u64,
+    pub generated_line: u32,
+    pub generated_column: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping: Option<BreakpointMappingSnapshot>,
+    pub status: BreakpointApplicationStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointApplicationStatus {
+    Installing,
+    Installed { backend_id: String },
+    Removing,
+    Failed { message: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -685,9 +802,29 @@ pub struct LogpointSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TargetBreakpointStatus {
-    Pending,
-    Installed { binding_count: u32 },
-    Failed { message: String },
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Unmapped {
+        diagnostics: Vec<String>,
+    },
+    Applicable {
+        mapping_count: u32,
+    },
+    Installing {
+        application_count: u32,
+    },
+    Installed {
+        binding_count: u32,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
