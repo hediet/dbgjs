@@ -327,6 +327,14 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
     assert_eq!(matches["matches"].as_array().unwrap().len(), 3);
     assert_eq!(matches["omittedMatches"], 0);
     assert_eq!(matches["searchedSources"], 1);
+    assert_eq!(matches["searchedContents"], 1);
+    assert_eq!(matches["matches"][0]["kind"], "intent");
+    assert_eq!(matches["matches"][0]["provenance"], "local file");
+    assert_eq!(matches["matches"][0]["matchLength"], 15);
+    assert_eq!(
+        matches["matches"][0]["contentHash"].as_str().unwrap().len(),
+        64
+    );
     let bounded_matches = run_json(
         &cli,
         &service,
@@ -343,6 +351,37 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
     );
     assert_eq!(bounded_matches["matches"].as_array().unwrap().len(), 1);
     assert_eq!(bounded_matches["omittedMatches"], 2);
+    let transcript = run_human(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "grep",
+            "VALIDATIONVALUE",
+            "--ignore-case",
+            "--path",
+            source_file.file_name().unwrap().to_str().unwrap(),
+            "--max-results",
+            "1",
+            "--context-lines",
+            "1",
+            "--timeout-ms",
+            "5000",
+            "--context",
+            "managed",
+        ],
+    );
+    assert_eq!(
+        transcript,
+        format!(
+            "{source}:1:14:export const validationValue = 42;\n\
+             {source}-2-console.log(validationValue);\n\
+             --\n\
+             ... 2 additional matches omitted; increase --max-results\n\
+             1 source(s) searched, 0 skipped\n"
+        )
+    );
     let source_graph = run_json(
         &cli,
         &service,

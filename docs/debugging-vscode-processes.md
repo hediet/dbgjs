@@ -159,6 +159,11 @@ Search projected authored and generated sources:
 jsdbg source grep 'hubRpcConnection'
 ```
 
+Use `--path` to select logical paths before content is loaded and
+`--timeout-ms` to bound the complete search. JSON matches include content
+identity, provenance, endpoint applicability, and match length; identical
+content is searched once and then fanned out to each logical source.
+
 Use a source URL or projected source path from those results:
 
 ```powershell

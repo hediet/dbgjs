@@ -22,6 +22,7 @@ pub mod service_api;
 pub mod session_transport;
 pub mod source_effects;
 pub mod source_graph;
+pub mod source_search;
 pub mod source_view;
 pub mod target_debugger;
 pub mod websocket_transport;

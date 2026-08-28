@@ -55,6 +55,7 @@ use crate::service_api::{
     ValuePropertySnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
+use crate::source_search::HydratedSourceBatch;
 use crate::source_view::Position;
 
 const COMMAND_BUFFER: usize = 32;
@@ -338,6 +339,21 @@ impl TargetDebuggerHandle {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::ResolvedSourcePaths { response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn source_search_batch(
+        &self,
+        path_selector: Option<String>,
+    ) -> Result<HydratedSourceBatch, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::SourceSearchBatch {
+                path_selector,
+                response,
+            })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
@@ -920,6 +936,10 @@ enum TargetCommand {
     ResolvedSourcePaths {
         response: oneshot::Sender<Result<Vec<(String, String)>, TargetDebuggerError>>,
     },
+    SourceSearchBatch {
+        path_selector: Option<String>,
+        response: oneshot::Sender<Result<HydratedSourceBatch, TargetDebuggerError>>,
+    },
     ExplainSource {
         path: String,
         response: oneshot::Sender<Result<Vec<SourceGraphViewSnapshot>, TargetDebuggerError>>,
@@ -1262,6 +1282,15 @@ async fn run_target(
             Next::Command(Some(TargetCommand::ResolvedSourcePaths { response })) => {
                 let paths = driver.source_effects().resolved_source_paths();
                 let _ = response.send(Ok(paths));
+            }
+            Next::Command(Some(TargetCommand::SourceSearchBatch {
+                path_selector,
+                response,
+            })) => {
+                let batch = driver
+                    .source_effects()
+                    .search_source_batch(driver.state(), path_selector.as_deref());
+                let _ = response.send(Ok(batch));
             }
             Next::Command(Some(TargetCommand::ExplainSource { path, response })) => {
                 let explanations = driver.source_effects().explain_source(&path);

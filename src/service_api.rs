@@ -428,8 +428,14 @@ pub struct SourceContentSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct SourceMatchSnapshot {
     pub path: String,
+    pub content_hash: String,
+    pub kind: String,
+    pub provenance: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
     pub line: u32,
     pub column: u32,
+    pub match_length: u32,
     pub text: String,
     pub before_context: Vec<String>,
     pub after_context: Vec<String>,
@@ -444,6 +450,8 @@ pub struct SourceSearchOptions {
     pub case_sensitive: bool,
     pub max_results: u32,
     pub context_lines: u32,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -452,6 +460,7 @@ pub struct SourceSearchSnapshot {
     pub matches: Vec<SourceMatchSnapshot>,
     pub omitted_matches: u64,
     pub searched_sources: u32,
+    pub searched_contents: u32,
     pub skipped_sources: u32,
 }
 

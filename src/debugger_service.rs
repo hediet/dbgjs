@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
+use futures_util::{StreamExt, stream};
 use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, watch};
@@ -48,6 +50,9 @@ use crate::service_api::{
     VariableSnapshot,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
+use crate::source_search::{
+    SearchControl, SearchDocument, SearchError, SearchQuery, SourceIdentity,
+};
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
 
 #[derive(Clone)]
@@ -1633,7 +1638,7 @@ impl DebuggerServiceApi for DebuggerService {
 
     async fn grep_sources(
         &self,
-        ctx: &CallCtx,
+        _ctx: &CallCtx,
         context_id: String,
         options: SourceSearchOptions,
     ) -> Result<SourceSearchSnapshot, JsonRpcError> {
@@ -1643,95 +1648,162 @@ impl DebuggerServiceApi for DebuggerService {
         if options.max_results == 0 {
             return Err(invalid_params("source grep max_results must be positive"));
         }
-        let regex = if options.regex {
-            Some(
-                regex::RegexBuilder::new(&options.pattern)
-                    .case_insensitive(!options.case_sensitive)
-                    .build()
-                    .map_err(|error| invalid_params(format!("invalid source regex: {error}")))?,
-            )
-        } else {
-            None
+        if options.timeout_ms == Some(0) {
+            return Err(invalid_params("source grep timeout_ms must be positive"));
+        }
+        let query = SearchQuery {
+            pattern: options.pattern.clone(),
+            regex: options.regex,
+            case_sensitive: options.case_sensitive,
+            max_results: options.max_results as usize,
+            context_lines: options.context_lines as usize,
         };
-        let literal = (!options.regex).then(|| {
-            if options.case_sensitive {
-                options.pattern.clone()
-            } else {
-                options.pattern.to_lowercase()
-            }
+        crate::source_search::validate(&query).map_err(source_search_error)?;
+        let deadline = options.timeout_ms.and_then(|milliseconds| {
+            std::time::Instant::now().checked_add(Duration::from_millis(milliseconds))
         });
-        let sources = self
-            .list_sources(ctx, context_id.clone(), options.path.clone())
-            .await?;
-        let mut matches = Vec::new();
-        let mut omitted_matches = 0_u64;
-        let mut searched_sources = 0_u32;
-        let mut skipped_sources = 0_u32;
-        for source in sources {
-            tokio::task::yield_now().await;
-            let Ok(content) = self
-                .show_source(
-                    ctx,
-                    context_id.clone(),
-                    source.path.clone(),
-                    SourceDisplayOptions {
-                        line: None,
-                        context_lines: 0,
-                    },
-                )
-                .await
-            else {
-                skipped_sources = skipped_sources.saturating_add(1);
-                continue;
+        let control = deadline.map_or_else(SearchControl::default, SearchControl::with_deadline);
+        let mut cancellation = SearchCancellationGuard::new(control.cancellation_flag());
+        let (debuggers, local_sources) = {
+            let state = self.state.lock().await;
+            let Some(context) = state.contexts.get(&context_id) else {
+                return Err(not_found("context", &context_id));
             };
-            searched_sources = searched_sources.saturating_add(1);
-            let lines = content.content.lines().collect::<Vec<_>>();
-            for (line_index, line) in lines.iter().enumerate() {
-                tokio::task::yield_now().await;
-                let columns: Vec<usize> = match &regex {
-                    Some(regex) => regex.find_iter(line).map(|item| item.start()).collect(),
-                    None => {
-                        let searchable;
-                        let line = if options.case_sensitive {
-                            *line
-                        } else {
-                            searchable = line.to_lowercase();
-                            &searchable
-                        };
-                        line.match_indices(literal.as_deref().unwrap())
-                            .map(|(column, _)| column)
-                            .collect()
-                    }
-                };
-                for column in columns {
-                    if matches.len() == options.max_results as usize {
-                        omitted_matches = omitted_matches.saturating_add(1);
+            let debuggers = state
+                .target_debuggers
+                .iter()
+                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                .map(|((_, connection_id, target_id), debugger)| {
+                    (connection_id.clone(), target_id.clone(), debugger.clone())
+                })
+                .collect::<Vec<_>>();
+            let local_sources = context
+                .breakpoints
+                .values()
+                .map(|breakpoint| breakpoint.source_path.clone())
+                .filter(|path| {
+                    options
+                        .path
+                        .as_ref()
+                        .is_none_or(|selector| path.contains(selector))
+                })
+                .collect::<BTreeSet<_>>();
+            (debuggers, local_sources)
+        };
+
+        let path_selector = options.path.clone();
+        let batches = stream::iter(debuggers.into_iter().map(
+            |(connection_id, target_id, debugger)| {
+                let path_selector = path_selector.clone();
+                async move {
+                    debugger
+                        .source_search_batch(path_selector)
+                        .await
+                        .map(|batch| (connection_id, target_id, batch))
+                }
+            },
+        ))
+        .buffer_unordered(8)
+        .collect::<Vec<_>>();
+        let batches = match deadline {
+            Some(deadline) => timeout_at(Instant::from_std(deadline), batches)
+                .await
+                .map_err(|_| source_search_error(SearchError::DeadlineExceeded))?,
+            None => batches.await,
+        };
+        let mut batches = batches
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(target_debugger_rpc_error)?;
+        batches.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+
+        let mut documents = Vec::new();
+        let mut skipped_sources = 0_u32;
+        for (connection_id, target_id, batch) in batches {
+            skipped_sources = skipped_sources.saturating_add(batch.skipped_sources);
+            documents.extend(batch.sources.into_iter().map(|source| SearchDocument {
+                identity: SourceIdentity {
+                    path: source.path,
+                    connection_id: Some(connection_id.clone()),
+                    target_id: Some(target_id.clone()),
+                    kind: source.kind,
+                    provenance: source.provenance,
+                },
+                content_hash: source.content_hash,
+                content: source.content,
+            }));
+        }
+
+        let worker_control = control.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            let mut skipped_local = 0_u32;
+            for path in local_sources {
+                worker_control.check()?;
+                let file_path = match source_file_path(&path) {
+                    Ok(file_path) => file_path,
+                    Err(_) => {
+                        skipped_local = skipped_local.saturating_add(1);
                         continue;
                     }
-                    let context = options.context_lines as usize;
-                    matches.push(SourceMatchSnapshot {
-                        path: source.path.clone(),
-                        line: line_index as u32 + 1,
-                        column: column as u32 + 1,
-                        text: (*line).to_owned(),
-                        before_context: lines[line_index.saturating_sub(context)..line_index]
-                            .iter()
-                            .map(|line| (*line).to_owned())
-                            .collect(),
-                        after_context: lines
-                            [line_index + 1..(line_index + context + 1).min(lines.len())]
-                            .iter()
-                            .map(|line| (*line).to_owned())
-                            .collect(),
-                    });
-                }
+                };
+                let content = match fs::read_to_string(file_path) {
+                    Ok(content) => Arc::<str>::from(content),
+                    Err(_) => {
+                        skipped_local = skipped_local.saturating_add(1);
+                        continue;
+                    }
+                };
+                documents.push(SearchDocument {
+                    identity: SourceIdentity {
+                        path,
+                        connection_id: None,
+                        target_id: None,
+                        kind: "intent".to_owned(),
+                        provenance: "local file".to_owned(),
+                    },
+                    content_hash: crate::content_store::ContentHash::of_bytes(content.as_bytes()),
+                    content,
+                });
             }
-        }
+            crate::source_search::search(documents, &query, &worker_control)
+                .map(|result| (result, skipped_local))
+        });
+        let (result, skipped_local) = match deadline {
+            Some(deadline) => timeout_at(Instant::from_std(deadline), worker)
+                .await
+                .map_err(|_| source_search_error(SearchError::DeadlineExceeded))?
+                .map_err(|error| internal_error(format!("source search worker failed: {error}")))?
+                .map_err(source_search_error)?,
+            None => worker
+                .await
+                .map_err(|error| internal_error(format!("source search worker failed: {error}")))?
+                .map_err(source_search_error)?,
+        };
+        cancellation.disarm();
+        let matches = result
+            .hits
+            .into_iter()
+            .map(|hit| SourceMatchSnapshot {
+                path: hit.identity.path,
+                content_hash: hit.content_hash.to_string(),
+                kind: hit.identity.kind,
+                provenance: hit.identity.provenance,
+                connection_id: hit.identity.connection_id,
+                target_id: hit.identity.target_id,
+                line: hit.line,
+                column: hit.column,
+                match_length: hit.match_length,
+                text: hit.text,
+                before_context: hit.before_context,
+                after_context: hit.after_context,
+            })
+            .collect::<Vec<_>>();
         Ok(SourceSearchSnapshot {
+            omitted_matches: result.total_matches.saturating_sub(matches.len() as u64),
             matches,
-            omitted_matches,
-            searched_sources,
-            skipped_sources,
+            searched_sources: result.searched_sources,
+            searched_contents: result.searched_contents,
+            skipped_sources: skipped_sources.saturating_add(skipped_local),
         })
     }
 
@@ -3648,6 +3720,45 @@ fn source_file_path(path: &str) -> Result<PathBuf, JsonRpcError> {
             .map_err(|_| invalid_params("source file URL is invalid"));
     }
     Ok(PathBuf::from(path))
+}
+
+struct SearchCancellationGuard {
+    flag: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl SearchCancellationGuard {
+    fn new(flag: Arc<AtomicBool>) -> Self {
+        Self { flag, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SearchCancellationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(true, Ordering::Release);
+        }
+    }
+}
+
+fn source_search_error(error: SearchError) -> JsonRpcError {
+    match error {
+        SearchError::InvalidPattern(message) => {
+            invalid_params(format!("invalid source regex: {message}"))
+        }
+        SearchError::Cancelled => {
+            JsonRpcError::new(error_codes::REQUEST_TIMEOUT, "source search was cancelled")
+        }
+        SearchError::DeadlineExceeded => JsonRpcError::new(
+            error_codes::REQUEST_TIMEOUT,
+            "source search deadline exceeded",
+        ),
+        SearchError::Search(message) => internal_error(message),
+    }
 }
 
 fn compacted_projection_label(kind: &CompactedProjectionKind) -> String {

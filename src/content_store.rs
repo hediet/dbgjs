@@ -10,8 +10,21 @@ use sha2::{Digest, Sha256};
 pub struct ContentHash([u8; 32]);
 
 impl ContentHash {
+    pub fn of_bytes(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+impl fmt::Display for ContentHash {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in &self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 
@@ -43,7 +56,7 @@ pub struct ContentStore {
 impl ContentStore {
     pub fn intern(&self, text: &str) -> ContentHash {
         self.intern_requests.fetch_add(1, Ordering::Relaxed);
-        let id = content_hash(text.as_bytes());
+        let id = ContentHash::of_bytes(text.as_bytes());
         let mut content = self.content.lock().unwrap();
         content.entry(id).or_insert_with(|| {
             self.unique_utf8_bytes
@@ -80,10 +93,6 @@ impl ContentStore {
             Ordering::Relaxed,
         );
     }
-}
-
-fn content_hash(bytes: &[u8]) -> ContentHash {
-    ContentHash(Sha256::digest(bytes).into())
 }
 
 #[cfg(test)]

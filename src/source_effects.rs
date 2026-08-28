@@ -11,6 +11,7 @@ use crate::debugger_engine::{
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
+use crate::source_search::{HydratedSource, HydratedSourceBatch};
 use crate::source_view::{
     GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
     ResolvedSourceView, SourceViewError,
@@ -640,6 +641,76 @@ impl SourceEffectInterpreter {
         paths.into_iter().collect()
     }
 
+    pub fn search_source_batch(
+        &self,
+        state: &DebuggerState,
+        path_selector: Option<&str>,
+    ) -> HydratedSourceBatch {
+        let mut sources = BTreeMap::new();
+        let mut skipped = BTreeSet::new();
+        for (script_key, script) in state.scripts.iter() {
+            if path_selector.is_none_or(|selector| script.url.contains(selector)) {
+                let identity = (script.url.clone(), "runtime".to_owned());
+                if let Some(content) = self.generated_source_content(state, script_key) {
+                    let content_hash =
+                        crate::content_store::ContentHash::of_bytes(content.as_bytes());
+                    sources
+                        .entry((
+                            identity.0.clone(),
+                            identity.1.clone(),
+                            content_hash,
+                            format!("runtime source {}", script.url),
+                        ))
+                        .or_insert_with(|| HydratedSource {
+                            path: identity.0.clone(),
+                            kind: identity.1.clone(),
+                            provenance: format!("runtime source {}", script.url),
+                            content_hash,
+                            content,
+                        });
+                } else {
+                    skipped.insert(identity);
+                }
+            }
+            let ScriptSourceState::Resolved(view) = &script.source else {
+                continue;
+            };
+            for (logical_url, candidate) in view.logical_sources.iter() {
+                if path_selector.is_some_and(|selector| !logical_url.contains(selector)) {
+                    continue;
+                }
+                let provenance = provenance_label(&candidate.provenance);
+                let Some(content) = self.store.get(candidate.content) else {
+                    skipped.insert((logical_url.clone(), "authored".to_owned()));
+                    continue;
+                };
+                sources
+                    .entry((
+                        logical_url.clone(),
+                        "authored".to_owned(),
+                        candidate.content,
+                        provenance.clone(),
+                    ))
+                    .or_insert_with(|| HydratedSource {
+                        path: logical_url.clone(),
+                        kind: "authored".to_owned(),
+                        provenance,
+                        content_hash: candidate.content,
+                        content,
+                    });
+            }
+        }
+        let hydrated = sources
+            .values()
+            .map(|source| (source.path.clone(), source.kind.clone()))
+            .collect::<BTreeSet<_>>();
+        skipped.retain(|identity| !hydrated.contains(identity));
+        HydratedSourceBatch {
+            sources: sources.into_values().collect(),
+            skipped_sources: skipped.len().min(u32::MAX as usize) as u32,
+        }
+    }
+
     pub fn map_source_position(
         &self,
         path: &str,
@@ -932,6 +1003,69 @@ mod tests {
             SourceRevision::Content(content)
         );
         model.release(&content_owner);
+    }
+
+    #[test]
+    fn source_search_selects_paths_before_content_hydration() {
+        let model = Arc::new(ContextSourceModel::new());
+        let interpreter = SourceEffectInterpreter::new(
+            SourceEffectOptions::default(),
+            model.clone(),
+            "test-target",
+        );
+        let keep = model.content_store().intern("const keep = true;");
+        let skip = model.content_store().intern("const skip = true;");
+        let script = ScriptKey {
+            session: crate::debugger_engine::SessionKey {
+                connection_generation: 1,
+                session_id: "session-1".into(),
+            },
+            script_id: "script-1".into(),
+        };
+        let mut state = DebuggerState::default();
+        Arc::make_mut(&mut state.scripts).insert(
+            script,
+            Arc::new(crate::debugger_engine::ScriptState {
+                url: "dist/app.js".into(),
+                hash: "runtime-hash".into(),
+                source_map_url: None,
+                version: 1,
+                source: ScriptSourceState::Resolved(crate::debugger_engine::SourceViewState {
+                    view_id: EffectId(1),
+                    logical_sources: Arc::new(BTreeMap::from([
+                        (
+                            "src/keep.ts".into(),
+                            crate::source_view::ContentCandidate {
+                                content: keep,
+                                provenance: Provenance::Workspace {
+                                    logical_url: "src/keep.ts".into(),
+                                },
+                            },
+                        ),
+                        (
+                            "src/skip.ts".into(),
+                            crate::source_view::ContentCandidate {
+                                content: skip,
+                                provenance: Provenance::Workspace {
+                                    logical_url: "src/skip.ts".into(),
+                                },
+                            },
+                        ),
+                    ])),
+                }),
+            }),
+        );
+
+        let before = model.content_store().stats().materializations;
+        let batch = interpreter.search_source_batch(&state, Some("keep"));
+
+        assert_eq!(batch.sources.len(), 1);
+        assert_eq!(batch.sources[0].path, "src/keep.ts");
+        assert_eq!(
+            model.content_store().stats().materializations - before,
+            1,
+            "the unselected source must not be hydrated"
+        );
     }
 
     use crate::debugger_engine::{

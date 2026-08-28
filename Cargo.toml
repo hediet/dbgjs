@@ -15,6 +15,9 @@ cdp-protocol = { path = "crates/cdp-protocol" }
 futures-util = "0.3"
 fs2 = "0.4"
 getrandom = "0.3"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
 hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }
 hubrpc-tokio = { path = "../hubrpc-rust/crates/hubrpc-tokio" }
 libc = "0.2"
@@ -44,3 +47,7 @@ jsonschema = { version = "0.33.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }
+
+[[bench]]
+name = "source_search"
+harness = false

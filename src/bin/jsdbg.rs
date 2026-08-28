@@ -3257,6 +3257,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
     let mut case_sensitive = true;
     let mut max_results = 200_u32;
     let mut context_lines = 0_u32;
+    let mut timeout_ms = None;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -3279,6 +3280,13 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
                     "--context-lines",
                     required_source_option(values, index, "--context-lines")?,
                 )?;
+            }
+            "--timeout-ms" => {
+                index += 1;
+                timeout_ms = Some(u64::from(parse_positive_u32(
+                    "--timeout-ms",
+                    required_source_option(values, index, "--timeout-ms")?,
+                )?));
             }
             option if option.starts_with("--") => {
                 return Err(invalid_option("source grep", option));
@@ -3303,6 +3311,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
         case_sensitive,
         max_results,
         context_lines,
+        timeout_ms,
     })
 }
 
@@ -5344,7 +5353,7 @@ commands:
   jsdbg source tree <loaded|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   jsdbg source graph [--uncompacted] [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
-  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--context <id>]
+  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--context <id>]
   jsdbg source map <path> <line> <column> [--context <id>]
   jsdbg source cache evict [--context <id>]
   jsdbg source export <destination> [--context <id>]
@@ -6311,6 +6320,8 @@ mod tests {
             "25",
             "--context-lines",
             "2",
+            "--timeout-ms",
+            "1500",
         ]))
         .unwrap();
         assert_eq!(options.pattern, "trim.*Whitespace");
@@ -6319,6 +6330,7 @@ mod tests {
         assert!(!options.case_sensitive);
         assert_eq!(options.max_results, 25);
         assert_eq!(options.context_lines, 2);
+        assert_eq!(options.timeout_ms, Some(1500));
     }
 
     #[test]
