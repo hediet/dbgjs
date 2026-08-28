@@ -646,7 +646,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&promises)?;
         }
         [heap, show, reference, options @ ..] if heap == "heap" && show == "show" => {
-            let max_string_length = parse_heap_string_display_options(options)?;
+            let options = parse_heap_show_options(options)?;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
@@ -658,11 +658,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     reference.clone(),
                     HeapReferenceDirection::Outgoing,
                     HeapEdgePolicy::All,
-                    100,
-                    max_string_length,
+                    options.limit,
+                    options.max_string_length,
                 )
                 .await)?;
-            output.print(&properties)?;
+            output.print_heap_show(&properties)?;
         }
         [heap, refs, reference, options @ ..] if heap == "heap" && refs == "refs" => {
             let options = parse_heap_reference_options(options)?;
@@ -3215,6 +3215,7 @@ struct HeapClassOptions {
 }
 
 const DEFAULT_HEAP_STRING_LENGTH: u32 = 160;
+const DEFAULT_HEAP_SHOW_REFERENCE_LIMIT: u32 = 20;
 
 struct HeapSelectOptions {
     capture_id: String,
@@ -3226,6 +3227,11 @@ struct HeapSelectOptions {
 struct HeapReferenceOptions {
     direction: HeapReferenceDirection,
     edge_policy: HeapEdgePolicy,
+    limit: u32,
+    max_string_length: Option<u32>,
+}
+
+struct HeapShowOptions {
     limit: u32,
     max_string_length: Option<u32>,
 }
@@ -3426,6 +3432,37 @@ fn parse_heap_reference_options(values: &[String]) -> Result<HeapReferenceOption
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("unknown heap refs option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn parse_heap_show_options(values: &[String]) -> Result<HeapShowOptions, io::Error> {
+    let mut options = HeapShowOptions {
+        limit: DEFAULT_HEAP_SHOW_REFERENCE_LIMIT,
+        max_string_length: Some(DEFAULT_HEAP_STRING_LENGTH),
+    };
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--all" => options.limit = u32::MAX,
+            "--limit" => {
+                index += 1;
+                options.limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--full-strings" => options.max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                options.max_string_length =
+                    Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap show option '{option}'"),
                 ));
             }
         }
@@ -4932,7 +4969,7 @@ commands:
   jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
   jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
   jsdbg heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
-  jsdbg heap show <capture#heap-object-id> [--full-strings]
+  jsdbg heap show <capture#heap-object-id> [--limit <count>|--all] [--full-strings]
   jsdbg heap refs <capture#heap-object-id> [--incoming|--outgoing|--both] [--all-edges] [--limit <count>]
   jsdbg heap path <from-ref> <to-ref> [--direction <outgoing|incoming|either>] [--all-edges] [--readable]
   jsdbg heap root-path|retainer-path|dominators <capture#heap-object-id>
@@ -4958,12 +4995,14 @@ mod tests {
         parse_connection_list_options, parse_context_create_options, parse_context_option,
         parse_coverage_show_options, parse_cpu_profile_sampling_interval,
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
-        parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
+        parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
+        parse_heap_string_options,
         parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
         parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_grep_options,
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_target_list_options, parse_value_options, png_dimensions, resolve_target_scope,
         select_implicit_context, split_heap_reference_cli, target_list_output,
+        DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -5481,6 +5520,31 @@ mod tests {
         assert_eq!(options.selector.limit, Some(25));
         assert!(options.include_dominators);
         assert_eq!(options.max_string_length, None);
+    }
+
+    #[test]
+    fn bounds_heap_show_references_unless_explicitly_expanded() {
+        let defaults = parse_heap_show_options(&arguments(&[])).unwrap();
+        assert_eq!(defaults.limit, DEFAULT_HEAP_SHOW_REFERENCE_LIMIT);
+        assert_eq!(
+            defaults.max_string_length,
+            Some(DEFAULT_HEAP_STRING_LENGTH)
+        );
+
+        let limited = parse_heap_show_options(&arguments(&[
+            "--limit",
+            "7",
+            "--max-string-length",
+            "40",
+        ]))
+        .unwrap();
+        assert_eq!(limited.limit, 7);
+        assert_eq!(limited.max_string_length, Some(40));
+
+        let expanded =
+            parse_heap_show_options(&arguments(&["--all", "--full-strings"])).unwrap();
+        assert_eq!(expanded.limit, u32::MAX);
+        assert_eq!(expanded.max_string_length, None);
     }
 
     #[test]

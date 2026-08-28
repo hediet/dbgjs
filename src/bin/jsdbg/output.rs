@@ -431,6 +431,21 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_heap_show(
+        &self,
+        snapshot: &HeapReferencesSnapshot,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => {
+                for line in heap_show_lines(snapshot) {
+                    println!("{line}");
+                }
+            }
+            Self::Json => println!("{}", serde_json::to_string_pretty(snapshot)?),
+        }
+        Ok(())
+    }
+
     pub fn print_source_tree(
         &self,
         snapshot: &SourceTreeSnapshot,
@@ -1239,6 +1254,35 @@ impl HumanOutput for HeapReferencesSnapshot {
             println!("  ... {} references omitted", self.omitted_reference_count);
         }
     }
+}
+
+fn heap_show_lines(snapshot: &HeapReferencesSnapshot) -> Vec<String> {
+    let shown = snapshot.references.len() as u64;
+    let total = shown + snapshot.omitted_reference_count;
+    let mut lines = vec![
+        heap_node_line(&snapshot.node),
+        format!("Outgoing properties/references ({shown} of {total}):"),
+        "  PROPERTY/EDGE                 REFERENCE".to_owned(),
+    ];
+    lines.extend(snapshot.references.iter().map(|reference| {
+        let label = reference
+            .name
+            .as_deref()
+            .map(|name| escaped_heap_text(name, false))
+            .unwrap_or_else(|| format!("[{}]", reference.name_or_index));
+        format!(
+            "  {:<28} {}",
+            format!("{} {label}", reference.edge_type),
+            reference.target
+        )
+    }));
+    if snapshot.omitted_reference_count > 0 {
+        lines.push(format!(
+            "  ... {} references omitted; use --all to expand",
+            snapshot.omitted_reference_count
+        ));
+    }
+    lines
 }
 
 impl HumanOutput for HeapPathSnapshot {
@@ -3512,18 +3556,20 @@ mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, SourceTreeOutputOptions, aggregate_coverage_entries,
-        coverage_entries, effective_file_metrics, heap_path_lines, looks_minified_identifier,
-        page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
-        render_evaluation, render_heap_classes_human, render_uncompacted_source_graph,
-        render_value_snapshot, source_tree_lines, style_process_label, style_session_label,
+        coverage_entries, effective_file_metrics, heap_path_lines, heap_show_lines,
+        looks_minified_identifier, page_logs, process_tree_lines, process_trees_json,
+        render_compacted_source_graph, render_evaluation, render_heap_classes_human,
+        render_uncompacted_source_graph, render_value_snapshot, source_tree_lines,
+        style_process_label, style_session_label,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
         CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
         CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
         HeapClassAnalysisSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot,
-        HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming,
-        HeapTraversalDirection, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
+        HeapEdgePolicy, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection,
+        HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
+        ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
         SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
         UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
         UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
@@ -4032,6 +4078,47 @@ mod tests {
                 "│   <- internal \"1\"",
                 "│ .#1  type:synthetic, value:\"\", shallow:0 B, in:0, out:1",
                 "└─",
+            ]
+        );
+    }
+
+    #[test]
+    fn heap_show_renders_a_bounded_property_reference_table() {
+        let snapshot = HeapReferencesSnapshot {
+            capture_id: ".".to_owned(),
+            node: heap_node(".#10", "object", "Object", 1, 4),
+            direction: HeapReferenceDirection::Outgoing,
+            edge_policy: HeapEdgePolicy::All,
+            references: vec![
+                HeapReferenceSnapshot {
+                    edge_index: 1,
+                    edge_type: "property".to_owned(),
+                    name: Some("title".to_owned()),
+                    name_or_index: 0,
+                    source: ".#10".to_owned(),
+                    target: ".#11".to_owned(),
+                },
+                HeapReferenceSnapshot {
+                    edge_index: 2,
+                    edge_type: "element".to_owned(),
+                    name: None,
+                    name_or_index: 3,
+                    source: ".#10".to_owned(),
+                    target: ".#12".to_owned(),
+                },
+            ],
+            omitted_reference_count: 2,
+        };
+
+        assert_eq!(
+            heap_show_lines(&snapshot),
+            vec![
+                ".#10  type:object, value:\"Object\", shallow:0 B, in:1, out:4",
+                "Outgoing properties/references (2 of 4):",
+                "  PROPERTY/EDGE                 REFERENCE",
+                "  property \"title\"             .#11",
+                "  element [3]                  .#12",
+                "  ... 2 references omitted; use --all to expand",
             ]
         );
     }
