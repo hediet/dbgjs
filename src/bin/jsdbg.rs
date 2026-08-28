@@ -1077,12 +1077,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&rpc(client.get_context(context_id).await)?)?;
         }
         [context, delete, options @ ..] if context == "context" && delete == "delete" => {
-            let mut options = parse_context_delete_options(options)?;
+            let mut mutation = parse_mutation_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
             let initial_delete = client
-                .delete_context(context_id.clone(), options.mutation.clone())
+                .delete_context(context_id.clone(), mutation.clone())
                 .await;
             if let Ok(deleted) = initial_delete {
                 output.print_context_deleted(&context_id, deleted)?;
@@ -1090,8 +1090,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let Ok(mut snapshot) = client.get_context(context_id.clone()).await else {
                     return Err(rpc::<bool>(Err(error)).unwrap_err().into());
                 };
-                if options
-                    .mutation
+                if mutation
                     .expected_revision
                     .is_some_and(|expected| expected != snapshot.revision)
                 {
@@ -1113,11 +1112,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if active_connections.is_empty() {
                     return Err(rpc::<bool>(Err(error)).unwrap_err().into());
                 }
-                if !options.disconnect_connections {
-                    return Err(
-                        context_delete_disconnect_error(&context_id, &active_connections).into(),
-                    );
-                }
                 for connection_id in snapshot
                     .connections
                     .iter()
@@ -1131,10 +1125,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .disconnect_connection(context_id.clone(), connection_id)
                         .await)?;
                 }
-                options.mutation.expected_revision = Some(snapshot.revision);
-                let deleted = rpc(client
-                    .delete_context(context_id.clone(), options.mutation)
-                    .await)?;
+                mutation.expected_revision = Some(snapshot.revision);
+                let deleted = rpc(client.delete_context(context_id.clone(), mutation).await)?;
                 output.print_context_deleted(&context_id, deleted)?;
             }
         }
@@ -4876,65 +4868,6 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
     Ok(options)
 }
 
-#[derive(Debug)]
-struct ContextDeleteOptions {
-    disconnect_connections: bool,
-    mutation: MutationOptions,
-}
-
-fn parse_context_delete_options(arguments: &[String]) -> Result<ContextDeleteOptions, io::Error> {
-    let disconnect_connections = arguments
-        .iter()
-        .any(|argument| argument == "--disconnect-connections");
-    let mutation_arguments = arguments
-        .iter()
-        .filter(|argument| *argument != "--disconnect-connections")
-        .cloned()
-        .collect::<Vec<_>>();
-    let mutation = parse_mutation_options(&mutation_arguments)?;
-    if disconnect_connections && mutation.expected_revision.is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--disconnect-connections cannot be combined with --expected-revision because the disconnects advance the context revision",
-        ));
-    }
-    Ok(ContextDeleteOptions {
-        disconnect_connections,
-        mutation,
-    })
-}
-
-fn context_delete_disconnect_error(context_id: &str, connections: &[String]) -> io::Error {
-    let context = context_cli_expression(context_id);
-    let mut message = format!(
-        "context '{context_id}' has active connections; disconnect them before deleting:\n"
-    );
-    for connection in connections {
-        message.push_str(&format!(
-            "  jsdbg connection disconnect --context {} --connection {}\n",
-            quoted_cli_argument(&context),
-            quoted_cli_argument(connection)
-        ));
-    }
-    message.push_str(&format!(
-        "Then retry, or opt in to disconnecting every connection before deletion:\n  jsdbg context delete --context {} --disconnect-connections",
-        quoted_cli_argument(&context)
-    ));
-    io::Error::new(io::ErrorKind::InvalidInput, message)
-}
-
-fn context_cli_expression(context_id: &str) -> String {
-    if path_and_parents(context_id).is_ok() {
-        context_id.to_owned()
-    } else {
-        format!(":{context_id}")
-    }
-}
-
-fn quoted_cli_argument(value: &str) -> String {
-    serde_json::to_string(value).expect("serializing a string cannot fail")
-}
-
 fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<String, io::Error> {
     match arguments {
         [expression] if expression != "-" => Ok(expression.clone()),
@@ -5064,7 +4997,7 @@ commands:
   jsdbg context list
   jsdbg context create <path|:id> [display-name] [--set]
   jsdbg context show [--context <path|:id>]
-  jsdbg context delete [--context <path|:id>] [--disconnect-connections] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg state get [--context <id>]
   jsdbg state watch [--context <id>] [--after-revision <revision>]
   jsdbg events --after-revision <revision> [--context <id>]
@@ -5148,18 +5081,17 @@ mod tests {
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ResolvedScope, ScopeOptions, SelectionStore,
         TargetListOptions, activate_selection_scope, apply_scope_selection, connection_list_output,
-        context_delete_disconnect_error, extract_scope_options, load_selection_store,
-        parse_chrome_options, parse_connection_list_options, parse_context_create_options,
-        parse_context_delete_options, parse_context_option, parse_coverage_show_options,
-        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
-        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
-        parse_heap_select_options, parse_heap_show_options, parse_heap_string_options,
-        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
-        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_grep_options,
-        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
-        parse_target_list_options, parse_value_options, png_dimensions, read_eval_expression,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
-        target_list_output,
+        extract_scope_options, load_selection_store, parse_chrome_options,
+        parse_connection_list_options, parse_context_create_options, parse_context_option,
+        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
+        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
+        parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
+        parse_heap_string_options, parse_mutation_options, parse_process_attach_options,
+        parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
+        parse_screenshot_capture_options, parse_source_grep_options, parse_source_map_arguments,
+        parse_source_show_options, parse_source_tree_options, parse_target_list_options,
+        parse_value_options, png_dimensions, read_eval_expression, resolve_target_scope,
+        select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -5194,42 +5126,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_context_delete_cascade_and_gives_exact_disconnect_commands() {
-        let options = parse_context_delete_options(&arguments(&[
-            "--disconnect-connections",
+    fn context_delete_uses_standard_mutation_options() {
+        let options = parse_mutation_options(&arguments(&[
+            "--expected-revision",
+            "7",
             "--request-id",
             "cleanup",
         ]))
         .unwrap();
-        assert!(options.disconnect_connections);
-        assert_eq!(options.mutation.request_id.as_deref(), Some("cleanup"));
-        assert!(
-            parse_context_delete_options(&arguments(&[
-                "--disconnect-connections",
-                "--expected-revision",
-                "7",
-            ]))
-            .unwrap_err()
-            .to_string()
-            .contains("cannot be combined")
-        );
-
-        let error = context_delete_disconnect_error(
-            "workspace",
-            &["browser".to_owned(), "node worker".to_owned()],
-        )
-        .to_string();
-        assert!(error.contains(
-            r#"jsdbg connection disconnect --context ":workspace" --connection "browser""#
-        ));
-        assert!(error.contains(
-            r#"jsdbg connection disconnect --context ":workspace" --connection "node worker""#
-        ));
-        assert!(
-            error.contains(
-                r#"jsdbg context delete --context ":workspace" --disconnect-connections"#
-            )
-        );
+        assert_eq!(options.expected_revision, Some(7));
+        assert_eq!(options.request_id.as_deref(), Some("cleanup"));
+        assert!(parse_mutation_options(&arguments(&["--disconnect-connections"])).is_err());
     }
 
     #[test]

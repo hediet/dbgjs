@@ -910,49 +910,13 @@ fn cli_service_connects_to_live_cdp() {
         ],
     );
 
-    let refused_delete = run_in(
+    let deleted = run_json(
         &cli,
         &service,
         &state_file,
-        &std::env::current_dir().unwrap(),
         &["context", "delete", "--context", "live-browser"],
     );
-    assert!(!refused_delete.0.success());
-    let guidance = String::from_utf8_lossy(&refused_delete.2);
-    assert!(guidance.contains("disconnect them before deleting"));
-    assert!(guidance.contains("jsdbg connection disconnect"));
-    assert!(guidance.contains(r#"--connection "browser""#));
-    assert!(guidance.contains(r#"--connection "observer""#));
-    assert!(guidance.contains("jsdbg context delete"));
-    assert!(guidance.contains("--disconnect-connections"));
-
-    let preserved = run_json(
-        &cli,
-        &service,
-        &state_file,
-        &["context", "show", "--context", "live-browser"],
-    );
-    assert!(
-        preserved["connections"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|connection| connection["status"]["kind"] == "connected")
-    );
-
-    let cascaded_delete = run_json(
-        &cli,
-        &service,
-        &state_file,
-        &[
-            "context",
-            "delete",
-            "--context",
-            "live-browser",
-            "--disconnect-connections",
-        ],
-    );
-    assert_eq!(cascaded_delete, Value::Bool(true));
+    assert_eq!(deleted, Value::Bool(true));
 
     run_json(&cli, &service, &state_file, &["service", "stop"]);
     wait_until_removed(&state_file);
