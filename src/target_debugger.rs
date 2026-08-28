@@ -4402,13 +4402,36 @@ fn bounded_projection_function(max_preview_length: u32) -> String {
         r#"function() {{
   const __jsdbgValue = this.__jsdbgValue;
   const __jsdbgMaxLength = {max_preview_length};
-  if (typeof __jsdbgValue !== "string") {{
+  const __jsdbgKind = typeof __jsdbgValue;
+  let __jsdbgText;
+  if (__jsdbgKind === "string") {{
+    __jsdbgText = __jsdbgValue;
+  }} else if (__jsdbgKind === "bigint") {{
+    __jsdbgText = `${{__jsdbgValue}}n`;
+  }} else if (__jsdbgKind === "symbol") {{
+    const __jsdbgDescription = __jsdbgValue.description;
+    __jsdbgText = __jsdbgDescription === undefined
+      ? "Symbol()"
+      : `Symbol(${{__jsdbgDescription}})`;
+  }} else if (__jsdbgKind === "number" && __jsdbgValue !== __jsdbgValue) {{
+    __jsdbgText = "NaN";
+  }} else if (__jsdbgKind === "number" && __jsdbgValue === 1 / 0) {{
+    __jsdbgText = "Infinity";
+  }} else if (__jsdbgKind === "number" && __jsdbgValue === -1 / 0) {{
+    __jsdbgText = "-Infinity";
+  }} else if (
+    __jsdbgKind === "number"
+    && __jsdbgValue === 0
+    && 1 / __jsdbgValue === -1 / 0
+  ) {{
+    __jsdbgText = "-0";
+  }} else {{
     return {{ __jsdbgKind: "remote", __jsdbgValue }};
   }}
   let __jsdbgPreview = "";
   let __jsdbgLength = 0;
   let __jsdbgTruncated = false;
-  for (const __jsdbgCharacter of __jsdbgValue) {{
+  for (const __jsdbgCharacter of __jsdbgText) {{
     if (__jsdbgLength === __jsdbgMaxLength) {{
       __jsdbgTruncated = true;
       break;
@@ -4417,8 +4440,8 @@ fn bounded_projection_function(max_preview_length: u32) -> String {
     __jsdbgLength++;
   }}
   return {{
-    __jsdbgKind: "string",
-    __jsdbgValue: __jsdbgPreview,
+    __jsdbgKind,
+    __jsdbgText: __jsdbgPreview,
     __jsdbgTruncated
   }};
 }}"#
@@ -4460,33 +4483,53 @@ fn evaluated_remote_from_envelope(
                 "target returned an invalid bounded evaluation envelope".to_owned(),
             )
         })?;
-    let value = property("__jsdbgValue").ok_or_else(|| {
-        TargetDebuggerError::Evaluation(
-            "target bounded evaluation envelope omitted its value".to_owned(),
-        )
-    })?;
     if kind == "remote" {
+        let value = property("__jsdbgValue").ok_or_else(|| {
+            TargetDebuggerError::Evaluation(
+                "target bounded evaluation envelope omitted its value".to_owned(),
+            )
+        })?;
         return Ok(EvaluatedRemote {
             remote: value.clone(),
             preview_truncated: false,
         });
     }
-    if kind != "string" {
-        return Err(TargetDebuggerError::Evaluation(format!(
-            "target returned unknown bounded evaluation kind '{kind}'"
-        )));
-    }
-    let preview = value
-        .value
-        .as_ref()
+    let preview = property("__jsdbgText")
+        .and_then(|value| value.value.as_ref())
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
             TargetDebuggerError::Evaluation(
-                "target bounded string projection omitted its preview".to_owned(),
+                "target bounded primitive projection omitted its preview".to_owned(),
             )
         })?;
-    let mut remote = RuntimeRemoteObject::new(RuntimeRemoteObjectType::String);
-    remote.value = Some(serde_json::Value::String(preview.to_owned()));
+    let mut remote = match kind {
+        "string" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::String),
+        "bigint" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::Bigint),
+        "symbol" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::Symbol),
+        "number" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::Number),
+        _ => {
+            return Err(TargetDebuggerError::Evaluation(format!(
+                "target returned unknown bounded evaluation kind '{kind}'"
+            )));
+        }
+    };
+    match &remote.r#type {
+        RuntimeRemoteObjectType::String => {
+            remote.value = Some(serde_json::Value::String(preview.to_owned()));
+        }
+        RuntimeRemoteObjectType::Bigint => {
+            remote.unserializable_value = Some(preview.to_owned());
+            remote.description = Some(preview.to_owned());
+        }
+        RuntimeRemoteObjectType::Symbol => {
+            remote.description = Some(preview.to_owned());
+        }
+        RuntimeRemoteObjectType::Number => {
+            remote.unserializable_value = Some(preview.to_owned());
+            remote.description = Some(preview.to_owned());
+        }
+        _ => unreachable!("bounded primitive kinds are exhaustive"),
+    }
     Ok(EvaluatedRemote {
         remote,
         preview_truncated: property("__jsdbgTruncated")
@@ -5634,10 +5677,11 @@ mod tests {
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         breakpoint_wait_failure, callback_aware_breadcrumb, complete_source_search_batch,
-        effective_coverage_ranges, heap_class_display_name, predicate_matches, publish_snapshot,
-        snapshot, source_excerpt, window_highlighted_line,
+        effective_coverage_ranges, evaluated_remote_from_envelope, heap_class_display_name,
+        predicate_matches, publish_snapshot, snapshot, source_excerpt, window_highlighted_line,
     };
     use crate::cdp::{
+        RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
         TargetAttachToTargetParams, TargetCloseTargetParams, TargetCreateTargetParams,
     };
     use crate::cdp_runtime::CdpConnection;
@@ -5684,6 +5728,89 @@ mod tests {
             logs: Vec::new(),
             pause: None,
         }
+    }
+
+    #[test]
+    fn bounded_primitive_envelopes_restore_remote_object_shape() {
+        let cases = [
+            (
+                "string",
+                RuntimeRemoteObjectType::String,
+                Some("hello"),
+                None,
+                None,
+            ),
+            (
+                "bigint",
+                RuntimeRemoteObjectType::Bigint,
+                None,
+                Some("99999"),
+                Some("99999"),
+            ),
+            (
+                "symbol",
+                RuntimeRemoteObjectType::Symbol,
+                None,
+                None,
+                Some("Symbol(long"),
+            ),
+            (
+                "number",
+                RuntimeRemoteObjectType::Number,
+                None,
+                Some("-Infinity"),
+                Some("-Infinity"),
+            ),
+        ];
+        for (kind, expected_type, value, unserializable, description) in cases {
+            let projection = evaluated_remote_from_envelope(&[
+                envelope_property("__jsdbgKind", serde_json::json!(kind)),
+                envelope_property(
+                    "__jsdbgText",
+                    serde_json::json!(value.or(unserializable).or(description).unwrap()),
+                ),
+                envelope_property("__jsdbgTruncated", serde_json::json!(true)),
+            ])
+            .unwrap();
+            assert_eq!(projection.remote.r#type, expected_type);
+            assert_eq!(
+                projection
+                    .remote
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.as_str()),
+                value
+            );
+            assert_eq!(
+                projection.remote.unserializable_value.as_deref(),
+                unserializable
+            );
+            assert_eq!(projection.remote.description.as_deref(), description);
+            assert!(projection.preview_truncated);
+        }
+    }
+
+    #[test]
+    fn remote_envelope_preserves_safe_primitive_payload() {
+        let projection = evaluated_remote_from_envelope(&[
+            envelope_property("__jsdbgKind", serde_json::json!("remote")),
+            envelope_property("__jsdbgValue", serde_json::json!(true)),
+        ])
+        .unwrap();
+        assert_eq!(projection.remote.r#type, RuntimeRemoteObjectType::Boolean);
+        assert_eq!(projection.remote.value, Some(serde_json::json!(true)));
+        assert!(!projection.preview_truncated);
+    }
+
+    fn envelope_property(name: &str, value: serde_json::Value) -> RuntimePropertyDescriptor {
+        let mut remote = RuntimeRemoteObject::new(match &value {
+            serde_json::Value::Bool(_) => RuntimeRemoteObjectType::Boolean,
+            _ => RuntimeRemoteObjectType::String,
+        });
+        remote.value = Some(value);
+        let mut property = RuntimePropertyDescriptor::new(name.to_owned(), true, true);
+        property.value = Some(remote);
+        property
     }
 
     fn replacement_snapshot(desired_binding: BreakpointBinding) -> TargetDebuggerSnapshot {
@@ -5880,7 +6007,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires CDP_WS_ENDPOINT for Playwright-launched Chromium"]
     async fn live_evaluation_bounds_large_primitive_transfer() {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(Duration::from_secs(120), async {
             let endpoint =
                 std::env::var("CDP_WS_ENDPOINT").expect("Playwright provides CDP_WS_ENDPOINT");
             let transport = Arc::new(
@@ -6006,6 +6133,59 @@ mod tests {
                 .await
                 .expect("counter reads");
             assert_eq!(count.preview.preview.as_deref(), Some("1"));
+
+            inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount = 0", true)
+                .await
+                .expect("counter resets");
+            transport.reset_largest_received_message_size();
+            let huge_bigint = inspect_live(
+                &debugger,
+                "(globalThis.__jsdbgEvaluationCount++, BigInt('9'.repeat(1_000_000)))",
+                true,
+            )
+            .await
+            .expect("million-digit BigInt evaluates");
+            let expected_bigint_preview = "9".repeat(120);
+            assert_eq!(huge_bigint.preview.kind, "bigint");
+            assert_eq!(
+                huge_bigint.preview.preview.as_deref(),
+                Some(expected_bigint_preview.as_str())
+            );
+            assert!(huge_bigint.preview.truncated);
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&huge_bigint).unwrap().len() < 2_048);
+            assert_no_references(&huge_bigint);
+            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+                .await
+                .expect("counter reads");
+            assert_eq!(count.preview.preview.as_deref(), Some("1"));
+
+            transport.reset_largest_received_message_size();
+            let huge_symbol = inspect_live(&debugger, "Symbol('s'.repeat(1_000_000))", true)
+                .await
+                .expect("huge Symbol description evaluates");
+            assert_eq!(huge_symbol.preview.kind, "symbol");
+            assert!(
+                huge_symbol
+                    .preview
+                    .preview
+                    .as_deref()
+                    .is_some_and(|preview| preview.starts_with("Symbol(ssss"))
+            );
+            assert_eq!(
+                huge_symbol
+                    .preview
+                    .preview
+                    .as_deref()
+                    .unwrap()
+                    .chars()
+                    .count(),
+                120
+            );
+            assert!(huge_symbol.preview.truncated);
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&huge_symbol).unwrap().len() < 2_048);
+            assert_no_references(&huge_symbol);
 
             let object = inspect_live(&debugger, "({ answer: 42, label: 'ok' })", true)
                 .await
