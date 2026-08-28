@@ -572,9 +572,16 @@ struct ServiceState {
     capture_reservations: BTreeMap<(String, String), CaptureReservation>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct CaptureReservation {
     metadata: CaptureSnapshot,
+    completed: Option<CompletedCapture>,
+}
+
+#[derive(Clone)]
+struct CompletedCapture {
+    payload: StoredCapturePayload,
+    heap_result: Option<HeapCaptureResult>,
 }
 
 struct CaptureReservationGuard {
@@ -2345,20 +2352,27 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
     ) -> Result<bool, JsonRpcError> {
         let mut state = self.state.lock().await;
-        if state
-            .capture_reservations
-            .contains_key(&(context_id.clone(), capture_name.clone()))
-        {
-            return Err(invalid_state(&format!(
-                "capture '{capture_name}' is currently being stored in context '{context_id}'"
-            )));
-        }
         let key = (context_id, capture_name.clone());
-        let capture = state
-            .captures
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| not_found("capture", &capture_name))?;
+        let (capture, completed_reservation) =
+            if let Some(capture) = state.captures.get(&key).cloned() {
+                (capture, false)
+            } else if let Some(reservation) = state.capture_reservations.get(&key) {
+                let Some(completed) = &reservation.completed else {
+                    return Err(invalid_state(&format!(
+                        "capture '{capture_name}' is currently being stored in context '{}'",
+                        key.0
+                    )));
+                };
+                (
+                    StoredCapture {
+                        metadata: reservation.metadata.clone(),
+                        payload: completed.payload.clone(),
+                    },
+                    true,
+                )
+            } else {
+                return Err(not_found("capture", &capture_name));
+            };
         let debugger = state
             .target_debuggers
             .get(&(
@@ -2384,9 +2398,13 @@ impl DebuggerServiceApi for DebuggerService {
                 ))
             })?;
         }
-        let previous = state.clone();
-        state.captures.remove(&key);
-        self.persist_or_restore(&mut state, previous)?;
+        if completed_reservation {
+            state.capture_reservations.remove(&key);
+        } else {
+            let previous = state.clone();
+            state.captures.remove(&key);
+            self.persist_or_restore(&mut state, previous)?;
+        }
         Ok(true)
     }
 
@@ -3272,6 +3290,19 @@ impl DebuggerServiceApi for DebuggerService {
         } else {
             None
         };
+        if let Some(reservation) = &reservation
+            && let Some(completed) = &reservation.reservation.completed
+        {
+            let StoredCapturePayload::Coverage(snapshot) = &completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            let snapshot = snapshot.clone();
+            self.store_capture(&reservation.reservation, completed.payload.clone())
+                .await?;
+            return Ok(snapshot);
+        }
         let snapshot = match debugger
             .take_coverage(capture_id.clone(), exclude_capture_id)
             .await
@@ -3319,6 +3350,17 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
+        if let Some(completed) = &reservation.reservation.completed {
+            let StoredCapturePayload::Coverage(snapshot) = &completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            let snapshot = snapshot.clone();
+            self.store_capture(&reservation.reservation, completed.payload.clone())
+                .await?;
+            return Ok(snapshot);
+        }
         let snapshot = match debugger
             .stop_coverage(exclude_capture_id)
             .await
@@ -3415,6 +3457,17 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
+        if let Some(completed) = &reservation.reservation.completed {
+            let StoredCapturePayload::CpuProfile(snapshot) = &completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            let snapshot = snapshot.clone();
+            self.store_capture(&reservation.reservation, completed.payload.clone())
+                .await?;
+            return Ok(snapshot);
+        }
         let snapshot = match debugger
             .stop_cpu_profile(capture_id)
             .await
@@ -3496,6 +3549,24 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
+        if let Some(completed) = &reservation.reservation.completed {
+            let StoredCapturePayload::HeapSnapshot { .. } = &completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            let result = completed
+                .heap_result
+                .clone()
+                .ok_or_else(|| invalid_state("completed heap capture result is missing"))?;
+            self.store_heap_capture(
+                &reservation.reservation,
+                completed.payload.clone(),
+                result.clone(),
+            )
+            .await?;
+            return Ok(result);
+        }
         let result = match debugger
             .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
             .await
@@ -3525,15 +3596,21 @@ impl DebuggerServiceApi for DebuggerService {
             )));
         }
         if let Err(error) = self
-            .store_capture(
+            .store_heap_capture(
                 &reservation.reservation,
                 StoredCapturePayload::HeapSnapshot {
                     path: final_path.to_string_lossy().into_owned(),
                 },
+                result.clone(),
             )
             .await
         {
-            remove_heap_files([final_path]);
+            if !self
+                .completed_capture_is_retained(&reservation.reservation)
+                .await
+            {
+                remove_heap_files([final_path]);
+            }
             return Err(error);
         }
         Ok(result)
@@ -3747,6 +3824,18 @@ impl DebuggerService {
             )));
         }
         if let Some(existing) = state.capture_reservations.get(&key) {
+            if existing.completed.is_some() {
+                if existing.metadata.connection_id == connection_id
+                    && existing.metadata.target_id == target_id
+                    && existing.metadata.connection_generation == connection_generation
+                    && existing.metadata.kind == kind
+                {
+                    return Ok(existing.clone());
+                }
+                return Err(invalid_state(&format!(
+                    "capture '{name}' completed in context '{context_id}' but catalog persistence failed; retry the same capture request or delete it to discard the completed data"
+                )));
+            }
             return Err(invalid_state(&format!(
                 "capture '{name}' is already being stored in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
                 existing.metadata.kind,
@@ -3791,7 +3880,10 @@ impl DebuggerService {
             connection_generation,
             storage_id,
         };
-        let reservation = CaptureReservation { metadata };
+        let reservation = CaptureReservation {
+            metadata,
+            completed: None,
+        };
         state.capture_reservations.insert(key, reservation.clone());
         Ok(reservation)
     }
@@ -3800,6 +3892,7 @@ impl DebuggerService {
         &self,
         reservation: &CaptureReservation,
         payload: StoredCapturePayload,
+        heap_result: Option<HeapCaptureResult>,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
         let mut state = self.state.lock().await;
         let metadata = &reservation.metadata;
@@ -3811,25 +3904,43 @@ impl DebuggerService {
         {
             return Err(invalid_state("capture reservation is no longer current"));
         }
-        let connection = state
-            .contexts
-            .get(&metadata.context_id)
-            .and_then(|context| context.connections.get(&metadata.connection_id))
-            .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
-        if connection.generation != metadata.connection_generation
-            || !connection.targets.contains_key(&metadata.target_id)
+        let completed = if let Some(completed) = state
+            .capture_reservations
+            .get(&key)
+            .and_then(|current| current.completed.clone())
         {
-            return Err(invalid_state(
-                "connection generation changed while the capture was being stored",
-            ));
-        }
+            completed
+        } else {
+            let connection = state
+                .contexts
+                .get(&metadata.context_id)
+                .and_then(|context| context.connections.get(&metadata.connection_id))
+                .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
+            if connection.generation != metadata.connection_generation
+                || !connection.targets.contains_key(&metadata.target_id)
+            {
+                return Err(invalid_state(
+                    "connection generation changed while the capture was being stored",
+                ));
+            }
+            let completed = CompletedCapture {
+                payload,
+                heap_result,
+            };
+            state
+                .capture_reservations
+                .get_mut(&key)
+                .expect("current capture reservation disappeared while locked")
+                .completed = Some(completed.clone());
+            completed
+        };
         let previous = state.clone();
         state.capture_reservations.remove(&key);
         state.captures.insert(
             key,
             StoredCapture {
                 metadata: metadata.clone(),
-                payload,
+                payload: completed.payload,
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -3840,11 +3951,9 @@ impl DebuggerService {
         let metadata = &reservation.metadata;
         let key = (metadata.context_id.clone(), metadata.name.clone());
         let mut state = self.state.lock().await;
-        if state
-            .capture_reservations
-            .get(&key)
-            .is_some_and(|current| current.metadata.storage_id == metadata.storage_id)
-        {
+        if state.capture_reservations.get(&key).is_some_and(|current| {
+            current.metadata.storage_id == metadata.storage_id && current.completed.is_none()
+        }) {
             state.capture_reservations.remove(&key);
             true
         } else {
@@ -3852,16 +3961,34 @@ impl DebuggerService {
         }
     }
 
+    async fn completed_capture_is_retained(&self, reservation: &CaptureReservation) -> bool {
+        let metadata = &reservation.metadata;
+        self.state
+            .lock()
+            .await
+            .capture_reservations
+            .get(&(metadata.context_id.clone(), metadata.name.clone()))
+            .is_some_and(|current| {
+                current.metadata.storage_id == metadata.storage_id && current.completed.is_some()
+            })
+    }
+
     async fn store_capture(
         &self,
         reservation: &CaptureReservation,
         payload: StoredCapturePayload,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
-        let result = self.finalize_capture(reservation, payload).await;
-        if result.is_err() {
-            self.abandon_capture(reservation).await;
-        }
-        result
+        self.finalize_capture(reservation, payload, None).await
+    }
+
+    async fn store_heap_capture(
+        &self,
+        reservation: &CaptureReservation,
+        payload: StoredCapturePayload,
+        result: HeapCaptureResult,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        self.finalize_capture(reservation, payload, Some(result))
+            .await
     }
 
     fn heap_capture_paths(&self, reservation: &CaptureReservation) -> (PathBuf, PathBuf) {
@@ -5162,6 +5289,32 @@ mod tests {
         }
     }
 
+    fn capture_retry_service(label: &str) -> (PathBuf, PathBuf, DebuggerService) {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("{label}-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let blocker = root.join("not-a-directory");
+        fs::write(&blocker, b"block").unwrap();
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let service = service_with_state(blocker.join("service.json"), state);
+        (root, blocker, service)
+    }
+
+    fn unblock_capture_persistence(blocker: &Path) {
+        fs::remove_file(blocker).unwrap();
+        fs::create_dir(blocker).unwrap();
+    }
+
     #[tokio::test]
     async fn capture_name_reservation_is_atomic_across_targets() {
         let context = context_with_targets([
@@ -5237,6 +5390,7 @@ mod tests {
                 StoredCapturePayload::HeapSnapshot {
                     path: "unused".into(),
                 },
+                None,
             )
             .await
             .unwrap_err();
@@ -5244,6 +5398,291 @@ mod tests {
         let state = service.state.lock().await;
         assert!(state.captures.is_empty());
         assert_eq!(state.capture_reservations.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn completed_cpu_profile_survives_persistence_failure_and_retries() {
+        let (root, blocker, service) = capture_retry_service("cpu-profile-finalization");
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "profile".into(),
+                CaptureKind::CpuProfile,
+            )
+            .await
+            .unwrap();
+        let snapshot = CpuProfileSnapshot {
+            capture_id: "profile".into(),
+            sampling_interval_micros: Some(100),
+            start_time_micros: 1.0,
+            end_time_micros: 2.0,
+            nodes: Vec::new(),
+            samples: Vec::new(),
+            time_deltas_micros: Vec::new(),
+            functions: Vec::new(),
+            analysis: None,
+        };
+
+        assert!(
+            service
+                .store_capture(
+                    &reservation,
+                    StoredCapturePayload::CpuProfile(snapshot.clone()),
+                )
+                .await
+                .is_err()
+        );
+        assert!(!service.abandon_capture(&reservation).await);
+        {
+            let state = service.state.lock().await;
+            let pending = &state.capture_reservations[&("test".to_owned(), "profile".to_owned())];
+            assert!(matches!(
+                pending.completed.as_ref().map(|value| &value.payload),
+                Some(StoredCapturePayload::CpuProfile(value)) if value == &snapshot
+            ));
+            assert!(state.captures.is_empty());
+        }
+
+        unblock_capture_persistence(&blocker);
+        let retry = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "profile".into(),
+                CaptureKind::CpuProfile,
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.metadata.storage_id, reservation.metadata.storage_id);
+        let completed = retry.completed.clone().unwrap();
+        service
+            .store_capture(&retry, completed.payload)
+            .await
+            .unwrap();
+        let state = service.state.lock().await;
+        assert!(state.capture_reservations.is_empty());
+        assert!(matches!(
+            &state.captures[&("test".to_owned(), "profile".to_owned())].payload,
+            StoredCapturePayload::CpuProfile(value) if value == &snapshot
+        ));
+        drop(state);
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, blocker.join("service.json")).unwrap();
+        assert!(matches!(
+            &restored.state.lock().await.captures
+                [&("test".to_owned(), "profile".to_owned())]
+                .payload,
+            StoredCapturePayload::CpuProfile(value) if value == &snapshot
+        ));
+        drop(restored);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn completed_coverage_survives_persistence_failure_and_retries() {
+        let (root, blocker, service) = capture_retry_service("coverage-finalization");
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "coverage".into(),
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 42,
+            sources: Vec::new(),
+            analysis: None,
+        };
+
+        assert!(
+            service
+                .store_capture(
+                    &reservation,
+                    StoredCapturePayload::Coverage(snapshot.clone()),
+                )
+                .await
+                .is_err()
+        );
+        unblock_capture_persistence(&blocker);
+        let retry = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "coverage".into(),
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
+        let completed = retry.completed.clone().unwrap();
+        assert!(matches!(
+            &completed.payload,
+            StoredCapturePayload::Coverage(value) if value == &snapshot
+        ));
+        service
+            .store_capture(&retry, completed.payload)
+            .await
+            .unwrap();
+        assert!(matches!(
+            &service.state.lock().await.captures
+                [&("test".to_owned(), "coverage".to_owned())]
+                .payload,
+            StoredCapturePayload::Coverage(value) if value == &snapshot
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn completed_heap_capture_survives_persistence_failure_and_retries() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "heap-finalization-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        fs::create_dir(&persistence_path).unwrap();
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let service = service_with_state(persistence_path.clone(), state);
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "heap".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        let (_, final_path) = service.heap_capture_paths(&reservation);
+        fs::create_dir_all(final_path.parent().unwrap()).unwrap();
+        fs::write(&final_path, b"completed heap").unwrap();
+        let result = HeapCaptureResult {
+            capture_id: "heap".into(),
+            bytes_written: 14,
+            timing: Default::default(),
+        };
+        let payload = StoredCapturePayload::HeapSnapshot {
+            path: final_path.to_string_lossy().into_owned(),
+        };
+
+        assert!(
+            service
+                .store_heap_capture(&reservation, payload.clone(), result.clone())
+                .await
+                .is_err()
+        );
+        assert!(final_path.exists());
+        fs::remove_dir(&persistence_path).unwrap();
+        let retry = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "heap".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        let completed = retry.completed.clone().unwrap();
+        assert_eq!(completed.heap_result, Some(result));
+        service
+            .store_heap_capture(&retry, completed.payload, completed.heap_result.unwrap())
+            .await
+            .unwrap();
+        assert!(final_path.exists());
+        assert!(matches!(
+            &service.state.lock().await.captures
+                [&("test".to_owned(), "heap".to_owned())]
+                .payload,
+            StoredCapturePayload::HeapSnapshot { path }
+                if path == &final_path.to_string_lossy()
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn completed_capture_reservation_can_be_explicitly_discarded() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("capture-discard-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        fs::create_dir(&persistence_path).unwrap();
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let service = service_with_state(persistence_path, state);
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "discard".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        let (_, final_path) = service.heap_capture_paths(&reservation);
+        fs::create_dir_all(final_path.parent().unwrap()).unwrap();
+        fs::write(&final_path, b"completed heap").unwrap();
+        let payload = StoredCapturePayload::HeapSnapshot {
+            path: final_path.to_string_lossy().into_owned(),
+        };
+        assert!(
+            service
+                .store_heap_capture(
+                    &reservation,
+                    payload,
+                    HeapCaptureResult {
+                        capture_id: "discard".into(),
+                        bytes_written: 14,
+                        timing: Default::default(),
+                    },
+                )
+                .await
+                .is_err()
+        );
+
+        service
+            .delete_capture(&CallCtx::default(), "test".into(), "discard".into())
+            .await
+            .unwrap();
+        assert!(!final_path.exists());
+        assert!(service.state.lock().await.capture_reservations.is_empty());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]

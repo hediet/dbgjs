@@ -395,6 +395,11 @@ ID, owning connection and generation, and an opaque immutable storage ID.
 Concurrent losers fail before receiving a storage path. Heap staging and final
 paths are unique to that reservation.
 
+If a completed capture cannot be added to the durable catalog, its reservation
+retains the completed payload in memory. Repeating the same capture request
+promotes that payload into the catalog without running the capture again;
+`capture delete` explicitly discards the retained payload and its heap storage.
+
 For compatibility, an omitted name is the literal name `.`. While `.` remains
 cataloged, later unnamed captures fail explicitly and should be given distinct
 names (or the old capture should be explicitly deleted first).
