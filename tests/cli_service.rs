@@ -566,6 +566,90 @@ fn cli_service_connects_to_live_cdp() {
             .is_some_and(|targets| targets.iter().any(|target| target["targetType"] == "page"))
     );
 
+    let connections = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "list",
+            "--context",
+            "live-browser",
+            "--status",
+            "connected",
+            "--kind",
+            "direct-cdp",
+        ],
+    );
+    assert_eq!(connections["contextId"], connected["id"]);
+    assert!(connections["revision"].as_u64().unwrap() >= connected["revision"].as_u64().unwrap());
+    assert_eq!(connections["connections"][0]["id"], "browser");
+    assert!(
+        connections["connections"][0]["targetCount"]
+            .as_u64()
+            .is_some_and(|count| count >= 1)
+    );
+    assert_eq!(connections["connections"][0]["status"]["kind"], "connected");
+
+    let targets = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "list",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--type",
+            "page",
+        ],
+    );
+    let page = targets["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["targetType"] == "page")
+        .expect("target discovery should include a page");
+    assert_eq!(targets["contextId"], connected["id"]);
+    assert_eq!(page["connectionId"], "browser");
+    assert!(page["targetId"].as_str().is_some_and(|id| !id.is_empty()));
+    assert!(page["url"].as_str().is_some());
+
+    let connections_human = run_human(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "list",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+        ],
+    );
+    assert!(connections_human.contains("Connections in context"));
+    assert!(connections_human.contains("kind=direct-cdp"));
+    let targets_human = run_human(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "list",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--type",
+            "page",
+        ],
+    );
+    assert!(targets_human.contains("Targets in context"));
+    assert!(targets_human.contains("[page"));
+
     let disconnected = run_json(
         &cli,
         &service,
@@ -648,12 +732,39 @@ fn run_in(
     cwd: &Path,
     arguments: &[&str],
 ) -> (ExitStatus, Vec<u8>, Vec<u8>) {
+    run_in_with_format(cli, service, state_file, cwd, arguments, true)
+}
+
+fn run_human(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -> String {
+    let (status, stdout, stderr) = run_in_with_format(
+        cli,
+        service,
+        state_file,
+        &std::env::current_dir().unwrap(),
+        arguments,
+        false,
+    );
+    assert_success(arguments, status, &stdout, &stderr);
+    String::from_utf8(stdout).expect("human CLI output should be UTF-8")
+}
+
+fn run_in_with_format(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+    json: bool,
+) -> (ExitStatus, Vec<u8>, Vec<u8>) {
     let suffix = unique_suffix();
     let stdout_path = state_file.with_extension(format!("{suffix}.stdout"));
     let stderr_path = state_file.with_extension(format!("{suffix}.stderr"));
-    let status = Command::new(cli)
-        .current_dir(cwd)
-        .arg("--json")
+    let mut command = Command::new(cli);
+    command.current_dir(cwd);
+    if json {
+        command.arg("--json");
+    }
+    let status = command
         .args(arguments)
         .env("JSDBG_SERVICE_EXE", service)
         .env("JSDBG_SERVICE_STATE", state_file)

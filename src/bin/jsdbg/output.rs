@@ -10,8 +10,8 @@ use cdp_client::service_api::{
     PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
     SourceSnapshotInfo, SourceTreeSnapshot, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
-    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    TargetDebuggerSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
+    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
 use serde::Serialize;
@@ -86,6 +86,46 @@ pub struct SourceTreeOutputOptions {
     pub all: bool,
     pub max_lines: usize,
     pub trim_width: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionListEntry {
+    pub id: String,
+    pub selected: bool,
+    pub configuration: ConnectionConfiguration,
+    pub generation: u64,
+    pub status: ConnectionStatus,
+    pub target_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionListOutput {
+    pub agent_instance_id: String,
+    pub context_id: String,
+    pub revision: u64,
+    pub connections: Vec<ConnectionListEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetListEntry {
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub selected: bool,
+    pub parent_target_id: Option<String>,
+    #[serde(flatten)]
+    pub target: TargetSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetListOutput {
+    pub agent_instance_id: String,
+    pub context_id: String,
+    pub revision: u64,
+    pub targets: Vec<TargetListEntry>,
 }
 
 impl OutputFormat {
@@ -1364,6 +1404,70 @@ impl HumanOutput for Vec<ContextSummary> {
                 context.revision,
                 context.connection_count,
                 context.breakpoint_count
+            );
+        }
+    }
+}
+
+impl HumanOutput for ConnectionListOutput {
+    fn print_human(&self) {
+        if self.connections.is_empty() {
+            println!("No connections matched in context {}.", self.context_id);
+            return;
+        }
+        println!(
+            "Connections in context {} (rev {}):",
+            self.context_id, self.revision
+        );
+        for connection in &self.connections {
+            println!(
+                "{} {}  [{}]  kind={}  generation={}  targets={}",
+                if connection.selected { "*" } else { " " },
+                connection.id,
+                connection_status(&connection.status),
+                connection_configuration_kind(&connection.configuration),
+                connection.generation,
+                connection.target_count,
+            );
+            println!(
+                "    {}",
+                connection_configuration(&connection.configuration)
+            );
+        }
+    }
+}
+
+impl HumanOutput for TargetListOutput {
+    fn print_human(&self) {
+        if self.targets.is_empty() {
+            println!("No targets matched in context {}.", self.context_id);
+            return;
+        }
+        println!(
+            "Targets in context {} (rev {}):",
+            self.context_id, self.revision
+        );
+        for entry in &self.targets {
+            let target = &entry.target;
+            let title = if target.title.is_empty() {
+                "(untitled)"
+            } else {
+                &target.title
+            };
+            println!(
+                "{} {}/{}  [{}{}]  {:?}  {}{}",
+                if entry.selected { "*" } else { " " },
+                entry.connection_id,
+                target.target_id,
+                target.target_type,
+                if target.attached { "; attached" } else { "" },
+                title,
+                target.url,
+                entry
+                    .parent_target_id
+                    .as_deref()
+                    .map(|parent| format!("  parent={parent}"))
+                    .unwrap_or_default(),
             );
         }
     }
@@ -3338,6 +3442,18 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
             runtime_executable,
             ..
         } => format!("Node.js at {runtime_executable} running {program}"),
+    }
+}
+
+fn connection_configuration_kind(configuration: &ConnectionConfiguration) -> &'static str {
+    match configuration {
+        ConnectionConfiguration::DirectCdp { .. } => "direct-cdp",
+        ConnectionConfiguration::NodeInspector { .. } => "node-inspector",
+        ConnectionConfiguration::Process { .. } => "process",
+        ConnectionConfiguration::ProcessTree { .. } => "process-tree",
+        ConnectionConfiguration::Playwright { .. } => "playwright",
+        ConnectionConfiguration::Chrome { .. } => "chrome",
+        ConnectionConfiguration::Node { .. } => "node",
     }
 }
 

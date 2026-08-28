@@ -14,13 +14,13 @@ use cdp_client::context_identity::{
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::promise_debugging::{DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH};
 use cdp_client::service_api::{
-    BreakpointSpec, ConnectionConfiguration, ContextSummary, CpuProfileSnapshot,
-    DebuggerServiceApiClient, EvaluationSnapshot, HeapAggregateBy, HeapCaptureResult,
-    HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection, HeapPathOptions,
-    HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions, ObservationCursor,
-    ObservationResult, PlaywrightChannel, ProcessRole, PromiseState, SourceDisplayOptions,
-    SourceSearchOptions, SourceTreeKind, StepKind, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetWaitPredicate, ValueSelector,
+    BreakpointSpec, ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
+    CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot, HeapAggregateBy,
+    HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
+    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
+    ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, PromiseState,
+    SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetDebuggerPhase,
+    TargetDebuggerSnapshot, TargetWaitPredicate, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,8 +30,9 @@ mod bounded_tree;
 mod output;
 
 use output::{
-    CoverageOutputOptions, CpuProfileOutputOptions, CpuProfileSort, CpuProfileView,
-    HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions, SourceTreeOutputOptions,
+    ConnectionListEntry, ConnectionListOutput, CoverageOutputOptions, CpuProfileOutputOptions,
+    CpuProfileSort, CpuProfileView, HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions,
+    SourceTreeOutputOptions, TargetListEntry, TargetListOutput,
 };
 
 #[tokio::main]
@@ -1022,6 +1023,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .list_contexts(Some(normalized_cwd.clone()))
                 .await)?)?;
         }
+        [connection, list, options @ ..] if connection == "connection" && list == "list" => {
+            let options = parse_connection_list_options(options)?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            let snapshot = rpc(client.get_context(context_id).await)?;
+            let selection = load_selection(&selection_file)?;
+            output.print(&connection_list_output(
+                &snapshot,
+                &selection,
+                scope_options.connection.as_deref(),
+                &options,
+            ))?;
+        }
         [context, create, options @ ..] if context == "context" && create == "create" => {
             let (expression, display_name, set_default) =
                 parse_context_create_options(scope_options.context.as_ref(), options)?;
@@ -1442,6 +1457,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .export_sources(context_id, destination.clone())
                 .await)?)?;
         }
+        [target, list, options @ ..] if target == "target" && list == "list" => {
+            let options = parse_target_list_options(options)?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            let snapshot = rpc(client.get_context(context_id).await)?;
+            let selection = load_selection(&selection_file)?;
+            output.print(&target_list_output(
+                &snapshot,
+                &selection,
+                &scope_options,
+                &options,
+            ))?;
+        }
         [target, attach, options @ ..] if target == "target" && attach == "attach" => {
             let set_default = parse_set_option(options)?;
             let client = ensure_service(&state_file).await?;
@@ -1620,6 +1649,312 @@ struct ScopeOptions {
     context: Option<String>,
     connection: Option<String>,
     target: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionStatusFilter {
+    Disconnected,
+    Connecting,
+    Disconnecting,
+    Connected,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConnectionKindFilter {
+    DirectCdp,
+    NodeInspector,
+    Process,
+    ProcessTree,
+    Playwright,
+    Chrome,
+    Node,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ConnectionListOptions {
+    status: Option<ConnectionStatusFilter>,
+    kind: Option<ConnectionKindFilter>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TargetListOptions {
+    target_type: Option<String>,
+    title: Option<String>,
+    url: Option<String>,
+    attached: Option<bool>,
+}
+
+fn parse_connection_list_options(arguments: &[String]) -> Result<ConnectionListOptions, io::Error> {
+    let mut options = ConnectionListOptions::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--status" => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--status requires a value")
+                })?;
+                if options.status.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--status may only be specified once",
+                    ));
+                }
+                options.status = Some(match value.as_str() {
+                    "disconnected" => ConnectionStatusFilter::Disconnected,
+                    "connecting" => ConnectionStatusFilter::Connecting,
+                    "disconnecting" => ConnectionStatusFilter::Disconnecting,
+                    "connected" => ConnectionStatusFilter::Connected,
+                    "failed" => ConnectionStatusFilter::Failed,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("unknown connection status '{value}'"),
+                        ));
+                    }
+                });
+                index += 2;
+            }
+            "--kind" => {
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--kind requires a value")
+                })?;
+                if options.kind.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--kind may only be specified once",
+                    ));
+                }
+                options.kind = Some(match value.as_str() {
+                    "direct-cdp" => ConnectionKindFilter::DirectCdp,
+                    "node-inspector" => ConnectionKindFilter::NodeInspector,
+                    "process" => ConnectionKindFilter::Process,
+                    "process-tree" => ConnectionKindFilter::ProcessTree,
+                    "playwright" => ConnectionKindFilter::Playwright,
+                    "chrome" => ConnectionKindFilter::Chrome,
+                    "node" => ConnectionKindFilter::Node,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("unknown connection kind '{value}'"),
+                        ));
+                    }
+                });
+                index += 2;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown connection list option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn parse_target_list_options(arguments: &[String]) -> Result<TargetListOptions, io::Error> {
+    let mut options = TargetListOptions::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--type" | "--title" | "--url" => {
+                let flag = arguments[index].as_str();
+                let value = arguments.get(index + 1).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{flag} requires a value"),
+                    )
+                })?;
+                let slot = match flag {
+                    "--type" => &mut options.target_type,
+                    "--title" => &mut options.title,
+                    "--url" => &mut options.url,
+                    _ => unreachable!(),
+                };
+                if slot.replace(value.clone()).is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{flag} may only be specified once"),
+                    ));
+                }
+                index += 2;
+            }
+            "--attached" | "--unattached" => {
+                if options.attached.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--attached and --unattached are mutually exclusive",
+                    ));
+                }
+                options.attached = Some(arguments[index] == "--attached");
+                index += 1;
+            }
+            argument => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown target list option '{argument}'"),
+                ));
+            }
+        }
+    }
+    Ok(options)
+}
+
+fn connection_list_output(
+    snapshot: &ContextSnapshot,
+    selection: &CliSelection,
+    connection_filter: Option<&str>,
+    options: &ConnectionListOptions,
+) -> ConnectionListOutput {
+    let selection_applies = selection.context.as_deref() == Some(snapshot.id.as_str());
+    let connections = snapshot
+        .connections
+        .iter()
+        .filter(|connection| {
+            connection_filter.is_none_or(|id| connection.id == id)
+                && options
+                    .status
+                    .is_none_or(|status| connection_status_matches(&connection.status, status))
+                && options.kind.is_none_or(|kind| {
+                    connection_configuration_matches(&connection.configuration, kind)
+                })
+        })
+        .map(|connection| ConnectionListEntry {
+            id: connection.id.clone(),
+            selected: selection_applies
+                && selection.connection.as_deref() == Some(connection.id.as_str()),
+            configuration: connection.configuration.clone(),
+            generation: connection.generation,
+            status: connection.status.clone(),
+            target_count: connection.targets.len(),
+        })
+        .collect();
+    ConnectionListOutput {
+        agent_instance_id: snapshot.agent_instance_id.clone(),
+        context_id: snapshot.id.clone(),
+        revision: snapshot.revision,
+        connections,
+    }
+}
+
+fn target_list_output(
+    snapshot: &ContextSnapshot,
+    selection: &CliSelection,
+    scope: &ScopeOptions,
+    options: &TargetListOptions,
+) -> TargetListOutput {
+    let selection_applies = selection.context.as_deref() == Some(snapshot.id.as_str());
+    let targets = snapshot
+        .target_forest
+        .iter()
+        .filter(|node| {
+            scope
+                .connection
+                .as_deref()
+                .is_none_or(|connection| node.connection_id == connection)
+                && scope
+                    .target
+                    .as_deref()
+                    .is_none_or(|selector| target_matches_selector(&node.target, selector))
+                && options.target_type.as_deref().is_none_or(|target_type| {
+                    node.target.target_type.eq_ignore_ascii_case(target_type)
+                })
+                && options
+                    .title
+                    .as_deref()
+                    .is_none_or(|title| contains_case_insensitive(&node.target.title, title))
+                && options
+                    .url
+                    .as_deref()
+                    .is_none_or(|url| contains_case_insensitive(&node.target.url, url))
+                && options
+                    .attached
+                    .is_none_or(|attached| node.target.attached == attached)
+        })
+        .map(|node| TargetListEntry {
+            connection_id: node.connection_id.clone(),
+            connection_generation: node.connection_generation,
+            selected: selection_applies
+                && selection.connection.as_deref() == Some(node.connection_id.as_str())
+                && selection.target.as_deref() == Some(node.target.target_id.as_str()),
+            parent_target_id: node.parent_target_id.clone(),
+            target: node.target.clone(),
+        })
+        .collect();
+    TargetListOutput {
+        agent_instance_id: snapshot.agent_instance_id.clone(),
+        context_id: snapshot.id.clone(),
+        revision: snapshot.revision,
+        targets,
+    }
+}
+
+fn connection_status_matches(status: &ConnectionStatus, filter: ConnectionStatusFilter) -> bool {
+    matches!(
+        (status, filter),
+        (
+            ConnectionStatus::Disconnected,
+            ConnectionStatusFilter::Disconnected
+        ) | (
+            ConnectionStatus::Connecting,
+            ConnectionStatusFilter::Connecting
+        ) | (
+            ConnectionStatus::Disconnecting,
+            ConnectionStatusFilter::Disconnecting
+        ) | (
+            ConnectionStatus::Connected { .. },
+            ConnectionStatusFilter::Connected
+        ) | (
+            ConnectionStatus::Failed { .. },
+            ConnectionStatusFilter::Failed
+        )
+    )
+}
+
+fn connection_configuration_matches(
+    configuration: &ConnectionConfiguration,
+    filter: ConnectionKindFilter,
+) -> bool {
+    matches!(
+        (configuration, filter),
+        (
+            ConnectionConfiguration::DirectCdp { .. },
+            ConnectionKindFilter::DirectCdp
+        ) | (
+            ConnectionConfiguration::NodeInspector { .. },
+            ConnectionKindFilter::NodeInspector
+        ) | (
+            ConnectionConfiguration::Process { .. },
+            ConnectionKindFilter::Process
+        ) | (
+            ConnectionConfiguration::ProcessTree { .. },
+            ConnectionKindFilter::ProcessTree
+        ) | (
+            ConnectionConfiguration::Playwright { .. },
+            ConnectionKindFilter::Playwright
+        ) | (
+            ConnectionConfiguration::Chrome { .. },
+            ConnectionKindFilter::Chrome
+        ) | (
+            ConnectionConfiguration::Node { .. },
+            ConnectionKindFilter::Node
+        )
+    )
+}
+
+fn target_matches_selector(
+    target: &cdp_client::service_api::TargetSnapshot,
+    selector: &str,
+) -> bool {
+    target.target_id == selector
+        || target.target_type == selector
+        || target.title == selector
+        || target.url == selector
+}
+
+fn contains_case_insensitive(value: &str, needle: &str) -> bool {
+    value.to_lowercase().contains(&needle.to_lowercase())
 }
 
 fn required_option<'a>(name: &str, value: Option<&'a String>) -> Result<&'a String, io::Error> {
@@ -2323,12 +2658,8 @@ fn resolve_target_scope(
         .iter()
         .flat_map(|connection| {
             connection.targets.iter().filter_map(|target| {
-                let matches = requested_target.is_none_or(|selector| {
-                    target.target_id == *selector
-                        || target.target_type == *selector
-                        || target.title == *selector
-                        || target.url == *selector
-                });
+                let matches = requested_target
+                    .is_none_or(|selector| target_matches_selector(target, selector));
                 matches.then_some((connection.id.as_str(), target))
             })
         })
@@ -4534,6 +4865,7 @@ commands:
   jsdbg events --after-revision <revision> [--context <id>]
   jsdbg set context --context <id>
   jsdbg set target --target <selector> [--context <id>] [--connection <id>]
+  jsdbg connection list [--status <status>] [--kind <kind>] [--context <id>] [--connection <id>]
   jsdbg connection add <ws-endpoint> --connection <id> [--context <id>] [--connect]
   jsdbg connection add --node-inspector <ws-endpoint> --connection <id> [--context <id>] --connect
   jsdbg connection add --process <process-id> --connection <id> [--context <id>] --connect
@@ -4554,6 +4886,7 @@ commands:
   jsdbg source map <path> <line> <column> [--context <id>]
   jsdbg source cache evict [--context <id>]
   jsdbg source export <destination> [--context <id>]
+  jsdbg target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
   jsdbg target show [target scope]
   jsdbg target attach [target scope] [--set]
   jsdbg target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
@@ -4605,16 +4938,18 @@ Use --no-validation for vendor or newer protocol methods."
 #[cfg(test)]
 mod tests {
     use super::{
-        CliSelection, ResolvedScope, ScopeOptions, SelectionStore, activate_selection_scope,
-        apply_scope_selection, extract_scope_options, load_selection_store, parse_chrome_options,
-        parse_context_create_options, parse_context_option, parse_coverage_show_options,
-        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
-        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
-        parse_heap_select_options, parse_heap_string_options, parse_process_attach_options,
-        parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
-        parse_screenshot_capture_options, parse_source_grep_options, parse_source_map_arguments,
-        parse_source_show_options, parse_source_tree_options, parse_value_options, png_dimensions,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        CliSelection, ConnectionKindFilter, ConnectionStatusFilter, ResolvedScope, ScopeOptions,
+        SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
+        connection_list_output, extract_scope_options, load_selection_store, parse_chrome_options,
+        parse_connection_list_options, parse_context_create_options, parse_context_option,
+        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
+        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
+        parse_heap_path_options, parse_heap_select_options, parse_heap_string_options,
+        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
+        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
+        parse_target_list_options, parse_value_options, png_dimensions, resolve_target_scope,
+        select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -4819,6 +5154,98 @@ mod tests {
             ScopeOptions::default()
         );
         assert_eq!(positional.len(), 5);
+    }
+
+    #[test]
+    fn parses_discovery_filters_and_scope_independently() {
+        let connection = parse_connection_list_options(&arguments(&[
+            "--status",
+            "connected",
+            "--kind",
+            "direct-cdp",
+        ]))
+        .unwrap();
+        assert_eq!(connection.status, Some(ConnectionStatusFilter::Connected));
+        assert_eq!(connection.kind, Some(ConnectionKindFilter::DirectCdp));
+
+        let mut target_arguments = arguments(&[
+            "target",
+            "list",
+            "--context",
+            "ctx",
+            "--connection",
+            "browser",
+            "--target",
+            "page",
+            "--type",
+            "page",
+            "--title",
+            "checkout",
+            "--url",
+            "example.test",
+            "--attached",
+        ]);
+        let scope = extract_scope_options(&mut target_arguments).unwrap();
+        let target = parse_target_list_options(&target_arguments[2..]).unwrap();
+        assert_eq!(scope.context.as_deref(), Some("ctx"));
+        assert_eq!(scope.connection.as_deref(), Some("browser"));
+        assert_eq!(scope.target.as_deref(), Some("page"));
+        assert_eq!(target.target_type.as_deref(), Some("page"));
+        assert_eq!(target.title.as_deref(), Some("checkout"));
+        assert_eq!(target.url.as_deref(), Some("example.test"));
+        assert_eq!(target.attached, Some(true));
+        assert!(parse_target_list_options(&arguments(&["--attached", "--unattached"])).is_err());
+        assert!(parse_connection_list_options(&arguments(&["--status", "unknown"])).is_err());
+    }
+
+    #[test]
+    fn discovery_views_filter_snapshots_and_mark_exact_selection() {
+        let mut snapshot =
+            context_snapshot(&[("browser", &["page-1", "worker-1"]), ("node", &["root"])]);
+        snapshot.connections[0].targets[0].target_type = "page".to_owned();
+        snapshot.connections[0].targets[0].title = "Checkout".to_owned();
+        snapshot.connections[0].targets[0].url = "https://example.test/cart".to_owned();
+        snapshot.connections[0].targets[1].target_type = "service_worker".to_owned();
+        snapshot.connections[0].targets[1].attached = false;
+        snapshot.target_forest = snapshot
+            .connections
+            .iter()
+            .flat_map(ConnectionSnapshot::target_forest)
+            .collect();
+        let selection = CliSelection {
+            context: Some("ctx".to_owned()),
+            connection: Some("browser".to_owned()),
+            target: Some("page-1".to_owned()),
+            ..CliSelection::default()
+        };
+
+        let connections = connection_list_output(
+            &snapshot,
+            &selection,
+            Some("browser"),
+            &parse_connection_list_options(&arguments(&["--status", "connected"])).unwrap(),
+        );
+        assert_eq!(connections.connections.len(), 1);
+        assert!(connections.connections[0].selected);
+        assert_eq!(connections.connections[0].target_count, 2);
+
+        let targets = target_list_output(
+            &snapshot,
+            &selection,
+            &ScopeOptions {
+                connection: Some("browser".to_owned()),
+                ..ScopeOptions::default()
+            },
+            &TargetListOptions {
+                target_type: Some("PAGE".to_owned()),
+                title: Some("check".to_owned()),
+                url: Some("EXAMPLE.TEST".to_owned()),
+                attached: Some(true),
+            },
+        );
+        assert_eq!(targets.targets.len(), 1);
+        assert_eq!(targets.targets[0].target.target_id, "page-1");
+        assert!(targets.targets[0].selected);
     }
 
     #[test]
