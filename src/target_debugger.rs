@@ -4224,12 +4224,13 @@ async fn inspect_value(
             ValueSelector::RemoteObject { object_id } => Some(object_id.clone()),
             ValueSelector::Expression { .. } => None,
         });
-    let (properties, internal_properties) = match &object_id {
-        Some(object_id) => {
+    let (properties, internal_properties) = match (&object_id, object_group) {
+        (Some(_), Some(_)) => (Vec::new(), Vec::new()),
+        (Some(object_id), None) => {
             get_object_property_descriptors(driver, session_key, pause_epoch, object_id.clone())
                 .await?
         }
-        None => (Vec::new(), Vec::new()),
+        (None, _) => (Vec::new(), Vec::new()),
     };
     let is_promise = remote
         .as_ref()
@@ -4260,18 +4261,70 @@ async fn inspect_value(
         },
         |value| remote_value_snapshot(value, options.max_preview_length),
     );
-    let mut properties = properties
-        .into_iter()
+    let remote_preview = remote.as_ref().and_then(|value| value.preview.as_ref());
+    let property_references = properties
+        .iter()
         .filter_map(|property| {
-            property.value.map(|value| ValuePropertySnapshot {
-                name: property.name,
-                value: remote_value_snapshot(&value, options.max_preview_length),
-            })
+            property
+                .value
+                .as_ref()
+                .and_then(|value| value.object_id.clone())
+                .map(|reference| (property.name.clone(), reference))
         })
-        .collect::<Vec<_>>();
-    let omitted_property_count = properties
-        .len()
-        .saturating_sub(options.max_properties as usize) as u64;
+        .collect::<BTreeMap<_, _>>();
+    let (mut properties, preview_overflow) = if let Some(remote_preview) = remote_preview {
+        let properties = remote_preview
+            .properties
+            .iter()
+            .map(|property| {
+                let raw_preview = property.value.clone().or_else(|| {
+                    property
+                        .value_preview
+                        .as_ref()
+                        .and_then(|preview| preview.description.clone())
+                });
+                let (preview, truncated) = raw_preview.map_or((None, false), |preview| {
+                    let protocol_truncated = preview.contains('…');
+                    let (preview, length_truncated) =
+                        bounded_preview_text(&preview, options.max_preview_length);
+                    (Some(preview), protocol_truncated || length_truncated)
+                });
+                ValuePropertySnapshot {
+                    name: property.name.clone(),
+                    value: ValuePreviewSnapshot {
+                        kind: serialized_enum_name(&property.r#type)
+                            .unwrap_or_else(|| "unknown".to_owned()),
+                        preview,
+                        truncated,
+                        reference: property_references.get(&property.name).cloned(),
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        (properties, remote_preview.overflow)
+    } else {
+        (
+            properties
+                .into_iter()
+                .filter_map(|property| {
+                    property.value.map(|value| ValuePropertySnapshot {
+                        name: property.name,
+                        value: remote_value_snapshot(&value, options.max_preview_length),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            false,
+        )
+    };
+    let omitted_property_count = if preview_overflow {
+        0
+    } else {
+        properties
+            .len()
+            .saturating_sub(options.max_properties as usize) as u64
+    };
+    let properties_truncated =
+        preview_overflow || properties.len() > options.max_properties as usize;
     properties.truncate(options.max_properties as usize);
     Ok(ValueSnapshot {
         selector,
@@ -4280,8 +4333,17 @@ async fn inspect_value(
         preview,
         properties,
         omitted_property_count,
+        properties_truncated,
         promise,
     })
+}
+
+fn bounded_preview_text(value: &str, max_length: u32) -> (String, bool) {
+    let end = value
+        .char_indices()
+        .nth(max_length as usize)
+        .map_or(value.len(), |(index, _)| index);
+    (value[..end].to_owned(), end < value.len())
 }
 
 fn remote_object_kind(value: &RuntimeRemoteObject) -> String {

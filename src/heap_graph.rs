@@ -172,12 +172,14 @@ impl HeapGraph {
             max_bytes: MAX_RECONSTRUCTED_STRING_BYTES,
             active: HashSet::new(),
             truncated: false,
+            uncertain: false,
         };
         let mut value = String::new();
         state.append(node, 0, &mut value)?;
         Ok(Some(ReconstructedString {
             value,
             truncated: state.truncated,
+            exact_prefix: !state.uncertain,
         }))
     }
 
@@ -297,7 +299,12 @@ impl HeapGraph {
                         )
                         .ok()
                         .flatten()
-                        .is_some_and(|value| !value.truncated && matcher.matches(&value.value)),
+                        .is_some_and(|value| {
+                            (!value.truncated
+                                || (value.exact_prefix
+                                    && matches!(matcher, TextMatcher::Contains(_))))
+                                && matcher.matches(&value.value)
+                        }),
                     _ => false,
                 };
                 if !matches {
@@ -831,6 +838,7 @@ fn dominator_eval(
 pub struct ReconstructedString {
     pub value: String,
     pub truncated: bool,
+    pub exact_prefix: bool,
 }
 
 struct StringReconstruction<'a> {
@@ -839,6 +847,7 @@ struct StringReconstruction<'a> {
     max_bytes: usize,
     active: HashSet<NodeIndex>,
     truncated: bool,
+    uncertain: bool,
 }
 
 impl StringReconstruction<'_> {
@@ -857,6 +866,7 @@ impl StringReconstruction<'_> {
         }
         if depth >= MAX_STRING_RECONSTRUCTION_DEPTH || !self.active.insert(node) {
             self.truncated = true;
+            self.uncertain = true;
             return Ok(());
         }
         let result = self.append_inner(node, depth, output);
@@ -895,6 +905,7 @@ impl StringReconstruction<'_> {
                 for part in ["first", "second"] {
                     let Some(target) = self.graph.named_edge_target(node, part) else {
                         self.truncated = true;
+                        self.uncertain = true;
                         continue;
                     };
                     self.append(target, depth + 1, output)?;
@@ -903,6 +914,7 @@ impl StringReconstruction<'_> {
             "sliced string" => {
                 let Some(parent) = self.graph.named_edge_target(node, "parent") else {
                     self.truncated = true;
+                    self.uncertain = true;
                     return Ok(());
                 };
                 let mut parent_value = String::new();
@@ -938,11 +950,13 @@ impl StringReconstruction<'_> {
                     // Regular V8 snapshots omit the slice offset. The backing
                     // string is useful as an explicitly incomplete preview.
                     self.truncated = true;
+                    self.uncertain = true;
                     self.append_text(output, &parent_value);
                 }
             }
             _ => {
                 self.truncated = true;
+                self.uncertain = true;
             }
         }
         Ok(())
@@ -2428,6 +2442,7 @@ mod tests {
             Some(ReconstructedString {
                 value: "hello world".to_owned(),
                 truncated: false,
+                exact_prefix: true,
             })
         );
         assert_eq!(
@@ -2437,6 +2452,7 @@ mod tests {
             Some(ReconstructedString {
                 value: "hello w".to_owned(),
                 truncated: true,
+                exact_prefix: true,
             })
         );
         assert_eq!(
@@ -2459,6 +2475,7 @@ mod tests {
             Some(ReconstructedString {
                 value: "cdefg".to_owned(),
                 truncated: false,
+                exact_prefix: true,
             })
         );
 
@@ -2479,6 +2496,7 @@ mod tests {
             Some(ReconstructedString {
                 value: "backing".to_owned(),
                 truncated: true,
+                exact_prefix: false,
             })
         );
         assert_eq!(
@@ -2509,6 +2527,7 @@ mod tests {
             Some(ReconstructedString {
                 value: "tail".to_owned(),
                 truncated: true,
+                exact_prefix: false,
             })
         );
 

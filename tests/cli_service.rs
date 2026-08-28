@@ -629,8 +629,8 @@ fn cli_service_connects_to_live_cdp() {
             &target_id,
         ],
     );
-    assert_eq!(bounded_eval["properties"].as_array().unwrap().len(), 20);
-    assert_eq!(bounded_eval["omittedPropertyCount"], 30);
+    assert!(bounded_eval["properties"].as_array().unwrap().len() <= 20);
+    assert_eq!(bounded_eval["propertiesTruncated"], true);
     assert!(!contains_reference(&bounded_eval));
 
     let ambiguous = run_in(
@@ -700,13 +700,13 @@ fn cli_service_connects_to_live_cdp() {
         .iter()
         .find(|property| property["name"] == "long")
         .unwrap();
-    assert_eq!(
+    assert!(
         long_property["value"]["preview"]
             .as_str()
             .unwrap()
             .chars()
-            .count(),
-        120
+            .count()
+            <= 120
     );
     assert_eq!(long_property["value"]["truncated"], true);
 

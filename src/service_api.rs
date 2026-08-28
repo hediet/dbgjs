@@ -741,6 +741,8 @@ pub struct ValueSnapshot {
     pub properties: Vec<ValuePropertySnapshot>,
     #[serde(default)]
     pub omitted_property_count: u64,
+    #[serde(default)]
+    pub properties_truncated: bool,
     pub promise: Option<PromiseSnapshot>,
 }
 
@@ -1780,6 +1782,7 @@ mod tests {
                 value: preview("Object", "object:2"),
             }],
             omitted_property_count: 0,
+            properties_truncated: false,
             promise: Some(PromiseSnapshot {
                 reference: Some("promise:1".to_owned()),
                 origin: PromiseOrigin::Live,

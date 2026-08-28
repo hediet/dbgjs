@@ -2282,6 +2282,8 @@ impl HumanOutput for ValueSnapshot {
                 "  ... {} properties omitted; use --max-properties to expand",
                 self.omitted_property_count
             );
+        } else if self.properties_truncated {
+            println!("  ... additional properties omitted");
         }
     }
 }
@@ -3628,6 +3630,7 @@ mod tests {
             preview,
             properties: Vec::new(),
             omitted_property_count: 0,
+            properties_truncated: false,
             promise: None,
         };
 
