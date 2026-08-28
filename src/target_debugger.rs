@@ -5236,15 +5236,6 @@ fn target_breakpoint_assessment_status(
             mapping_count: u32::try_from(mapping_count).unwrap_or(u32::MAX),
         };
     }
-    if let Some(message) = assessments
-        .iter()
-        .find_map(|assessment| match &assessment.status {
-            BreakpointScriptAssessmentStatus::Failed { message } => Some(message.clone()),
-            _ => None,
-        })
-    {
-        return TargetBreakpointStatus::Failed { message };
-    }
     if assessments.is_empty()
         || assessments.iter().any(|assessment| {
             matches!(
@@ -5255,6 +5246,15 @@ fn target_breakpoint_assessment_status(
         })
     {
         return TargetBreakpointStatus::WaitingForScript;
+    }
+    if let Some(message) = assessments
+        .iter()
+        .find_map(|assessment| match &assessment.status {
+            BreakpointScriptAssessmentStatus::Failed { message } => Some(message.clone()),
+            _ => None,
+        })
+    {
+        return TargetBreakpointStatus::Failed { message };
     }
     let diagnostics = assessments
         .iter()
@@ -5461,22 +5461,31 @@ fn snapshot(
                         Some(BreakpointBinding::Failed { message }) => Some(message.clone()),
                         _ => None,
                     });
-            let desired_pending = desired.iter().any(|physical| {
+            let desired_installing = desired.iter().any(|physical| {
                 !matches!(
                     breakpoint.bindings.get(physical),
-                    Some(BreakpointBinding::Installed { .. })
+                    Some(BreakpointBinding::Installed { .. } | BreakpointBinding::Failed { .. })
                 )
             });
-            let status = if let Some(message) = desired_failure {
-                TargetBreakpointStatus::Failed { message }
-            } else if !desired.is_empty() && desired_pending {
+            let assessment_pending = assessments.iter().any(|assessment| {
+                matches!(
+                    assessment.status,
+                    BreakpointScriptAssessmentStatus::WaitingForScript
+                        | BreakpointScriptAssessmentStatus::Mapping { .. }
+                )
+            });
+            let status = if desired_installing {
                 TargetBreakpointStatus::Installing {
                     application_count: u32::try_from(desired.len()).unwrap_or(u32::MAX),
                 }
-            } else if !desired.is_empty() {
+            } else if desired_installed > 0 {
                 TargetBreakpointStatus::Installed {
                     binding_count: u32::try_from(desired_installed).unwrap_or(u32::MAX),
                 }
+            } else if assessment_pending {
+                target_breakpoint_assessment_status(&assessments)
+            } else if let Some(message) = desired_failure {
+                TargetBreakpointStatus::Failed { message }
             } else {
                 target_breakpoint_assessment_status(&assessments)
             };
@@ -5995,6 +6004,166 @@ mod tests {
         snapshot("context", "connection", "target", 1, &session, &state)
     }
 
+    #[derive(Clone, Copy)]
+    enum MixedCandidateState {
+        WaitingForScript,
+        Mapping,
+        Installing,
+        Installed,
+    }
+
+    fn mixed_failure_snapshot(candidate_state: MixedCandidateState) -> TargetDebuggerSnapshot {
+        let connected =
+            debugger_engine::reduce(&Arc::new(DebuggerState::default()), Input::Connected);
+        let attached = debugger_engine::reduce(
+            &connected.state,
+            Input::SessionAttached {
+                session_id: "session".into(),
+                target_id: "target".into(),
+                parent_session_id: None,
+                waiting_for_debugger: false,
+            },
+        );
+        let session = attached.state.sessions.keys().next().unwrap().clone();
+        let configured = debugger_engine::reduce(
+            &attached.state,
+            Input::SessionConfigured {
+                effect_id: attached.effects[0].effect_id(),
+            },
+        );
+        let mut state = (*configured.state).clone();
+        let failed_script = ScriptKey {
+            session: session.clone(),
+            script_id: "failed".into(),
+        };
+        let candidate_script = ScriptKey {
+            session: session.clone(),
+            script_id: "candidate".into(),
+        };
+        for script in [&failed_script, &candidate_script] {
+            Arc::make_mut(&mut state.scripts).insert(
+                script.clone(),
+                Arc::new(ScriptState {
+                    url: format!("{}.js", script.script_id),
+                    hash: format!("{}-hash", script.script_id),
+                    source_map_url: Some(format!("{}.js.map", script.script_id)),
+                    version: 1,
+                    source: ScriptSourceState::Unresolved,
+                }),
+            );
+        }
+        let failed_position = Position { line: 1, column: 1 };
+        let candidate_position = Position { line: 2, column: 2 };
+        let content = ContentStore::default().intern("source");
+        let candidate = |script: &ScriptKey| BreakpointSourceCandidate {
+            source_url: "app.ts".into(),
+            content: ContentCandidate {
+                content: content.clone(),
+                provenance: Provenance::Workspace {
+                    logical_url: format!("{}:app.ts", script.script_id),
+                },
+            },
+        };
+        let mapping = |position| {
+            Arc::new(vec![BreakpointMapping {
+                generated_position: position,
+                quality: "exact".into(),
+                generated_url: "bundle.js".into(),
+                projection: vec!["source map".into()],
+            }])
+        };
+        let (candidate_status, candidate_binding, pending_mapping) = match candidate_state {
+            MixedCandidateState::WaitingForScript => {
+                (BreakpointAssessmentStatus::WaitingForScript, None, None)
+            }
+            MixedCandidateState::Mapping => (
+                BreakpointAssessmentStatus::Mapping {
+                    effect_id: EffectId(12),
+                    candidate: candidate(&candidate_script),
+                },
+                None,
+                Some(EffectId(12)),
+            ),
+            MixedCandidateState::Installing => (
+                BreakpointAssessmentStatus::Applicable {
+                    candidate: candidate(&candidate_script),
+                    mappings: mapping(candidate_position),
+                },
+                Some(BreakpointBinding::PendingInstall(EffectId(13))),
+                None,
+            ),
+            MixedCandidateState::Installed => (
+                BreakpointAssessmentStatus::Applicable {
+                    candidate: candidate(&candidate_script),
+                    mappings: mapping(candidate_position),
+                },
+                Some(BreakpointBinding::Installed {
+                    backend_id: "backend-success".into(),
+                }),
+                None,
+            ),
+        };
+        let failed_physical = PhysicalBreakpointKey {
+            script: failed_script.clone(),
+            script_version: 1,
+            position: failed_position,
+            condition: None,
+        };
+        let candidate_physical = PhysicalBreakpointKey {
+            script: candidate_script.clone(),
+            script_version: 1,
+            position: candidate_position,
+            condition: None,
+        };
+        let mut bindings = BTreeMap::from([(
+            failed_physical,
+            BreakpointBinding::Failed {
+                message: "first script failed".into(),
+            },
+        )]);
+        if let Some(binding) = candidate_binding {
+            bindings.insert(candidate_physical, binding);
+        }
+        Arc::make_mut(&mut state.breakpoints).insert(
+            BreakpointKey {
+                client_id: "context".into(),
+                breakpoint_id: "mixed".into(),
+            },
+            Arc::new(BreakpointState {
+                generation: 1,
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+                pending_mappings: Arc::new(
+                    pending_mapping
+                        .map(|effect_id| BTreeMap::from([(candidate_script.clone(), effect_id)]))
+                        .unwrap_or_default(),
+                ),
+                assessments: Arc::new(BTreeMap::from([
+                    (
+                        failed_script.clone(),
+                        BreakpointAssessment {
+                            script_version: 1,
+                            status: BreakpointAssessmentStatus::Applicable {
+                                candidate: candidate(&failed_script),
+                                mappings: mapping(failed_position),
+                            },
+                        },
+                    ),
+                    (
+                        candidate_script,
+                        BreakpointAssessment {
+                            script_version: 1,
+                            status: candidate_status,
+                        },
+                    ),
+                ])),
+                bindings: Arc::new(bindings),
+            }),
+        );
+        snapshot("context", "connection", "target", 1, &session, &state)
+    }
+
     #[test]
     fn replacement_status_ignores_installed_fallback_while_desired_binding_is_pending() {
         let snapshot = replacement_snapshot(BreakpointBinding::PendingInstall(EffectId(99)));
@@ -6042,6 +6211,34 @@ mod tests {
         let installed = replacement_snapshot(BreakpointBinding::Installed {
             backend_id: "backend-new".into(),
         });
+        assert!(predicate_matches(&installed, &predicate));
+        assert!(breakpoint_wait_failure(&installed, &predicate).is_none());
+    }
+
+    #[test]
+    fn failed_candidate_does_not_end_wait_while_another_candidate_can_succeed() {
+        let predicate = TargetWaitPredicate::BreakpointInstalled {
+            breakpoint_id: "mixed".into(),
+        };
+        for candidate_state in [
+            MixedCandidateState::WaitingForScript,
+            MixedCandidateState::Mapping,
+            MixedCandidateState::Installing,
+        ] {
+            let snapshot = mixed_failure_snapshot(candidate_state);
+            assert!(!predicate_matches(&snapshot, &predicate));
+            assert!(
+                breakpoint_wait_failure(&snapshot, &predicate).is_none(),
+                "pending or viable candidate must keep the waiter alive: {:?}",
+                snapshot.breakpoints[0].status
+            );
+        }
+
+        let installed = mixed_failure_snapshot(MixedCandidateState::Installed);
+        assert!(matches!(
+            installed.breakpoints[0].status,
+            TargetBreakpointStatus::Installed { binding_count: 1 }
+        ));
         assert!(predicate_matches(&installed, &predicate));
         assert!(breakpoint_wait_failure(&installed, &predicate).is_none());
     }
