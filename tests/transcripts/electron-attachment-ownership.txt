@@ -5,3 +5,6 @@ force-lifecycle: detach=1 attach=1
 released: attached=false
 race: created=1 ownership-conflicts=1
 reattach-after-release: created
+initialization: failed
+initialization-cleanup: attached=false
+retry-after-initialization-failure: created

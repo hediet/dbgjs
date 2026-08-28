@@ -8,6 +8,7 @@ class FakeDebugger extends EventEmitter {
 		this.attached = true;
 		this.attachCount = 0;
 		this.detachCount = 0;
+		this.failNextCommand = undefined;
 	}
 
 	isAttached() {
@@ -31,7 +32,11 @@ class FakeDebugger extends EventEmitter {
 		this.emit("detach", {}, "detached");
 	}
 
-	async sendCommand() {
+	async sendCommand(method) {
+		if (method === this.failNextCommand) {
+			this.failNextCommand = undefined;
+			throw new Error(`deterministic ${method} initialization failure`);
+		}
 		return {};
 	}
 }
@@ -113,6 +118,27 @@ const closeRenderer = ({ socket }) => new Promise((resolve, reject) => {
 	socket.write(`${JSON.stringify({ kind: "close" })}\n`);
 });
 
+const sendCommand = ({ socket }, id, method) => new Promise((resolve, reject) => {
+	let buffer = "";
+	socket.removeAllListeners("data");
+	socket.on("error", reject);
+	socket.on("data", (chunk) => {
+		buffer += chunk;
+		const newline = buffer.indexOf("\n");
+		if (newline < 0) {
+			return;
+		}
+		const frame = JSON.parse(buffer.slice(0, newline));
+		if (frame.kind === "cdp" && frame.envelope?.id === id) {
+			resolve(frame.envelope);
+		}
+	});
+	socket.write(`${JSON.stringify({
+		kind: "cdp",
+		envelope: { id, method, params: {} },
+	})}\n`);
+});
+
 const control = await connect("control");
 const normal = await connect("renderer");
 console.log(`normal: ${normal.frame.ready ? "created" : "ownership-conflict"}`);
@@ -133,6 +159,16 @@ await closeRenderer(created[0]);
 const reattached = await connect("renderer");
 console.log(`reattach-after-release: ${reattached.frame.ready ? "created" : "failed"}`);
 await closeRenderer(reattached);
+
+fakeDebugger.failNextCommand = "Debugger.enable";
+const failedInitialization = await connect("renderer");
+const failedResponse = await sendCommand(failedInitialization, 1, "Debugger.enable");
+console.log(`initialization: ${failedResponse.error ? "failed" : "unexpected-success"}`);
+await closeRenderer(failedInitialization);
+console.log(`initialization-cleanup: attached=${fakeDebugger.isAttached()}`);
+const retry = await connect("renderer");
+console.log(`retry-after-initialization-failure: ${retry.frame.ready ? "created" : "failed"}`);
+await closeRenderer(retry);
 
 control.socket.write(`${JSON.stringify({ kind: "dispose" })}\n`);
 await new Promise((resolve) => control.socket.once("close", resolve));

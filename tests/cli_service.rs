@@ -12,7 +12,7 @@ use cdp_client::local_rpc::{
 };
 
 #[test]
-fn electron_bridge_enforces_strict_ownership_and_force_stealing() {
+fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() {
     let output = Command::new("node")
         .arg(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))

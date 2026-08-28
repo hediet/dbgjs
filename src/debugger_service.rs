@@ -2455,43 +2455,46 @@ impl DebuggerServiceApi for DebuggerService {
             (runtime, generation, waiting_for_debugger, source_model)
         };
 
-        let (session, session_key) = if runtime.is_direct_debugger() {
-            let runtime_target_id = if target_id == synthetic_node_target_id(&connection_id) {
-                "$node-root"
+        let direct_runtime_target_id = runtime.is_direct_debugger().then(|| {
+            if target_id == synthetic_node_target_id(&connection_id) {
+                "$node-root".to_owned()
             } else {
-                &target_id
-            };
-            let attachment = runtime
-                .take_direct_debugger_session(runtime_target_id, options.force)
-                .await
-                .map_err(|error| direct_attachment_error(error.to_string(), options.force))?
-                .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
-            if attachment.stole_external_owner {
-                outcome = TargetAttachmentOutcome::Stolen;
+                target_id.clone()
             }
-            let key = attachment.session.key().clone();
-            (attachment.session, key)
-        } else {
-            let mut attach = TargetAttachToTargetParams::new(target_id.clone());
-            attach.flatten = Some(true);
-            let attached = runtime
-                .root()
-                .target_attach_to_target(attach)
-                .await
-                .map_err(|error| cdp_rpc_error("Target.attachToTarget", error))?;
-            let session_key = SessionKey {
-                connection_generation: generation,
-                session_id: attached.session_id.clone(),
-            };
-            let session = match runtime.open_session(session_key.clone()) {
-                Ok(session) => session,
-                Err(error) => {
-                    detach_session(&runtime, &session_key.session_id).await;
-                    return Err(internal_error(error.to_string()));
+        });
+        let (session, session_key) =
+            if let Some(runtime_target_id) = direct_runtime_target_id.as_deref() {
+                let attachment = runtime
+                    .take_direct_debugger_session(runtime_target_id, options.force)
+                    .await
+                    .map_err(|error| direct_attachment_error(error.to_string(), options.force))?
+                    .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
+                if attachment.stole_external_owner {
+                    outcome = TargetAttachmentOutcome::Stolen;
                 }
+                let key = attachment.session.key().clone();
+                (attachment.session, key)
+            } else {
+                let mut attach = TargetAttachToTargetParams::new(target_id.clone());
+                attach.flatten = Some(true);
+                let attached = runtime
+                    .root()
+                    .target_attach_to_target(attach)
+                    .await
+                    .map_err(|error| cdp_rpc_error("Target.attachToTarget", error))?;
+                let session_key = SessionKey {
+                    connection_generation: generation,
+                    session_id: attached.session_id.clone(),
+                };
+                let session = match runtime.open_session(session_key.clone()) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        detach_session(&runtime, &session_key.session_id).await;
+                        return Err(internal_error(error.to_string()));
+                    }
+                };
+                (session, session_key)
             };
-            (session, session_key)
-        };
         let debugger = match TargetDebuggerHandle::start(
             context_id.clone(),
             connection_id.clone(),
@@ -2506,7 +2509,12 @@ impl DebuggerServiceApi for DebuggerService {
         {
             Ok(debugger) => debugger,
             Err(error) => {
-                detach_session(&runtime, &session_key.session_id).await;
+                discard_attached_session(
+                    &runtime,
+                    direct_runtime_target_id.as_deref(),
+                    &session_key.session_id,
+                )
+                .await;
                 return Err(target_debugger_rpc_error(error));
             }
         };
@@ -2523,7 +2531,12 @@ impl DebuggerServiceApi for DebuggerService {
             .is_some_and(|connection| connection.generation == generation);
         if !runtime_is_current || !generation_is_current {
             drop(state);
-            detach_session(&runtime, &session_key.session_id).await;
+            discard_attached_session(
+                &runtime,
+                direct_runtime_target_id.as_deref(),
+                &session_key.session_id,
+            )
+            .await;
             return Err(invalid_state(
                 "connection changed while the target was being attached",
             ));
@@ -2531,7 +2544,12 @@ impl DebuggerServiceApi for DebuggerService {
         if let Some(existing) = state.target_debuggers.get(&debugger_key) {
             let owner = existing.snapshot();
             drop(state);
-            detach_session(&runtime, &session_key.session_id).await;
+            discard_attached_session(
+                &runtime,
+                direct_runtime_target_id.as_deref(),
+                &session_key.session_id,
+            )
+            .await;
             return Err(ownership_conflict(&(
                 owner.context_id,
                 owner.connection_id,
@@ -2581,7 +2599,12 @@ impl DebuggerServiceApi for DebuggerService {
                     state.target_debuggers.remove(&debugger_key);
                 }
                 drop(state);
-                detach_session(&runtime, &session_key.session_id).await;
+                discard_attached_session(
+                    &runtime,
+                    direct_runtime_target_id.as_deref(),
+                    &session_key.session_id,
+                )
+                .await;
                 return Err(target_debugger_rpc_error(error));
             }
         }
@@ -3896,6 +3919,18 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
     let mut detach = TargetDetachFromTargetParams::new();
     detach.session_id = Some(session_id.to_owned());
     let _ = runtime.root().target_detach_from_target(detach).await;
+}
+
+async fn discard_attached_session(
+    runtime: &ConnectionRuntime,
+    direct_target_id: Option<&str>,
+    session_id: &str,
+) {
+    if let Some(target_id) = direct_target_id {
+        runtime.close_direct_debugger(target_id).await;
+    } else {
+        detach_session(runtime, session_id).await;
+    }
 }
 
 fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> String {
