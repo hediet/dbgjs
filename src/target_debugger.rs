@@ -5972,6 +5972,7 @@ mod tests {
                 position: Position::ZERO,
                 condition: None,
                 friendly_candidate_selected: false,
+                candidate_index: Arc::new(Default::default()),
                 pending_mappings: Arc::new(BTreeMap::new()),
                 assessments: Arc::new(
                     BTreeMap::from([(
@@ -6139,6 +6140,7 @@ mod tests {
                 position: Position::ZERO,
                 condition: None,
                 friendly_candidate_selected: false,
+                candidate_index: Arc::new(Default::default()),
                 pending_mappings: Arc::new(
                     pending_mapping
                         .map(|effect_id| BTreeMap::from([(candidate_script.clone(), effect_id)]))

@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use im::OrdMap;
+use im::{OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
 
+use crate::content_store::ContentHash;
 use crate::source_view::{ContentCandidate, Position};
 
 const MAX_DIAGNOSTICS: usize = 1024;
@@ -171,6 +172,184 @@ pub struct BreakpointAssessment {
     pub status: BreakpointAssessmentStatus,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct BreakpointCandidateKey {
+    source_url: String,
+    content: ContentHash,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IndexedBreakpointCandidate {
+    candidate: BreakpointSourceCandidate,
+    representative_script: ScriptKey,
+    scripts: OrdSet<ScriptKey>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BreakpointCandidateBucket {
+    keys: OrdSet<BreakpointCandidateKey>,
+    bounded: OrdMap<BreakpointCandidateKey, IndexedBreakpointCandidate>,
+    matching_scripts: OrdSet<ScriptKey>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BreakpointCandidateIndex {
+    exact: BreakpointCandidateBucket,
+    friendly: BreakpointCandidateBucket,
+    unresolved: OrdSet<ScriptKey>,
+}
+
+impl BreakpointCandidateBucket {
+    fn insert(&mut self, script: &ScriptKey, candidate: BreakpointSourceCandidate) {
+        let key = BreakpointCandidateKey {
+            source_url: candidate.source_url.clone(),
+            content: candidate.content.content,
+        };
+        self.matching_scripts.insert(script.clone());
+        if self.keys.contains(&key) {
+            if let Some(indexed) = self.bounded.get_mut(&key) {
+                indexed.scripts.insert(script.clone());
+                if script < &indexed.representative_script {
+                    indexed.representative_script = script.clone();
+                    indexed.candidate = candidate;
+                }
+            }
+            return;
+        }
+        self.keys.insert(key.clone());
+        let indexed = IndexedBreakpointCandidate {
+            candidate,
+            representative_script: script.clone(),
+            scripts: OrdSet::unit(script.clone()),
+        };
+        if self.bounded.len() < MAX_BREAKPOINT_CANDIDATES {
+            self.bounded.insert(key, indexed);
+            return;
+        }
+        let Some(largest) = self.bounded.keys().next_back().cloned() else {
+            return;
+        };
+        if key < largest {
+            self.bounded.remove(&largest);
+            self.bounded.insert(key, indexed);
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum BreakpointCandidateSelection {
+    None,
+    Waiting {
+        scripts: BTreeSet<ScriptKey>,
+    },
+    Unique {
+        candidate: BreakpointSourceCandidate,
+        scripts: BTreeSet<ScriptKey>,
+        friendly: bool,
+    },
+    Ambiguous {
+        candidates: Arc<Vec<BreakpointSourceCandidate>>,
+        omitted_candidate_count: usize,
+        scripts: BTreeSet<ScriptKey>,
+    },
+}
+
+impl BreakpointCandidateSelection {
+    fn special_scripts(&self) -> BTreeSet<ScriptKey> {
+        match self {
+            Self::None => BTreeSet::new(),
+            Self::Waiting { scripts }
+            | Self::Unique { scripts, .. }
+            | Self::Ambiguous { scripts, .. } => scripts.clone(),
+        }
+    }
+
+    fn friendly_candidate_selected(&self) -> bool {
+        matches!(self, Self::Unique { friendly: true, .. })
+    }
+
+    fn same_status_payload(&self, next: &Self) -> bool {
+        match (self, next) {
+            (Self::None, Self::None) | (Self::Waiting { .. }, Self::Waiting { .. }) => true,
+            (
+                Self::Unique {
+                    candidate: left,
+                    friendly: left_friendly,
+                    ..
+                },
+                Self::Unique {
+                    candidate: right,
+                    friendly: right_friendly,
+                    ..
+                },
+            ) => left == right && left_friendly == right_friendly,
+            (
+                Self::Ambiguous {
+                    candidates: left,
+                    omitted_candidate_count: left_omitted,
+                    ..
+                },
+                Self::Ambiguous {
+                    candidates: right,
+                    omitted_candidate_count: right_omitted,
+                    ..
+                },
+            ) => left == right && left_omitted == right_omitted,
+            _ => false,
+        }
+    }
+
+    fn changed_scripts(&self, next: &Self, completed: &ScriptKey) -> BTreeSet<ScriptKey> {
+        let same_status_payload = self.same_status_payload(next);
+        let previous = self.special_scripts();
+        let next = next.special_scripts();
+        let mut changed: BTreeSet<ScriptKey> = if same_status_payload {
+            previous.symmetric_difference(&next).cloned().collect()
+        } else {
+            previous.union(&next).cloned().collect()
+        };
+        changed.insert(completed.clone());
+        changed
+    }
+}
+
+impl BreakpointCandidateIndex {
+    fn selection(&self) -> BreakpointCandidateSelection {
+        let (bucket, friendly) = if self.exact.keys.is_empty() {
+            (&self.friendly, true)
+        } else {
+            (&self.exact, false)
+        };
+        if bucket.keys.len() > 1 {
+            return BreakpointCandidateSelection::Ambiguous {
+                candidates: Arc::new(
+                    bucket
+                        .bounded
+                        .values()
+                        .map(|candidate| candidate.candidate.clone())
+                        .collect(),
+                ),
+                omitted_candidate_count: bucket.keys.len().saturating_sub(bucket.bounded.len()),
+                scripts: bucket.matching_scripts.iter().cloned().collect(),
+            };
+        }
+        let Some(indexed) = bucket.bounded.values().next() else {
+            return BreakpointCandidateSelection::None;
+        };
+        if friendly && !self.unresolved.is_empty() {
+            let mut scripts = indexed.scripts.iter().cloned().collect::<BTreeSet<_>>();
+            scripts.extend(self.unresolved.iter().cloned());
+            BreakpointCandidateSelection::Waiting { scripts }
+        } else {
+            BreakpointCandidateSelection::Unique {
+                candidate: indexed.candidate.clone(),
+                scripts: indexed.scripts.iter().cloned().collect(),
+                friendly,
+            }
+        }
+    }
+}
+
 impl Clone for BreakpointAssessment {
     fn clone(&self) -> Self {
         #[cfg(test)]
@@ -188,6 +367,8 @@ thread_local! {
         const { std::cell::Cell::new(0) };
     static BREAKPOINT_RECONCILIATION_SCRIPT_VISITS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    static BREAKPOINT_INCREMENTAL_SCRIPT_VISITS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,6 +378,7 @@ pub struct BreakpointState {
     pub position: Position,
     pub condition: Option<String>,
     pub friendly_candidate_selected: bool,
+    pub candidate_index: Arc<BreakpointCandidateIndex>,
     pub pending_mappings: Arc<BTreeMap<ScriptKey, EffectId>>,
     pub assessments: Arc<OrdMap<ScriptKey, BreakpointAssessment>>,
     pub bindings: Arc<BTreeMap<PhysicalBreakpointKey, BreakpointBinding>>,
@@ -244,7 +426,7 @@ pub struct DebuggerState {
     pub connection_generation: u64,
     pub next_effect_id: u64,
     pub sessions: Arc<BTreeMap<SessionKey, Arc<SessionState>>>,
-    pub scripts: Arc<BTreeMap<ScriptKey, Arc<ScriptState>>>,
+    pub scripts: Arc<OrdMap<ScriptKey, Arc<ScriptState>>>,
     pub breakpoints: Arc<BTreeMap<BreakpointKey, Arc<BreakpointState>>>,
     pub physical_breakpoints: Arc<BTreeMap<PhysicalBreakpointKey, Arc<PhysicalBreakpointState>>>,
     pending: Arc<BTreeMap<EffectId, PendingEffect>>,
@@ -258,7 +440,7 @@ impl Default for DebuggerState {
             connection_generation: 0,
             next_effect_id: 1,
             sessions: Arc::new(BTreeMap::new()),
-            scripts: Arc::new(BTreeMap::new()),
+            scripts: Arc::new(OrdMap::new()),
             breakpoints: Arc::new(BTreeMap::new()),
             physical_breakpoints: Arc::new(BTreeMap::new()),
             pending: Arc::new(BTreeMap::new()),
@@ -560,13 +742,14 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
         Input::Connected => {
             state.connection_generation += 1;
             state.sessions = Arc::new(BTreeMap::new());
-            state.scripts = Arc::new(BTreeMap::new());
+            state.scripts = Arc::new(OrdMap::new());
             state.physical_breakpoints = Arc::new(BTreeMap::new());
             state.pending = Arc::new(BTreeMap::new());
             let mut breakpoints = (*state.breakpoints).clone();
             for breakpoint in breakpoints.values_mut() {
                 let breakpoint = Arc::make_mut(breakpoint);
                 breakpoint.friendly_candidate_selected = false;
+                breakpoint.candidate_index = Arc::new(BreakpointCandidateIndex::default());
                 breakpoint.pending_mappings = Arc::new(BTreeMap::new());
                 breakpoint.assessments = Arc::new(OrdMap::new());
                 breakpoint.bindings = Arc::new(BTreeMap::new());
@@ -704,6 +887,15 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                         status,
                     );
                     if may_expose {
+                        Arc::make_mut(
+                            &mut Arc::make_mut(&mut state.breakpoints)
+                                .get_mut(&breakpoint)
+                                .map(Arc::make_mut)
+                                .unwrap()
+                                .candidate_index,
+                        )
+                        .unresolved
+                        .insert(key.clone());
                         schedule_source_hydration(&mut state, &key, false, &mut effects);
                     } else if !state.breakpoints[&breakpoint].bindings.is_empty() {
                         reconcile_physical_bindings(&mut state, &breakpoint, &mut effects);
@@ -804,10 +996,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 view_id: effect_id,
                 logical_sources: Arc::new(logical_sources),
             });
-            let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
-            for breakpoint in breakpoint_keys {
-                reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
-            }
+            reconcile_built_script(&mut state, &script, &mut effects);
             schedule_frame_mappings_for_script(&mut state, &script, &mut effects);
         }
         Input::SetBreakpoint {
@@ -830,6 +1019,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     position,
                     condition,
                     friendly_candidate_selected: false,
+                    candidate_index: Arc::new(BreakpointCandidateIndex::default()),
                     pending_mappings: Arc::new(BTreeMap::new()),
                     assessments: Arc::new(OrdMap::new()),
                     bindings: Arc::new(BTreeMap::new()),
@@ -1337,150 +1527,190 @@ fn reconcile_breakpoint(
         .iter()
         .map(|(key, script)| (key.clone(), script.clone()))
         .collect::<Vec<_>>();
-    let mut exact_by_script = BTreeMap::<ScriptKey, Vec<BreakpointSourceCandidate>>::new();
-    let mut friendly_by_script = BTreeMap::<ScriptKey, Vec<BreakpointSourceCandidate>>::new();
+    let mut candidate_index = BreakpointCandidateIndex::default();
     let mut hydrate = Vec::new();
 
     for (script_key, script) in &scripts {
         #[cfg(test)]
         BREAKPOINT_RECONCILIATION_SCRIPT_VISITS.with(|count| count.set(count.get() + 1));
-        match &script.source {
-            ScriptSourceState::Resolved(view) => {
-                for (source_url, content) in view.logical_sources.iter() {
-                    let candidate = BreakpointSourceCandidate {
-                        source_url: source_url.clone(),
-                        content: content.clone(),
-                    };
-                    if source_urls_match(source_url, &breakpoint_state.source_url) {
-                        exact_by_script
-                            .entry(script_key.clone())
-                            .or_default()
-                            .push(candidate);
-                    } else if friendly_source_matches(source_url, &breakpoint_state.source_url) {
-                        friendly_by_script
-                            .entry(script_key.clone())
-                            .or_default()
-                            .push(candidate);
-                    }
-                }
-            }
-            ScriptSourceState::Unresolved => {
-                if script_may_expose_breakpoint(state, script_key, breakpoint) {
-                    hydrate.push(script_key.clone());
-                }
-            }
-            ScriptSourceState::Failed(_)
-            | ScriptSourceState::Pending(_)
-            | ScriptSourceState::Loaded { .. } => {}
+        index_breakpoint_script(
+            &mut candidate_index,
+            &breakpoint_state.source_url,
+            script_key,
+            script,
+        );
+        if matches!(script.source, ScriptSourceState::Unresolved)
+            && script_may_expose_source(script, &breakpoint_state.source_url)
+        {
+            hydrate.push(script_key.clone());
         }
     }
 
-    let uses_exact_match = !exact_by_script.is_empty();
-    let matching_by_script = if uses_exact_match {
-        &exact_by_script
-    } else {
-        &friendly_by_script
-    };
-    let candidates = deduplicate_candidates(matching_by_script.values().flatten().cloned());
-    let unresolved_candidate_scripts = scripts.iter().any(|(script_key, script)| {
-        matches!(
-            script.source,
-            ScriptSourceState::Unresolved
-                | ScriptSourceState::Pending(_)
-                | ScriptSourceState::Loaded { .. }
-        ) && script_may_expose_breakpoint(state, script_key, breakpoint)
-    });
-    let friendly_candidate_selected =
-        candidates.len() == 1 && !uses_exact_match && !unresolved_candidate_scripts;
-
-    if candidates.len() > 1 {
-        let omitted_candidate_count = candidates.len().saturating_sub(MAX_BREAKPOINT_CANDIDATES);
-        let candidates = Arc::new(
-            candidates
-                .into_iter()
-                .take(MAX_BREAKPOINT_CANDIDATES)
-                .collect::<Vec<_>>(),
-        );
-        for (script_key, script) in &scripts {
-            let status = if matching_by_script.contains_key(script_key) {
-                BreakpointAssessmentStatus::AmbiguousSource {
-                    candidates: candidates.clone(),
-                    omitted_candidate_count,
-                }
-            } else {
-                assessment_without_candidate(script, &breakpoint_state.source_url)
-            };
-            replace_breakpoint_assessment(
-                state,
-                breakpoint,
-                script_key.clone(),
-                script.version,
-                status,
-            );
-        }
-    } else if let Some(candidate) = candidates.into_iter().next() {
-        if !uses_exact_match && unresolved_candidate_scripts {
-            for (script_key, script) in &scripts {
-                let status = if matching_by_script.contains_key(script_key)
-                    || script_may_expose_breakpoint(state, script_key, breakpoint)
-                {
-                    BreakpointAssessmentStatus::WaitingForScript
-                } else {
-                    assessment_without_candidate(script, &breakpoint_state.source_url)
-                };
-                replace_breakpoint_assessment(
-                    state,
-                    breakpoint,
-                    script_key.clone(),
-                    script.version,
-                    status,
-                );
-            }
-        } else {
-            for (script_key, script) in &scripts {
-                let selected = matching_by_script
-                    .get(script_key)
-                    .and_then(|items| {
-                        items.iter().find(|item| {
-                            item.source_url == candidate.source_url
-                                && item.content.content == candidate.content.content
-                        })
-                    })
-                    .cloned();
-                if let Some(selected) = selected {
-                    ensure_mapping(state, breakpoint, script_key, selected, effects);
-                } else {
-                    replace_breakpoint_assessment(
-                        state,
-                        breakpoint,
-                        script_key.clone(),
-                        script.version,
-                        assessment_without_candidate(script, &breakpoint_state.source_url),
-                    );
-                }
-            }
-        }
-    } else {
-        for (script_key, script) in &scripts {
-            replace_breakpoint_assessment(
-                state,
-                breakpoint,
-                script_key.clone(),
-                script.version,
-                assessment_without_candidate(script, &breakpoint_state.source_url),
-            );
-        }
+    let selection = candidate_index.selection();
+    {
+        let breakpoint = Arc::make_mut(&mut state.breakpoints)
+            .get_mut(breakpoint)
+            .map(Arc::make_mut)
+            .unwrap();
+        breakpoint.friendly_candidate_selected = selection.friendly_candidate_selected();
+        breakpoint.candidate_index = Arc::new(candidate_index);
+    }
+    for (script_key, _) in &scripts {
+        apply_breakpoint_selection_to_script(state, breakpoint, script_key, &selection, effects);
     }
 
     for script in hydrate {
         schedule_source_hydration(state, &script, true, effects);
     }
-    Arc::make_mut(&mut state.breakpoints)
-        .get_mut(breakpoint)
-        .map(Arc::make_mut)
-        .unwrap()
-        .friendly_candidate_selected = friendly_candidate_selected;
     reconcile_physical_bindings(state, breakpoint, effects);
+}
+
+fn reconcile_built_script(
+    state: &mut DebuggerState,
+    script: &ScriptKey,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(script_state) = state.scripts.get(script).cloned() else {
+        return;
+    };
+    let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+    for breakpoint_key in breakpoint_keys {
+        let breakpoint_state = state.breakpoints[&breakpoint_key].clone();
+        let previous_selection = breakpoint_state.candidate_index.selection();
+        let mut candidate_index = (*breakpoint_state.candidate_index).clone();
+        let completed_was_unresolved = candidate_index.unresolved.contains(script);
+        candidate_index.unresolved.remove(script);
+        index_breakpoint_script(
+            &mut candidate_index,
+            &breakpoint_state.source_url,
+            script,
+            &script_state,
+        );
+        let selection = candidate_index.selection();
+        let selection_payload_changed = !previous_selection.same_status_payload(&selection);
+        let affected = previous_selection.changed_scripts(&selection, script);
+        let unresolved_remain = !candidate_index.unresolved.is_empty();
+        {
+            let breakpoint = Arc::make_mut(&mut state.breakpoints)
+                .get_mut(&breakpoint_key)
+                .map(Arc::make_mut)
+                .unwrap();
+            breakpoint.friendly_candidate_selected = selection.friendly_candidate_selected();
+            breakpoint.candidate_index = Arc::new(candidate_index);
+        }
+        for affected_script in affected {
+            #[cfg(test)]
+            BREAKPOINT_INCREMENTAL_SCRIPT_VISITS.with(|count| count.set(count.get() + 1));
+            apply_breakpoint_selection_to_script(
+                state,
+                &breakpoint_key,
+                &affected_script,
+                &selection,
+                effects,
+            );
+        }
+        let breakpoint_state = &state.breakpoints[&breakpoint_key];
+        let final_pending_assessment_completed = completed_was_unresolved
+            && !unresolved_remain
+            && breakpoint_state.pending_mappings.is_empty();
+        if !breakpoint_state.bindings.is_empty()
+            && (selection_payload_changed || final_pending_assessment_completed)
+        {
+            reconcile_physical_bindings(state, &breakpoint_key, effects);
+        }
+    }
+}
+
+fn index_breakpoint_script(
+    index: &mut BreakpointCandidateIndex,
+    requested_source: &str,
+    script_key: &ScriptKey,
+    script: &ScriptState,
+) {
+    match &script.source {
+        ScriptSourceState::Resolved(view) => {
+            for (source_url, content) in view.logical_sources.iter() {
+                let candidate = BreakpointSourceCandidate {
+                    source_url: source_url.clone(),
+                    content: content.clone(),
+                };
+                if source_urls_match(source_url, requested_source) {
+                    index.exact.insert(script_key, candidate);
+                } else if friendly_source_matches(source_url, requested_source) {
+                    index.friendly.insert(script_key, candidate);
+                }
+            }
+        }
+        ScriptSourceState::Unresolved
+        | ScriptSourceState::Pending(_)
+        | ScriptSourceState::Loaded { .. }
+            if script_may_expose_source(script, requested_source) =>
+        {
+            index.unresolved.insert(script_key.clone());
+        }
+        ScriptSourceState::Unresolved
+        | ScriptSourceState::Pending(_)
+        | ScriptSourceState::Loaded { .. }
+        | ScriptSourceState::Failed(_) => {}
+    }
+}
+
+fn apply_breakpoint_selection_to_script(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    script: &ScriptKey,
+    selection: &BreakpointCandidateSelection,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(script_state) = state.scripts.get(script).cloned() else {
+        cancel_breakpoint_mapping(state, breakpoint, script);
+        return;
+    };
+    match selection {
+        BreakpointCandidateSelection::Waiting { scripts } if scripts.contains(script) => {
+            replace_breakpoint_assessment(
+                state,
+                breakpoint,
+                script.clone(),
+                script_state.version,
+                BreakpointAssessmentStatus::WaitingForScript,
+            );
+        }
+        BreakpointCandidateSelection::Unique {
+            candidate, scripts, ..
+        } if scripts.contains(script) => {
+            ensure_mapping(state, breakpoint, script, candidate.clone(), effects);
+        }
+        BreakpointCandidateSelection::Ambiguous {
+            candidates,
+            omitted_candidate_count,
+            scripts,
+        } if scripts.contains(script) => {
+            replace_breakpoint_assessment(
+                state,
+                breakpoint,
+                script.clone(),
+                script_state.version,
+                BreakpointAssessmentStatus::AmbiguousSource {
+                    candidates: candidates.clone(),
+                    omitted_candidate_count: *omitted_candidate_count,
+                },
+            );
+        }
+        BreakpointCandidateSelection::None
+        | BreakpointCandidateSelection::Waiting { .. }
+        | BreakpointCandidateSelection::Unique { .. }
+        | BreakpointCandidateSelection::Ambiguous { .. } => {
+            let requested_source = state.breakpoints[breakpoint].source_url.clone();
+            replace_breakpoint_assessment(
+                state,
+                breakpoint,
+                script.clone(),
+                script_state.version,
+                assessment_without_candidate(&script_state, &requested_source),
+            );
+        }
+    }
 }
 
 fn parsed_script_requires_full_reconciliation(
@@ -1619,26 +1849,6 @@ fn cancel_breakpoint_mapping(
     Arc::make_mut(&mut breakpoint.pending_mappings).remove(script);
 }
 
-fn deduplicate_candidates(
-    candidates: impl Iterator<Item = BreakpointSourceCandidate>,
-) -> Vec<BreakpointSourceCandidate> {
-    let mut result = Vec::new();
-    for candidate in candidates {
-        if !result.iter().any(|existing: &BreakpointSourceCandidate| {
-            existing.source_url == candidate.source_url
-                && existing.content.content == candidate.content.content
-        }) {
-            result.push(candidate);
-        }
-    }
-    result.sort_by(|left, right| {
-        left.source_url.cmp(&right.source_url).then_with(|| {
-            format!("{:?}", left.content.content).cmp(&format!("{:?}", right.content.content))
-        })
-    });
-    result
-}
-
 fn schedule_source_hydration(
     state: &mut DebuggerState,
     script: &ScriptKey,
@@ -1691,7 +1901,11 @@ fn script_may_expose_breakpoint(
     let Some(breakpoint) = state.breakpoints.get(breakpoint) else {
         return false;
     };
-    source_urls_match(&script.url, &breakpoint.source_url) || script.source_map_url.is_some()
+    script_may_expose_source(script, &breakpoint.source_url)
+}
+
+fn script_may_expose_source(script: &ScriptState, source_url: &str) -> bool {
+    source_urls_match(&script.url, source_url) || script.source_map_url.is_some()
 }
 
 fn script_has_frame_demand(state: &DebuggerState, script: &ScriptKey) -> bool {
@@ -2454,7 +2668,10 @@ fn detach_session(state: &mut DebuggerState, session: &SessionKey) {
         .filter(|script| &script.session == session)
         .cloned()
         .collect();
-    Arc::make_mut(&mut state.scripts).retain(|script, _| !scripts_to_remove.contains(script));
+    let scripts = Arc::make_mut(&mut state.scripts);
+    for script in &scripts_to_remove {
+        scripts.remove(script);
+    }
     Arc::make_mut(&mut state.physical_breakpoints)
         .retain(|physical, _| !scripts_to_remove.contains(&physical.script));
     let breakpoints = Arc::make_mut(&mut state.breakpoints);
@@ -2484,6 +2701,21 @@ fn detach_session(state: &mut DebuggerState, session: &SessionKey) {
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
         );
+    }
+    let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+    for breakpoint_key in breakpoint_keys {
+        let source_url = state.breakpoints[&breakpoint_key].source_url.clone();
+        let mut candidate_index = BreakpointCandidateIndex::default();
+        for (script_key, script) in state.scripts.iter() {
+            index_breakpoint_script(&mut candidate_index, &source_url, script_key, script);
+        }
+        let selection = candidate_index.selection();
+        let breakpoint = Arc::make_mut(&mut state.breakpoints)
+            .get_mut(&breakpoint_key)
+            .map(Arc::make_mut)
+            .unwrap();
+        breakpoint.friendly_candidate_selected = selection.friendly_candidate_selected();
+        breakpoint.candidate_index = Arc::new(candidate_index);
     }
     let before = state.pending.len();
     Arc::make_mut(&mut state.pending).retain(|_, effect| !effect.belongs_to_session(session));
@@ -4497,6 +4729,7 @@ mod tests {
                     position: Position::ZERO,
                     condition: None,
                     friendly_candidate_selected: false,
+                    candidate_index: Arc::new(BreakpointCandidateIndex::default()),
                     pending_mappings: Arc::new(BTreeMap::new()),
                     assessments: Arc::new(
                         BTreeMap::from([(
@@ -4585,6 +4818,7 @@ mod tests {
                         position: Position::ZERO,
                         condition: None,
                         friendly_candidate_selected: false,
+                        candidate_index: Arc::new(BreakpointCandidateIndex::default()),
                         pending_mappings: Arc::new(BTreeMap::new()),
                         assessments: Arc::new(OrdMap::new()),
                         bindings: Arc::new(BTreeMap::new()),
@@ -4645,6 +4879,196 @@ mod tests {
         assert!(
             large.0 <= BREAKPOINT_COUNT * 256 * 64,
             "persistent updates must keep assessment cloning bounded per insertion"
+        );
+    }
+
+    #[test]
+    fn mapped_source_completion_scales_with_only_affected_scripts() {
+        const SCRIPT_COUNT: usize = 2_000;
+        const BREAKPOINT_COUNT: usize = 32;
+
+        let (mut state, session) = configured_session();
+        let store = crate::content_store::ContentStore::default();
+        let content = store.intern("source");
+        let mut scripts = OrdMap::new();
+        let mut pending = BTreeMap::new();
+        let mut assessments = OrdMap::new();
+        let mut unresolved = OrdSet::new();
+        for index in 0..SCRIPT_COUNT {
+            let script = ScriptKey {
+                session: session.clone(),
+                script_id: format!("script-{index:04}"),
+            };
+            let effect_id = EffectId(index as u64 + 10_000);
+            scripts.insert(
+                script.clone(),
+                Arc::new(ScriptState {
+                    url: format!("bundle-{index:04}.js"),
+                    hash: format!("hash-{index:04}"),
+                    source_map_url: Some(format!("bundle-{index:04}.js.map")),
+                    version: 1,
+                    source: ScriptSourceState::Loaded {
+                        content: Arc::from("compiled"),
+                        source_map: Some(Arc::from([])),
+                        build_effect: effect_id,
+                    },
+                }),
+            );
+            pending.insert(
+                effect_id,
+                PendingEffect::BuildSourceView {
+                    script: script.clone(),
+                    version: 1,
+                },
+            );
+            assessments.insert(
+                script.clone(),
+                BreakpointAssessment {
+                    script_version: 1,
+                    status: BreakpointAssessmentStatus::WaitingForScript,
+                },
+            );
+            unresolved.insert(script);
+        }
+        {
+            let state = Arc::make_mut(&mut state);
+            state.next_effect_id = 20_000;
+            state.scripts = Arc::new(scripts);
+            state.pending = Arc::new(pending);
+            let candidate_index = Arc::new(BreakpointCandidateIndex {
+                unresolved,
+                ..BreakpointCandidateIndex::default()
+            });
+            for index in 0..BREAKPOINT_COUNT {
+                Arc::make_mut(&mut state.breakpoints).insert(
+                    BreakpointKey {
+                        client_id: "benchmark".into(),
+                        breakpoint_id: format!("breakpoint-{index:02}"),
+                    },
+                    Arc::new(BreakpointState {
+                        generation: 1,
+                        source_url: format!("source-{index:02}.ts"),
+                        position: Position::ZERO,
+                        condition: None,
+                        friendly_candidate_selected: false,
+                        candidate_index: candidate_index.clone(),
+                        pending_mappings: Arc::new(BTreeMap::new()),
+                        assessments: Arc::new(assessments.clone()),
+                        bindings: Arc::new(BTreeMap::new()),
+                    }),
+                );
+            }
+        }
+        BREAKPOINT_ASSESSMENT_CLONE_COUNT.with(|count| count.set(0));
+        BREAKPOINT_RECONCILIATION_SCRIPT_VISITS.with(|count| count.set(0));
+        BREAKPOINT_INCREMENTAL_SCRIPT_VISITS.with(|count| count.set(0));
+
+        let started = std::time::Instant::now();
+        for index in 0..SCRIPT_COUNT {
+            let completed = reduce(
+                &state,
+                Input::SourceViewBuilt {
+                    effect_id: EffectId(index as u64 + 10_000),
+                    logical_sources: BTreeMap::from([(
+                        format!("vendor-{index:04}.ts"),
+                        ContentCandidate {
+                            content,
+                            provenance: crate::source_view::Provenance::Workspace {
+                                logical_url: format!("vendor-{index:04}.ts"),
+                            },
+                        },
+                    )]),
+                },
+            );
+            assert!(completed.effects.is_empty());
+            state = completed.state;
+        }
+        let elapsed = started.elapsed();
+        let full_visits = BREAKPOINT_RECONCILIATION_SCRIPT_VISITS.with(std::cell::Cell::get);
+        let incremental_visits = BREAKPOINT_INCREMENTAL_SCRIPT_VISITS.with(std::cell::Cell::get);
+        let assessment_clones = BREAKPOINT_ASSESSMENT_CLONE_COUNT.with(std::cell::Cell::get);
+        eprintln!(
+            "{SCRIPT_COUNT} mapped scripts x {BREAKPOINT_COUNT} breakpoints: \
+             {incremental_visits} affected-script visits, {full_visits} full-script visits, \
+             {assessment_clones} assessment clones, {elapsed:?}"
+        );
+
+        assert_eq!(full_visits, 0);
+        assert_eq!(incremental_visits, SCRIPT_COUNT * BREAKPOINT_COUNT);
+        assert!(
+            assessment_clones <= incremental_visits * 128,
+            "persistent assessment updates must have bounded cloning per affected script"
+        );
+        assert!(state.breakpoints.values().all(|breakpoint| {
+            breakpoint.assessments.len() == SCRIPT_COUNT
+                && breakpoint.candidate_index.unresolved.is_empty()
+                && breakpoint.assessments.values().all(|assessment| {
+                    matches!(
+                        assessment.status,
+                        BreakpointAssessmentStatus::SourceNotFound { .. }
+                    )
+                })
+        }));
+    }
+
+    #[test]
+    fn candidate_index_deduplicates_and_bounds_diagnostics_during_collection() {
+        let session = SessionKey {
+            connection_generation: 1,
+            session_id: "session".into(),
+        };
+        let store = crate::content_store::ContentStore::default();
+        let mut bucket = BreakpointCandidateBucket::default();
+        for index in (0..MAX_BREAKPOINT_CANDIDATES + 3).rev() {
+            let script = ScriptKey {
+                session: session.clone(),
+                script_id: format!("script-{index}"),
+            };
+            bucket.insert(
+                &script,
+                BreakpointSourceCandidate {
+                    source_url: format!("source-{index:02}.ts"),
+                    content: ContentCandidate {
+                        content: store.intern(&format!("content-{index}")),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: format!("source-{index:02}.ts"),
+                        },
+                    },
+                },
+            );
+        }
+        let duplicate_script = ScriptKey {
+            session,
+            script_id: "duplicate".into(),
+        };
+        let duplicate_index = 0;
+        bucket.insert(
+            &duplicate_script,
+            BreakpointSourceCandidate {
+                source_url: format!("source-{duplicate_index:02}.ts"),
+                content: ContentCandidate {
+                    content: store.intern(&format!("content-{duplicate_index}")),
+                    provenance: crate::source_view::Provenance::Workspace {
+                        logical_url: "duplicate.ts".into(),
+                    },
+                },
+            },
+        );
+
+        assert_eq!(bucket.keys.len(), MAX_BREAKPOINT_CANDIDATES + 3);
+        assert_eq!(bucket.bounded.len(), MAX_BREAKPOINT_CANDIDATES);
+        assert_eq!(
+            bucket.keys.len() - bucket.bounded.len(),
+            3,
+            "duplicates must not inflate omitted candidate diagnostics"
+        );
+        assert_eq!(
+            bucket.bounded.keys().next().unwrap().source_url,
+            "source-00.ts"
+        );
+        assert_eq!(
+            bucket.bounded.keys().next_back().unwrap().source_url,
+            format!("source-{:02}.ts", MAX_BREAKPOINT_CANDIDATES - 1)
         );
     }
 
