@@ -1367,6 +1367,8 @@ pub struct SnapshotDiff {
     pub by: AggregateBy,
     /// `newer - older`, retaining keys that disappear from either capture.
     pub groups: BTreeMap<String, AggregateDelta>,
+    pub older_incomplete_string_count: u64,
+    pub newer_incomplete_string_count: u64,
 }
 
 pub fn diff_aggregates(older: &SnapshotAggregate, newer: &SnapshotAggregate) -> SnapshotDiff {
@@ -1392,6 +1394,8 @@ pub fn diff_aggregates(older: &SnapshotAggregate, newer: &SnapshotAggregate) -> 
     SnapshotDiff {
         by: older.by,
         groups,
+        older_incomplete_string_count: older.incomplete_string_count,
+        newer_incomplete_string_count: newer.incomplete_string_count,
     }
 }
 

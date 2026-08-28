@@ -1440,6 +1440,12 @@ impl HumanOutput for HeapDiffSnapshot {
                 escaped_heap_text(&entry.key, entry.key_truncated)
             );
         }
+        if self.older_incomplete_string_count > 0 || self.newer_incomplete_string_count > 0 {
+            println!(
+                "... string diff is incomplete: {} older and {} newer reconstructed strings omitted",
+                self.older_incomplete_string_count, self.newer_incomplete_string_count
+            );
+        }
     }
 }
 
@@ -1564,16 +1570,16 @@ impl HumanOutput for TargetListOutput {
             println!(
                 "{} {}/{}  [{}{}]  {:?}  {}{}",
                 if entry.selected { "*" } else { " " },
-                entry.connection_id,
-                target.target_id,
-                target.target_type,
+                terminal_text(&entry.connection_id),
+                terminal_text(&target.target_id),
+                terminal_text(&target.target_type),
                 if target.attached { "; attached" } else { "" },
                 title,
-                target.url,
+                terminal_text(&target.url),
                 entry
                     .parent_target_id
                     .as_deref()
-                    .map(|parent| format!("  parent={parent}"))
+                    .map(|parent| format!("  parent={}", terminal_text(parent)))
                     .unwrap_or_default(),
             );
         }
@@ -3529,7 +3535,11 @@ fn render_value_preview_with_reference(
 fn render_value_preview(value: &cdp_client::service_api::ValuePreviewSnapshot) -> String {
     let preview = value.preview.as_deref().unwrap_or(&value.kind);
     let truncated = if value.truncated { "..." } else { "" };
-    format!("{preview}{truncated}")
+    format!("{}{truncated}", terminal_text(preview))
+}
+
+fn terminal_text(value: &str) -> String {
+    value.escape_default().to_string()
 }
 
 fn connection_configuration(configuration: &ConnectionConfiguration) -> String {

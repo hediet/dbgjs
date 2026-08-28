@@ -1456,6 +1456,10 @@ pub struct HeapDiffSnapshot {
     pub newer_capture_id: String,
     pub by: HeapAggregateBy,
     pub entries: Vec<HeapDiffEntrySnapshot>,
+    #[serde(default)]
+    pub older_incomplete_string_count: u64,
+    #[serde(default)]
+    pub newer_incomplete_string_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

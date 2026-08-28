@@ -2397,6 +2397,8 @@ async fn run_target(
                         load_heap_graph(&newer_capture_id, &heap_captures, &mut heap_graphs)
                             .await?;
                     let diff = older.diff(&newer, heap_aggregate_by(by));
+                    let older_incomplete_string_count = diff.older_incomplete_string_count;
+                    let newer_incomplete_string_count = diff.newer_incomplete_string_count;
                     let mut entries = diff
                         .groups
                         .into_iter()
@@ -2430,6 +2432,8 @@ async fn run_target(
                         newer_capture_id,
                         by,
                         entries,
+                        older_incomplete_string_count,
+                        newer_incomplete_string_count,
                     })
                 }
                 .await;
