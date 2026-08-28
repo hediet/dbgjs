@@ -789,7 +789,26 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     bindings: Arc::new(BTreeMap::new()),
                 }),
             );
-            reconcile_breakpoint(&mut state, &key, &mut effects);
+            let failed_scripts = state
+                .scripts
+                .iter()
+                .filter_map(|(script, script_state)| {
+                    (matches!(script_state.source, ScriptSourceState::Failed(_))
+                        && script_may_expose_breakpoint(&state, script, &key))
+                    .then_some(script.clone())
+                })
+                .collect::<Vec<_>>();
+            for script in &failed_scripts {
+                schedule_source_hydration(&mut state, script, true, &mut effects);
+            }
+            if failed_scripts.is_empty() {
+                reconcile_breakpoint(&mut state, &key, &mut effects);
+            } else {
+                let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
+                for breakpoint in breakpoint_keys {
+                    reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
+                }
+            }
         }
         Input::RemoveBreakpoint { key } => {
             release_breakpoint(&mut state, &key, &mut effects);
@@ -4251,6 +4270,163 @@ mod tests {
                 } if candidate == &script && message == "HTTP 404"
             )
         }));
+    }
+
+    #[test]
+    fn new_breakpoint_retries_failed_source_hydration_and_advances_assessments() {
+        let (state, session) = configured_session();
+        let parsed = reduce(
+            &state,
+            Input::ScriptParsed {
+                session,
+                script_id: "1".into(),
+                url: "bundle.js".into(),
+                hash: "hash".into(),
+                source_map_url: Some("bundle.js.map".into()),
+            },
+        );
+        let script = parsed.state.scripts.keys().next().unwrap().clone();
+        let first_key = breakpoint_key();
+        let first = reduce(
+            &parsed.state,
+            Input::SetBreakpoint {
+                key: first_key.clone(),
+                source_url: "src/app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let Effect::FetchScriptSource {
+            effect_id: failed_fetch,
+            ..
+        } = first.effects[0]
+        else {
+            panic!("first breakpoint should hydrate the source");
+        };
+        let failed = reduce(
+            &first.state,
+            Input::EffectFailed {
+                effect_id: failed_fetch,
+                message: "source unavailable".into(),
+            },
+        );
+        assert!(
+            failed.effects.is_empty(),
+            "a hydration failure must not immediately retry itself"
+        );
+        assert!(matches!(
+            failed.state.breakpoints[&first_key].assessments[&script].status,
+            BreakpointAssessmentStatus::Failed { ref message }
+                if message == "source unavailable"
+        ));
+
+        let second_key = BreakpointKey {
+            client_id: "client".into(),
+            breakpoint_id: "bp-2".into(),
+        };
+        let retrying = reduce(
+            &failed.state,
+            Input::SetBreakpoint {
+                key: second_key.clone(),
+                source_url: "src/app.ts".into(),
+                position: Position { line: 1, column: 0 },
+                condition: None,
+            },
+        );
+        let [
+            Effect::FetchScriptSource {
+                effect_id: retry_fetch,
+                ..
+            },
+        ] = retrying.effects.as_slice()
+        else {
+            panic!("new breakpoint intent should retry failed source hydration");
+        };
+        assert_ne!(*retry_fetch, failed_fetch);
+        assert!(matches!(
+            retrying.state.scripts[&script].source,
+            ScriptSourceState::Pending(effect_id) if effect_id == *retry_fetch
+        ));
+        for key in [&first_key, &second_key] {
+            assert!(matches!(
+                retrying.state.breakpoints[key].assessments[&script].status,
+                BreakpointAssessmentStatus::WaitingForScript
+            ));
+        }
+
+        let stale = reduce(
+            &retrying.state,
+            Input::ScriptSourceFetched {
+                effect_id: failed_fetch,
+                content: Arc::from("stale"),
+                source_map: None,
+                source_map_url: None,
+                source_map_error: None,
+            },
+        );
+        assert!(matches!(
+            stale.state.scripts[&script].source,
+            ScriptSourceState::Pending(effect_id) if effect_id == *retry_fetch
+        ));
+        assert!(matches!(
+            stale.state.diagnostics.last(),
+            Some(Diagnostic::IgnoredStaleEffect { effect_id }) if *effect_id == failed_fetch
+        ));
+
+        let fetched = reduce(
+            &stale.state,
+            Input::ScriptSourceFetched {
+                effect_id: *retry_fetch,
+                content: Arc::from("compiled"),
+                source_map: Some(Arc::from([])),
+                source_map_url: Some("file:///bundle.js.map".into()),
+                source_map_error: None,
+            },
+        );
+        let Effect::BuildSourceView {
+            effect_id: view_id, ..
+        } = fetched.effects[0]
+        else {
+            panic!("retried hydration should build a source view");
+        };
+        let built = reduce(
+            &fetched.state,
+            Input::SourceViewBuilt {
+                effect_id: view_id,
+                logical_sources: BTreeMap::from([(
+                    "src/app.ts".into(),
+                    ContentCandidate {
+                        content: crate::content_store::ContentStore::default().intern("source"),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: "src/app.ts".into(),
+                        },
+                    },
+                )]),
+            },
+        );
+        let second_mapping = built
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::MapBreakpoint {
+                    effect_id,
+                    breakpoint,
+                    ..
+                } if breakpoint == &second_key => Some(*effect_id),
+                _ => None,
+            })
+            .expect("new breakpoint assessment should advance to mapping");
+        let mapped = reduce(
+            &built.state,
+            Input::BreakpointMapped {
+                effect_id: second_mapping,
+                generated_positions: vec![Position { line: 2, column: 0 }],
+            },
+        );
+        assert!(matches!(
+            mapped.state.breakpoints[&second_key].assessments[&script].status,
+            BreakpointAssessmentStatus::Applicable { .. }
+        ));
     }
 
     fn configured_session() -> (Arc<DebuggerState>, SessionKey) {
