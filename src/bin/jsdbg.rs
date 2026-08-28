@@ -1165,58 +1165,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&rpc(client.get_context(context_id).await)?)?;
         }
         [context, delete, options @ ..] if context == "context" && delete == "delete" => {
-            let mut mutation = parse_mutation_options(options)?;
+            let mutation = parse_mutation_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let initial_delete = client
-                .delete_context(context_id.clone(), mutation.clone())
-                .await;
-            if let Ok(deleted) = initial_delete {
-                output.print_context_deleted(&context_id, deleted)?;
-            } else if let Err(error) = initial_delete {
-                let Ok(mut snapshot) = client.get_context(context_id.clone()).await else {
-                    return Err(rpc::<bool>(Err(error)).unwrap_err().into());
-                };
-                if mutation
-                    .expected_revision
-                    .is_some_and(|expected| expected != snapshot.revision)
-                {
-                    return Err(rpc::<bool>(Err(error)).unwrap_err().into());
-                }
-                let active_connections = snapshot
-                    .connections
-                    .iter()
-                    .filter(|connection| {
-                        matches!(
-                            connection.status,
-                            cdp_client::service_api::ConnectionStatus::Connecting
-                                | cdp_client::service_api::ConnectionStatus::Disconnecting
-                                | cdp_client::service_api::ConnectionStatus::Connected { .. }
-                        )
-                    })
-                    .map(|connection| connection.id.clone())
-                    .collect::<Vec<_>>();
-                if active_connections.is_empty() {
-                    return Err(rpc::<bool>(Err(error)).unwrap_err().into());
-                }
-                for connection_id in snapshot
-                    .connections
-                    .iter()
-                    .filter(|connection| {
-                        connection.status != cdp_client::service_api::ConnectionStatus::Disconnected
-                    })
-                    .map(|connection| connection.id.clone())
-                    .collect::<Vec<_>>()
-                {
-                    snapshot = rpc(client
-                        .disconnect_connection(context_id.clone(), connection_id)
-                        .await)?;
-                }
-                mutation.expected_revision = Some(snapshot.revision);
-                let deleted = rpc(client.delete_context(context_id.clone(), mutation).await)?;
-                output.print_context_deleted(&context_id, deleted)?;
-            }
+            let deleted = rpc(client.delete_context(context_id.clone(), mutation).await)?;
+            output.print_context_deleted(&context_id, deleted)?;
         }
         [state, get] if state == "state" && get == "get" => {
             let context_id =

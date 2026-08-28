@@ -833,41 +833,80 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         options: MutationOptions,
     ) -> Result<bool, JsonRpcError> {
-        let mut state = self.state.lock().await;
-        if options.request_id.as_ref().is_some_and(|request_id| {
+        let (runtimes, heap_paths) = {
+            let mut state = self.state.lock().await;
+            if options.request_id.as_ref().is_some_and(|request_id| {
+                state
+                    .completed_requests
+                    .contains_key(&(context_id.clone(), request_id.clone()))
+            }) {
+                return Ok(true);
+            }
+            if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+                return Ok(existing.id == context_id);
+            }
+            let previous = state.clone();
+            if state.contexts.remove(&context_id).is_none() {
+                return Err(not_found("context", &context_id));
+            }
+            state.context_kinds.remove(&context_id);
+            self.complete_request(&mut state, &context_id, &options, 0);
+            state.history.remove(&context_id);
+            state.source_models.remove(&context_id);
             state
-                .completed_requests
-                .contains_key(&(context_id.clone(), request_id.clone()))
-        }) {
-            return Ok(true);
+                .target_debuggers
+                .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
+            for proxy in state
+                .playwright_proxies
+                .values()
+                .filter(|proxy| proxy.context_id == context_id)
+            {
+                let _ = proxy.cancel.send(true);
+            }
+            state
+                .playwright_proxies
+                .retain(|_, proxy| proxy.context_id != context_id);
+            let runtime_keys = state
+                .runtimes
+                .keys()
+                .filter(|(candidate_context, _)| candidate_context == &context_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let runtimes = runtime_keys
+                .into_iter()
+                .filter_map(|key| state.runtimes.remove(&key))
+                .collect::<Vec<_>>();
+            let capture_keys = state
+                .captures
+                .keys()
+                .filter(|(candidate_context, _)| candidate_context == &context_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let heap_paths = capture_keys
+                .into_iter()
+                .filter_map(|key| state.captures.remove(&key))
+                .filter_map(|capture| match capture.payload {
+                    StoredCapturePayload::HeapSnapshot { path } => Some(path),
+                    StoredCapturePayload::Coverage(_) | StoredCapturePayload::CpuProfile(_) => None,
+                })
+                .collect::<Vec<_>>();
+            self.persist_or_restore(&mut state, previous)?;
+            (runtimes, heap_paths)
+        };
+        for runtime in runtimes {
+            runtime.close().await;
         }
-        if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
-            return Ok(existing.id == context_id);
+        for path in heap_paths {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(internal_error(format!(
+                        "context was deleted, but heap capture '{path}' could not be removed: {error}"
+                    )));
+                }
+            }
         }
-        if state
-            .runtimes
-            .keys()
-            .any(|(candidate_context, _)| candidate_context == &context_id)
-        {
-            return Err(invalid_state(
-                "all context connections must be disconnected before deletion",
-            ));
-        }
-        let previous = state.clone();
-        if state.contexts.remove(&context_id).is_none() {
-            return Err(not_found("context", &context_id));
-        }
-        state.context_kinds.remove(&context_id);
-        self.complete_request(&mut state, &context_id, &options, 0);
-        state.history.remove(&context_id);
-        state.source_models.remove(&context_id);
-        state
-            .target_debuggers
-            .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
-        state
-            .captures
-            .retain(|(candidate_context, _), _| candidate_context != &context_id);
-        self.persist_or_restore(&mut state, previous)?;
         Ok(true)
     }
 
