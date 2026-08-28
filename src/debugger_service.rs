@@ -75,6 +75,7 @@ impl DebuggerService {
         persistence_path: PathBuf,
     ) -> Result<Self, ServicePersistenceError> {
         let state = load_state(&persistence_path)?;
+        scavenge_heap_capture_storage(&persistence_path, &state);
         let (revision_signal, _) = watch::channel(0);
         Ok(Self {
             agent_instance_id: random_instance_id()?,
@@ -726,6 +727,121 @@ fn remove_heap_files(paths: impl IntoIterator<Item = PathBuf>) {
     }
 }
 
+fn heap_capture_paths_for(
+    persistence_path: &Path,
+    reservation: &CaptureReservation,
+) -> (PathBuf, PathBuf) {
+    let directory = persistence_path.with_extension("captures").join(format!(
+        "{:016x}",
+        stable_name_hash(&reservation.metadata.context_id)
+    ));
+    let final_path = directory.join(format!("{}.heapsnapshot", reservation.metadata.storage_id));
+    let staging_path = directory.join(format!("{}.partial", reservation.metadata.storage_id));
+    (staging_path, final_path)
+}
+
+fn scavenge_heap_capture_storage(persistence_path: &Path, state: &ServiceState) {
+    let capture_root = persistence_path.with_extension("captures");
+    let mut referenced = state
+        .captures
+        .values()
+        .filter_map(StoredCapture::heap_path)
+        .map(|path| storage_path_key(&path))
+        .collect::<BTreeSet<_>>();
+    for reservation in state
+        .capture_reservations
+        .values()
+        .filter(|reservation| reservation.metadata.kind == CaptureKind::HeapSnapshot)
+    {
+        let (staging, final_path) = heap_capture_paths_for(persistence_path, reservation);
+        referenced.insert(storage_path_key(&staging));
+        referenced.insert(storage_path_key(&final_path));
+    }
+    scavenge_heap_capture_directory(&capture_root, &referenced);
+}
+
+fn scavenge_heap_capture_directory(directory: &Path, referenced: &BTreeSet<PathBuf>) {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() => return,
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "failed to inspect heap capture storage '{}': {error}",
+                directory.display()
+            );
+            return;
+        }
+    }
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            eprintln!(
+                "failed to inspect heap capture storage '{}': {error}",
+                directory.display()
+            );
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!(
+                    "failed to inspect an entry in heap capture storage '{}': {error}",
+                    directory.display()
+                );
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                eprintln!(
+                    "failed to inspect heap capture storage '{}': {error}",
+                    path.display()
+                );
+                continue;
+            }
+        };
+        if file_type.is_dir() {
+            scavenge_heap_capture_directory(&path, referenced);
+            continue;
+        }
+        let is_capture_storage = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| matches!(extension, "partial" | "heapsnapshot"));
+        if is_capture_storage && !referenced.contains(&storage_path_key(&path)) {
+            remove_heap_files([path]);
+        }
+    }
+}
+
+fn storage_path_key(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|current| current.join(path))
+            .unwrap_or_else(|_| path.to_owned())
+    };
+    absolute
+        .components()
+        .fold(PathBuf::new(), |mut path, part| {
+            match part {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    path.pop();
+                }
+                _ => path.push(part.as_os_str()),
+            }
+            path
+        })
+}
+
 #[async_trait::async_trait]
 impl DebuggerServiceApi for DebuggerService {
     async fn service_info(&self, _ctx: &CallCtx) -> Result<ServiceInfo, JsonRpcError> {
@@ -911,7 +1027,7 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         options: MutationOptions,
     ) -> Result<bool, JsonRpcError> {
-        let (runtimes, heap_paths) = {
+        let (runtimes, heap_paths, proxy_cancellations) = {
             let mut state = self.state.lock().await;
             if options.request_id.as_ref().is_some_and(|request_id| {
                 state
@@ -950,13 +1066,12 @@ impl DebuggerServiceApi for DebuggerService {
             state
                 .target_debuggers
                 .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
-            for proxy in state
+            let proxy_cancellations = state
                 .playwright_proxies
                 .values()
                 .filter(|proxy| proxy.context_id == context_id)
-            {
-                let _ = proxy.cancel.send(true);
-            }
+                .map(|proxy| proxy.cancel.clone())
+                .collect::<Vec<_>>();
             state
                 .playwright_proxies
                 .retain(|_, proxy| proxy.context_id != context_id);
@@ -977,8 +1092,11 @@ impl DebuggerServiceApi for DebuggerService {
                 .capture_reservations
                 .retain(|(candidate_context, _), _| candidate_context != &context_id);
             self.persist_or_restore(&mut state, previous)?;
-            (runtimes, heap_paths)
+            (runtimes, heap_paths, proxy_cancellations)
         };
+        for cancellation in proxy_cancellations {
+            let _ = cancellation.send(true);
+        }
         for runtime in runtimes {
             runtime.close().await;
         }
@@ -3729,17 +3847,7 @@ impl DebuggerService {
     }
 
     fn heap_capture_paths(&self, reservation: &CaptureReservation) -> (PathBuf, PathBuf) {
-        let directory = self
-            .persistence_path
-            .with_extension("captures")
-            .join(format!(
-                "{:016x}",
-                stable_name_hash(&reservation.metadata.context_id)
-            ));
-        let final_path =
-            directory.join(format!("{}.heapsnapshot", reservation.metadata.storage_id));
-        let staging_path = directory.join(format!("{}.partial", reservation.metadata.storage_id));
-        (staging_path, final_path)
+        heap_capture_paths_for(&self.persistence_path, reservation)
     }
 
     async fn target_debugger(
@@ -5259,6 +5367,106 @@ mod tests {
                 .captures
                 .contains_key(&("test".into(), "kept".into()))
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn failed_context_persistence_does_not_cancel_playwright_proxies() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "context-delete-failure-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let blocker = root.join("not-a-directory");
+        fs::write(&blocker, b"block").unwrap();
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        state
+            .context_kinds
+            .insert("test".into(), ContextKind::Named);
+        let (cancel, cancelled) = watch::channel(false);
+        state.playwright_proxies.insert(
+            "proxy".into(),
+            PlaywrightProxyRegistration {
+                context_id: "test".into(),
+                connection_id: "runtime".into(),
+                target_id: "target-a".into(),
+                generation: 1,
+                cancel,
+            },
+        );
+        let service = service_with_state(blocker.join("service.json"), state);
+
+        assert!(
+            service
+                .delete_context(
+                    &CallCtx::default(),
+                    "test".into(),
+                    MutationOptions::default(),
+                )
+                .await
+                .is_err()
+        );
+        assert!(!*cancelled.borrow());
+        let state = service.state.lock().await;
+        assert!(state.contexts.contains_key("test"));
+        assert!(state.playwright_proxies.contains_key("proxy"));
+        drop(state);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_scavenges_only_unreferenced_heap_capture_files() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "capture-startup-scavenge-{}",
+                random_instance_id().unwrap()
+            ));
+        let persistence_path = root.join("service.json");
+        let capture_root = persistence_path.with_extension("captures");
+        let cataloged = capture_root.join("cataloged").join("valid.heapsnapshot");
+        let orphan_final = capture_root.join("orphan").join("lost.heapsnapshot");
+        let orphan_partial = capture_root.join("orphan").join("interrupted.partial");
+        let unrelated = capture_root.join("orphan").join("notes.txt");
+        for path in [&cataloged, &orphan_final, &orphan_partial, &unrelated] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, path.to_string_lossy().as_bytes()).unwrap();
+        }
+        let mut state = ServiceState::default();
+        state.captures.insert(
+            ("test".into(), "valid".into()),
+            heap_capture("test", "valid", "target-a", "runtime", &cataloged),
+        );
+        let writer = service_with_state(persistence_path.clone(), state);
+        writer.persist(&writer.state.blocking_lock()).unwrap();
+        drop(writer);
+
+        let (shutdown, _) = watch::channel(false);
+        let service = DebuggerService::load(shutdown, persistence_path).unwrap();
+        assert!(cataloged.exists());
+        assert!(!orphan_final.exists());
+        assert!(!orphan_partial.exists());
+        assert!(unrelated.exists());
+        assert!(
+            service
+                .state
+                .blocking_lock()
+                .captures
+                .contains_key(&("test".into(), "valid".into()))
+        );
+        drop(service);
         let _ = fs::remove_dir_all(root);
     }
 
