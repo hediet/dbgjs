@@ -12,9 +12,9 @@ workflows and presentation from that model rather than defining a second one.
 For operational steps against live VS Code processes, see
 [Debugging VS Code Processes with jsdbg](./debugging-vscode-processes.md).
 
-The first client is a non-interactive CLI. A TUI may be added later, but it must
-use the same debugger service and state model rather than creating a separate
-debugger agent or CDP connection.
+The CLI supports non-interactive commands and feeds plus interactive views. All
+three use the same debugger service and state model rather than creating a
+separate debugger agent or CDP connection.
 
 The document is divided into:
 
@@ -51,6 +51,33 @@ the contract for those next stages.
 ---
 
 # Part I: Core design
+
+## 0. Interaction forms
+
+The CLI distinguishes three user-visible interaction forms:
+
+- **Command:** one invocation sends one input and returns one terminal result.
+  A command may wait internally, but it does not publish intermediate results.
+- **Feed:** one invocation publishes an ordered sequence of immutable items. A
+  feed may be finite or remain open until cancellation. JSON feeds use JSONL.
+- **View:** an interactive, continuously redrawn screen over current state. A
+  view may accept keyboard input, but redrawing does not create new debugger
+  state or a second observation mechanism.
+
+`stream` describes the transport shape used to implement feeds and views, not a
+fourth user-facing interaction form. `watch` describes a durable expression or
+policy and is not used as a synonym for a feed or view.
+
+Representative spellings are:
+
+```text
+jsdbg state get             # command
+jsdbg events feed           # feed
+jsdbg daemon view           # view
+```
+
+Convenience aliases may preserve older `watch` or `follow` spellings, but new
+commands should use this terminology.
 
 ## 1. Goals
 
