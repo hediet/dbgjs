@@ -1101,6 +1101,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                                 status: BreakpointAssessmentStatus::Failed { message },
                             },
                         ));
+                        reconcile_physical_bindings(&mut state, &breakpoint, &mut effects);
                     }
                 }
                 PendingEffect::InstallBreakpoint { physical } => {
@@ -3797,6 +3798,118 @@ mod tests {
         assert_eq!(candidates.len(), MAX_BREAKPOINT_CANDIDATES);
         assert_eq!(*omitted_candidate_count, 3);
         assert!(built.state.physical_breakpoints.is_empty());
+    }
+
+    #[test]
+    fn failed_replacement_mapping_removes_obsolete_fallback_binding() {
+        let (state, session) = configured_session();
+        let first = resolved_script_with_source(
+            &state,
+            &session,
+            "one",
+            "one.js",
+            "webpack:///one/app.ts",
+            "first",
+        );
+        let key = breakpoint_key();
+        let mapping = reduce(
+            &first,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let mapped = reduce(
+            &mapping.state,
+            Input::BreakpointMapped {
+                effect_id: mapping.effects[0].effect_id(),
+                generated_positions: vec![Position { line: 1, column: 1 }],
+            },
+        );
+        let installed = reduce(
+            &mapped.state,
+            Input::BreakpointInstalled {
+                effect_id: mapped.effects[0].effect_id(),
+                backend_id: "backend-old".into(),
+            },
+        );
+        let old_physical = installed.state.breakpoints[&key]
+            .bindings
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+
+        let replacement = resolved_script_with_source(
+            &installed.state,
+            &session,
+            "two",
+            "two.js",
+            "app.ts",
+            "second",
+        );
+        let replacement_script = ScriptKey {
+            session,
+            script_id: "two".into(),
+        };
+        let BreakpointAssessmentStatus::Mapping {
+            effect_id: replacement_mapping,
+            ..
+        } = replacement.breakpoints[&key].assessments[&replacement_script].status
+        else {
+            panic!("exact replacement candidate should be mapping");
+        };
+        assert!(matches!(
+            replacement.breakpoints[&key].bindings[&old_physical],
+            BreakpointBinding::Installed { ref backend_id } if backend_id == "backend-old"
+        ));
+
+        let failed = reduce(
+            &replacement,
+            Input::EffectFailed {
+                effect_id: replacement_mapping,
+                message: "replacement mapping failed".into(),
+            },
+        );
+        assert!(matches!(
+            failed.effects.as_slice(),
+            [Effect::RemoveBreakpoint {
+                physical,
+                backend_id,
+                ..
+            }] if physical == &old_physical && backend_id == "backend-old"
+        ));
+        assert!(
+            !failed.state.breakpoints[&key]
+                .bindings
+                .contains_key(&old_physical)
+        );
+        assert!(matches!(
+            failed.state.breakpoints[&key].assessments[&replacement_script].status,
+            BreakpointAssessmentStatus::Failed { ref message }
+                if message == "replacement mapping failed"
+        ));
+
+        let stale_failure = reduce(
+            &failed.state,
+            Input::EffectFailed {
+                effect_id: replacement_mapping,
+                message: "late failure".into(),
+            },
+        );
+        assert!(stale_failure.effects.is_empty());
+        assert!(matches!(
+            stale_failure.state.diagnostics.last(),
+            Some(Diagnostic::IgnoredStaleEffect { effect_id })
+                if *effect_id == replacement_mapping
+        ));
+        assert!(matches!(
+            stale_failure.state.breakpoints[&key].assessments[&replacement_script].status,
+            BreakpointAssessmentStatus::Failed { ref message }
+                if message == "replacement mapping failed"
+        ));
     }
 
     #[test]
