@@ -688,15 +688,22 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 {
                     reconcile_breakpoint(&mut state, &breakpoint, &mut effects);
                 } else {
+                    let may_expose = script_may_expose_breakpoint(&state, &key, &breakpoint);
+                    let status = assessment_without_candidate(
+                        &state.scripts[&key],
+                        &state.breakpoints[&breakpoint].source_url,
+                    );
                     set_breakpoint_assessment(
                         &mut state,
                         &breakpoint,
                         key.clone(),
                         version,
-                        BreakpointAssessmentStatus::WaitingForScript,
+                        status,
                     );
-                    if script_may_expose_breakpoint(&state, &key, &breakpoint) {
+                    if may_expose {
                         schedule_source_hydration(&mut state, &key, false, &mut effects);
+                    } else {
+                        reconcile_physical_bindings(&mut state, &breakpoint, &mut effects);
                     }
                 }
             }
@@ -1498,7 +1505,20 @@ fn assessment_without_candidate(
     match &script.source {
         ScriptSourceState::Unresolved
         | ScriptSourceState::Pending(_)
-        | ScriptSourceState::Loaded { .. } => BreakpointAssessmentStatus::WaitingForScript,
+        | ScriptSourceState::Loaded { .. }
+            if script.source_map_url.is_some()
+                || source_urls_match(&script.url, requested_source) =>
+        {
+            BreakpointAssessmentStatus::WaitingForScript
+        }
+        ScriptSourceState::Unresolved
+        | ScriptSourceState::Pending(_)
+        | ScriptSourceState::Loaded { .. } => BreakpointAssessmentStatus::SourceNotFound {
+            diagnostics: Arc::new(vec![format!(
+                "script '{}' version {} cannot expose '{}' because its URL does not match and it has no source map",
+                script.url, script.version, requested_source
+            )]),
+        },
         ScriptSourceState::Failed(message) => BreakpointAssessmentStatus::Failed {
             message: message.clone(),
         },
@@ -4445,6 +4465,108 @@ mod tests {
     }
 
     #[test]
+    fn ineligible_parsed_script_is_terminal_and_releases_stale_binding() {
+        let (mut state, session) = configured_session();
+        let old_script = ScriptKey {
+            session: session.clone(),
+            script_id: "old".into(),
+        };
+        let key = breakpoint_key();
+        let physical = PhysicalBreakpointKey {
+            script: old_script.clone(),
+            script_version: 1,
+            position: Position::ZERO,
+            condition: None,
+        };
+        {
+            let state = Arc::make_mut(&mut state);
+            Arc::make_mut(&mut state.scripts).insert(
+                old_script.clone(),
+                Arc::new(ScriptState {
+                    url: "old.js".into(),
+                    hash: "old-hash".into(),
+                    source_map_url: Some("old.js.map".into()),
+                    version: 1,
+                    source: ScriptSourceState::Resolved(SourceViewState {
+                        view_id: EffectId(100),
+                        logical_sources: Arc::new(BTreeMap::new()),
+                    }),
+                }),
+            );
+            Arc::make_mut(&mut state.breakpoints).insert(
+                key.clone(),
+                Arc::new(BreakpointState {
+                    generation: 1,
+                    source_url: "src/app.ts".into(),
+                    position: Position::ZERO,
+                    condition: None,
+                    pending_mappings: Arc::new(BTreeMap::new()),
+                    assessments: Arc::new(BTreeMap::from([(
+                        old_script.clone(),
+                        BreakpointAssessment {
+                            script_version: 1,
+                            status: BreakpointAssessmentStatus::SourceNotFound {
+                                diagnostics: Arc::new(Vec::new()),
+                            },
+                        },
+                    )])),
+                    bindings: Arc::new(BTreeMap::from([(
+                        physical.clone(),
+                        BreakpointBinding::Installed {
+                            backend_id: "stale-backend".into(),
+                        },
+                    )])),
+                }),
+            );
+            Arc::make_mut(&mut state.physical_breakpoints).insert(
+                physical.clone(),
+                Arc::new(PhysicalBreakpointState {
+                    owners: Arc::new(BTreeSet::from([key.clone()])),
+                    status: PhysicalBreakpointStatus::Installed {
+                        backend_id: "stale-backend".into(),
+                    },
+                }),
+            );
+        }
+
+        let parsed = reduce(
+            &state,
+            Input::ScriptParsed {
+                session: session.clone(),
+                script_id: "unrelated".into(),
+                url: "vendor.js".into(),
+                hash: "vendor-hash".into(),
+                source_map_url: None,
+            },
+        );
+        let unrelated = ScriptKey {
+            session,
+            script_id: "unrelated".into(),
+        };
+        assert!(matches!(
+            parsed.state.breakpoints[&key].assessments[&unrelated].status,
+            BreakpointAssessmentStatus::SourceNotFound { .. }
+        ));
+        assert!(matches!(
+            parsed.effects.as_slice(),
+            [Effect::RemoveBreakpoint {
+                physical: removed,
+                backend_id,
+                ..
+            }] if removed == &physical && backend_id == "stale-backend"
+        ));
+        assert!(
+            !parsed.state.breakpoints[&key]
+                .bindings
+                .contains_key(&physical)
+        );
+        assert!(matches!(
+            parsed.state.scripts[&unrelated].source,
+            ScriptSourceState::Unresolved
+        ));
+    }
+
+    #[test]
     fn many_script_many_breakpoint_parse_clones_each_assessment_map_once() {
         const SCRIPT_COUNT: usize = 64;
         const BREAKPOINT_COUNT: usize = 64;
@@ -4533,7 +4655,7 @@ mod tests {
                 && breakpoint.assessments.values().any(|assessment| {
                     matches!(
                         assessment.status,
-                        BreakpointAssessmentStatus::WaitingForScript
+                        BreakpointAssessmentStatus::SourceNotFound { .. }
                     )
                 })
         }));
