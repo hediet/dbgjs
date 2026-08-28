@@ -12,9 +12,10 @@ workflows and presentation from that model rather than defining a second one.
 For operational steps against live VS Code processes, see
 [Debugging VS Code Processes with jsdbg](./debugging-vscode-processes.md).
 
-The CLI supports non-interactive commands and feeds plus interactive views. All
-three use the same debugger service and state model rather than creating a
-separate debugger agent or CDP connection.
+The CLI supports unary commands, ordered result feeds, and an interactive
+redrawn daemon-state view. The view uses the same debugger service observation
+primitives and state model rather than creating a separate debugger agent, CDP
+connection, or client-side state model.
 
 The document is divided into:
 
@@ -44,9 +45,13 @@ The first executable vertical slice now validates:
 - continuous target discovery with context-global canonical target IDs and
   retained connection/generation provenance;
 - a context-wide immutable capture catalog for coverage, CPU profiles, and heap
-  snapshots, including offline queries after disconnect or daemon restart.
+  snapshots, including offline queries after disconnect or daemon restart;
+- `jsdbg daemon view`, which redraws one selected context or `--all-contexts`
+  while observing context and target debugger revisions. When stdout is not a
+  terminal it emits one deterministic snapshot and exits.
 
-Strict attachment stealing and Playwright integration remain deferred.
+Strict attachment stealing and selected-page Playwright programs are also
+implemented through the same target identities and lifecycle checks.
 
 ---
 

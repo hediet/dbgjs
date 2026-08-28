@@ -25,6 +25,7 @@ test("CLI spawns its HubRPC service and connects it to Chromium", async () => {
 	});
 
 	try {
+		await context.pages()[0].goto("data:text/html,<title>Daemon View</title>");
 		const endpoint = await readCdpEndpoint(debuggingPort);
 		const result = await run(
 			"cargo",

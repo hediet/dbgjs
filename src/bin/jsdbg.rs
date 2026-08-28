@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
+use std::io::IsTerminal;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -34,6 +35,8 @@ use tokio::sync::mpsc;
 
 #[path = "jsdbg/bounded_tree.rs"]
 mod bounded_tree;
+#[path = "jsdbg/daemon_view.rs"]
+mod daemon_view;
 #[path = "jsdbg/output.rs"]
 mod output;
 
@@ -81,6 +84,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         activate_selection_scope(&selection_file, &normalized_cwd, context)?;
     }
     match arguments.as_slice() {
+        [daemon, view, options @ ..] if daemon == "daemon" && view == "view" => {
+            if output.is_json() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "daemon view is a human-readable terminal view; omit --json",
+                )
+                .into());
+            }
+            let all_contexts = parse_daemon_view_options(options)?;
+            if all_contexts && scope_options.context.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--context and --all-contexts are mutually exclusive",
+                )
+                .into());
+            }
+            let client = ensure_service(&state_file).await?;
+            daemon_view::run(
+                &client,
+                scope_options.context.as_deref(),
+                all_contexts,
+                io::stdout().is_terminal(),
+            )
+            .await?;
+        }
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace") => {
             let context_id = required_option("--context", scope_options.context.as_ref())?;
             let client = ensure_service(&state_file).await?;
@@ -2116,6 +2144,7 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
         },
         (Some("context" | "state" | "events" | "source" | "capture"), _)
         | (Some("breakpoint"), _)
+        | (Some("daemon"), Some("view"))
         | (Some("process"), Some("attach"))
         | (Some("set"), Some("context" | "workspace")) => ScopeOptionKind {
             context: true,
@@ -2144,8 +2173,25 @@ fn command_requires_context(arguments: &[String]) -> bool {
             if context == "context" && matches!(operation.as_str(), "create" | "list")
     ) && !matches!(
         arguments,
+        [daemon, view, options @ ..]
+            if daemon == "daemon"
+                && view == "view"
+                && options.iter().any(|option| option == "--all-contexts")
+    ) && !matches!(
+        arguments,
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace")
     )
+}
+
+fn parse_daemon_view_options(arguments: &[String]) -> Result<bool, io::Error> {
+    match arguments {
+        [] => Ok(false),
+        [all] if all == "--all-contexts" => Ok(true),
+        [option, ..] => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown or repeated daemon view option '{option}'"),
+        )),
+    }
 }
 
 fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io::Error> {
@@ -5358,6 +5404,7 @@ fn usage() -> &'static str {
     "usage: jsdbg [--json] <command>
 
 commands:
+  jsdbg daemon view [--context <id> | --all-contexts]
   jsdbg service status|stop
   jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   jsdbg process attach <process-id> [--context <id>] [--set] [--force]

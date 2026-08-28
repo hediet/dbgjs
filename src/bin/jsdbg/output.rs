@@ -130,6 +130,10 @@ pub struct TargetListOutput {
 }
 
 impl OutputFormat {
+    pub fn is_json(self) -> bool {
+        matches!(self, Self::Json)
+    }
+
     pub fn from_arguments(arguments: &mut Vec<String>) -> Self {
         if arguments
             .first()

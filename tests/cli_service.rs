@@ -119,7 +119,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &cli,
         &service,
         &state_file,
-        &["context", "create", "--context", ":shop", "Shop"],
+        &["context", "create", "--context", ":shop", "Shop", "--set"],
     );
     assert_eq!(created["id"], "shop");
     assert_eq!(created["revision"], 1);
@@ -201,6 +201,58 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         "file:///workspace/shared/validation.ts"
     );
     assert_eq!(snapshot["breakpoints"][0]["status"], "pending");
+
+    let current_view = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &["daemon", "view"],
+    );
+    assert_success(
+        &["daemon", "view"],
+        current_view.0,
+        &current_view.1,
+        &current_view.2,
+    );
+    let current_view = String::from_utf8(current_view.1).unwrap();
+    assert!(current_view.contains("jsdbg daemon view — context shop"));
+    assert!(current_view.contains("Connection browser disconnected"));
+    assert!(current_view.contains("Connection server disconnected"));
+
+    let all_view = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &["daemon", "view", "--all-contexts"],
+    );
+    assert_success(
+        &["daemon", "view", "--all-contexts"],
+        all_view.0,
+        &all_view.1,
+        &all_view.2,
+    );
+    assert!(
+        String::from_utf8(all_view.1)
+            .unwrap()
+            .contains("jsdbg daemon view — all contexts")
+    );
+
+    let conflicting_scope = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &["daemon", "view", "--context", ":shop", "--all-contexts"],
+    );
+    assert!(!conflicting_scope.0.success());
+    assert!(
+        String::from_utf8_lossy(&conflicting_scope.2)
+            .contains("--context and --all-contexts are mutually exclusive"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&conflicting_scope.2)
+    );
 
     let stopped = run_json(&cli, &service, &state_file, &["service", "stop"]);
     assert_eq!(stopped, Value::Bool(true));
@@ -910,6 +962,7 @@ fn cli_service_connects_to_live_cdp() {
         .as_str()
         .unwrap()
         .to_owned();
+    let resolved_context_id = connected["id"].as_str().unwrap().to_owned();
 
     let positional_eval = run_json(
         &cli,
@@ -967,6 +1020,55 @@ fn cli_service_connects_to_live_cdp() {
     assert!(bounded_eval["properties"].as_array().unwrap().len() <= 20);
     assert_eq!(bounded_eval["propertiesTruncated"], true);
     assert!(!contains_reference(&bounded_eval));
+
+    let pending_logpoint = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "logpoint",
+            "view-pending",
+            "file:///workspace/not-loaded.ts",
+            "1",
+            "1",
+            "'view'",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_eq!(
+        pending_logpoint["breakpoints"][0]["status"]["kind"],
+        "pending"
+    );
+    let daemon_view = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &["daemon", "view", "--context", "live-browser"],
+    );
+    assert_success(
+        &["daemon", "view", "--context", "live-browser"],
+        daemon_view.0,
+        &daemon_view.1,
+        &daemon_view.2,
+    );
+    let daemon_view = normalize_daemon_view(
+        &String::from_utf8(daemon_view.1).unwrap(),
+        &resolved_context_id,
+        &target_id,
+    );
+    let daemon_transcript = format!("$ jsdbg daemon view --context live-browser\n{daemon_view}");
+    print!("{daemon_transcript}");
+    assert_eq!(
+        daemon_transcript,
+        include_str!("transcripts/daemon-view.txt")
+    );
 
     let ambiguous = run_in(
         &cli,
@@ -1324,6 +1426,31 @@ fn normalize_value_rendering(rendering: &str) -> String {
         }
     }
     result
+}
+
+fn normalize_daemon_view(rendering: &str, context_id: &str, target_id: &str) -> String {
+    let mut context_prefix = context_id.chars().take(60).collect::<String>();
+    if context_id.chars().count() > 60 {
+        context_prefix.push('…');
+    }
+    rendering
+        .replace(&context_prefix, "live-browser")
+        .replace(context_id, "live-browser")
+        .replace(target_id, "<target-id>")
+        .lines()
+        .map(|line| {
+            let Some(start) = line.find(" rev=") else {
+                return line.to_owned();
+            };
+            let value_start = start + " rev=".len();
+            let value_end = line[value_start..]
+                .find(char::is_whitespace)
+                .map_or(line.len(), |offset| value_start + offset);
+            format!("{}<revision>{}", &line[..value_start], &line[value_end..])
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -> Value {
