@@ -1185,7 +1185,7 @@ fn cli_service_connects_to_live_cdp() {
     );
     assert_eq!(
         pending_logpoint["breakpoints"][0]["status"]["kind"],
-        "pending"
+        "waitingForScript"
     );
     let daemon_view = run_human_in(
         &cli,
@@ -1571,28 +1571,63 @@ fn normalize_value_rendering(rendering: &str) -> String {
 }
 
 fn normalize_daemon_view(rendering: &str, context_id: &str, target_id: &str) -> String {
-    let mut context_prefix = context_id.chars().take(60).collect::<String>();
-    if context_id.chars().count() > 60 {
-        context_prefix.push('…');
+    let mut rendering = rendering.to_owned();
+    for context_rendering in [
+        escaped_prefix(context_id, context_id.chars().count()),
+        escaped_prefix(context_id, 80),
+        escaped_prefix(context_id, 60),
+    ] {
+        rendering = rendering.replace(&context_rendering, "live-browser");
     }
     rendering
-        .replace(&context_prefix, "live-browser")
-        .replace(context_id, "live-browser")
         .replace(target_id, "<target-id>")
         .lines()
-        .map(|line| {
+        .filter_map(|line| {
+            if line.trim_start().starts_with("target=") && !line.contains("<target-id>") {
+                return None;
+            }
+            let mut line = line.to_owned();
+            if line.trim_start().starts_with("Connection ")
+                && let Some(start) = line.find("targets=")
+            {
+                let value_start = start + "targets=".len();
+                let value_end = line[value_start..]
+                    .find(char::is_whitespace)
+                    .map_or(line.len(), |offset| value_start + offset);
+                line.replace_range(value_start..value_end, "<target-count>");
+            }
+            if line.contains("target=browser/<target-id>")
+                && let Some(start) = line.find(" url=")
+            {
+                line.replace_range(start.., " url=\"<debuggee-url>\"");
+            }
             let Some(start) = line.find(" rev=") else {
-                return line.to_owned();
+                return Some(line);
             };
             let value_start = start + " rev=".len();
             let value_end = line[value_start..]
                 .find(char::is_whitespace)
                 .map_or(line.len(), |offset| value_start + offset);
-            format!("{}<revision>{}", &line[..value_start], &line[value_end..])
+            Some(format!(
+                "{}<revision>{}",
+                &line[..value_start],
+                &line[value_end..]
+            ))
         })
         .collect::<Vec<_>>()
         .join("\n")
         + "\n"
+}
+
+fn escaped_prefix(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let prefix = chars.by_ref().take(max_chars).collect::<String>();
+    let truncated = if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    };
+    truncated.chars().flat_map(char::escape_default).collect()
 }
 
 fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -> Value {

@@ -8,8 +8,8 @@ use cdp_client::service_api::{
     ConnectionStatus, ContextSnapshot, DebuggerServiceApiClient, FrameProjectionSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
 };
-use futures_util::FutureExt;
-use futures_util::future::{LocalBoxFuture, select_all};
+
+const VIEW_OBSERVE_TIMEOUT_MS: u64 = 1_000;
 
 pub struct ContextView {
     pub snapshot: ContextSnapshot,
@@ -23,6 +23,7 @@ pub async fn run(
     interactive: bool,
 ) -> Result<(), io::Error> {
     let mut previous = String::new();
+    let mut next_observer = 0;
     loop {
         let contexts = capture(client, context_id, all_contexts).await?;
         let screen = render(&contexts, all_contexts);
@@ -35,7 +36,7 @@ pub async fn run(
             io::stdout().flush()?;
             previous = screen;
         }
-        wait_for_change(client, &contexts).await;
+        wait_for_change(client, &contexts, &mut next_observer).await;
     }
 }
 
@@ -97,45 +98,88 @@ async fn capture(
     Ok(contexts)
 }
 
-async fn wait_for_change(client: &DebuggerServiceApiClient, contexts: &[ContextView]) {
-    let mut waits = Vec::<LocalBoxFuture<'_, ()>>::new();
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ObservationRequest {
+    Context {
+        context_id: String,
+        revision: u64,
+    },
+    Target {
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        revision: u64,
+    },
+}
+
+fn observation_requests(contexts: &[ContextView]) -> Vec<ObservationRequest> {
+    let mut requests = Vec::new();
     for context in contexts {
-        let context_id = context.snapshot.id.clone();
-        let revision = context.snapshot.revision;
-        waits.push(
-            async move {
-                let _ = client
-                    .observe_context(
-                        context_id,
-                        cdp_client::service_api::ObservationCursor::After { revision },
-                        30_000,
-                    )
-                    .await;
-            }
-            .boxed_local(),
-        );
+        requests.push(ObservationRequest::Context {
+            context_id: context.snapshot.id.clone(),
+            revision: context.snapshot.revision,
+        });
         for debugger in context.debuggers.values() {
-            let context_id = debugger.context_id.clone();
-            let connection_id = debugger.connection_id.clone();
-            let target_id = debugger.target_id.clone();
-            let revision = debugger.revision;
-            waits.push(
-                async move {
-                    let _ = client
-                        .observe_target(context_id, connection_id, target_id, revision, 30_000)
-                        .await;
-                }
-                .boxed_local(),
-            );
+            requests.push(ObservationRequest::Target {
+                context_id: debugger.context_id.clone(),
+                connection_id: debugger.connection_id.clone(),
+                target_id: debugger.target_id.clone(),
+                revision: debugger.revision,
+            });
         }
     }
-    waits.push(
-        async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    requests
+}
+
+fn next_observation_request(
+    contexts: &[ContextView],
+    next_observer: &mut usize,
+) -> Option<ObservationRequest> {
+    let requests = observation_requests(contexts);
+    if requests.is_empty() {
+        return None;
+    }
+    let request = requests[*next_observer % requests.len()].clone();
+    *next_observer = next_observer.wrapping_add(1);
+    Some(request)
+}
+
+async fn wait_for_change(
+    client: &DebuggerServiceApiClient,
+    contexts: &[ContextView],
+    next_observer: &mut usize,
+) {
+    match next_observation_request(contexts, next_observer) {
+        Some(ObservationRequest::Context {
+            context_id,
+            revision,
+        }) => {
+            let _ = client
+                .observe_context(
+                    context_id,
+                    cdp_client::service_api::ObservationCursor::After { revision },
+                    VIEW_OBSERVE_TIMEOUT_MS,
+                )
+                .await;
         }
-        .boxed_local(),
-    );
-    let _ = select_all(waits).await;
+        Some(ObservationRequest::Target {
+            context_id,
+            connection_id,
+            target_id,
+            revision,
+        }) => {
+            let _ = client
+                .observe_target(
+                    context_id,
+                    connection_id,
+                    target_id,
+                    revision,
+                    VIEW_OBSERVE_TIMEOUT_MS,
+                )
+                .await;
+        }
+        None => tokio::time::sleep(Duration::from_millis(VIEW_OBSERVE_TIMEOUT_MS)).await,
+    }
 }
 
 pub fn render(contexts: &[ContextView], all_contexts: bool) -> String {
@@ -145,7 +189,7 @@ pub fn render(contexts: &[ContextView], all_contexts: bool) -> String {
     } else {
         contexts
             .first()
-            .map(|context| format!("context {}", context.snapshot.id))
+            .map(|context| format!("context {}", inline(&context.snapshot.id, 80)))
             .unwrap_or_else(|| "current context".to_owned())
     };
     writeln!(output, "jsdbg daemon view — {scope}").unwrap();
@@ -167,9 +211,9 @@ pub fn render(contexts: &[ContextView], all_contexts: bool) -> String {
         }
         writeln!(
             output,
-            "Context {} {:?} rev={} connections={} breakpoints={}",
-            context.snapshot.id,
-            inline(&context.snapshot.display_name, 60),
+            "Context {} {} rev={} connections={} breakpoints={}",
+            inline(&context.snapshot.id, 80),
+            quoted(&context.snapshot.display_name, 60),
             context.snapshot.revision,
             context.snapshot.connections.len(),
             context.snapshot.breakpoints.len(),
@@ -194,7 +238,7 @@ fn render_connection(output: &mut String, context: &ContextView, connection: &Co
     writeln!(
         output,
         "  Connection {} {} gen={} targets={} kind={}",
-        connection.id,
+        inline(&connection.id, 80),
         connection_status(&connection.status),
         connection.generation,
         connection.targets.len(),
@@ -228,9 +272,9 @@ fn render_target(
     debugger: Option<&TargetDebuggerSnapshot>,
 ) {
     let title = if target.title.is_empty() {
-        "(untitled)".to_owned()
+        quoted("(untitled)", 60)
     } else {
-        inline(&target.title, 60)
+        quoted(&target.title, 60)
     };
     let (phase, location, lifecycle) = debugger.map(debugger_state).unwrap_or_else(|| {
         (
@@ -256,13 +300,14 @@ fn render_target(
     let url = if target.url.is_empty() {
         String::new()
     } else {
-        format!(" url={:?}", inline(&target.url, 80))
+        format!(" url={}", quoted(&target.url, 80))
     };
     writeln!(
         output,
-        "    target={connection_id}/{} [{}] {:?} {}{} debugger={} bp=i{installed}/p{pending}/f{failed} gen={generation} lifecycle={lifecycle}{url}",
-        target.target_id,
-        target.target_type,
+        "    target={}/{} [{}] {} {}{} debugger={} bp=i{installed}/p{pending}/f{failed} gen={generation} lifecycle={lifecycle}{url}",
+        inline(connection_id, 80),
+        inline(&target.target_id, 80),
+        inline(&target.target_type, 40),
         title,
         phase,
         location,
@@ -289,7 +334,7 @@ fn debugger_state(debugger: &TargetDebuggerSnapshot) -> (String, String, String)
         TargetDebuggerPhase::Failed { message } => (
             "failed".to_owned(),
             String::new(),
-            format!("failed({:?})", inline(message, 80)),
+            format!("failed({})", quoted(message, 80)),
         ),
     }
 }
@@ -378,7 +423,7 @@ fn connection_status(status: &ConnectionStatus) -> String {
         ConnectionStatus::Connecting => "connecting".to_owned(),
         ConnectionStatus::Disconnecting => "disconnecting".to_owned(),
         ConnectionStatus::Connected { .. } => "connected".to_owned(),
-        ConnectionStatus::Failed { message } => format!("failed({:?})", inline(message, 80)),
+        ConnectionStatus::Failed { message } => format!("failed({})", quoted(message, 80)),
     }
 }
 
@@ -398,11 +443,16 @@ fn inline(value: &str, max_chars: usize) -> String {
     let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut chars = value.chars();
     let prefix = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
+    let truncated = if chars.next().is_some() {
         format!("{prefix}…")
     } else {
         prefix
-    }
+    };
+    truncated.chars().flat_map(char::escape_default).collect()
+}
+
+fn quoted(value: &str, max_chars: usize) -> String {
+    format!("\"{}\"", inline(value, max_chars))
 }
 
 fn rpc_error(error: hubrpc::prelude::JsonRpcError) -> io::Error {
@@ -484,13 +534,13 @@ mod tests {
                     index: 0,
                     function_name: "submit".to_owned(),
                     raw: SourceLocation {
-                        source_url: "https://example.test/app.js".to_owned(),
+                        source_url: "https://example.test/\u{1b}[31mapp.js".to_owned(),
                         line: 42,
                         column: 7,
                     },
                     projected: FrameProjectionSnapshot::Resolved {
                         location: SourceLocation {
-                            source_url: "file:///workspace/src/checkout.ts".to_owned(),
+                            source_url: "file:///workspace/src/\u{1b}[31mcheckout.ts".to_owned(),
                             line: 8,
                             column: 3,
                         },
@@ -501,16 +551,37 @@ mod tests {
                 source: None,
             }),
         };
-        let actual = render(
-            &[ContextView {
-                snapshot: context,
-                debuggers: BTreeMap::from([(
-                    ("browser".to_owned(), "page-1".to_owned()),
-                    debugger,
-                )]),
-            }],
-            false,
+        let contexts = [ContextView {
+            snapshot: context,
+            debuggers: BTreeMap::from([(("browser".to_owned(), "page-1".to_owned()), debugger)]),
+        }];
+        let mut next_observer = 0;
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Context {
+                context_id: "shop".to_owned(),
+                revision: 12,
+            })
         );
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Target {
+                context_id: "shop".to_owned(),
+                connection_id: "browser".to_owned(),
+                target_id: "page-1".to_owned(),
+                revision: 19,
+            })
+        );
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Context {
+                context_id: "shop".to_owned(),
+                revision: 12,
+            })
+        );
+
+        let actual = render(&contexts, false);
+        assert_only_screen_controls(&actual);
         assert_eq!(
             actual,
             concat!(
@@ -518,7 +589,7 @@ mod tests {
                 "breakpoints per target: i=installed p=pending f=failed\n",
                 "Context shop \"Shop\" rev=12 connections=1 breakpoints=0\n",
                 "  Connection browser connected gen=7 targets=1 kind=direct-cdp\n",
-                "    target=browser/page-1 [page] \"Checkout page\" paused(epoch=3) at file:///workspace/src/checkout.ts:8:3 <- https://example.test/app.js:42:7 debugger=attached bp=i1/p1/f1 gen=7 lifecycle=debugging url=\"https://example.test/checkout\"\n",
+                "    target=browser/page-1 [page] \"Checkout page\" paused(epoch=3) at file:///workspace/src/\\u{1b}[31mcheckout.ts:8:3 <- https://example.test/\\u{1b}[31mapp.js:42:7 debugger=attached bp=i1/p1/f1 gen=7 lifecycle=debugging url=\"https://example.test/checkout\"\n",
             )
         );
     }
@@ -526,10 +597,10 @@ mod tests {
     #[test]
     fn renders_all_contexts_and_unattached_target_lifecycle() {
         let target = TargetSnapshot {
-            target_id: "worker-1".to_owned(),
-            target_type: "worker".to_owned(),
-            title: String::new(),
-            url: String::new(),
+            target_id: "worker-\u{1b}[2J".to_owned(),
+            target_type: "worker\u{7}".to_owned(),
+            title: "\u{1b}]0;owned\u{7}".to_owned(),
+            url: "https://example.test/\u{1b}[31m".to_owned(),
             attached: false,
             parent_id: None,
             opener_id: None,
@@ -538,11 +609,11 @@ mod tests {
         };
         let context = ContextSnapshot {
             agent_instance_id: "ignored".to_owned(),
-            id: "workers".to_owned(),
-            display_name: "Workers".to_owned(),
+            id: "workers\u{1b}[2J".to_owned(),
+            display_name: "Workers\u{7}".to_owned(),
             revision: 4,
             connections: vec![ConnectionSnapshot {
-                id: "runtime".to_owned(),
+                id: "runtime\u{1b}".to_owned(),
                 configuration: ConnectionConfiguration::NodeInspector {
                     endpoint: "ws://ignored".to_owned(),
                 },
@@ -559,28 +630,94 @@ mod tests {
                 status: BreakpointStatus::Pending,
                 enabled: true,
                 condition: None,
-                target_selector: Some("worker".to_owned()),
+                target_selector: None,
                 pending_reason: None,
                 targets: vec![],
                 applications: vec![],
             }],
         };
+        let actual = render(
+            &[ContextView {
+                snapshot: context,
+                debuggers: BTreeMap::new(),
+            }],
+            true,
+        );
+        assert_only_screen_controls(&actual);
         assert_eq!(
-            render(
-                &[ContextView {
-                    snapshot: context,
-                    debuggers: BTreeMap::new(),
-                }],
-                true,
-            ),
+            actual,
             concat!(
                 "jsdbg daemon view — all contexts\n",
                 "breakpoints per target: i=installed p=pending f=failed\n",
-                "Context workers \"Workers\" rev=4 connections=1 breakpoints=1\n",
-                "  Connection runtime connecting gen=2 targets=1 kind=node-inspector\n",
-                "    target=runtime/worker-1 [worker] \"(untitled)\" unobserved debugger=detached bp=i0/p1/f0 gen=2 lifecycle=observed\n",
+                "Context workers\\u{1b}[2J \"Workers\\u{7}\" rev=4 connections=1 breakpoints=1\n",
+                "  Connection runtime\\u{1b} connecting gen=2 targets=1 kind=node-inspector\n",
+                "    target=runtime\\u{1b}/worker-\\u{1b}[2J [worker\\u{7}] \"\\u{1b}]0;owned\\u{7}\" unobserved debugger=detached bp=i0/p1/f0 gen=2 lifecycle=observed url=\"https://example.test/\\u{1b}[31m\"\n",
             )
         );
+        assert_eq!(
+            connection_status(&ConnectionStatus::Failed {
+                message: "remote\u{1b}[2Jfailed".to_owned(),
+            }),
+            "failed(\"remote\\u{1b}[2Jfailed\")"
+        );
+    }
+
+    #[test]
+    fn selects_one_bounded_observation_request_at_a_time() {
+        let contexts = [
+            empty_context_view("first", 3),
+            empty_context_view("second", 5),
+        ];
+        let mut next_observer = 0;
+        assert_eq!(VIEW_OBSERVE_TIMEOUT_MS, 1_000);
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Context {
+                context_id: "first".to_owned(),
+                revision: 3,
+            })
+        );
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Context {
+                context_id: "second".to_owned(),
+                revision: 5,
+            })
+        );
+        assert_eq!(
+            next_observation_request(&contexts, &mut next_observer),
+            Some(ObservationRequest::Context {
+                context_id: "first".to_owned(),
+                revision: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn escapes_terminal_controls_in_untrusted_text() {
+        let escaped = inline("\u{1b}[2J\u{7}\nowned", 80);
+        assert_eq!(escaped, "\\u{1b}[2J\\u{7} owned");
+        assert_only_screen_controls(&escaped);
+        assert_only_screen_controls(&source_location(&SourceLocation {
+            source_url: "file:///debuggee/\u{1b}]0;owned\u{7}.js".to_owned(),
+            line: 1,
+            column: 2,
+        }));
+    }
+
+    fn empty_context_view(id: &str, revision: u64) -> ContextView {
+        ContextView {
+            snapshot: ContextSnapshot {
+                agent_instance_id: "ignored".to_owned(),
+                id: id.to_owned(),
+                display_name: id.to_owned(),
+                revision,
+                connections: vec![],
+                target_forest: vec![],
+                breakpoints: vec![],
+            },
+            debuggers: BTreeMap::new(),
+        }
     }
 
     fn target_breakpoint(id: &str, status: TargetBreakpointStatus) -> TargetBreakpointSnapshot {
@@ -594,5 +731,14 @@ mod tests {
             assessments: vec![],
             applications: vec![],
         }
+    }
+
+    fn assert_only_screen_controls(value: &str) {
+        assert!(
+            value
+                .chars()
+                .all(|character| character == '\n' || !character.is_control()),
+            "rendered debuggee control character: {value:?}"
+        );
     }
 }

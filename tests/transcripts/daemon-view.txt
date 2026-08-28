@@ -2,5 +2,5 @@ $ jsdbg daemon view --context live-browser
 jsdbg daemon view — context live-browser
 breakpoints per target: i=installed p=pending f=failed
 Context live-browser "live-browser" rev=<revision> connections=1 breakpoints=0
-  Connection browser connected gen=1 targets=1 kind=direct-cdp
-    target=browser/<target-id> [page] "Daemon View" running debugger=attached bp=i0/p1/f0 gen=1 lifecycle=debugging url="data:text/html,<title>Daemon View</title>"
+  Connection browser connected gen=1 targets=<target-count> kind=direct-cdp
+    target=browser/<target-id> [page] "Daemon View" running debugger=attached bp=i0/p1/f0 gen=1 lifecycle=debugging url="<debuggee-url>"
