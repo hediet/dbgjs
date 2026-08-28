@@ -183,7 +183,7 @@ struct ContentMatches {
 }
 
 struct CompiledMatcher {
-    line: Option<RegexMatcher>,
+    candidate: RegexMatcher,
     exact: RegexMatcher,
 }
 
@@ -432,8 +432,14 @@ fn build_matcher(query: &SearchQuery) -> Result<CompiledMatcher, SearchError> {
         .multi_line(true)
         .case_insensitive(!query.case_sensitive)
         .fixed_strings(!query.regex);
-    let line = line_builder.build(&query.pattern).ok();
-    Ok(CompiledMatcher { line, exact })
+    let candidate = line_builder.build(&query.pattern).unwrap_or_else(|_| {
+        RegexMatcherBuilder::new()
+            .crlf(true)
+            .multi_line(true)
+            .build("")
+            .expect("the match-all candidate regex is valid")
+    });
+    Ok(CompiledMatcher { candidate, exact })
 }
 
 fn search_content(
@@ -446,16 +452,6 @@ fn search_content(
     if let Some(interruption) = control.interruption() {
         return Err(interruption);
     }
-    let Some(line_matcher) = matcher.line.as_ref() else {
-        return Ok(ContentMatches {
-            hash,
-            content: content.content,
-            line_ranges: Vec::new(),
-            identities: content.identities,
-            locations: Vec::new(),
-            total: 0,
-        });
-    };
     let mut locations = Vec::with_capacity(max_results.min(64));
     let mut total = 0_u64;
     let mut matcher_error = None;
@@ -467,7 +463,7 @@ fn search_content(
         .build();
     let mut reader = InterruptibleReader::new(content.content.as_bytes(), control);
     let search_result = searcher.search_reader(
-        line_matcher,
+        &matcher.candidate,
         &mut reader,
         ContentMatchSink {
             matcher: &matcher.exact,
@@ -696,6 +692,58 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_to_all_lines_for_newline_capable_patterns() {
+        let content: Arc<str> = "head\r\nfoo\r\nbar".into();
+
+        let mut alternative = query(r"foo|\n");
+        alternative.regex = true;
+        let result = search(
+            vec![document("alternative.ts", content.clone())],
+            &alternative,
+            &SearchControl::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .hits
+                .iter()
+                .map(|hit| (hit.line, hit.column, hit.match_length))
+                .collect::<Vec<_>>(),
+            [(2, 1, 3)]
+        );
+
+        let mut multiline = query(r"foo\r?\nbar");
+        multiline.regex = true;
+        assert!(
+            search(
+                vec![document("multiline.ts", content.clone())],
+                &multiline,
+                &SearchControl::default(),
+            )
+            .unwrap()
+            .hits
+            .is_empty()
+        );
+
+        let mut anchored = query(r"\A|\n|foo|\z");
+        anchored.regex = true;
+        let result = search(
+            vec![document("anchored.ts", content)],
+            &anchored,
+            &SearchControl::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .hits
+                .iter()
+                .map(|hit| (hit.line, hit.column, hit.match_length))
+                .collect::<Vec<_>>(),
+            [(1, 1, 0), (2, 1, 3), (3, 4, 0)]
+        );
+    }
+
+    #[test]
     fn searches_equal_content_once_and_deterministically_fans_out() {
         let shared: Arc<str> = "const shared = 1;\nshared();".into();
         let mut endpoint_copy = document("a.ts", shared.clone());
@@ -803,7 +851,11 @@ mod tests {
         assert_eq!(
             search(
                 vec![document("large.ts", content)],
-                &query("absent"),
+                &SearchQuery {
+                    pattern: r"absent|\n".to_owned(),
+                    regex: true,
+                    ..query("absent")
+                },
                 &control
             ),
             Err(SearchError::Cancelled)
