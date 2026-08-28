@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -209,16 +210,20 @@ async fn bridge(
             _ = cancel.changed() => return Ok(()),
             message = client_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
-                match client_request(message?, &scope, &mut pending)? {
+                match client_request(message?, &scope, &mut pending, &internal)? {
                     ClientAction::Forward(message) => upstream_sender.send(message).await?,
                     ClientAction::Reply(message) => client_sender.send(message).await?,
                     ClientAction::AttachSelected(request_id) => {
-                        let internal_id = Value::from(next_internal_id);
-                        next_internal_id -= 1;
-                        internal.insert(
+                        let internal_id = allocate_internal_request_id(
+                            &mut next_internal_id,
+                            &pending,
+                            &internal,
+                        )?;
+                        reserve_internal_request(
+                            &mut internal,
                             id_key(&internal_id)?,
                             InternalRequest::AutoAttach { request_id },
-                        );
+                        )?;
                         upstream_sender.send(json_message(json!({
                             "id": internal_id,
                             "method": "Target.attachToTarget",
@@ -247,9 +252,16 @@ async fn bridge(
                     UpstreamAction::Reply(message) => client_sender.send(message).await?,
                     UpstreamAction::Drop => {}
                     UpstreamAction::Detach(session_id) => {
-                        let internal_id = Value::from(next_internal_id);
-                        next_internal_id -= 1;
-                        internal.insert(id_key(&internal_id)?, InternalRequest::Detach);
+                        let internal_id = allocate_internal_request_id(
+                            &mut next_internal_id,
+                            &pending,
+                            &internal,
+                        )?;
+                        reserve_internal_request(
+                            &mut internal,
+                            id_key(&internal_id)?,
+                            InternalRequest::Detach,
+                        )?;
                         upstream_sender.send(json_message(json!({
                             "id": internal_id,
                             "method": "Target.detachFromTarget",
@@ -259,6 +271,39 @@ async fn bridge(
                 }
             }
         }
+    }
+}
+
+fn allocate_internal_request_id(
+    next_internal_id: &mut i64,
+    pending: &HashMap<String, PendingRequest>,
+    internal: &HashMap<String, InternalRequest>,
+) -> Result<Value, PlaywrightProxyError> {
+    loop {
+        let id = Value::from(*next_internal_id);
+        *next_internal_id = next_internal_id
+            .checked_sub(1)
+            .ok_or(PlaywrightProxyError::InternalRequestIdExhausted)?;
+        let key = id_key(&id)?;
+        if !pending.contains_key(&key) && !internal.contains_key(&key) {
+            return Ok(id);
+        }
+    }
+}
+
+fn reserve_internal_request(
+    internal: &mut HashMap<String, InternalRequest>,
+    key: String,
+    request: InternalRequest,
+) -> Result<(), PlaywrightProxyError> {
+    match internal.entry(key) {
+        Entry::Vacant(entry) => {
+            entry.insert(request);
+            Ok(())
+        }
+        Entry::Occupied(entry) => Err(PlaywrightProxyError::DuplicateRequestId(
+            entry.key().clone(),
+        )),
     }
 }
 
@@ -323,9 +368,12 @@ impl ActiveScope {
 }
 
 #[derive(Clone)]
-struct PendingRequest {
-    method: String,
-    session_id: Option<String>,
+enum PendingRequest {
+    Forwarded {
+        method: String,
+        session_id: Option<String>,
+    },
+    InternalAttach,
 }
 
 enum InternalRequest {
@@ -337,6 +385,7 @@ fn client_request(
     message: Message,
     scope: &ActiveScope,
     pending: &mut HashMap<String, PendingRequest>,
+    internal: &HashMap<String, InternalRequest>,
 ) -> Result<ClientAction, PlaywrightProxyError> {
     let Some(mut value) = parse_data_message(message)? else {
         return Ok(ClientAction::Drop);
@@ -351,6 +400,12 @@ fn client_request(
         .to_owned();
     let id = object.get("id").cloned();
     let response_session = object.get("sessionId").cloned();
+    if let Some(id) = &id {
+        let key = id_key(id)?;
+        if pending.contains_key(&key) || internal.contains_key(&key) {
+            return Err(PlaywrightProxyError::DuplicateRequestId(key));
+        }
+    }
     if let Err(error) = validate_request_identifiers(object, &method, scope) {
         return scope_error(id, response_session, error);
     }
@@ -373,7 +428,10 @@ fn client_request(
         ),
         MethodPolicy::SyntheticSuccess => response_result(id, response_session, json!({})),
         MethodPolicy::AttachSelected => match id {
-            Some(id) => Ok(ClientAction::AttachSelected(id)),
+            Some(id) => {
+                reserve_pending_request(pending, id_key(&id)?, PendingRequest::InternalAttach)?;
+                Ok(ClientAction::AttachSelected(id))
+            }
             None => Ok(ClientAction::Drop),
         },
         MethodPolicy::RewriteSelectedTarget => {
@@ -409,18 +467,35 @@ fn forward_request(
     pending: &mut HashMap<String, PendingRequest>,
 ) -> Result<ClientAction, PlaywrightProxyError> {
     if let Some(id) = value.get("id") {
-        pending.insert(
+        reserve_pending_request(
+            pending,
             id_key(id)?,
-            PendingRequest {
+            PendingRequest::Forwarded {
                 method,
                 session_id: value
                     .get("sessionId")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
             },
-        );
+        )?;
     }
     Ok(ClientAction::Forward(json_message(value)?))
+}
+
+fn reserve_pending_request(
+    pending: &mut HashMap<String, PendingRequest>,
+    key: String,
+    request: PendingRequest,
+) -> Result<(), PlaywrightProxyError> {
+    match pending.entry(key) {
+        Entry::Vacant(entry) => {
+            entry.insert(request);
+            Ok(())
+        }
+        Entry::Occupied(entry) => Err(PlaywrightProxyError::DuplicateRequestId(
+            entry.key().clone(),
+        )),
+    }
 }
 
 fn root_method_policy(method: &str) -> MethodPolicy {
@@ -563,12 +638,14 @@ fn upstream_message(
     if let Some(id) = object.get("id") {
         let key = id_key(id)?;
         if let Some(request) = internal.remove(&key) {
-            return internal_response(object, request, scope);
+            return internal_response(object, request, scope, pending);
         }
-        let Some(request) = pending.remove(&key) else {
+        let Some(PendingRequest::Forwarded { method, session_id }) = pending.get(&key).cloned()
+        else {
             return Ok(UpstreamAction::Drop);
         };
-        match request.method.as_str() {
+        pending.remove(&key);
+        match method.as_str() {
             "Target.getTargets" => {
                 let Some(infos) = object
                     .get_mut("result")
@@ -587,11 +664,9 @@ fn upstream_message(
                     .get("result")
                     .and_then(|result| result.get("targetInfo"))
                     .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-                let expected_target = scope
-                    .target_for_session(request.session_id.as_deref())
-                    .ok_or(PlaywrightProxyError::ScopeViolation(
-                        ScopeViolation::SessionId,
-                    ))?;
+                let expected_target = scope.target_for_session(session_id.as_deref()).ok_or(
+                    PlaywrightProxyError::ScopeViolation(ScopeViolation::SessionId),
+                )?;
                 validate_target_info(info, &scope.page, expected_target)?;
             }
             "Target.attachToTarget" => {
@@ -732,10 +807,17 @@ fn internal_response(
     object: &Map<String, Value>,
     request: InternalRequest,
     scope: &mut ActiveScope,
+    pending: &mut HashMap<String, PendingRequest>,
 ) -> Result<UpstreamAction, PlaywrightProxyError> {
     match request {
         InternalRequest::Detach => Ok(UpstreamAction::Drop),
         InternalRequest::AutoAttach { request_id } => {
+            if !matches!(
+                pending.remove(&id_key(&request_id)?),
+                Some(PendingRequest::InternalAttach)
+            ) {
+                return Err(PlaywrightProxyError::InvalidCdpMessage);
+            }
             if let Some(error) = object.get("error") {
                 return Ok(UpstreamAction::Reply(json_message(json!({
                     "id": request_id,
@@ -972,6 +1054,10 @@ pub enum PlaywrightProxyError {
     CapabilityTimeout,
     #[error("Playwright proxy upstream connection exceeded its deadline")]
     UpstreamConnectTimeout,
+    #[error("duplicate outstanding CDP request id {0}")]
+    DuplicateRequestId(String),
+    #[error("Playwright proxy exhausted its internal CDP request ids")]
+    InternalRequestIdExhausted,
     #[error("selected page target was destroyed")]
     SelectedTargetDestroyed,
     #[error(transparent)]
@@ -1027,6 +1113,7 @@ mod tests {
                     text(json!({ "id": 1, "method": method })),
                     &scope(),
                     &mut HashMap::new(),
+                    &HashMap::new(),
                 )
                 .unwrap(),
             );
@@ -1038,6 +1125,163 @@ mod tests {
                 "{method} was not rejected: {response}"
             );
         }
+    }
+
+    #[test]
+    fn duplicate_request_cannot_replace_target_filter_metadata() {
+        let mut pending = HashMap::new();
+        let internal = HashMap::new();
+        let first = client_request(
+            text(json!({ "id": 40, "method": "Target.getTargets" })),
+            &scope(),
+            &mut pending,
+            &internal,
+        )
+        .unwrap();
+        assert!(matches!(first, ClientAction::Forward(_)));
+
+        let Err(duplicate) = client_request(
+            text(json!({ "id": 40, "method": "Browser.getVersion" })),
+            &scope(),
+            &mut pending,
+            &internal,
+        ) else {
+            panic!("duplicate request id was accepted")
+        };
+        assert!(matches!(
+            duplicate,
+            PlaywrightProxyError::DuplicateRequestId(ref id) if id == "40"
+        ));
+        assert!(matches!(
+            pending.get("40"),
+            Some(PendingRequest::Forwarded { method, .. }) if method == "Target.getTargets"
+        ));
+
+        let filtered = upstream_message(
+            text(json!({
+                "id": 40,
+                "result": {
+                    "targetInfos": [
+                        {
+                            "targetId": "unrelated",
+                            "type": "page",
+                            "title": "secret",
+                            "url": "http://unrelated.test/",
+                            "browserContextId": "other-context"
+                        },
+                        {
+                            "targetId": "selected",
+                            "type": "page",
+                            "title": "selected",
+                            "url": "http://selected.test/",
+                            "browserContextId": "selected-context"
+                        }
+                    ]
+                }
+            })),
+            &mut scope(),
+            &mut pending,
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        let UpstreamAction::Forward(Message::Text(filtered)) = filtered else {
+            panic!("expected filtered response")
+        };
+        let filtered: Value = serde_json::from_str(&filtered).unwrap();
+        assert_eq!(
+            filtered["result"]["targetInfos"],
+            json!([{
+                "targetId": "selected",
+                "type": "page",
+                "title": "selected",
+                "url": "http://selected.test/",
+                "browserContextId": "selected-context"
+            }])
+        );
+    }
+
+    #[test]
+    fn client_request_id_cannot_collide_with_internal_request() {
+        let mut pending = HashMap::new();
+        let internal = HashMap::from([("-1".to_owned(), InternalRequest::Detach)]);
+        let Err(error) = client_request(
+            text(json!({ "id": -1, "method": "Browser.getVersion" })),
+            &scope(),
+            &mut pending,
+            &internal,
+        ) else {
+            panic!("internal request id collision was accepted")
+        };
+
+        assert!(matches!(
+            error,
+            PlaywrightProxyError::DuplicateRequestId(ref id) if id == "-1"
+        ));
+        assert!(pending.is_empty());
+        assert!(matches!(internal.get("-1"), Some(InternalRequest::Detach)));
+    }
+
+    #[test]
+    fn internal_request_id_skips_outstanding_client_id() {
+        let pending = HashMap::from([(
+            "-1".to_owned(),
+            PendingRequest::Forwarded {
+                method: "Browser.getVersion".to_owned(),
+                session_id: None,
+            },
+        )]);
+        let internal = HashMap::new();
+        let mut next_internal_id = -1;
+
+        let id = allocate_internal_request_id(&mut next_internal_id, &pending, &internal).unwrap();
+        assert_eq!(id, json!(-2));
+        assert!(matches!(
+            pending.get("-1"),
+            Some(PendingRequest::Forwarded { method, .. }) if method == "Browser.getVersion"
+        ));
+    }
+
+    #[test]
+    fn duplicate_internal_attach_client_id_is_rejected() {
+        let mut pending = HashMap::new();
+        let internal = HashMap::new();
+        let first = client_request(
+            text(json!({
+                "id": 41,
+                "method": "Target.setAutoAttach",
+                "params": {
+                    "autoAttach": true,
+                    "waitForDebuggerOnStart": true,
+                    "flatten": true
+                }
+            })),
+            &scope(),
+            &mut pending,
+            &internal,
+        )
+        .unwrap();
+        assert!(matches!(first, ClientAction::AttachSelected(_)));
+        assert!(matches!(
+            pending.get("41"),
+            Some(PendingRequest::InternalAttach)
+        ));
+
+        let Err(duplicate) = client_request(
+            text(json!({ "id": 41, "method": "Browser.getVersion" })),
+            &scope(),
+            &mut pending,
+            &internal,
+        ) else {
+            panic!("duplicate internal attach id was accepted")
+        };
+        assert!(matches!(
+            duplicate,
+            PlaywrightProxyError::DuplicateRequestId(ref id) if id == "41"
+        ));
+        assert!(matches!(
+            pending.get("41"),
+            Some(PendingRequest::InternalAttach)
+        ));
     }
 
     #[test]
@@ -1068,6 +1312,7 @@ mod tests {
                     })),
                     &scope(),
                     &mut HashMap::new(),
+                    &HashMap::new(),
                 )
                 .unwrap(),
             );
@@ -1110,6 +1355,7 @@ mod tests {
                 })),
                 &scope(),
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .unwrap();
             assert!(
@@ -1130,6 +1376,7 @@ mod tests {
                 })),
                 &scope(),
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .unwrap(),
         );
@@ -1237,6 +1484,7 @@ mod tests {
             })),
             &scope(),
             &mut HashMap::new(),
+            &HashMap::new(),
         )
         .unwrap();
         assert!(matches!(action, ClientAction::Forward(_)));
@@ -1276,6 +1524,7 @@ mod tests {
             })),
             &scope,
             &mut HashMap::new(),
+            &HashMap::new(),
         )
         .unwrap();
         assert!(matches!(continued, ClientAction::Forward(_)));
@@ -1320,6 +1569,7 @@ mod tests {
                 })),
                 &scope,
                 &mut HashMap::new(),
+                &HashMap::new(),
             )
             .unwrap(),
         );
@@ -1339,6 +1589,7 @@ mod tests {
             })),
             &scope,
             &mut HashMap::new(),
+            &HashMap::new(),
         )
         .unwrap();
         assert!(matches!(allowed, ClientAction::Forward(_)));
@@ -1349,7 +1600,7 @@ mod tests {
         let mut scope = scope();
         let mut pending = HashMap::from([(
             "6".to_owned(),
-            PendingRequest {
+            PendingRequest::Forwarded {
                 method: "Target.attachToBrowserTarget".to_owned(),
                 session_id: None,
             },
