@@ -31,12 +31,12 @@ use crate::context_source_model::{
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
-    CanonicalTargetSnapshot, CaptureKind, CaptureSnapshot,
-    CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot,
-    ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot,
-    ContextObservation, ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot,
-    DebuggerServiceApi, EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot,
-    HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
+    CanonicalTargetSnapshot, CaptureKind, CaptureSnapshot, CompactedSourceEdgeSnapshot,
+    CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
+    ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot, DebuggerServiceApi,
+    EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult,
+    HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
@@ -631,6 +631,8 @@ fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
     } else {
         internal_error(message)
     }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredCapture {
