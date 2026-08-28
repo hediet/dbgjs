@@ -1078,7 +1078,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .delete_context(context_id.clone(), options.mutation.clone())
                 .await;
             if let Ok(deleted) = initial_delete {
-                output.print(&deleted)?;
+                output.print_context_deleted(&context_id, deleted)?;
             } else if let Err(error) = initial_delete {
                 let Ok(mut snapshot) = client.get_context(context_id.clone()).await else {
                     return Err(rpc::<bool>(Err(error)).unwrap_err().into());
@@ -1127,9 +1127,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if options.mutation.expected_revision.is_some() {
                     options.mutation.expected_revision = Some(snapshot.revision);
                 }
-                output.print(&rpc(client
-                    .delete_context(context_id, options.mutation)
-                    .await)?)?;
+                let deleted = rpc(client
+                    .delete_context(context_id.clone(), options.mutation)
+                    .await)?;
+                output.print_context_deleted(&context_id, deleted)?;
             }
         }
         [state, get] if state == "state" && get == "get" => {

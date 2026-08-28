@@ -153,6 +153,24 @@ impl OutputFormat {
         Ok(())
     }
 
+    pub fn print_context_deleted(
+        &self,
+        context_id: &str,
+        deleted: bool,
+    ) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Human => {
+                if deleted {
+                    println!("Deleted context {context_id}.");
+                } else {
+                    println!("Context {context_id} was not deleted.");
+                }
+            }
+            Self::Json => println!("{}", serde_json::to_string_pretty(&deleted)?),
+        }
+        Ok(())
+    }
+
     pub fn print_target_with_breakpoint_sources(
         &self,
         snapshot: &TargetDebuggerSnapshot,
