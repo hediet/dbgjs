@@ -509,7 +509,7 @@ impl TargetDebuggerHandle {
             })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
-        receiver.await.map_err(|_| TargetDebuggerError::Stopped)
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
     pub async fn get_heap_classes(
@@ -1019,7 +1019,7 @@ enum TargetCommand {
     },
     DeleteStoredCapture {
         capture_id: String,
-        response: oneshot::Sender<bool>,
+        response: oneshot::Sender<Result<bool, TargetDebuggerError>>,
     },
     GetHeapClasses {
         capture_id: String,
@@ -1948,19 +1948,32 @@ async fn run_target(
                 capture_id,
                 response,
             })) => {
-                let mut removed = coverage
-                    .as_mut()
-                    .and_then(|recording| recording.captures.remove(&capture_id))
-                    .is_some();
-                removed |= cpu_profiles.remove(&capture_id).is_some();
-                if let Some(capture) = heap_captures.remove(&capture_id) {
-                    let _ = tokio::fs::remove_file(capture.path).await;
-                    removed = true;
+                let result = async {
+                    if let Some(capture) = heap_captures.get(&capture_id) {
+                        match tokio::fs::remove_file(&capture.path).await {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(error) => {
+                                return Err(TargetDebuggerError::HeapSnapshot(format!(
+                                    "failed to delete stored heap capture '{}': {error}",
+                                    capture.path.display()
+                                )));
+                            }
+                        }
+                    }
+                    let mut removed = coverage
+                        .as_mut()
+                        .and_then(|recording| recording.captures.remove(&capture_id))
+                        .is_some();
+                    removed |= cpu_profiles.remove(&capture_id).is_some();
+                    removed |= heap_captures.remove(&capture_id).is_some();
+                    heap_constructor_groups.remove(&capture_id);
+                    heap_graphs.remove(&capture_id);
+                    heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
+                    Ok(removed)
                 }
-                heap_constructor_groups.remove(&capture_id);
-                heap_graphs.remove(&capture_id);
-                heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
-                let _ = response.send(removed);
+                .await;
+                let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::GetHeapClasses {
                 capture_id,

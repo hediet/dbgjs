@@ -407,9 +407,12 @@ capturing target still belongs to the recorded connection generation, so a
 capture completing after reconnect cannot be attributed to the replacement
 target.
 
-`capture delete` first persists catalog removal, then removes immutable heap
-storage. Context deletion follows the same ordering. A persistence failure
-restores the catalog and leaves heap files untouched.
+`capture delete` removes immutable heap storage before persisting catalog
+removal. Filesystem failures are explicit and retain the catalog entry; retries
+accept already-absent files, including after catalog persistence fails following
+a successful file deletion. Context deletion persists context and catalog
+removal before cleaning its heap storage, so a persistence failure leaves those
+files untouched.
 
 ### 4.17 Breakpoint specification
 

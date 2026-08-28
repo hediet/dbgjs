@@ -716,14 +716,20 @@ impl StoredCapture {
 
 fn remove_heap_files(paths: impl IntoIterator<Item = PathBuf>) {
     for path in paths {
-        if let Err(error) = fs::remove_file(&path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
+        if let Err(error) = remove_heap_file(&path) {
             eprintln!(
                 "failed to remove deleted heap capture '{}': {error}",
                 path.display()
             );
         }
+    }
+}
+
+fn remove_heap_file(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -2338,41 +2344,49 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         capture_name: String,
     ) -> Result<bool, JsonRpcError> {
-        let (heap_path, debugger) = {
-            let mut state = self.state.lock().await;
-            if state
-                .capture_reservations
-                .contains_key(&(context_id.clone(), capture_name.clone()))
-            {
-                return Err(invalid_state(&format!(
-                    "capture '{capture_name}' is currently being stored in context '{context_id}'"
-                )));
-            }
-            let previous = state.clone();
-            let capture = state
-                .captures
-                .remove(&(context_id, capture_name.clone()))
-                .ok_or_else(|| not_found("capture", &capture_name))?;
-            let heap_path = capture.heap_path();
-            let debugger = state
-                .target_debuggers
-                .get(&(
-                    capture.metadata.context_id.clone(),
-                    capture.metadata.connection_id.clone(),
-                    capture.metadata.target_id.clone(),
-                ))
-                .filter(|debugger| {
-                    debugger.snapshot().connection_generation
-                        == capture.metadata.connection_generation
-                })
-                .cloned();
-            self.persist_or_restore(&mut state, previous)?;
-            (heap_path, debugger)
-        };
-        remove_heap_files(heap_path);
-        if let Some(debugger) = debugger {
-            let _ = debugger.delete_stored_capture(capture_name).await;
+        let mut state = self.state.lock().await;
+        if state
+            .capture_reservations
+            .contains_key(&(context_id.clone(), capture_name.clone()))
+        {
+            return Err(invalid_state(&format!(
+                "capture '{capture_name}' is currently being stored in context '{context_id}'"
+            )));
         }
+        let key = (context_id, capture_name.clone());
+        let capture = state
+            .captures
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| not_found("capture", &capture_name))?;
+        let debugger = state
+            .target_debuggers
+            .get(&(
+                capture.metadata.context_id.clone(),
+                capture.metadata.connection_id.clone(),
+                capture.metadata.target_id.clone(),
+            ))
+            .filter(|debugger| {
+                debugger.snapshot().connection_generation == capture.metadata.connection_generation
+            })
+            .cloned();
+        if let Some(debugger) = debugger {
+            debugger
+                .delete_stored_capture(capture_name.clone())
+                .await
+                .map_err(target_debugger_rpc_error)?;
+        }
+        if let Some(heap_path) = capture.heap_path() {
+            remove_heap_file(&heap_path).map_err(|error| {
+                internal_error(format!(
+                    "failed to delete capture '{capture_name}' storage '{}': {error}",
+                    heap_path.display()
+                ))
+            })?;
+        }
+        let previous = state.clone();
+        state.captures.remove(&key);
+        self.persist_or_restore(&mut state, previous)?;
         Ok(true)
     }
 
@@ -5344,7 +5358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_catalog_persistence_leaves_heap_file_and_entry_intact() {
+    async fn failed_catalog_persistence_keeps_capture_retryable() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -5364,13 +5378,17 @@ mod tests {
         );
         let service = service_with_state(blocker.join("service.json"), state);
 
+        let error = service
+            .delete_capture(&CallCtx::default(), "test".into(), "kept".into())
+            .await
+            .unwrap_err();
         assert!(
-            service
-                .delete_capture(&CallCtx::default(), "test".into(), "kept".into())
-                .await
-                .is_err()
+            error
+                .message
+                .contains("failed to persist debugger context state"),
+            "{error:?}"
         );
-        assert!(heap_path.exists());
+        assert!(!heap_path.exists());
         assert!(
             service
                 .state
@@ -5379,6 +5397,90 @@ mod tests {
                 .captures
                 .contains_key(&("test".into(), "kept".into()))
         );
+        fs::remove_file(&blocker).unwrap();
+        fs::create_dir(&blocker).unwrap();
+        service
+            .delete_capture(&CallCtx::default(), "test".into(), "kept".into())
+            .await
+            .unwrap();
+        assert!(
+            !service
+                .state
+                .lock()
+                .await
+                .captures
+                .contains_key(&("test".into(), "kept".into()))
+        );
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, blocker.join("service.json")).unwrap();
+        assert!(restored.state.lock().await.captures.is_empty());
+        drop(restored);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn failed_heap_file_deletion_keeps_capture_retryable() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "capture-file-delete-failure-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let heap_path = root.join("blocked.heapsnapshot");
+        fs::create_dir(&heap_path).unwrap();
+        let mut state = ServiceState::default();
+        state.captures.insert(
+            ("test".into(), "blocked".into()),
+            heap_capture("test", "blocked", "target-a", "runtime", &heap_path),
+        );
+        let service = service_with_state(persistence_path.clone(), state);
+        service.persist(&*service.state.lock().await).unwrap();
+
+        let error = service
+            .delete_capture(&CallCtx::default(), "test".into(), "blocked".into())
+            .await
+            .unwrap_err();
+        assert!(
+            error.message.contains("failed to delete capture 'blocked'"),
+            "{error:?}"
+        );
+        assert!(heap_path.is_dir());
+        assert!(
+            service
+                .state
+                .lock()
+                .await
+                .captures
+                .contains_key(&("test".into(), "blocked".into()))
+        );
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path.clone()).unwrap();
+        assert!(
+            restored
+                .state
+                .lock()
+                .await
+                .captures
+                .contains_key(&("test".into(), "blocked".into()))
+        );
+        fs::remove_dir(&heap_path).unwrap();
+        restored
+            .delete_capture(&CallCtx::default(), "test".into(), "blocked".into())
+            .await
+            .unwrap();
+        drop(restored);
+
+        let (shutdown, _) = watch::channel(false);
+        let reloaded = DebuggerService::load(shutdown, persistence_path).unwrap();
+        assert!(reloaded.state.lock().await.captures.is_empty());
+        drop(reloaded);
         let _ = fs::remove_dir_all(root);
     }
 
