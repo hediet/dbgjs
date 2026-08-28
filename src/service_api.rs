@@ -1100,6 +1100,8 @@ pub struct HeapNodeSelectionSnapshot {
     pub total_nodes: u64,
     pub total_edges: u64,
     pub nodes: Vec<HeapNodeSnapshot>,
+    #[serde(default)]
+    pub incomplete_string_count: u64,
     pub graph_parse_duration_micros: u64,
     pub used_cached_graph: bool,
 }
@@ -1231,6 +1233,8 @@ pub struct HeapAggregateSnapshot {
     pub by: HeapAggregateBy,
     pub entries: Vec<HeapAggregateEntrySnapshot>,
     pub omitted_entry_count: u64,
+    #[serde(default)]
+    pub incomplete_string_count: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

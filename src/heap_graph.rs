@@ -256,11 +256,16 @@ impl HeapGraph {
     }
 
     pub fn select(&self, selector: &NodeSelector<'_>) -> Vec<NodeIndex> {
+        self.select_with_stats(selector).nodes
+    }
+
+    pub fn select_with_stats(&self, selector: &NodeSelector<'_>) -> NodeSelectionResult {
         let limit = selector.limit.unwrap_or(usize::MAX);
         if limit == 0 {
-            return Vec::new();
+            return NodeSelectionResult::default();
         }
         let mut result = Vec::new();
+        let mut incomplete_string_count = 0_u64;
         for index in 0..self.node_count() {
             if selector
                 .heap_object_id
@@ -287,30 +292,6 @@ impl HeapGraph {
             {
                 continue;
             }
-            if let Some(matcher) = &selector.string_value {
-                let matches = match self.node_type_name(index) {
-                    Ok("string") => matcher.matches(raw_name),
-                    Ok("concatenated string" | "sliced string") => self
-                        .reconstructed_string(
-                            NodeIndex(
-                                u32::try_from(index).expect("node count was checked while parsing"),
-                            ),
-                            None,
-                        )
-                        .ok()
-                        .flatten()
-                        .is_some_and(|value| {
-                            (!value.truncated
-                                || (value.exact_prefix
-                                    && matches!(matcher, TextMatcher::Contains(_))))
-                                && matcher.matches(&value.value)
-                        }),
-                    _ => false,
-                };
-                if !matches {
-                    continue;
-                }
-            }
             let size = self.node_shallow_size[index];
             if selector
                 .min_shallow_size
@@ -321,6 +302,37 @@ impl HeapGraph {
             {
                 continue;
             }
+            if let Some(matcher) = &selector.string_value {
+                let (matches, incomplete) = match self.node_type_name(index) {
+                    Ok("string") => (matcher.matches(raw_name), false),
+                    Ok("concatenated string" | "sliced string") => match self
+                        .reconstructed_string(
+                            NodeIndex(
+                                u32::try_from(index).expect("node count was checked while parsing"),
+                            ),
+                            None,
+                        )
+                        .ok()
+                        .flatten()
+                    {
+                        Some(value) => {
+                            let conclusive = !value.truncated
+                                || (value.exact_prefix
+                                    && matches!(matcher, TextMatcher::Contains(_))
+                                    && matcher.matches(&value.value));
+                            (conclusive && matcher.matches(&value.value), !conclusive)
+                        }
+                        None => (false, true),
+                    },
+                    _ => (false, false),
+                };
+                if !matches {
+                    if incomplete {
+                        incomplete_string_count = incomplete_string_count.saturating_add(1);
+                    }
+                    continue;
+                }
+            }
             result.push(NodeIndex(
                 u32::try_from(index).expect("node count was checked while parsing"),
             ));
@@ -328,7 +340,50 @@ impl HeapGraph {
                 break;
             }
         }
-        result
+        NodeSelectionResult {
+            nodes: result,
+            incomplete_string_count,
+        }
+    }
+
+    pub fn aggregate(&self, by: AggregateBy) -> SnapshotAggregate {
+        let mut groups = BTreeMap::<String, AggregateValue>::new();
+        let mut incomplete_string_count = 0_u64;
+        for index in 0..self.node_count() {
+            let key = match by {
+                AggregateBy::NodeType => self.node_type_name(index).ok().map(str::to_owned),
+                AggregateBy::RawName => self.string(self.node_name[index]).map(str::to_owned),
+                AggregateBy::StringValue if self.is_string_type(index) => self
+                    .reconstructed_string(
+                        NodeIndex(
+                            u32::try_from(index).expect("node count was checked while parsing"),
+                        ),
+                        None,
+                    )
+                    .ok()
+                    .flatten()
+                    .and_then(|value| {
+                        if value.truncated {
+                            incomplete_string_count = incomplete_string_count.saturating_add(1);
+                            None
+                        } else {
+                            Some(value.value)
+                        }
+                    }),
+                AggregateBy::StringValue => None,
+            };
+            let Some(key) = key else {
+                continue;
+            };
+            let value = groups.entry(key).or_default();
+            value.count += 1;
+            value.shallow_size += u128::from(self.node_shallow_size[index]);
+        }
+        SnapshotAggregate {
+            by,
+            groups,
+            incomplete_string_count,
+        }
     }
 
     pub fn shortest_path(
@@ -381,34 +436,6 @@ impl HeapGraph {
             Ok(analysis) => Ok(analysis),
             Err(error) => Err(error.clone()),
         }
-    }
-
-    pub fn aggregate(&self, by: AggregateBy) -> SnapshotAggregate {
-        let mut groups = BTreeMap::<String, AggregateValue>::new();
-        for index in 0..self.node_count() {
-            let key = match by {
-                AggregateBy::NodeType => self.node_type_name(index).ok().map(str::to_owned),
-                AggregateBy::RawName => self.string(self.node_name[index]).map(str::to_owned),
-                AggregateBy::StringValue if self.is_string_type(index) => self
-                    .reconstructed_string(
-                        NodeIndex(
-                            u32::try_from(index).expect("node count was checked while parsing"),
-                        ),
-                        None,
-                    )
-                    .ok()
-                    .flatten()
-                    .and_then(|value| (!value.truncated).then_some(value.value)),
-                AggregateBy::StringValue => None,
-            };
-            let Some(key) = key else {
-                continue;
-            };
-            let value = groups.entry(key).or_default();
-            value.count += 1;
-            value.shallow_size += u128::from(self.node_shallow_size[index]);
-        }
-        SnapshotAggregate { by, groups }
     }
 
     pub fn diff(&self, newer: &HeapGraph, by: AggregateBy) -> SnapshotDiff {
@@ -1119,6 +1146,12 @@ pub struct NodeSelector<'a> {
     pub limit: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NodeSelectionResult {
+    pub nodes: Vec<NodeIndex>,
+    pub incomplete_string_count: u64,
+}
+
 impl<'a> NodeSelector<'a> {
     pub fn new() -> Self {
         Self::default()
@@ -1320,6 +1353,7 @@ pub struct AggregateValue {
 pub struct SnapshotAggregate {
     pub by: AggregateBy,
     pub groups: BTreeMap<String, AggregateValue>,
+    pub incomplete_string_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2499,15 +2533,13 @@ mod tests {
                 exact_prefix: false,
             })
         );
-        assert_eq!(
-            regular_v8_slice
-                .select(&NodeSelector::new().string_value(TextMatcher::Contains("backing"))),
-            vec![NodeIndex(1)]
-        );
-        assert_eq!(
-            regular_v8_slice.aggregate(AggregateBy::StringValue).groups["backing string"].count,
-            1
-        );
+        let selection = regular_v8_slice
+            .select_with_stats(&NodeSelector::new().string_value(TextMatcher::Contains("backing")));
+        assert_eq!(selection.nodes, vec![NodeIndex(1)]);
+        assert_eq!(selection.incomplete_string_count, 1);
+        let aggregate = regular_v8_slice.aggregate(AggregateBy::StringValue);
+        assert_eq!(aggregate.groups["backing string"].count, 1);
+        assert_eq!(aggregate.incomplete_string_count, 1);
     }
 
     #[test]

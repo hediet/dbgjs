@@ -2015,12 +2015,13 @@ async fn run_target(
                     if let Some(limit) = selector.limit {
                         graph_selector = graph_selector.limit(limit as usize);
                     }
-                    let nodes = graph.select(&graph_selector);
+                    let selection = graph.select_with_stats(&graph_selector);
                     let dominators = include_dominators
                         .then(|| graph.dominators())
                         .transpose()
                         .map_err(heap_analysis_error)?;
-                    let nodes = nodes
+                    let nodes = selection
+                        .nodes
                         .into_iter()
                         .map(|node| {
                             heap_node_snapshot(
@@ -2037,6 +2038,7 @@ async fn run_target(
                         total_nodes: graph.node_count() as u64,
                         total_edges: graph.edge_count() as u64,
                         nodes,
+                        incomplete_string_count: selection.incomplete_string_count,
                         graph_parse_duration_micros: graph_parse_duration.as_micros() as u64,
                         used_cached_graph,
                     })
@@ -2231,6 +2233,7 @@ async fn run_target(
                     let (graph, _, _) =
                         load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
                     let aggregate = graph.aggregate(heap_aggregate_by(by));
+                    let incomplete_string_count = aggregate.incomplete_string_count;
                     let mut entries = aggregate
                         .groups
                         .into_iter()
@@ -2258,6 +2261,7 @@ async fn run_target(
                         by,
                         entries,
                         omitted_entry_count,
+                        incomplete_string_count,
                     })
                 }
                 .await;

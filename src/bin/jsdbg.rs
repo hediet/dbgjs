@@ -1131,9 +1131,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .disconnect_connection(context_id.clone(), connection_id)
                         .await)?;
                 }
-                if options.mutation.expected_revision.is_some() {
-                    options.mutation.expected_revision = Some(snapshot.revision);
-                }
+                options.mutation.expected_revision = Some(snapshot.revision);
                 let deleted = rpc(client
                     .delete_context(context_id.clone(), options.mutation)
                     .await)?;

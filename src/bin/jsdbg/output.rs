@@ -1251,6 +1251,12 @@ impl HumanOutput for HeapNodeSelectionSnapshot {
         for node in &self.nodes {
             println!("{}", heap_node_line(node));
         }
+        if self.incomplete_string_count > 0 {
+            println!(
+                "{} reconstructed strings were incomplete and could not be matched conclusively.",
+                self.incomplete_string_count
+            );
+        }
     }
 }
 
@@ -1403,6 +1409,12 @@ impl HumanOutput for HeapAggregateSnapshot {
         }
         if self.omitted_entry_count > 0 {
             println!("... {} aggregate groups omitted", self.omitted_entry_count);
+        }
+        if self.incomplete_string_count > 0 {
+            println!(
+                "... {} incomplete reconstructed strings omitted",
+                self.incomplete_string_count
+            );
         }
     }
 }
