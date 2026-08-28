@@ -25,8 +25,8 @@ use crate::context_source_model::ContextSourceModel;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
 use crate::debugger_engine::{
     BreakpointAssessmentStatus, BreakpointBinding, BreakpointKey, BreakpointMapping,
-    BreakpointSourceCandidate, DebuggerState, FrameProjection, Input, ScriptKey, ScriptSourceState,
-    SessionKey, SessionPhase, StepKind,
+    BreakpointSourceCandidate, DebuggerState, FrameProjection, Input, PhysicalBreakpointKey,
+    ScriptKey, ScriptSourceState, SessionKey, SessionPhase, StepKind,
 };
 use crate::heap_graph::{
     AggregateBy, CostPolicy, EdgePolicy, HeapGraph, NodeIndex, NodeSelector, PathDirection,
@@ -836,20 +836,8 @@ impl TargetDebuggerHandle {
                 if let TargetDebuggerPhase::Failed { message } = &current.phase {
                     return Err(TargetDebuggerError::DriverFailed(message.clone()));
                 }
-                if let TargetWaitPredicate::BreakpointInstalled { breakpoint_id } = &predicate {
-                    if let Some(TargetBreakpointSnapshot {
-                        status: TargetBreakpointStatus::Failed { message },
-                        ..
-                    }) = current
-                        .breakpoints
-                        .iter()
-                        .find(|breakpoint| breakpoint.id == *breakpoint_id)
-                    {
-                        return Err(TargetDebuggerError::BreakpointFailed {
-                            breakpoint_id: breakpoint_id.clone(),
-                            message: message.clone(),
-                        });
-                    }
+                if let Some(error) = breakpoint_wait_failure(&current, &predicate) {
+                    return Err(error);
                 }
                 if predicate_matches(&current, &predicate) {
                     return Ok(current);
@@ -4855,6 +4843,29 @@ fn predicate_matches(snapshot: &TargetDebuggerSnapshot, predicate: &TargetWaitPr
     }
 }
 
+fn breakpoint_wait_failure(
+    snapshot: &TargetDebuggerSnapshot,
+    predicate: &TargetWaitPredicate,
+) -> Option<TargetDebuggerError> {
+    let TargetWaitPredicate::BreakpointInstalled { breakpoint_id } = predicate else {
+        return None;
+    };
+    let TargetBreakpointSnapshot {
+        status: TargetBreakpointStatus::Failed { message },
+        ..
+    } = snapshot
+        .breakpoints
+        .iter()
+        .find(|breakpoint| breakpoint.id == *breakpoint_id)?
+    else {
+        return None;
+    };
+    Some(TargetDebuggerError::BreakpointFailed {
+        breakpoint_id: breakpoint_id.clone(),
+        message: message.clone(),
+    })
+}
+
 fn breakpoint_candidate_snapshot(
     candidate: &BreakpointSourceCandidate,
 ) -> BreakpointSourceCandidateSnapshot {
@@ -5122,27 +5133,53 @@ fn snapshot(
                     })
                 })
                 .collect::<Vec<_>>();
-            let installed = breakpoint
-                .bindings
-                .values()
-                .filter(|binding| matches!(binding, BreakpointBinding::Installed { .. }))
+            let desired = breakpoint
+                .assessments
+                .iter()
+                .flat_map(|(script, assessment)| match &assessment.status {
+                    BreakpointAssessmentStatus::Applicable { mappings, .. } => mappings
+                        .iter()
+                        .map(|mapping| PhysicalBreakpointKey {
+                            script: script.clone(),
+                            script_version: assessment.script_version,
+                            position: mapping.generated_position,
+                            condition: breakpoint.condition.clone(),
+                        })
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                })
+                .collect::<BTreeSet<_>>();
+            let desired_installed = desired
+                .iter()
+                .filter(|physical| {
+                    matches!(
+                        breakpoint.bindings.get(*physical),
+                        Some(BreakpointBinding::Installed { .. })
+                    )
+                })
                 .count();
-            let failure = breakpoint
-                .bindings
-                .values()
-                .find_map(|binding| match binding {
-                    BreakpointBinding::Failed { message } => Some(message.clone()),
-                    _ => None,
-                });
-            let status = if installed > 0 {
-                TargetBreakpointStatus::Installed {
-                    binding_count: u32::try_from(installed).unwrap_or(u32::MAX),
-                }
-            } else if let Some(message) = failure {
+            let desired_failure =
+                desired
+                    .iter()
+                    .find_map(|physical| match breakpoint.bindings.get(physical) {
+                        Some(BreakpointBinding::Failed { message }) => Some(message.clone()),
+                        _ => None,
+                    });
+            let desired_pending = desired.iter().any(|physical| {
+                !matches!(
+                    breakpoint.bindings.get(physical),
+                    Some(BreakpointBinding::Installed { .. })
+                )
+            });
+            let status = if let Some(message) = desired_failure {
                 TargetBreakpointStatus::Failed { message }
-            } else if !applications.is_empty() {
+            } else if !desired.is_empty() && desired_pending {
                 TargetBreakpointStatus::Installing {
-                    application_count: u32::try_from(applications.len()).unwrap_or(u32::MAX),
+                    application_count: u32::try_from(desired.len()).unwrap_or(u32::MAX),
+                }
+            } else if !desired.is_empty() {
+                TargetBreakpointStatus::Installed {
+                    binding_count: u32::try_from(desired_installed).unwrap_or(u32::MAX),
                 }
             } else {
                 target_breakpoint_assessment_status(&assessments)
@@ -5384,15 +5421,24 @@ fn generated_script_callback_breadcrumb(
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_cpu_profile, bounded_heap_text, callback_aware_breadcrumb,
-        effective_coverage_ranges, heap_class_display_name, predicate_matches, publish_snapshot,
-        source_excerpt, window_highlighted_line,
+        aggregate_cpu_profile, bounded_heap_text, breakpoint_wait_failure,
+        callback_aware_breadcrumb, effective_coverage_ranges, heap_class_display_name,
+        predicate_matches, publish_snapshot, snapshot, source_excerpt, window_highlighted_line,
+    };
+    use crate::content_store::ContentStore;
+    use crate::debugger_engine::{
+        self, BreakpointAssessment, BreakpointAssessmentStatus, BreakpointBinding, BreakpointKey,
+        BreakpointMapping, BreakpointSourceCandidate, BreakpointState, DebuggerState, EffectId,
+        Input, PhysicalBreakpointKey, ScriptKey, ScriptSourceState, ScriptState,
     };
     use crate::service_api::{
-        CoverageRangeSnapshot, CpuProfileCallFrameSnapshot, CpuProfileNodeSnapshot,
-        CpuProfileSnapshot, SourceExcerpt, SourceLocation, TargetDebuggerPhase,
-        TargetDebuggerSnapshot, TargetWaitPredicate,
+        BreakpointApplicationStatus, CoverageRangeSnapshot, CpuProfileCallFrameSnapshot,
+        CpuProfileNodeSnapshot, CpuProfileSnapshot, SourceExcerpt, SourceLocation,
+        TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
     };
+    use crate::source_view::{ContentCandidate, Position, Provenance};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
         CoverageRangeSnapshot {
@@ -5417,6 +5463,153 @@ mod tests {
             logs: Vec::new(),
             pause: None,
         }
+    }
+
+    fn replacement_snapshot(desired_binding: BreakpointBinding) -> TargetDebuggerSnapshot {
+        let connected =
+            debugger_engine::reduce(&Arc::new(DebuggerState::default()), Input::Connected);
+        let attached = debugger_engine::reduce(
+            &connected.state,
+            Input::SessionAttached {
+                session_id: "session".into(),
+                target_id: "target".into(),
+                parent_session_id: None,
+                waiting_for_debugger: false,
+            },
+        );
+        let session = attached.state.sessions.keys().next().unwrap().clone();
+        let configured = debugger_engine::reduce(
+            &attached.state,
+            Input::SessionConfigured {
+                effect_id: attached.effects[0].effect_id(),
+            },
+        );
+        let mut state = (*configured.state).clone();
+        let script = ScriptKey {
+            session: session.clone(),
+            script_id: "script".into(),
+        };
+        Arc::make_mut(&mut state.scripts).insert(
+            script.clone(),
+            Arc::new(ScriptState {
+                url: "bundle.js".into(),
+                hash: "hash".into(),
+                source_map_url: Some("bundle.js.map".into()),
+                version: 1,
+                source: ScriptSourceState::Unresolved,
+            }),
+        );
+        let old_physical = PhysicalBreakpointKey {
+            script: script.clone(),
+            script_version: 1,
+            position: Position { line: 1, column: 1 },
+            condition: None,
+        };
+        let new_position = Position { line: 2, column: 2 };
+        let new_physical = PhysicalBreakpointKey {
+            script: script.clone(),
+            script_version: 1,
+            position: new_position,
+            condition: None,
+        };
+        let content = ContentCandidate {
+            content: ContentStore::default().intern("source"),
+            provenance: Provenance::Workspace {
+                logical_url: "app.ts".into(),
+            },
+        };
+        Arc::make_mut(&mut state.breakpoints).insert(
+            BreakpointKey {
+                client_id: "context".into(),
+                breakpoint_id: "replacement".into(),
+            },
+            Arc::new(BreakpointState {
+                generation: 1,
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+                pending_mappings: Arc::new(BTreeMap::new()),
+                assessments: Arc::new(BTreeMap::from([(
+                    script,
+                    BreakpointAssessment {
+                        script_version: 1,
+                        status: BreakpointAssessmentStatus::Applicable {
+                            candidate: BreakpointSourceCandidate {
+                                source_url: "app.ts".into(),
+                                content,
+                            },
+                            mappings: Arc::new(vec![BreakpointMapping {
+                                generated_position: new_position,
+                                quality: "exact".into(),
+                                generated_url: "bundle.js".into(),
+                                projection: vec!["source map".into()],
+                            }]),
+                        },
+                    },
+                )])),
+                bindings: Arc::new(BTreeMap::from([
+                    (
+                        old_physical,
+                        BreakpointBinding::Installed {
+                            backend_id: "backend-fallback".into(),
+                        },
+                    ),
+                    (new_physical, desired_binding),
+                ])),
+            }),
+        );
+        snapshot("context", "connection", "target", 1, &session, &state)
+    }
+
+    #[test]
+    fn replacement_status_ignores_installed_fallback_while_desired_binding_is_pending() {
+        let snapshot = replacement_snapshot(BreakpointBinding::PendingInstall(EffectId(99)));
+        let breakpoint = &snapshot.breakpoints[0];
+        assert!(matches!(
+            breakpoint.status,
+            TargetBreakpointStatus::Installing {
+                application_count: 1
+            }
+        ));
+        assert!(breakpoint.applications.iter().any(|application| matches!(
+            application.status,
+            BreakpointApplicationStatus::Installed { ref backend_id }
+                if backend_id == "backend-fallback"
+        )));
+        let predicate = TargetWaitPredicate::BreakpointInstalled {
+            breakpoint_id: "replacement".into(),
+        };
+        assert!(!predicate_matches(&snapshot, &predicate));
+        assert!(breakpoint_wait_failure(&snapshot, &predicate).is_none());
+    }
+
+    #[test]
+    fn replacement_failure_wakes_waiter_as_failure_despite_installed_fallback() {
+        let snapshot = replacement_snapshot(BreakpointBinding::Failed {
+            message: "replacement failed".into(),
+        });
+        assert!(matches!(
+            snapshot.breakpoints[0].status,
+            TargetBreakpointStatus::Failed { ref message }
+                if message == "replacement failed"
+        ));
+        let predicate = TargetWaitPredicate::BreakpointInstalled {
+            breakpoint_id: "replacement".into(),
+        };
+        assert!(!predicate_matches(&snapshot, &predicate));
+        assert!(matches!(
+            breakpoint_wait_failure(&snapshot, &predicate),
+            Some(super::TargetDebuggerError::BreakpointFailed {
+                breakpoint_id,
+                message,
+            }) if breakpoint_id == "replacement" && message == "replacement failed"
+        ));
+
+        let installed = replacement_snapshot(BreakpointBinding::Installed {
+            backend_id: "backend-new".into(),
+        });
+        assert!(predicate_matches(&installed, &predicate));
+        assert!(breakpoint_wait_failure(&installed, &predicate).is_none());
     }
 
     #[tokio::test]
