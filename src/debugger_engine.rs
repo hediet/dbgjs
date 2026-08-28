@@ -862,6 +862,10 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             }
             if owners.is_empty() {
                 schedule_physical_removal(&mut state, &physical, backend_id, &mut effects);
+            } else {
+                for owner in owners.iter() {
+                    reconcile_physical_bindings(&mut state, owner, &mut effects);
+                }
             }
         }
         Input::BreakpointRemoved { effect_id } => {
@@ -1254,15 +1258,7 @@ fn complete_breakpoint_mapping(
         },
     ));
 
-    for mapping in mappings {
-        bind_physical(
-            state,
-            &breakpoint,
-            &script,
-            mapping.generated_position,
-            effects,
-        );
-    }
+    reconcile_physical_bindings(state, &breakpoint, effects);
 }
 
 fn reconcile_breakpoint(
@@ -1273,17 +1269,6 @@ fn reconcile_breakpoint(
     let Some(breakpoint_state) = state.breakpoints.get(breakpoint).cloned() else {
         return;
     };
-    release_breakpoint(state, breakpoint, effects);
-    {
-        let breakpoint_mut = Arc::make_mut(&mut state.breakpoints)
-            .get_mut(breakpoint)
-            .map(Arc::make_mut)
-            .expect("breakpoint remains present while reconciling");
-        breakpoint_mut.pending_mappings = Arc::new(BTreeMap::new());
-        breakpoint_mut.assessments = Arc::new(BTreeMap::new());
-        breakpoint_mut.bindings = Arc::new(BTreeMap::new());
-    }
-
     let scripts = state
         .scripts
         .iter()
@@ -1358,7 +1343,7 @@ fn reconcile_breakpoint(
             } else {
                 assessment_without_candidate(script, &breakpoint_state.source_url)
             };
-            set_breakpoint_assessment(
+            replace_breakpoint_assessment(
                 state,
                 breakpoint,
                 script_key.clone(),
@@ -1376,7 +1361,7 @@ fn reconcile_breakpoint(
                 } else {
                     assessment_without_candidate(script, &breakpoint_state.source_url)
                 };
-                set_breakpoint_assessment(
+                replace_breakpoint_assessment(
                     state,
                     breakpoint,
                     script_key.clone(),
@@ -1396,9 +1381,9 @@ fn reconcile_breakpoint(
                     })
                     .cloned();
                 if let Some(selected) = selected {
-                    schedule_mapping(state, breakpoint, script_key, selected, effects);
+                    ensure_mapping(state, breakpoint, script_key, selected, effects);
                 } else {
-                    set_breakpoint_assessment(
+                    replace_breakpoint_assessment(
                         state,
                         breakpoint,
                         script_key.clone(),
@@ -1410,7 +1395,7 @@ fn reconcile_breakpoint(
         }
     } else {
         for (script_key, script) in &scripts {
-            set_breakpoint_assessment(
+            replace_breakpoint_assessment(
                 state,
                 breakpoint,
                 script_key.clone(),
@@ -1423,6 +1408,7 @@ fn reconcile_breakpoint(
     for script in hydrate {
         schedule_source_hydration(state, &script, true, effects);
     }
+    reconcile_physical_bindings(state, breakpoint, effects);
 }
 
 fn assessment_without_candidate(
@@ -1468,6 +1454,73 @@ fn set_breakpoint_assessment(
             status,
         },
     ));
+}
+
+fn replace_breakpoint_assessment(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    script: ScriptKey,
+    script_version: u64,
+    status: BreakpointAssessmentStatus,
+) {
+    cancel_breakpoint_mapping(state, breakpoint, &script);
+    set_breakpoint_assessment(state, breakpoint, script, script_version, status);
+}
+
+fn ensure_mapping(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    script: &ScriptKey,
+    candidate: BreakpointSourceCandidate,
+    effects: &mut Vec<Effect>,
+) {
+    let script_version = state.scripts[script].version;
+    let current = state.breakpoints[breakpoint].assessments.get(script);
+    let reusable = current.is_some_and(|assessment| {
+        assessment.script_version == script_version
+            && match &assessment.status {
+                BreakpointAssessmentStatus::Mapping {
+                    effect_id,
+                    candidate: current,
+                } => {
+                    current == &candidate
+                        && state.breakpoints[breakpoint].pending_mappings.get(script)
+                            == Some(effect_id)
+                        && state.pending.contains_key(effect_id)
+                }
+                BreakpointAssessmentStatus::Applicable {
+                    candidate: current, ..
+                }
+                | BreakpointAssessmentStatus::Unmapped {
+                    candidate: current, ..
+                } => current == &candidate,
+                _ => false,
+            }
+    });
+    if reusable {
+        return;
+    }
+    cancel_breakpoint_mapping(state, breakpoint, script);
+    schedule_mapping(state, breakpoint, script, candidate, effects);
+}
+
+fn cancel_breakpoint_mapping(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    script: &ScriptKey,
+) {
+    let Some(breakpoint_state) = state.breakpoints.get(breakpoint).cloned() else {
+        return;
+    };
+    let Some(effect_id) = breakpoint_state.pending_mappings.get(script).copied() else {
+        return;
+    };
+    Arc::make_mut(&mut state.pending).remove(&effect_id);
+    Arc::make_mut(&mut state.breakpoints)
+        .get_mut(breakpoint)
+        .map(Arc::make_mut)
+        .unwrap()
+        .pending_mappings = Arc::new(without_key(&breakpoint_state.pending_mappings, script));
 }
 
 fn deduplicate_candidates(
@@ -1863,6 +1916,120 @@ fn bind_physical(
         effect_id,
         physical,
     });
+}
+
+fn reconcile_physical_bindings(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(breakpoint_state) = state.breakpoints.get(breakpoint).cloned() else {
+        return;
+    };
+    let mut desired = BTreeSet::new();
+    let mut assessment_pending = false;
+    for (script, assessment) in breakpoint_state.assessments.iter() {
+        match &assessment.status {
+            BreakpointAssessmentStatus::Applicable { mappings, .. } => {
+                if state.scripts.get(script).map(|value| value.version)
+                    != Some(assessment.script_version)
+                {
+                    continue;
+                }
+                for mapping in mappings.iter() {
+                    desired.insert(PhysicalBreakpointKey {
+                        script: script.clone(),
+                        script_version: assessment.script_version,
+                        position: mapping.generated_position,
+                        condition: breakpoint_state.condition.clone(),
+                    });
+                }
+            }
+            BreakpointAssessmentStatus::WaitingForScript
+            | BreakpointAssessmentStatus::Mapping { .. } => assessment_pending = true,
+            BreakpointAssessmentStatus::SourceNotFound { .. }
+            | BreakpointAssessmentStatus::AmbiguousSource { .. }
+            | BreakpointAssessmentStatus::Unmapped { .. }
+            | BreakpointAssessmentStatus::Failed { .. } => {}
+        }
+    }
+
+    for physical in desired.iter() {
+        if !breakpoint_state.bindings.contains_key(physical) {
+            bind_physical(
+                state,
+                breakpoint,
+                &physical.script,
+                physical.position,
+                effects,
+            );
+        }
+    }
+
+    if assessment_pending
+        || desired.iter().any(|physical| {
+            !matches!(
+                state
+                    .physical_breakpoints
+                    .get(physical)
+                    .map(|physical| &physical.status),
+                Some(PhysicalBreakpointStatus::Installed { .. })
+            )
+        })
+    {
+        return;
+    }
+
+    let stale = state.breakpoints[breakpoint]
+        .bindings
+        .keys()
+        .filter(|physical| !desired.contains(*physical))
+        .cloned()
+        .collect::<Vec<_>>();
+    for physical in stale {
+        release_physical_binding(state, breakpoint, &physical, effects);
+    }
+}
+
+fn release_physical_binding(
+    state: &mut DebuggerState,
+    breakpoint: &BreakpointKey,
+    physical: &PhysicalBreakpointKey,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(breakpoint_state) = state.breakpoints.get(breakpoint).cloned() else {
+        return;
+    };
+    if !breakpoint_state.bindings.contains_key(physical) {
+        return;
+    }
+    Arc::make_mut(&mut state.breakpoints)
+        .get_mut(breakpoint)
+        .map(Arc::make_mut)
+        .unwrap()
+        .bindings = Arc::new(without_key(&breakpoint_state.bindings, physical));
+
+    let Some(physical_state) = state.physical_breakpoints.get(physical).cloned() else {
+        return;
+    };
+    let owners = Arc::new(with_set_remove(&physical_state.owners, breakpoint));
+    Arc::make_mut(&mut state.physical_breakpoints)
+        .get_mut(physical)
+        .map(Arc::make_mut)
+        .unwrap()
+        .owners = owners.clone();
+    if !owners.is_empty() {
+        return;
+    }
+    match &physical_state.status {
+        PhysicalBreakpointStatus::Installed { backend_id } => {
+            schedule_physical_removal(state, physical, backend_id.clone(), effects);
+        }
+        PhysicalBreakpointStatus::Failed { .. } => {
+            Arc::make_mut(&mut state.physical_breakpoints).remove(physical);
+        }
+        PhysicalBreakpointStatus::Installing(_) | PhysicalBreakpointStatus::Removing(_) => {}
+    }
 }
 
 fn schedule_physical_install(
@@ -2320,6 +2487,12 @@ fn without_key<K: Ord + Clone, V: Clone>(map: &BTreeMap<K, V>, key: &K) -> BTree
 fn with_set_insert<T: Ord + Clone>(set: &BTreeSet<T>, value: T) -> BTreeSet<T> {
     let mut result = set.clone();
     result.insert(value);
+    result
+}
+
+fn with_set_remove<T: Ord + Clone>(set: &BTreeSet<T>, value: &T) -> BTreeSet<T> {
+    let mut result = set.clone();
+    result.remove(value);
     result
 }
 
@@ -2967,6 +3140,330 @@ mod tests {
             )
         }));
         assert_eq!(script.session, session);
+    }
+
+    #[test]
+    fn script_and_source_reconciliation_preserve_unchanged_installed_binding() {
+        let (state, session, script, _) = resolved_script();
+        let key = breakpoint_key();
+        let mapped = reduce(
+            &state,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "src/app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let mapping = mapped.effects[0].effect_id();
+        let installing = reduce(
+            &mapped.state,
+            Input::BreakpointMapped {
+                effect_id: mapping,
+                generated_positions: vec![Position {
+                    line: 10,
+                    column: 2,
+                }],
+            },
+        );
+        let install = installing.effects[0].effect_id();
+        let installed = reduce(
+            &installing.state,
+            Input::BreakpointInstalled {
+                effect_id: install,
+                backend_id: "backend-stable".into(),
+            },
+        );
+        let original_assessment = installed.state.breakpoints[&key].assessments[&script].clone();
+        let original_physical = installed.state.breakpoints[&key]
+            .bindings
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let second_script = ScriptKey {
+            session: session.clone(),
+            script_id: "2".into(),
+        };
+
+        let parsed = reduce(
+            &installed.state,
+            Input::ScriptParsed {
+                session: session.clone(),
+                script_id: "2".into(),
+                url: "second.js".into(),
+                hash: "second".into(),
+                source_map_url: Some("second.js.map".into()),
+            },
+        );
+        assert!(matches!(
+            parsed.effects.as_slice(),
+            [Effect::FetchScriptSource { .. }]
+        ));
+        assert_eq!(
+            parsed.state.breakpoints[&key].assessments[&script],
+            original_assessment
+        );
+        assert!(matches!(
+            parsed.state.physical_breakpoints[&original_physical].status,
+            PhysicalBreakpointStatus::Installed { ref backend_id }
+                if backend_id == "backend-stable"
+        ));
+
+        let fetch = parsed.effects[0].effect_id();
+        let fetched = reduce(
+            &parsed.state,
+            Input::ScriptSourceFetched {
+                effect_id: fetch,
+                content: Arc::from("compiled second"),
+                source_map: Some(Arc::from([])),
+                source_map_url: Some("second.js.map".into()),
+                source_map_error: None,
+            },
+        );
+        let view = fetched.effects[0].effect_id();
+        let built = reduce(
+            &fetched.state,
+            Input::SourceViewBuilt {
+                effect_id: view,
+                logical_sources: BTreeMap::from([(
+                    "src/app.ts".into(),
+                    ContentCandidate {
+                        content: crate::content_store::ContentStore::default().intern("source"),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: "src/app.ts".into(),
+                        },
+                    },
+                )]),
+            },
+        );
+        assert!(matches!(
+            built.effects.as_slice(),
+            [Effect::MapBreakpoint {
+                script: mapped_script,
+                ..
+            }] if mapped_script == &second_script
+        ));
+        assert_eq!(
+            built.state.breakpoints[&key].assessments[&script],
+            original_assessment
+        );
+        assert!(matches!(
+            built.state.physical_breakpoints[&original_physical].status,
+            PhysicalBreakpointStatus::Installed { ref backend_id }
+                if backend_id == "backend-stable"
+        ));
+
+        let second_mapping = built.effects[0].effect_id();
+        let raced = reduce(
+            &built.state,
+            Input::ScriptParsed {
+                session,
+                script_id: "3".into(),
+                url: "third.js".into(),
+                hash: "third".into(),
+                source_map_url: Some("third.js.map".into()),
+            },
+        );
+        assert!(matches!(
+            raced.effects.as_slice(),
+            [Effect::FetchScriptSource { .. }]
+        ));
+        assert!(raced.state.pending.contains_key(&second_mapping));
+        assert!(matches!(
+            raced.state.breakpoints[&key].assessments[&second_script].status,
+            BreakpointAssessmentStatus::Mapping { effect_id, .. }
+                if effect_id == second_mapping
+        ));
+        let second_mapped = reduce(
+            &raced.state,
+            Input::BreakpointMapped {
+                effect_id: second_mapping,
+                generated_positions: vec![Position {
+                    line: 30,
+                    column: 6,
+                }],
+            },
+        );
+        assert!(matches!(
+            second_mapped.effects.as_slice(),
+            [Effect::InstallBreakpoint { .. }]
+        ));
+        assert!(matches!(
+            second_mapped.state.physical_breakpoints[&original_physical].status,
+            PhysicalBreakpointStatus::Installed { ref backend_id }
+                if backend_id == "backend-stable"
+        ));
+    }
+
+    #[test]
+    fn changed_mapping_installs_before_removing_previous_location() {
+        let (state, session) = configured_session();
+        let first_script = ScriptKey {
+            session: session.clone(),
+            script_id: "one".into(),
+        };
+        let first = resolved_script_with_source(
+            &state,
+            &session,
+            "one",
+            "one.js",
+            "webpack:///one/app.ts",
+            "first",
+        );
+        let key = breakpoint_key();
+        let mapping = reduce(
+            &first,
+            Input::SetBreakpoint {
+                key: key.clone(),
+                source_url: "app.ts".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+        let mapped = reduce(
+            &mapping.state,
+            Input::BreakpointMapped {
+                effect_id: mapping.effects[0].effect_id(),
+                generated_positions: vec![Position { line: 1, column: 1 }],
+            },
+        );
+        let installed = reduce(
+            &mapped.state,
+            Input::BreakpointInstalled {
+                effect_id: mapped.effects[0].effect_id(),
+                backend_id: "backend-old".into(),
+            },
+        );
+        let old_physical = installed.state.breakpoints[&key]
+            .bindings
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+
+        let parsed = reduce(
+            &installed.state,
+            Input::ScriptParsed {
+                session: session.clone(),
+                script_id: "two".into(),
+                url: "two.js".into(),
+                hash: "two".into(),
+                source_map_url: Some("two.js.map".into()),
+            },
+        );
+        assert!(parsed.effects.iter().all(|effect| {
+            !matches!(
+                effect,
+                Effect::InstallBreakpoint { .. } | Effect::RemoveBreakpoint { .. }
+            )
+        }));
+        assert!(matches!(
+            parsed.state.physical_breakpoints[&old_physical].status,
+            PhysicalBreakpointStatus::Installed { ref backend_id }
+                if backend_id == "backend-old"
+        ));
+
+        let fetched = reduce(
+            &parsed.state,
+            Input::ScriptSourceFetched {
+                effect_id: parsed.effects[0].effect_id(),
+                content: Arc::from("compiled two"),
+                source_map: Some(Arc::from([])),
+                source_map_url: Some("two.js.map".into()),
+                source_map_error: None,
+            },
+        );
+        let built = reduce(
+            &fetched.state,
+            Input::SourceViewBuilt {
+                effect_id: fetched.effects[0].effect_id(),
+                logical_sources: BTreeMap::from([(
+                    "app.ts".into(),
+                    ContentCandidate {
+                        content: crate::content_store::ContentStore::default().intern("second"),
+                        provenance: crate::source_view::Provenance::Workspace {
+                            logical_url: "app.ts".into(),
+                        },
+                    },
+                )]),
+            },
+        );
+        let new_mapping = built
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::MapBreakpoint {
+                    effect_id, script, ..
+                } if script != &first_script => Some(*effect_id),
+                _ => None,
+            })
+            .expect("new exact candidate should be mapped");
+        assert!(
+            built
+                .effects
+                .iter()
+                .all(|effect| !matches!(effect, Effect::RemoveBreakpoint { .. }))
+        );
+        assert!(matches!(
+            built.state.physical_breakpoints[&old_physical].status,
+            PhysicalBreakpointStatus::Installed { .. }
+        ));
+
+        let remapped = reduce(
+            &built.state,
+            Input::BreakpointMapped {
+                effect_id: new_mapping,
+                generated_positions: vec![Position {
+                    line: 20,
+                    column: 4,
+                }],
+            },
+        );
+        let Effect::InstallBreakpoint {
+            effect_id: new_install,
+            physical: ref new_physical,
+        } = remapped.effects[0]
+        else {
+            panic!("changed location should be installed first");
+        };
+        assert_eq!(remapped.effects.len(), 1);
+        assert!(
+            remapped.state.breakpoints[&key]
+                .bindings
+                .contains_key(&old_physical)
+        );
+        assert!(matches!(
+            remapped.state.physical_breakpoints[&old_physical].status,
+            PhysicalBreakpointStatus::Installed { ref backend_id }
+                if backend_id == "backend-old"
+        ));
+
+        let new_physical = new_physical.clone();
+        let new_installed = reduce(
+            &remapped.state,
+            Input::BreakpointInstalled {
+                effect_id: new_install,
+                backend_id: "backend-new".into(),
+            },
+        );
+        assert!(matches!(
+            new_installed.effects.as_slice(),
+            [Effect::RemoveBreakpoint {
+                physical,
+                backend_id,
+                ..
+            }] if physical == &old_physical && backend_id == "backend-old"
+        ));
+        assert!(
+            !new_installed.state.breakpoints[&key]
+                .bindings
+                .contains_key(&old_physical)
+        );
+        assert!(matches!(
+            new_installed.state.breakpoints[&key].bindings[&new_physical],
+            BreakpointBinding::Installed { ref backend_id } if backend_id == "backend-new"
+        ));
     }
 
     #[test]
