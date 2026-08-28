@@ -41,10 +41,9 @@ use crate::service_api::{
     SourceContentSnapshot, SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot,
     SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
     SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind,
-    TargetAttachOptions,
-    TargetAttachmentOutcome, TargetAttachmentResult, TargetDebuggerSnapshot, TargetSnapshot,
-    TargetWaitPredicate, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
-    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult, TargetDebuggerSnapshot,
+    TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
+    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
     VariableSnapshot,
 };
