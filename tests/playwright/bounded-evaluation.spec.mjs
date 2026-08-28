@@ -44,6 +44,7 @@ test("target evaluation bounds large primitive CDP transfer", async () => {
 		expect(result.output).toContain("resultBytes<2048");
 		expect(result.output).toContain("kind=bigint");
 		expect(result.output).toContain("symbolDescriptionCharacters=1000000");
+		expect(result.output).toContain("poisoned mutable primitive hooks invoked: no");
 	} finally {
 		await context.close();
 		await rm(userDataDir, { recursive: true, force: true });

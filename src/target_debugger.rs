@@ -4436,10 +4436,8 @@ fn bounded_projection_function(max_preview_length: u32) -> String {
   }} else if (__jsdbgKind === "bigint") {{
     __jsdbgText = `${{__jsdbgValue}}n`;
   }} else if (__jsdbgKind === "symbol") {{
-    const __jsdbgDescription = __jsdbgValue.description;
-    __jsdbgText = __jsdbgDescription === undefined
-      ? "Symbol()"
-      : `Symbol(${{__jsdbgDescription}})`;
+    // A Symbol description is only exposed through a mutable prototype getter.
+    return {{ __jsdbgKind, __jsdbgTruncated: true }};
   }} else if (__jsdbgKind === "number" && __jsdbgValue !== __jsdbgValue) {{
     __jsdbgText = "NaN";
   }} else if (__jsdbgKind === "number" && __jsdbgValue === 1 / 0) {{
@@ -4457,19 +4455,32 @@ fn bounded_projection_function(max_preview_length: u32) -> String {
   }}
   let __jsdbgPreview = "";
   let __jsdbgLength = 0;
-  let __jsdbgTruncated = false;
-  for (const __jsdbgCharacter of __jsdbgText) {{
-    if (__jsdbgLength === __jsdbgMaxLength) {{
-      __jsdbgTruncated = true;
-      break;
+  let __jsdbgOffset = 0;
+  // In-range string index and length reads use own exotic data, not prototype hooks.
+  while (
+    __jsdbgOffset < __jsdbgText.length
+    && __jsdbgLength < __jsdbgMaxLength
+  ) {{
+    const __jsdbgFirst = __jsdbgText[__jsdbgOffset];
+    __jsdbgPreview += __jsdbgFirst;
+    __jsdbgOffset++;
+    if (
+      __jsdbgFirst >= "\uD800"
+      && __jsdbgFirst <= "\uDBFF"
+      && __jsdbgOffset < __jsdbgText.length
+    ) {{
+      const __jsdbgSecond = __jsdbgText[__jsdbgOffset];
+      if (__jsdbgSecond >= "\uDC00" && __jsdbgSecond <= "\uDFFF") {{
+        __jsdbgPreview += __jsdbgSecond;
+        __jsdbgOffset++;
+      }}
     }}
-    __jsdbgPreview += __jsdbgCharacter;
     __jsdbgLength++;
   }}
   return {{
     __jsdbgKind,
     __jsdbgText: __jsdbgPreview,
-    __jsdbgTruncated
+    __jsdbgTruncated: __jsdbgOffset < __jsdbgText.length
   }};
 }}"#
     )
@@ -4521,14 +4532,6 @@ fn evaluated_remote_from_envelope(
             preview_truncated: false,
         });
     }
-    let preview = property("__jsdbgText")
-        .and_then(|value| value.value.as_ref())
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            TargetDebuggerError::Evaluation(
-                "target bounded primitive projection omitted its preview".to_owned(),
-            )
-        })?;
     let mut remote = match kind {
         "string" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::String),
         "bigint" => RuntimeRemoteObject::new(RuntimeRemoteObjectType::Bigint),
@@ -4540,18 +4543,28 @@ fn evaluated_remote_from_envelope(
             )));
         }
     };
+    let preview = property("__jsdbgText")
+        .and_then(|value| value.value.as_ref())
+        .and_then(serde_json::Value::as_str);
+    if kind != "symbol" && preview.is_none() {
+        return Err(TargetDebuggerError::Evaluation(
+            "target bounded primitive projection omitted its preview".to_owned(),
+        ));
+    }
     match &remote.r#type {
         RuntimeRemoteObjectType::String => {
-            remote.value = Some(serde_json::Value::String(preview.to_owned()));
+            remote.value = Some(serde_json::Value::String(
+                preview.expect("string preview was required").to_owned(),
+            ));
         }
         RuntimeRemoteObjectType::Bigint => {
+            let preview = preview.expect("BigInt preview was required");
             remote.unserializable_value = Some(preview.to_owned());
             remote.description = Some(preview.to_owned());
         }
-        RuntimeRemoteObjectType::Symbol => {
-            remote.description = Some(preview.to_owned());
-        }
+        RuntimeRemoteObjectType::Symbol => {}
         RuntimeRemoteObjectType::Number => {
+            let preview = preview.expect("number preview was required");
             remote.unserializable_value = Some(preview.to_owned());
             remote.description = Some(preview.to_owned());
         }
@@ -5705,9 +5718,10 @@ fn generated_script_callback_breadcrumb(
 mod tests {
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
-        breakpoint_wait_failure, callback_aware_breadcrumb, complete_source_search_batch,
-        effective_coverage_ranges, evaluated_remote_from_envelope, heap_class_display_name,
-        predicate_matches, publish_snapshot, snapshot, source_excerpt, window_highlighted_line,
+        bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
+        complete_source_search_batch, effective_coverage_ranges, evaluated_remote_from_envelope,
+        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
+        window_highlighted_line,
     };
     use crate::cdp::{
         RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
@@ -5796,13 +5810,6 @@ mod tests {
                 Some("99999"),
             ),
             (
-                "symbol",
-                RuntimeRemoteObjectType::Symbol,
-                None,
-                None,
-                Some("Symbol(long"),
-            ),
-            (
                 "number",
                 RuntimeRemoteObjectType::Number,
                 None,
@@ -5836,6 +5843,33 @@ mod tests {
             assert_eq!(projection.remote.description.as_deref(), description);
             assert!(projection.preview_truncated);
         }
+    }
+
+    #[test]
+    fn bounded_symbol_envelope_omits_untrusted_description() {
+        let projection = evaluated_remote_from_envelope(&[
+            envelope_property("__jsdbgKind", serde_json::json!("symbol")),
+            envelope_property("__jsdbgTruncated", serde_json::json!(true)),
+        ])
+        .unwrap();
+        assert_eq!(projection.remote.r#type, RuntimeRemoteObjectType::Symbol);
+        assert!(projection.remote.description.is_none());
+        assert!(projection.preview_truncated);
+    }
+
+    #[test]
+    fn bounded_projection_avoids_mutable_primitive_dispatch() {
+        let source = bounded_projection_function(120);
+        assert!(!source.contains(" for "));
+        assert!(!source.contains(" of "));
+        assert!(!source.contains(".description"));
+        assert!(!source.contains(".charAt"));
+        assert!(!source.contains(".charCodeAt"));
+        assert!(!source.contains(".codePointAt"));
+        assert!(!source.contains(".slice"));
+        assert!(source.contains("__jsdbgText[__jsdbgOffset]"));
+        assert!(source.contains(r#""\uD800""#));
+        assert!(source.contains(r#""\uDC00""#));
     }
 
     #[test]
@@ -6213,23 +6247,7 @@ mod tests {
                 .await
                 .expect("huge Symbol description evaluates");
             assert_eq!(huge_symbol.preview.kind, "symbol");
-            assert!(
-                huge_symbol
-                    .preview
-                    .preview
-                    .as_deref()
-                    .is_some_and(|preview| preview.starts_with("Symbol(ssss"))
-            );
-            assert_eq!(
-                huge_symbol
-                    .preview
-                    .preview
-                    .as_deref()
-                    .unwrap()
-                    .chars()
-                    .count(),
-                120
-            );
+            assert!(huge_symbol.preview.preview.is_none());
             assert!(huge_symbol.preview.truncated);
             assert!(transport.largest_received_message_size() < 64 * 1024);
             assert!(serde_json::to_vec(&huge_symbol).unwrap().len() < 2_048);
@@ -6277,6 +6295,117 @@ mod tests {
                 .await
                 .is_err()
             );
+
+            inspect_live(
+                &debugger,
+                r#"(() => {
+  globalThis.__jsdbgEvaluationCount = 0;
+  globalThis.__jsdbgPoisonedUnicode = "😀".repeat(1_000_000);
+  globalThis.__jsdbgPoisonedBigInt = BigInt("8".repeat(1_000_000));
+  globalThis.__jsdbgPoisonedSymbol = Symbol("z".repeat(1_000_000));
+  const poison = function() { for (;;) {} };
+  for (const name of [
+    "charAt", "charCodeAt", "codePointAt", "slice", "substring", "substr",
+    "toString", "valueOf"
+  ]) {
+    Object.defineProperty(String.prototype, name, {
+      value: poison,
+      configurable: true
+    });
+  }
+  Object.defineProperty(String.prototype, Symbol.iterator, {
+    value: poison,
+    configurable: true
+  });
+  Object.defineProperty(String.prototype, Symbol.toPrimitive, {
+    value: poison,
+    configurable: true
+  });
+  Object.defineProperty(String.prototype, "0", {
+    get: poison,
+    configurable: true
+  });
+  for (const name of ["toString", "valueOf"]) {
+    Object.defineProperty(BigInt.prototype, name, {
+      value: poison,
+      configurable: true
+    });
+    Object.defineProperty(Symbol.prototype, name, {
+      value: poison,
+      configurable: true
+    });
+  }
+  Object.defineProperty(BigInt.prototype, Symbol.toPrimitive, {
+    value: poison,
+    configurable: true
+  });
+  Object.defineProperty(Symbol.prototype, Symbol.toPrimitive, {
+    value: poison,
+    configurable: true
+  });
+  Object.defineProperty(Symbol.prototype, "description", {
+    get: poison,
+    configurable: true
+  });
+  return true;
+})()"#,
+                true,
+            )
+            .await
+            .expect("install nonterminating primitive prototype poison");
+
+            transport.reset_largest_received_message_size();
+            let poisoned_unicode = inspect_live(
+                &debugger,
+                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedUnicode)",
+                true,
+            )
+            .await
+            .expect("poisoned Unicode string evaluates");
+            assert_eq!(poisoned_unicode.preview.kind, "string");
+            assert_eq!(
+                poisoned_unicode.preview.preview.as_deref(),
+                Some("😀".repeat(120).as_str())
+            );
+            assert!(poisoned_unicode.preview.truncated);
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&poisoned_unicode).unwrap().len() < 2_048);
+
+            transport.reset_largest_received_message_size();
+            let poisoned_bigint = inspect_live(
+                &debugger,
+                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedBigInt)",
+                true,
+            )
+            .await
+            .expect("poisoned BigInt evaluates");
+            assert_eq!(poisoned_bigint.preview.kind, "bigint");
+            assert_eq!(
+                poisoned_bigint.preview.preview.as_deref(),
+                Some("8".repeat(120).as_str())
+            );
+            assert!(poisoned_bigint.preview.truncated);
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&poisoned_bigint).unwrap().len() < 2_048);
+
+            transport.reset_largest_received_message_size();
+            let poisoned_symbol = inspect_live(
+                &debugger,
+                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedSymbol)",
+                true,
+            )
+            .await
+            .expect("poisoned Symbol evaluates");
+            assert_eq!(poisoned_symbol.preview.kind, "symbol");
+            assert!(poisoned_symbol.preview.preview.is_none());
+            assert!(poisoned_symbol.preview.truncated);
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&poisoned_symbol).unwrap().len() < 2_048);
+
+            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+                .await
+                .expect("poisoned evaluation count reads");
+            assert_eq!(count.preview.preview.as_deref(), Some("3"));
 
             print!(
                 "{}",
