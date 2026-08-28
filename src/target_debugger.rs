@@ -493,6 +493,21 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn delete_stored_capture(
+        &self,
+        capture_id: String,
+    ) -> Result<bool, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::DeleteStoredCapture {
+                capture_id,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)
+    }
+
     pub async fn get_heap_classes(
         &self,
         capture_id: String,
@@ -1008,6 +1023,10 @@ enum TargetCommand {
         capture_id: String,
         destination: String,
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
+    DeleteStoredCapture {
+        capture_id: String,
+        response: oneshot::Sender<bool>,
     },
     GetHeapClasses {
         capture_id: String,
@@ -1911,13 +1930,40 @@ async fn run_target(
                             TargetDebuggerError::HeapSnapshot(error.to_string())
                         })?;
                     }
-                    tokio::fs::copy(&capture.path, &destination)
+                    let mut source = tokio::fs::File::open(&capture.path)
+                        .await
+                        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    let mut output = tokio::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&destination)
+                        .await
+                        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    tokio::io::copy(&mut source, &mut output)
                         .await
                         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
                     Ok(())
                 }
                 .await;
                 let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::DeleteStoredCapture {
+                capture_id,
+                response,
+            })) => {
+                let mut removed = coverage
+                    .as_mut()
+                    .and_then(|recording| recording.captures.remove(&capture_id))
+                    .is_some();
+                removed |= cpu_profiles.remove(&capture_id).is_some();
+                if let Some(capture) = heap_captures.remove(&capture_id) {
+                    let _ = tokio::fs::remove_file(capture.path).await;
+                    removed = true;
+                }
+                heap_constructor_groups.remove(&capture_id);
+                heap_graphs.remove(&capture_id);
+                heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
+                let _ = response.send(removed);
             }
             Next::Command(Some(TargetCommand::GetHeapClasses {
                 capture_id,

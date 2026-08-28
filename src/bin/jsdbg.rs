@@ -12,7 +12,7 @@ use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
 use cdp_client::context_identity::{
     ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
-    resolve_context_expression,
+    resolve_context_expression, synthetic_node_target_id,
 };
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
 use cdp_client::promise_debugging::{
@@ -651,6 +651,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.get_capture(context, name.clone()).await)?)?;
         }
+        [capture, delete, name] if capture == "capture" && delete == "delete" => {
+            let client = ensure_service(&state_file).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.delete_capture(context, name.clone()).await)?)?;
+        }
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
             let client = ensure_service(&state_file).await?;
@@ -1044,6 +1050,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "$node-root".to_owned(),
                     )
                 };
+            let target_id = if target_id == "$node-root" {
+                synthetic_node_target_id(&connection_id)
+            } else {
+                target_id
+            };
             let client = ensure_service(&state_file).await?;
             let context = rpc(client.get_context(context_id.clone()).await)?;
             let existing = context
@@ -1081,7 +1092,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .connect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
-            if target_id != "$node-root" {
+            if target_id != synthetic_node_target_id(&connection_id) {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
                     let context = rpc(client.get_context(context_id.clone()).await)?;
@@ -5425,6 +5436,7 @@ commands:
   jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
   jsdbg capture list [--context <id>]
   jsdbg capture show <name> [--context <id>]
+  jsdbg capture delete <name> [--context <id>]
   jsdbg promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
   jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
   jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]

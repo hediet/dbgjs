@@ -125,6 +125,10 @@ pub fn compare_context_paths(cwd: &str, left: &str, right: &str) -> Ordering {
     }
 }
 
+pub fn synthetic_node_target_id(connection_id: &str) -> String {
+    format!("$node-root:{connection_id}")
+}
+
 fn normalize_named_id(id: &str) -> Result<String, ContextIdentityError> {
     if id.is_empty() {
         return Err(ContextIdentityError::EmptyNamedId);

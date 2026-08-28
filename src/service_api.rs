@@ -1651,6 +1651,9 @@ pub trait DebuggerServiceApi {
         capture_name: String,
     ) -> Result<CaptureSnapshot, JsonRpcError>;
 
+    async fn delete_capture(context_id: String, capture_name: String)
+    -> Result<bool, JsonRpcError>;
+
     async fn get_stored_coverage(
         context_id: String,
         capture_name: String,

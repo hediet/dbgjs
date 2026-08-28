@@ -639,6 +639,27 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     };
     assert!(endpoint.starts_with("ws://"), "{endpoint}");
     let _node = ChildCleanup(node);
+    let Ok(mut second_node) = Command::new("node")
+        .args([
+            "-e",
+            "const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let second_endpoint = {
+        let mut line = String::new();
+        BufReader::new(second_node.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        line.trim().to_owned()
+    };
+    assert!(second_endpoint.starts_with("ws://"), "{second_endpoint}");
+    let _second_node = ChildCleanup(second_node);
 
     let suffix = unique_suffix();
     let context_id = format!("identity-e2e-{suffix}");
@@ -667,7 +688,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--node-inspector",
             &endpoint,
             "--connection",
-            "runtime",
+            "runtime-a",
             "--context",
             &context,
             "--connect",
@@ -676,7 +697,75 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     assert_eq!(connected["connections"][0]["generation"], 1);
     assert_eq!(
         connected["connections"][0]["targets"][0]["targetId"],
-        "$node-root"
+        "$node-root:runtime-a"
+    );
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "attach",
+            "--context",
+            &context,
+            "--target",
+            "$node-root:runtime-a",
+        ],
+    );
+    let connected = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "add",
+            "--node-inspector",
+            &second_endpoint,
+            "--connection",
+            "runtime-b",
+            "--context",
+            &context,
+            "--connect",
+        ],
+    );
+    let targets = connected["targetForest"].as_array().unwrap();
+    assert!(targets.iter().any(|target| {
+        target["connectionId"] == "runtime-a"
+            && target["target"]["targetId"] == "$node-root:runtime-a"
+    }));
+    assert!(targets.iter().any(|target| {
+        target["connectionId"] == "runtime-b"
+            && target["target"]["targetId"] == "$node-root:runtime-b"
+    }));
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "attach",
+            "--context",
+            &context,
+            "--target",
+            "$node-root:runtime-b",
+        ],
+    );
+    let ambiguous = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &["target", "show", "--context", &context, "--target", "node"],
+    );
+    assert!(!ambiguous.0.success());
+    let ambiguity = String::from_utf8_lossy(&ambiguous.2);
+    assert!(
+        ambiguity.contains("runtime-a/$node-root:runtime-a@1"),
+        "{ambiguity}"
+    );
+    assert!(
+        ambiguity.contains("runtime-b/$node-root:runtime-b@1"),
+        "{ambiguity}"
     );
 
     let evaluated = run_json(
@@ -690,7 +779,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     assert_eq!(evaluated["preview"]["preview"], "42");
@@ -704,7 +793,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     run_json(
@@ -718,7 +807,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     run_json(
@@ -733,7 +822,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     let coverage_started = run_human_in(
@@ -747,7 +836,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     assert_success(
@@ -769,7 +858,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     assert!(!duplicate.0.success());
@@ -787,7 +876,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "--context",
             &context,
             "--target",
-            "$node-root",
+            "$node-root:runtime-a",
         ],
     );
     assert_success(
@@ -801,12 +890,43 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &service,
         &state_file,
         &[
+            "heap",
+            "capture",
+            "--id",
+            "offline-heap",
+            "--context",
+            &context,
+            "--target",
+            "$node-root:runtime-b",
+        ],
+    );
+    let capture_directory = persistent_state_file(&state_file).with_extension("captures");
+    let heap_files = heap_capture_files(&capture_directory);
+    assert_eq!(heap_files.len(), 1, "{heap_files:?}");
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
             "connection",
             "disconnect",
             "--context",
             &context,
             "--connection",
-            "runtime",
+            "runtime-a",
+        ],
+    );
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "disconnect",
+            "--context",
+            &context,
+            "--connection",
+            "runtime-b",
         ],
     );
     run_json(&cli, &service, &state_file, &["service", "stop"]);
@@ -825,8 +945,8 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         .find(|capture| capture["name"] == "offline-profile")
         .unwrap();
     assert_eq!(profile["kind"], "cpuProfile");
-    assert_eq!(profile["targetId"], "$node-root");
-    assert_eq!(profile["connectionId"], "runtime");
+    assert_eq!(profile["targetId"], "$node-root:runtime-a");
+    assert_eq!(profile["connectionId"], "runtime-a");
     assert_eq!(profile["connectionGeneration"], 1);
     assert_eq!(profile["contextId"], context_id);
     assert!(
@@ -858,20 +978,42 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         )
         .is_object()
     );
+    let heap = captures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|capture| capture["name"] == "offline-heap")
+        .unwrap();
+    assert_eq!(heap["targetId"], "$node-root:runtime-b");
+    assert_eq!(heap["connectionId"], "runtime-b");
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["capture", "delete", "offline-heap", "--context", &context],
+    );
+    assert!(!heap_files[0].exists());
 
     let transcript = "\
+$ jsdbg target show --context <context> --target node
+error: target selector 'node' is ambiguous: runtime-a/<node-a>@1, runtime-b/<node-b>@1
 $ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
 42
 $ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
 capture registered context-wide
 $ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
 error: capture 'offline-profile' already exists in context
-$ jsdbg connection disconnect --context <context> --connection runtime
+$ jsdbg heap capture --id offline-heap --context <context> --target <node-b>
+capture reserved before storage
+$ jsdbg connection disconnect --context <context> --connection runtime-a
+$ jsdbg connection disconnect --context <context> --connection runtime-b
 $ jsdbg service stop
 $ jsdbg capture show offline-profile --context <context>
-kind=cpuProfile owner=runtime/<canonical-id>@1
+kind=cpuProfile owner=runtime-a/<node-a>@1
 $ jsdbg profile show offline-profile --context <context>
 offline query succeeded
+$ jsdbg capture delete offline-heap --context <context>
+catalog persisted, then immutable heap storage removed
 ";
     print!("{transcript}");
     assert_eq!(
@@ -1585,6 +1727,28 @@ fn wait_until_removed(path: &Path) {
     }
     assert!(!path.exists(), "service state file was not removed");
     let _ = fs::remove_file(path.with_extension("startup.lock"));
+}
+
+fn heap_capture_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "heapsnapshot")
+            {
+                files.push(path);
+            }
+        }
+    }
+    files
 }
 
 fn cleanup_persistent_state(path: &Path) {

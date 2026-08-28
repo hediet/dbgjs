@@ -64,7 +64,8 @@ Use the role label, window grouping, and PID together:
   `[agent-host]` or `[copilot]` PID instead.
 
 Use a separate context for each process in the introductory workflows below.
-That keeps `$node-root` unambiguous for shorthand commands.
+Each root is published canonically as `$node-root:<connection-id>`. The friendly
+selector `node` remains convenient when only one Node target matches.
 
 Target-local commands use the scope selected by `--set`. Override any part with
 `--context <id>` or `--target <selector>`. The owning connection is inferred

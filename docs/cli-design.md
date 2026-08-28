@@ -240,6 +240,9 @@ connection and its generation as provenance. If two connections report the same
 canonical ID, discovery rejects the collision explicitly rather than silently
 qualifying, replacing, or selecting either target. IDs remain live protocol
 identifiers and must not be treated as durable identities across all restarts.
+Synthetic Node/process roots use `$node-root:<connection-id>` as their canonical
+ID, so independent direct runtimes can coexist. `node` remains a friendly
+selector and reports qualified candidates when more than one root matches.
 
 ### 4.6 Target graph
 
@@ -385,14 +388,16 @@ it to that frame and its ancestors.
 ### 4.16a Stored capture catalog
 
 Coverage, CPU-profile, and heap-snapshot names share one namespace per context.
-A name is immutable and cannot be replaced or reused by another capture kind or
-target. The service catalog maps `(context identity, capture name)` to the
-capture kind, canonical target ID, owning connection and generation, and an
-opaque immutable storage ID.
+A name is reserved atomically before capture output is written and cannot be
+replaced by another capture kind or target while cataloged. The service catalog
+maps `(context identity, capture name)` to the capture kind, canonical target
+ID, owning connection and generation, and an opaque immutable storage ID.
+Concurrent losers fail before receiving a storage path. Heap staging and final
+paths are unique to that reservation.
 
-For compatibility, an omitted name is the literal name `.`. Because names are
-immutable, `.` can be created only once in a context; later unnamed captures
-fail explicitly and should be given distinct names.
+For compatibility, an omitted name is the literal name `.`. While `.` remains
+cataloged, later unnamed captures fail explicitly and should be given distinct
+names (or the old capture should be explicitly deleted first).
 
 Capture lookup is context-scoped, not connection- or target-scoped. Catalog
 listing, metadata lookup, coverage rendering, CPU-profile rendering/export, and
@@ -401,6 +406,10 @@ disconnected and after a daemon restart. Registration validates that the
 capturing target still belongs to the recorded connection generation, so a
 capture completing after reconnect cannot be attributed to the replacement
 target.
+
+`capture delete` first persists catalog removal, then removes immutable heap
+storage. Context deletion follows the same ordering. A persistence failure
+restores the catalog and leaves heap files untouched.
 
 ### 4.17 Breakpoint specification
 

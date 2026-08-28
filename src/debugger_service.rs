@@ -24,6 +24,7 @@ use crate::context_engine::{
 };
 use crate::context_identity::{
     ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
+    synthetic_node_target_id,
 };
 use crate::context_source_model::{
     CompactedProjectionKind, ContextSourceGraphSnapshot, ContextSourceModel,
@@ -279,6 +280,7 @@ impl DebuggerService {
             while let Some(event) = events.recv().await {
                 let (observation, target_to_attach, target_to_remove) = match event {
                     crate::connection_provider::ProviderTargetEvent::Upsert(target) => {
+                        let target = canonicalize_synthetic_target(target, &connection_id);
                         let target_id = target.target_id.clone();
                         (
                             RuntimeObservation::TargetUpserted {
@@ -294,10 +296,10 @@ impl DebuggerService {
                         RuntimeObservation::TargetRemoved {
                             connection_id: connection_id.clone(),
                             attempt,
-                            target_id: target_id.clone(),
+                            target_id: canonicalize_synthetic_target_id(&target_id, &connection_id),
                         },
                         None,
-                        Some(target_id),
+                        Some(canonicalize_synthetic_target_id(&target_id, &connection_id)),
                     ),
                 };
                 let mut state = service.state.lock().await;
@@ -554,6 +556,43 @@ struct ServiceState {
     completed_requests: BTreeMap<(String, String), u64>,
     playwright_proxies: BTreeMap<String, PlaywrightProxyRegistration>,
     captures: BTreeMap<(String, String), StoredCapture>,
+    capture_reservations: BTreeMap<(String, String), CaptureReservation>,
+}
+
+#[derive(Clone, Debug)]
+struct CaptureReservation {
+    metadata: CaptureSnapshot,
+}
+
+struct CaptureReservationGuard {
+    service: DebuggerService,
+    reservation: CaptureReservation,
+}
+
+impl CaptureReservationGuard {
+    fn new(service: DebuggerService, reservation: CaptureReservation) -> Self {
+        Self {
+            service,
+            reservation,
+        }
+    }
+}
+
+impl Drop for CaptureReservationGuard {
+    fn drop(&mut self) {
+        let service = self.service.clone();
+        let reservation = self.reservation.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                if service.abandon_capture(&reservation).await
+                    && reservation.metadata.kind == CaptureKind::HeapSnapshot
+                {
+                    let (staging, final_path) = service.heap_capture_paths(&reservation);
+                    remove_heap_files([staging, final_path]);
+                }
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -590,10 +629,14 @@ fn physical_target_key(
         return Ok(format!("process:{process_id}"));
     }
     Ok(match &connection.configuration {
-        ConnectionConfiguration::Process { process_id } if key.2 == "$node-root" => {
+        ConnectionConfiguration::Process { process_id }
+            if key.2 == synthetic_node_target_id(&key.1) =>
+        {
             format!("process:{process_id}")
         }
-        ConnectionConfiguration::ProcessTree { root_pid } if key.2 == "$node-root" => {
+        ConnectionConfiguration::ProcessTree { root_pid }
+            if key.2 == synthetic_node_target_id(&key.1) =>
+        {
             format!("process:{root_pid}")
         }
         ConnectionConfiguration::ProcessTree { .. } if target.url.starts_with("process:") => {
@@ -646,6 +689,28 @@ enum StoredCapturePayload {
     Coverage(CoverageSnapshot),
     CpuProfile(CpuProfileSnapshot),
     HeapSnapshot { path: String },
+}
+
+impl StoredCapture {
+    fn heap_path(&self) -> Option<PathBuf> {
+        match &self.payload {
+            StoredCapturePayload::HeapSnapshot { path } => Some(path.into()),
+            StoredCapturePayload::Coverage(_) | StoredCapturePayload::CpuProfile(_) => None,
+        }
+    }
+}
+
+fn remove_heap_files(paths: impl IntoIterator<Item = PathBuf>) {
+    for path in paths {
+        if let Err(error) = fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "failed to remove deleted heap capture '{}': {error}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -845,6 +910,22 @@ impl DebuggerServiceApi for DebuggerService {
             if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
                 return Ok(existing.id == context_id);
             }
+            let mut heap_paths = state
+                .captures
+                .iter()
+                .filter(|((candidate_context, _), _)| candidate_context == &context_id)
+                .filter_map(|(_, capture)| capture.heap_path())
+                .collect::<Vec<_>>();
+            for reservation in state
+                .capture_reservations
+                .iter()
+                .filter(|((candidate_context, _), _)| candidate_context == &context_id)
+                .map(|(_, reservation)| reservation)
+                .filter(|reservation| reservation.metadata.kind == CaptureKind::HeapSnapshot)
+            {
+                let (staging, final_path) = self.heap_capture_paths(reservation);
+                heap_paths.extend([staging, final_path]);
+            }
             let previous = state.clone();
             if state.contexts.remove(&context_id).is_none() {
                 return Err(not_found("context", &context_id));
@@ -876,37 +957,19 @@ impl DebuggerServiceApi for DebuggerService {
                 .into_iter()
                 .filter_map(|key| state.runtimes.remove(&key))
                 .collect::<Vec<_>>();
-            let capture_keys = state
+            state
                 .captures
-                .keys()
-                .filter(|(candidate_context, _)| candidate_context == &context_id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let heap_paths = capture_keys
-                .into_iter()
-                .filter_map(|key| state.captures.remove(&key))
-                .filter_map(|capture| match capture.payload {
-                    StoredCapturePayload::HeapSnapshot { path } => Some(path),
-                    StoredCapturePayload::Coverage(_) | StoredCapturePayload::CpuProfile(_) => None,
-                })
-                .collect::<Vec<_>>();
+                .retain(|(candidate_context, _), _| candidate_context != &context_id);
+            state
+                .capture_reservations
+                .retain(|(candidate_context, _), _| candidate_context != &context_id);
             self.persist_or_restore(&mut state, previous)?;
             (runtimes, heap_paths)
         };
         for runtime in runtimes {
             runtime.close().await;
         }
-        for path in heap_paths {
-            match tokio::fs::remove_file(&path).await {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(internal_error(format!(
-                        "context was deleted, but heap capture '{path}' could not be removed: {error}"
-                    )));
-                }
-            }
-        }
+        remove_heap_files(heap_paths);
         Ok(true)
     }
 
@@ -974,7 +1037,7 @@ impl DebuggerServiceApi for DebuggerService {
             (configuration, attempt)
         };
 
-        let connected = connect_runtime(&configuration, attempt.generation).await;
+        let connected = connect_runtime(&configuration, &connection_id, attempt.generation).await;
         let mut state = self.state.lock().await;
         let context = state
             .contexts
@@ -2134,6 +2197,50 @@ impl DebuggerServiceApi for DebuggerService {
             .ok_or_else(|| not_found("capture", &capture_name))
     }
 
+    async fn delete_capture(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+    ) -> Result<bool, JsonRpcError> {
+        let (heap_path, debugger) = {
+            let mut state = self.state.lock().await;
+            if state
+                .capture_reservations
+                .contains_key(&(context_id.clone(), capture_name.clone()))
+            {
+                return Err(invalid_state(&format!(
+                    "capture '{capture_name}' is currently being stored in context '{context_id}'"
+                )));
+            }
+            let previous = state.clone();
+            let capture = state
+                .captures
+                .remove(&(context_id, capture_name.clone()))
+                .ok_or_else(|| not_found("capture", &capture_name))?;
+            let heap_path = capture.heap_path();
+            let debugger = state
+                .target_debuggers
+                .get(&(
+                    capture.metadata.context_id.clone(),
+                    capture.metadata.connection_id.clone(),
+                    capture.metadata.target_id.clone(),
+                ))
+                .filter(|debugger| {
+                    debugger.snapshot().connection_generation
+                        == capture.metadata.connection_generation
+                })
+                .cloned();
+            self.persist_or_restore(&mut state, previous)?;
+            (heap_path, debugger)
+        };
+        remove_heap_files(heap_path);
+        if let Some(debugger) = debugger {
+            let _ = debugger.delete_stored_capture(capture_name).await;
+        }
+        Ok(true)
+    }
+
     async fn get_stored_coverage(
         &self,
         _ctx: &CallCtx,
@@ -2284,7 +2391,9 @@ impl DebuggerServiceApi for DebuggerService {
         if let Some(owner) = prior_owner {
             outcome = TargetAttachmentOutcome::Stolen;
             let owner_is_requested = owner.key == debugger_key;
-            if owner.runtime.is_direct_debugger() && owner.key.2 == "$node-root" {
+            if owner.runtime.is_direct_debugger()
+                && owner.key.2 == synthetic_node_target_id(&owner.key.1)
+            {
                 self.disconnect_connection(ctx, owner.key.0.clone(), owner.key.1.clone())
                     .await?;
                 if owner_is_requested {
@@ -2334,8 +2443,13 @@ impl DebuggerServiceApi for DebuggerService {
         };
 
         let (session, session_key) = if runtime.is_direct_debugger() {
+            let runtime_target_id = if target_id == synthetic_node_target_id(&connection_id) {
+                "$node-root"
+            } else {
+                &target_id
+            };
             let attachment = runtime
-                .take_direct_debugger_session(&target_id, options.force)
+                .take_direct_debugger_session(runtime_target_id, options.force)
                 .await
                 .map_err(|error| direct_attachment_error(error.to_string(), options.force))?
                 .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
@@ -2958,26 +3072,42 @@ impl DebuggerServiceApi for DebuggerService {
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        if let Some(name) = capture_id.as_deref() {
-            self.ensure_capture_name_available(&context_id, name)
-                .await?;
-        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let owner = debugger.snapshot();
-        let snapshot = debugger
+        let reservation = if let Some(name) = capture_id.as_ref() {
+            Some(CaptureReservationGuard::new(
+                self.clone(),
+                self.reserve_capture(
+                    &context_id,
+                    &owner.connection_id,
+                    &owner.target_id,
+                    owner.connection_generation,
+                    name.clone(),
+                    CaptureKind::Coverage,
+                )
+                .await?,
+            ))
+        } else {
+            None
+        };
+        let snapshot = match debugger
             .take_coverage(capture_id.clone(), exclude_capture_id)
             .await
-            .map_err(target_debugger_rpc_error)?;
-        if let Some(name) = capture_id {
-            self.register_capture(
-                &context_id,
-                &owner.connection_id,
-                &owner.target_id,
-                owner.connection_generation,
-                name,
-                CaptureKind::Coverage,
+            .map_err(target_debugger_rpc_error)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if let Some(reservation) = &reservation {
+                    self.abandon_capture(&reservation.reservation).await;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(reservation) = &reservation {
+            self.store_capture(
+                &reservation.reservation,
                 StoredCapturePayload::Coverage(snapshot.clone()),
             )
             .await?;
@@ -2993,22 +3123,35 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        self.ensure_capture_name_available(&context_id, ".").await?;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let owner = debugger.snapshot();
-        let snapshot = debugger
+        let reservation = CaptureReservationGuard::new(
+            self.clone(),
+            self.reserve_capture(
+                &context_id,
+                &owner.connection_id,
+                &owner.target_id,
+                owner.connection_generation,
+                ".".to_owned(),
+                CaptureKind::Coverage,
+            )
+            .await?,
+        );
+        let snapshot = match debugger
             .stop_coverage(exclude_capture_id)
             .await
-            .map_err(target_debugger_rpc_error)?;
-        self.register_capture(
-            &context_id,
-            &owner.connection_id,
-            &owner.target_id,
-            owner.connection_generation,
-            ".".to_owned(),
-            CaptureKind::Coverage,
+            .map_err(target_debugger_rpc_error)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.abandon_capture(&reservation.reservation).await;
+                return Err(error);
+            }
+        };
+        self.store_capture(
+            &reservation.reservation,
             StoredCapturePayload::Coverage(snapshot.clone()),
         )
         .await?;
@@ -3076,23 +3219,35 @@ impl DebuggerServiceApi for DebuggerService {
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
         let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
-        self.ensure_capture_name_available(&context_id, &name)
-            .await?;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let owner = debugger.snapshot();
-        let snapshot = debugger
+        let reservation = CaptureReservationGuard::new(
+            self.clone(),
+            self.reserve_capture(
+                &context_id,
+                &owner.connection_id,
+                &owner.target_id,
+                owner.connection_generation,
+                name,
+                CaptureKind::CpuProfile,
+            )
+            .await?,
+        );
+        let snapshot = match debugger
             .stop_cpu_profile(capture_id)
             .await
-            .map_err(target_debugger_rpc_error)?;
-        self.register_capture(
-            &context_id,
-            &owner.connection_id,
-            &owner.target_id,
-            owner.connection_generation,
-            name,
-            CaptureKind::CpuProfile,
+            .map_err(target_debugger_rpc_error)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.abandon_capture(&reservation.reservation).await;
+                return Err(error);
+            }
+        };
+        self.store_capture(
+            &reservation.reservation,
             StoredCapturePayload::CpuProfile(snapshot.clone()),
         )
         .await?;
@@ -3145,40 +3300,60 @@ impl DebuggerServiceApi for DebuggerService {
         expose_internals: bool,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
         let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
-        self.ensure_capture_name_available(&context_id, &name)
-            .await?;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let owner = debugger.snapshot();
-        let result = debugger
-            .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
-            .await
-            .map_err(target_debugger_rpc_error)?;
-        let path = self
-            .persistence_path
-            .with_extension("captures")
-            .join(format!("{:016x}", stable_name_hash(&context_id)))
-            .join(format!("{:016x}.heapsnapshot", stable_name_hash(&name)));
-        debugger
-            .copy_heap_capture(name.clone(), path.to_string_lossy().into_owned())
-            .await
-            .map_err(target_debugger_rpc_error)?;
-        if let Err(error) = self
-            .register_capture(
+        let reservation = CaptureReservationGuard::new(
+            self.clone(),
+            self.reserve_capture(
                 &context_id,
                 &owner.connection_id,
                 &owner.target_id,
                 owner.connection_generation,
-                name,
+                name.clone(),
                 CaptureKind::HeapSnapshot,
+            )
+            .await?,
+        );
+        let result = match debugger
+            .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
+            .await
+            .map_err(target_debugger_rpc_error)
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.abandon_capture(&reservation.reservation).await;
+                return Err(error);
+            }
+        };
+        let (staging_path, final_path) = self.heap_capture_paths(&reservation.reservation);
+        if let Err(error) = debugger
+            .copy_heap_capture(name, staging_path.to_string_lossy().into_owned())
+            .await
+            .map_err(target_debugger_rpc_error)
+        {
+            self.abandon_capture(&reservation.reservation).await;
+            remove_heap_files([staging_path]);
+            return Err(error);
+        }
+        if let Err(error) = fs::rename(&staging_path, &final_path) {
+            self.abandon_capture(&reservation.reservation).await;
+            remove_heap_files([staging_path, final_path]);
+            return Err(internal_error(format!(
+                "failed to publish heap capture storage: {error}"
+            )));
+        }
+        if let Err(error) = self
+            .store_capture(
+                &reservation.reservation,
                 StoredCapturePayload::HeapSnapshot {
-                    path: path.to_string_lossy().into_owned(),
+                    path: final_path.to_string_lossy().into_owned(),
                 },
             )
             .await
         {
-            let _ = fs::remove_file(path);
+            remove_heap_files([final_path]);
             return Err(error);
         }
         Ok(result)
@@ -3370,7 +3545,7 @@ impl DebuggerServiceApi for DebuggerService {
 }
 
 impl DebuggerService {
-    async fn register_capture(
+    async fn reserve_capture(
         &self,
         context_id: &str,
         connection_id: &str,
@@ -3378,14 +3553,22 @@ impl DebuggerService {
         connection_generation: u64,
         name: String,
         kind: CaptureKind,
-        payload: StoredCapturePayload,
-    ) -> Result<CaptureSnapshot, JsonRpcError> {
+    ) -> Result<CaptureReservation, JsonRpcError> {
         validate_id("capture", &name)?;
         let mut state = self.state.lock().await;
         let key = (context_id.to_owned(), name.clone());
         if let Some(existing) = state.captures.get(&key) {
             return Err(invalid_state(&format!(
                 "capture '{name}' already exists in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
+                existing.metadata.kind,
+                existing.metadata.target_id,
+                existing.metadata.connection_id,
+                existing.metadata.connection_generation,
+            )));
+        }
+        if let Some(existing) = state.capture_reservations.get(&key) {
+            return Err(invalid_state(&format!(
+                "capture '{name}' is already being stored in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
                 existing.metadata.kind,
                 existing.metadata.target_id,
                 existing.metadata.connection_id,
@@ -3404,6 +3587,21 @@ impl DebuggerService {
                 "connection generation changed while the capture was being stored",
             ));
         }
+        let storage_id = loop {
+            let candidate =
+                random_instance_id().map_err(|error| internal_error(error.to_string()))?;
+            let in_use = state
+                .captures
+                .values()
+                .any(|capture| capture.metadata.storage_id == candidate)
+                || state
+                    .capture_reservations
+                    .values()
+                    .any(|reservation| reservation.metadata.storage_id == candidate);
+            if !in_use {
+                break candidate;
+            }
+        };
         let metadata = CaptureSnapshot {
             context_id: context_id.to_owned(),
             name,
@@ -3411,9 +3609,42 @@ impl DebuggerService {
             target_id: target_id.to_owned(),
             connection_id: connection_id.to_owned(),
             connection_generation,
-            storage_id: random_instance_id().map_err(|error| internal_error(error.to_string()))?,
+            storage_id,
         };
+        let reservation = CaptureReservation { metadata };
+        state.capture_reservations.insert(key, reservation.clone());
+        Ok(reservation)
+    }
+
+    async fn finalize_capture(
+        &self,
+        reservation: &CaptureReservation,
+        payload: StoredCapturePayload,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        let mut state = self.state.lock().await;
+        let metadata = &reservation.metadata;
+        let key = (metadata.context_id.clone(), metadata.name.clone());
+        if state
+            .capture_reservations
+            .get(&key)
+            .is_none_or(|current| current.metadata.storage_id != metadata.storage_id)
+        {
+            return Err(invalid_state("capture reservation is no longer current"));
+        }
+        let connection = state
+            .contexts
+            .get(&metadata.context_id)
+            .and_then(|context| context.connections.get(&metadata.connection_id))
+            .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
+        if connection.generation != metadata.connection_generation
+            || !connection.targets.contains_key(&metadata.target_id)
+        {
+            return Err(invalid_state(
+                "connection generation changed while the capture was being stored",
+            ));
+        }
         let previous = state.clone();
+        state.capture_reservations.remove(&key);
         state.captures.insert(
             key,
             StoredCapture {
@@ -3422,29 +3653,49 @@ impl DebuggerService {
             },
         );
         self.persist_or_restore(&mut state, previous)?;
-        Ok(metadata)
+        Ok(metadata.clone())
     }
 
-    async fn ensure_capture_name_available(
-        &self,
-        context_id: &str,
-        name: &str,
-    ) -> Result<(), JsonRpcError> {
-        validate_id("capture", name)?;
-        let state = self.state.lock().await;
-        if let Some(existing) = state
-            .captures
-            .get(&(context_id.to_owned(), name.to_owned()))
+    async fn abandon_capture(&self, reservation: &CaptureReservation) -> bool {
+        let metadata = &reservation.metadata;
+        let key = (metadata.context_id.clone(), metadata.name.clone());
+        let mut state = self.state.lock().await;
+        if state
+            .capture_reservations
+            .get(&key)
+            .is_some_and(|current| current.metadata.storage_id == metadata.storage_id)
         {
-            return Err(invalid_state(&format!(
-                "capture '{name}' already exists in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
-                existing.metadata.kind,
-                existing.metadata.target_id,
-                existing.metadata.connection_id,
-                existing.metadata.connection_generation,
-            )));
+            state.capture_reservations.remove(&key);
+            true
+        } else {
+            false
         }
-        Ok(())
+    }
+
+    async fn store_capture(
+        &self,
+        reservation: &CaptureReservation,
+        payload: StoredCapturePayload,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        let result = self.finalize_capture(reservation, payload).await;
+        if result.is_err() {
+            self.abandon_capture(reservation).await;
+        }
+        result
+    }
+
+    fn heap_capture_paths(&self, reservation: &CaptureReservation) -> (PathBuf, PathBuf) {
+        let directory = self
+            .persistence_path
+            .with_extension("captures")
+            .join(format!(
+                "{:016x}",
+                stable_name_hash(&reservation.metadata.context_id)
+            ));
+        let final_path =
+            directory.join(format!("{}.heapsnapshot", reservation.metadata.storage_id));
+        let staging_path = directory.join(format!("{}.partial", reservation.metadata.storage_id));
+        (staging_path, final_path)
     }
 
     async fn target_debugger(
@@ -3609,8 +3860,31 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
     let _ = runtime.root().target_detach_from_target(detach).await;
 }
 
+fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> String {
+    if target_id == "$node-root" {
+        synthetic_node_target_id(connection_id)
+    } else {
+        target_id.to_owned()
+    }
+}
+
+fn canonicalize_synthetic_target(
+    mut target: TargetSnapshot,
+    connection_id: &str,
+) -> TargetSnapshot {
+    target.target_id = canonicalize_synthetic_target_id(&target.target_id, connection_id);
+    target.parent_id = target
+        .parent_id
+        .map(|id| canonicalize_synthetic_target_id(&id, connection_id));
+    target.opener_id = target
+        .opener_id
+        .map(|id| canonicalize_synthetic_target_id(&id, connection_id));
+    target
+}
+
 async fn connect_runtime(
     configuration: &ConnectionConfiguration,
+    connection_id: &str,
     connection_generation: u64,
 ) -> Result<(Arc<ConnectionRuntime>, String, String, Vec<TargetSnapshot>), String> {
     let connection = ConnectionRuntime::connect(configuration, connection_generation)
@@ -3631,7 +3905,7 @@ async fn connect_runtime(
             title.clone(),
             "1.3".to_owned(),
             vec![TargetSnapshot {
-                target_id: "$node-root".to_owned(),
+                target_id: synthetic_node_target_id(connection_id),
                 target_type: "node".to_owned(),
                 title,
                 url: match configuration {
@@ -4156,6 +4430,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         completed_requests,
         playwright_proxies: BTreeMap::new(),
         captures,
+        capture_reservations: BTreeMap::new(),
     })
 }
 
@@ -4643,6 +4918,277 @@ mod tests {
         })
     }
 
+    fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
+        let (shutdown, _) = watch::channel(false);
+        let (revision_signal, _) = watch::channel(0);
+        DebuggerService {
+            agent_instance_id: "test-agent".into(),
+            state: Arc::new(Mutex::new(state)),
+            attachment_lock: Arc::new(Mutex::new(())),
+            persistence_path: path,
+            shutdown,
+            revision_signal,
+        }
+    }
+
+    fn heap_capture(
+        context_id: &str,
+        name: &str,
+        target_id: &str,
+        connection_id: &str,
+        path: &Path,
+    ) -> StoredCapture {
+        StoredCapture {
+            metadata: CaptureSnapshot {
+                context_id: context_id.into(),
+                name: name.into(),
+                kind: CaptureKind::HeapSnapshot,
+                target_id: target_id.into(),
+                connection_id: connection_id.into(),
+                connection_generation: 1,
+                storage_id: format!("storage-{name}"),
+            },
+            payload: StoredCapturePayload::HeapSnapshot {
+                path: path.to_string_lossy().into_owned(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_name_reservation_is_atomic_across_targets() {
+        let context = context_with_targets([
+            ("first", 1, vec![target("target-a", "A", "https://a.test")]),
+            ("second", 1, vec![target("target-b", "B", "https://b.test")]),
+        ]);
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+        let service = service_with_state(PathBuf::from("unused"), state);
+
+        let (first, second) = tokio::join!(
+            service.reserve_capture(
+                "test",
+                "first",
+                "target-a",
+                1,
+                "same-name".into(),
+                CaptureKind::Coverage,
+            ),
+            service.reserve_capture(
+                "test",
+                "second",
+                "target-b",
+                1,
+                "same-name".into(),
+                CaptureKind::HeapSnapshot,
+            )
+        );
+
+        assert_ne!(first.is_ok(), second.is_ok());
+        let loser = first.as_ref().err().or(second.as_ref().err()).unwrap();
+        assert!(loser.message.contains("already being stored"), "{loser:?}");
+        let state = service.state.lock().await;
+        assert_eq!(state.capture_reservations.len(), 1);
+        assert!(state.captures.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capture_finalization_rechecks_connection_generation() {
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "capture".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        service.state.lock().await.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                2,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+
+        let error = service
+            .finalize_capture(
+                &reservation,
+                StoredCapturePayload::HeapSnapshot {
+                    path: "unused".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(error.message.contains("generation changed"), "{error:?}");
+        let state = service.state.lock().await;
+        assert!(state.captures.is_empty());
+        assert_eq!(state.capture_reservations.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn heap_storage_is_unique_and_cleanup_cannot_remove_another_reservation() {
+        let context = context_with_targets([(
+            "runtime",
+            1,
+            vec![target("target-a", "A", "https://a.test")],
+        )]);
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("capture-storage-{}", random_instance_id().unwrap()));
+        let service = service_with_state(root.join("service.json"), state);
+        let first = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "first".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        let second = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "second".into(),
+                CaptureKind::HeapSnapshot,
+            )
+            .await
+            .unwrap();
+        let (first_staging, first_final) = service.heap_capture_paths(&first);
+        let (second_staging, second_final) = service.heap_capture_paths(&second);
+        assert_ne!(first_staging, second_staging);
+        assert_ne!(first_final, second_final);
+        fs::create_dir_all(first_final.parent().unwrap()).unwrap();
+        fs::write(&first_final, b"winner").unwrap();
+
+        service.abandon_capture(&second).await;
+        remove_heap_files([second_staging, second_final]);
+        assert_eq!(fs::read(&first_final).unwrap(), b"winner");
+
+        remove_heap_files([first_final]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn persisted_heap_files_are_removed_after_catalog_and_context_deletion() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("capture-delete-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let first_path = root.join("first.heapsnapshot");
+        let second_path = root.join("second.heapsnapshot");
+        fs::write(&first_path, b"first").unwrap();
+        fs::write(&second_path, b"second").unwrap();
+        let context = context_with_targets([(
+            "runtime",
+            1,
+            vec![target("target-a", "A", "https://a.test")],
+        )]);
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+        state
+            .context_kinds
+            .insert("test".into(), ContextKind::Named);
+        state.captures.insert(
+            ("test".into(), "first".into()),
+            heap_capture("test", "first", "target-a", "runtime", &first_path),
+        );
+        state.captures.insert(
+            ("test".into(), "second".into()),
+            heap_capture("test", "second", "target-a", "runtime", &second_path),
+        );
+        let service = service_with_state(persistence_path.clone(), state);
+        service.persist(&*service.state.lock().await).unwrap();
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path.clone()).unwrap();
+        restored
+            .delete_capture(&CallCtx::default(), "test".into(), "first".into())
+            .await
+            .unwrap();
+        assert!(!first_path.exists());
+        assert!(second_path.exists());
+        restored
+            .delete_context(
+                &CallCtx::default(),
+                "test".into(),
+                MutationOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!second_path.exists());
+
+        let (shutdown, _) = watch::channel(false);
+        let reloaded = DebuggerService::load(shutdown, persistence_path).unwrap();
+        let state = reloaded.state.lock().await;
+        assert!(!state.contexts.contains_key("test"));
+        assert!(state.captures.is_empty());
+        drop(state);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn failed_catalog_persistence_leaves_heap_file_and_entry_intact() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "capture-delete-failure-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let blocker = root.join("not-a-directory");
+        fs::write(&blocker, b"block").unwrap();
+        let heap_path = root.join("kept.heapsnapshot");
+        fs::write(&heap_path, b"kept").unwrap();
+        let mut state = ServiceState::default();
+        state.captures.insert(
+            ("test".into(), "kept".into()),
+            heap_capture("test", "kept", "target-a", "runtime", &heap_path),
+        );
+        let service = service_with_state(blocker.join("service.json"), state);
+
+        assert!(
+            service
+                .delete_capture(&CallCtx::default(), "test".into(), "kept".into())
+                .await
+                .is_err()
+        );
+        assert!(heap_path.exists());
+        assert!(
+            service
+                .state
+                .lock()
+                .await
+                .captures
+                .contains_key(&("test".into(), "kept".into()))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn canonical_target_id_wins_over_friendly_matches_context_wide() {
         let context = context_with_targets([
@@ -4693,6 +5239,45 @@ mod tests {
         let error = error.message;
         assert!(error.contains("browser-a/target-a@3"), "{error}");
         assert!(error.contains("browser-b/target-b@8"), "{error}");
+    }
+
+    #[test]
+    fn synthetic_node_roots_are_unique_but_node_selector_is_friendly() {
+        let mut first = target(
+            &synthetic_node_target_id("runtime-a"),
+            "Node.js",
+            "ws://runtime-a",
+        );
+        first.target_type = "node".into();
+        let mut second = target(
+            &synthetic_node_target_id("runtime-b"),
+            "Node.js",
+            "ws://runtime-b",
+        );
+        second.target_type = "node".into();
+        let context = context_with_targets([
+            ("runtime-a", 1, vec![first]),
+            ("runtime-b", 1, vec![second]),
+        ]);
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+
+        let exact = DebuggerService::resolve_canonical_target(
+            &state,
+            "test",
+            &synthetic_node_target_id("runtime-b"),
+        )
+        .unwrap();
+        assert_eq!(exact.connection_id, "runtime-b");
+        let error = DebuggerService::resolve_canonical_target(&state, "test", "node").unwrap_err();
+        assert!(
+            error.message.contains("runtime-a/$node-root:runtime-a@1"),
+            "{error:?}"
+        );
+        assert!(
+            error.message.contains("runtime-b/$node-root:runtime-b@1"),
+            "{error:?}"
+        );
     }
 
     #[test]

@@ -66,8 +66,12 @@ export async function run(): Promise<void> {
 	const childTarget = nodeTargets.find(
 		(target) => target.subtype === "child-process",
 	);
+	const rootTarget = nodeTargets.find(
+		(target) => target.targetId.startsWith("$node-root:"),
+	);
 	assert.ok(childTarget, "spawned Node.js process is modeled as a target");
-	assert.equal(childTarget.parentId, "$node-root");
+	assert.ok(rootTarget, "Node.js root has a canonical connection-scoped ID");
+	assert.equal(childTarget.parentId, rootTarget.targetId);
 	assert.equal(childTarget.attached, true);
 	await launchAndAssert(api, {
 		type: "jsdbg",
