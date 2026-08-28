@@ -723,6 +723,14 @@ pub enum ValueSelector {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueInspectionOptions {
+    pub max_preview_length: u32,
+    pub max_properties: u32,
+    pub retain_references: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSnapshot {
@@ -731,6 +739,8 @@ pub struct ValueSnapshot {
     pub class_name: Option<String>,
     pub preview: ValuePreviewSnapshot,
     pub properties: Vec<ValuePropertySnapshot>,
+    #[serde(default)]
+    pub omitted_property_count: u64,
     pub promise: Option<PromiseSnapshot>,
 }
 
@@ -1510,7 +1520,7 @@ pub trait DebuggerServiceApi {
         target_id: String,
         pause_epoch: Option<u64>,
         selector: ValueSelector,
-        max_preview_length: u32,
+        options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, JsonRpcError>;
 
     async fn set_logpoint(
@@ -1769,6 +1779,7 @@ mod tests {
                 name: "child".to_owned(),
                 value: preview("Object", "object:2"),
             }],
+            omitted_property_count: 0,
             promise: Some(PromiseSnapshot {
                 reference: Some("promise:1".to_owned()),
                 origin: PromiseOrigin::Live,

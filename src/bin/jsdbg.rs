@@ -23,7 +23,7 @@ use cdp_client::service_api::{
     HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, PromiseState,
     SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetWaitPredicate, ValueSelector,
+    TargetDebuggerSnapshot, TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,8 @@ use output::{
     CpuProfileSort, CpuProfileView, HeapClassOutputOptions, OutputFormat, ProcessTreeOutputOptions,
     SourceTreeOutputOptions, TargetListEntry, TargetListOutput,
 };
+
+const DEFAULT_VALUE_PROPERTY_LIMIT: u32 = 20;
 
 #[tokio::main]
 async fn main() {
@@ -197,22 +199,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                 )
                 .await)?;
-            output.print(
-                &rpc(client
-                    .inspect_value(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        pause_epoch(&snapshot),
-                        ValueSelector::Expression {
-                            expression: expression.clone(),
-                            allow_side_effects: true,
-                        },
-                        DEFAULT_VALUE_PREVIEW_LENGTH,
-                    )
-                    .await)?
-                .without_references(),
-            )?;
+            output.print(&rpc(client
+                .inspect_value(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    pause_epoch(&snapshot),
+                    ValueSelector::Expression {
+                        expression: expression.clone(),
+                        allow_side_effects: true,
+                    },
+                    ValueInspectionOptions {
+                        max_preview_length: DEFAULT_VALUE_PREVIEW_LENGTH,
+                        max_properties: DEFAULT_VALUE_PROPERTY_LIMIT,
+                        retain_references: false,
+                    },
+                )
+                .await)?)?;
         }
         [target, cdp, method, options @ ..] if target == "target" && cdp == "cdp" => {
             let options = parse_raw_cdp_options(options)?;
@@ -250,7 +253,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target,
                     pause_epoch(&snapshot),
                     options.selector,
-                    options.max_preview_length,
+                    ValueInspectionOptions {
+                        max_preview_length: options.max_preview_length,
+                        max_properties: options.max_properties,
+                        retain_references: true,
+                    },
                 )
                 .await)?;
             output.print(&value)?;
@@ -3717,6 +3724,7 @@ fn parse_u32_option(values: &[String], index: usize, option: &str) -> Result<u32
 struct ValueOptions {
     selector: ValueSelector,
     max_preview_length: u32,
+    max_properties: u32,
 }
 
 fn parse_value_options(arguments: &[String]) -> Result<ValueOptions, io::Error> {
@@ -3724,6 +3732,7 @@ fn parse_value_options(arguments: &[String]) -> Result<ValueOptions, io::Error> 
     let mut object_id = None;
     let mut allow_side_effects = false;
     let mut max_preview_length = DEFAULT_PROMISE_PREVIEW_LENGTH;
+    let mut max_properties = DEFAULT_VALUE_PROPERTY_LIMIT;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -3745,6 +3754,10 @@ fn parse_value_options(arguments: &[String]) -> Result<ValueOptions, io::Error> 
             "--max-preview-length" => {
                 index += 1;
                 max_preview_length = parse_u32_option(arguments, index, "--max-preview-length")?;
+            }
+            "--max-properties" => {
+                index += 1;
+                max_properties = parse_u32_option(arguments, index, "--max-properties")?;
             }
             argument if argument.starts_with("--") => {
                 return Err(io::Error::new(
@@ -3790,6 +3803,7 @@ fn parse_value_options(arguments: &[String]) -> Result<ValueOptions, io::Error> 
     Ok(ValueOptions {
         selector,
         max_preview_length,
+        max_properties,
     })
 }
 
@@ -4864,6 +4878,7 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
     Ok(options)
 }
 
+#[derive(Debug)]
 struct ContextDeleteOptions {
     disconnect_connections: bool,
     mutation: MutationOptions,
@@ -4878,9 +4893,16 @@ fn parse_context_delete_options(arguments: &[String]) -> Result<ContextDeleteOpt
         .filter(|argument| *argument != "--disconnect-connections")
         .cloned()
         .collect::<Vec<_>>();
+    let mutation = parse_mutation_options(&mutation_arguments)?;
+    if disconnect_connections && mutation.expected_revision.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--disconnect-connections cannot be combined with --expected-revision because the disconnects advance the context revision",
+        ));
+    }
     Ok(ContextDeleteOptions {
         disconnect_connections,
-        mutation: parse_mutation_options(&mutation_arguments)?,
+        mutation,
     })
 }
 
@@ -5082,8 +5104,8 @@ commands:
   jsdbg target eval <expression|-> [target scope]  ('-' reads the expression from stdin)
   jsdbg target watch <expression> [target scope]
   jsdbg target cdp <method> [--params <json>] [--no-validation] [target scope]
-  jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [target scope]
-  jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [target scope]
+  jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
+  jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
   jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
   jsdbg log [--after <cursor>] [--limit <count>] [target scope]
@@ -5125,20 +5147,21 @@ Use --no-validation for vendor or newer protocol methods."
 mod tests {
     use super::{
         CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
-        DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH, ResolvedScope, ScopeOptions,
-        SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
-        connection_list_output, context_delete_disconnect_error, extract_scope_options,
-        load_selection_store, parse_chrome_options, parse_connection_list_options,
-        parse_context_create_options, parse_context_delete_options, parse_context_option,
-        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
-        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
-        parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
-        parse_heap_string_options, parse_process_attach_options, parse_process_list_options,
-        parse_promise_list_options, parse_raw_cdp_options, parse_screenshot_capture_options,
-        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
-        parse_source_tree_options, parse_target_list_options, parse_value_options, png_dimensions,
-        read_eval_expression, resolve_target_scope, select_implicit_context,
-        split_heap_reference_cli, target_list_output,
+        DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
+        DEFAULT_VALUE_PROPERTY_LIMIT, ResolvedScope, ScopeOptions, SelectionStore,
+        TargetListOptions, activate_selection_scope, apply_scope_selection, connection_list_output,
+        context_delete_disconnect_error, extract_scope_options, load_selection_store,
+        parse_chrome_options, parse_connection_list_options, parse_context_create_options,
+        parse_context_delete_options, parse_context_option, parse_coverage_show_options,
+        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
+        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
+        parse_heap_select_options, parse_heap_show_options, parse_heap_string_options,
+        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
+        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
+        parse_target_list_options, parse_value_options, png_dimensions, read_eval_expression,
+        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -5165,7 +5188,8 @@ mod tests {
         assert!(read_eval_expression(&arguments(&["-"]), " \n".as_bytes()).is_err());
         assert!(
             read_eval_expression(&arguments(&["answer", "-"]), "".as_bytes())
-                .unwrap_err()
+                .err()
+                .unwrap()
                 .to_string()
                 .contains("'-' alone")
         );
@@ -5175,15 +5199,22 @@ mod tests {
     fn parses_context_delete_cascade_and_gives_exact_disconnect_commands() {
         let options = parse_context_delete_options(&arguments(&[
             "--disconnect-connections",
-            "--expected-revision",
-            "7",
             "--request-id",
             "cleanup",
         ]))
         .unwrap();
         assert!(options.disconnect_connections);
-        assert_eq!(options.mutation.expected_revision, Some(7));
         assert_eq!(options.mutation.request_id.as_deref(), Some("cleanup"));
+        assert!(
+            parse_context_delete_options(&arguments(&[
+                "--disconnect-connections",
+                "--expected-revision",
+                "7",
+            ]))
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be combined")
+        );
 
         let error = context_delete_disconnect_error(
             "workspace",
@@ -5283,12 +5314,15 @@ mod tests {
             }
         );
         assert_eq!(options.max_preview_length, 120);
+        assert_eq!(options.max_properties, DEFAULT_VALUE_PROPERTY_LIMIT);
 
         let options = parse_value_options(&arguments(&[
             "refresh()",
             "--allow-side-effects",
             "--max-preview-length",
             "40",
+            "--max-properties",
+            "7",
         ]))
         .unwrap();
         assert_eq!(
@@ -5299,6 +5333,7 @@ mod tests {
             }
         );
         assert_eq!(options.max_preview_length, 40);
+        assert_eq!(options.max_properties, 7);
 
         let options = parse_value_options(&arguments(&["--object-id", "{\"id\":1}"])).unwrap();
         assert_eq!(

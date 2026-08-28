@@ -6,6 +6,11 @@ characters by default and append `...` when truncated. Evaluation remains
 effectful; `value` remains side-effect-safe unless `--allow-side-effects` is
 passed.
 
+Object property lists are bounded to 20 entries by default. `target eval` uses
+an ephemeral object group and releases it after rendering; `value` retains
+references for explicit follow-up inspection and accepts `--max-properties` to
+adjust the limit.
+
 Ordinary `target eval` does not publish CDP object IDs. Its `reference` fields
 are `null`, including property and Promise settlement references. Generic
 `value` inspection retains its existing remote-reference output until those

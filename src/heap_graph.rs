@@ -297,7 +297,7 @@ impl HeapGraph {
                         )
                         .ok()
                         .flatten()
-                        .is_some_and(|value| matcher.matches(&value.value)),
+                        .is_some_and(|value| !value.truncated && matcher.matches(&value.value)),
                     _ => false,
                 };
                 if !matches {
@@ -391,7 +391,7 @@ impl HeapGraph {
                     )
                     .ok()
                     .flatten()
-                    .map(|value| value.value),
+                    .and_then(|value| (!value.truncated).then_some(value.value)),
                 AggregateBy::StringValue => None,
             };
             let Some(key) = key else {
@@ -2480,6 +2480,15 @@ mod tests {
                 value: "backing".to_owned(),
                 truncated: true,
             })
+        );
+        assert_eq!(
+            regular_v8_slice
+                .select(&NodeSelector::new().string_value(TextMatcher::Contains("backing"))),
+            vec![NodeIndex(1)]
+        );
+        assert_eq!(
+            regular_v8_slice.aggregate(AggregateBy::StringValue).groups["backing string"].count,
+            1
         );
     }
 

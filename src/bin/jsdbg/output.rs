@@ -2277,6 +2277,12 @@ impl HumanOutput for ValueSnapshot {
                 render_value_preview_with_reference(&property.value)
             );
         }
+        if self.omitted_property_count > 0 {
+            println!(
+                "  ... {} properties omitted; use --max-properties to expand",
+                self.omitted_property_count
+            );
+        }
     }
 }
 
@@ -3621,6 +3627,7 @@ mod tests {
             class_name: None,
             preview,
             properties: Vec::new(),
+            omitted_property_count: 0,
             promise: None,
         };
 

@@ -18,7 +18,7 @@ use crate::cdp::{
     ProfilerStartParams, ProfilerStartPreciseCoverageParams, ProfilerStopParams,
     ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams, RuntimeExceptionDetails,
     RuntimeGetPropertiesParams, RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor,
-    RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
+    RuntimeReleaseObjectGroupParams, RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::context_source_model::ContextSourceModel;
@@ -51,8 +51,8 @@ use crate::service_api::{
     ScreenshotSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptSnapshot,
-    TargetScriptStatus, TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot,
-    ValueSelector, ValueSnapshot, VariableSnapshot,
+    TargetScriptStatus, TargetWaitPredicate, ValueInspectionOptions, ValuePreviewSnapshot,
+    ValuePropertySnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_view::Position;
@@ -305,14 +305,14 @@ impl TargetDebuggerHandle {
         &self,
         pause_epoch: Option<u64>,
         selector: ValueSelector,
-        max_preview_length: u32,
+        options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::InspectValue {
                 pause_epoch,
                 selector,
-                max_preview_length,
+                options,
                 response,
             })
             .await
@@ -910,7 +910,7 @@ enum TargetCommand {
     InspectValue {
         pause_epoch: Option<u64>,
         selector: ValueSelector,
-        max_preview_length: u32,
+        options: ValueInspectionOptions,
         response: oneshot::Sender<Result<ValueSnapshot, TargetDebuggerError>>,
     },
     SourceContent {
@@ -1374,17 +1374,40 @@ async fn run_target(
             Next::Command(Some(TargetCommand::InspectValue {
                 pause_epoch,
                 selector,
-                max_preview_length,
+                options,
                 response,
             })) => {
+                let object_group =
+                    (!options.retain_references).then(|| "jsdbg-ephemeral-value".to_owned());
                 let result = inspect_value(
                     &driver,
                     &session_key,
                     pause_epoch,
                     selector,
-                    max_preview_length,
+                    &options,
+                    object_group.as_deref(),
                 )
                 .await;
+                let result = if let Some(object_group) = object_group {
+                    let release = driver
+                        .client()
+                        .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+                            object_group,
+                        })
+                        .await
+                        .map_err(|error| {
+                            TargetDebuggerError::Properties(format!(
+                                "failed to release ephemeral evaluation values: {error:?}"
+                            ))
+                        });
+                    match (result, release) {
+                        (Ok(value), Ok(_)) => Ok(value.without_references()),
+                        (Ok(_), Err(error)) => Err(error),
+                        (Err(error), _) => Err(error),
+                    }
+                } else {
+                    result
+                };
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::Click { selector, response })) => {
@@ -4006,6 +4029,7 @@ async fn evaluate(
         frame_index,
         expression.clone(),
         true,
+        None,
     )
     .await?;
     let mut preview = remote_value_snapshot(
@@ -4032,6 +4056,7 @@ async fn evaluate_remote(
     frame_index: u32,
     expression: String,
     allow_side_effects: bool,
+    object_group: Option<&str>,
 ) -> Result<RuntimeRemoteObject, TargetDebuggerError> {
     let result = if let Some(pause_epoch) = pause_epoch {
         let pause = require_pause(driver, session_key, pause_epoch)?;
@@ -4044,6 +4069,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(true);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
             .debugger_evaluate_on_call_frame(params)
@@ -4060,6 +4086,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(true);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
             .runtime_evaluate(params)
@@ -4157,7 +4184,8 @@ async fn inspect_value(
     session_key: &SessionKey,
     pause_epoch: Option<u64>,
     selector: ValueSelector,
-    max_preview_length: u32,
+    options: &ValueInspectionOptions,
+    object_group: Option<&str>,
 ) -> Result<ValueSnapshot, TargetDebuggerError> {
     let (remote, selector) = match selector {
         ValueSelector::Expression {
@@ -4171,6 +4199,7 @@ async fn inspect_value(
                 0,
                 expression.clone(),
                 allow_side_effects,
+                object_group,
             )
             .await?;
             (
@@ -4208,7 +4237,11 @@ async fn inspect_value(
         || has_live_promise_evidence(&internal_properties);
     let promise = if is_promise {
         object_id.as_ref().map(|object_id| {
-            inspect_live_promise(object_id.clone(), internal_properties, max_preview_length)
+            inspect_live_promise(
+                object_id.clone(),
+                internal_properties,
+                options.max_preview_length,
+            )
         })
     } else {
         None
@@ -4225,23 +4258,28 @@ async fn inspect_value(
             truncated: false,
             reference: object_id.clone(),
         },
-        |value| remote_value_snapshot(value, max_preview_length),
+        |value| remote_value_snapshot(value, options.max_preview_length),
     );
-    let properties = properties
+    let mut properties = properties
         .into_iter()
         .filter_map(|property| {
             property.value.map(|value| ValuePropertySnapshot {
                 name: property.name,
-                value: remote_value_snapshot(&value, max_preview_length),
+                value: remote_value_snapshot(&value, options.max_preview_length),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let omitted_property_count = properties
+        .len()
+        .saturating_sub(options.max_properties as usize) as u64;
+    properties.truncate(options.max_properties as usize);
     Ok(ValueSnapshot {
         selector,
         subtype,
         class_name,
         preview,
         properties,
+        omitted_property_count,
         promise,
     })
 }

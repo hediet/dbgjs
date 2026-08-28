@@ -613,6 +613,26 @@ fn cli_service_connects_to_live_cdp() {
     );
     assert_eq!(stdin_eval["preview"]["preview"], "42");
 
+    let bounded_eval = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            "Object.fromEntries(Array.from({ length: 50 }, (_, index) => [`p${index}`, index]))",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_eq!(bounded_eval["properties"].as_array().unwrap().len(), 20);
+    assert_eq!(bounded_eval["omittedPropertyCount"], 30);
+    assert!(!contains_reference(&bounded_eval));
+
     let ambiguous = run_in(
         &cli,
         &service,

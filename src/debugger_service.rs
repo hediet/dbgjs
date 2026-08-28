@@ -43,7 +43,8 @@ use crate::service_api::{
     SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot,
     TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
     UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
+    UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
+    VariableSnapshot,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
@@ -2220,11 +2221,11 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         pause_epoch: Option<u64>,
         selector: ValueSelector,
-        max_preview_length: u32,
+        options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, JsonRpcError> {
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
-            .inspect_value(pause_epoch, selector, max_preview_length)
+            .inspect_value(pause_epoch, selector, options)
             .await
             .map_err(target_debugger_rpc_error)
     }
