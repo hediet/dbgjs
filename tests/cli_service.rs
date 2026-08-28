@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -575,6 +576,64 @@ fn cli_service_connects_to_live_cdp() {
         .unwrap()
         .to_owned();
 
+    let positional_eval = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            "6 * 7",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_eq!(positional_eval["preview"]["preview"], "42");
+
+    let stdin_eval = run_json_with_stdin(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            "-",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+        b"40\n  + 2\n",
+    );
+    assert_eq!(stdin_eval["preview"]["preview"], "42");
+
+    let ambiguous = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "target",
+            "eval",
+            "-",
+            "6 * 7",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert!(!ambiguous.0.success());
+    assert!(String::from_utf8_lossy(&ambiguous.2).contains("use '-' alone to read from stdin"));
+
     let long_value = "x".repeat(140);
     let setup_expression = format!(
         "globalThis.__jsdbgConsistentValue = {{ short: 'ok', long: '{long_value}', nested: {{ answer: 42 }} }}"
@@ -908,6 +967,29 @@ fn run_json_in(
             String::from_utf8_lossy(&stderr)
         )
     })
+}
+
+fn run_json_with_stdin(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    arguments: &[&str],
+    stdin: &[u8],
+) -> Value {
+    let mut child = Command::new(cli)
+        .arg("--json")
+        .args(arguments)
+        .env("JSDBG_SERVICE_EXE", service)
+        .env("JSDBG_SERVICE_STATE", state_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert_success(arguments, output.status, &output.stdout, &output.stderr);
+    serde_json::from_slice(&output.stdout).unwrap()
 }
 
 fn run_in(

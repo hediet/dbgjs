@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 
@@ -184,7 +185,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
-        [target, eval, expression] if target == "target" && eval == "eval" => {
+        [target, eval, arguments @ ..] if target == "target" && eval == "eval" => {
+            let expression = read_eval_expression(arguments, io::stdin())?;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
@@ -4806,6 +4808,31 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
     Ok(options)
 }
 
+fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<String, io::Error> {
+    match arguments {
+        [expression] if expression != "-" => Ok(expression.clone()),
+        [stdin_marker] if stdin_marker == "-" => {
+            let mut expression = String::new();
+            stdin.read_to_string(&mut expression)?;
+            if expression.trim().is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "target eval received an empty expression on stdin",
+                ));
+            }
+            Ok(expression)
+        }
+        [] => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target eval requires <expression> or '-' to read the expression from stdin",
+        )),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target eval accepts exactly one expression; use '-' alone to read from stdin",
+        )),
+    }
+}
+
 fn parse_observation_cursor(arguments: &[String]) -> Result<ObservationCursor, io::Error> {
     match arguments {
         [] => Ok(ObservationCursor::Current),
@@ -4945,7 +4972,8 @@ commands:
   jsdbg target wait running [target scope]
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
-  jsdbg target eval|watch <expression> [target scope]
+  jsdbg target eval <expression|-> [target scope]  ('-' reads the expression from stdin)
+  jsdbg target watch <expression> [target scope]
   jsdbg target cdp <method> [--params <json>] [--no-validation] [target scope]
   jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [target scope]
   jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [target scope]
@@ -5001,7 +5029,8 @@ mod tests {
         parse_promise_list_options, parse_raw_cdp_options, parse_screenshot_capture_options,
         parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
         parse_source_tree_options, parse_target_list_options, parse_value_options, png_dimensions,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        read_eval_expression, resolve_target_scope, select_implicit_context,
+        split_heap_reference_cli,
         target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
@@ -5014,6 +5043,25 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn reads_target_eval_expression_from_argument_or_stdin_without_ambiguity() {
+        assert_eq!(
+            read_eval_expression(&arguments(&["answer + 1"]), "".as_bytes()).unwrap(),
+            "answer + 1"
+        );
+        assert_eq!(
+            read_eval_expression(&arguments(&["-"]), "answer\n  + 1\n".as_bytes()).unwrap(),
+            "answer\n  + 1\n"
+        );
+        assert!(read_eval_expression(&arguments(&["-"]), " \n".as_bytes()).is_err());
+        assert!(
+            read_eval_expression(&arguments(&["answer", "-"]), "".as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("'-' alone")
+        );
     }
 
     #[test]
