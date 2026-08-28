@@ -3,7 +3,7 @@ error: target selector 'node' is ambiguous: runtime-a/<node-a>@1, runtime-b/<nod
 $ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
 42
 $ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
-capture registered context-wide
+capture registered context-wide; payload externalized from service state
 $ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
 error: capture 'offline-profile' already exists in context
 $ jsdbg heap capture --id offline-heap --context <context> --target <node-b>

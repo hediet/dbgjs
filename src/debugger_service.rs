@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -10,6 +10,7 @@ use atomic_write_file::AtomicWriteFile;
 use futures_util::{StreamExt, stream};
 use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, watch};
 use tokio::time::{Instant, timeout_at};
 
@@ -75,7 +76,7 @@ impl DebuggerService {
         persistence_path: PathBuf,
     ) -> Result<Self, ServicePersistenceError> {
         let state = load_state(&persistence_path)?;
-        scavenge_heap_capture_storage(&persistence_path, &state);
+        scavenge_capture_storage(&persistence_path, &state);
         let (revision_signal, _) = watch::channel(0);
         Ok(Self {
             agent_instance_id: random_instance_id()?,
@@ -89,14 +90,7 @@ impl DebuggerService {
 
     fn persist(&self, state: &ServiceState) -> Result<(), ServicePersistenceError> {
         let stored = StoredServiceState::from(state);
-        if let Some(parent) = self.persistence_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec_pretty(&stored)?;
-        let mut file = AtomicWriteFile::open(&self.persistence_path)?;
-        file.write_all(&bytes)?;
-        file.commit()?;
-        Ok(())
+        persist_stored_state(&self.persistence_path, &stored)
     }
 
     fn persist_or_restore(
@@ -580,7 +574,12 @@ struct CaptureReservation {
 
 #[derive(Clone)]
 struct CompletedCapture {
-    payload: StoredCapturePayload,
+    payload: CapturePayloadReference,
+    heap_result: Option<HeapCaptureResult>,
+}
+
+struct PromotedCapture {
+    payload: CapturePayload,
     heap_result: Option<HeapCaptureResult>,
 }
 
@@ -608,7 +607,7 @@ impl Drop for CaptureReservationGuard {
                     && reservation.metadata.kind == CaptureKind::HeapSnapshot
                 {
                     let (staging, final_path) = service.heap_capture_paths(&reservation);
-                    remove_heap_files([staging, final_path]);
+                    remove_capture_payload_files([staging, final_path]);
                 }
             });
         }
@@ -701,38 +700,228 @@ fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
 #[serde(rename_all = "camelCase")]
 struct StoredCapture {
     metadata: CaptureSnapshot,
-    payload: StoredCapturePayload,
+    payload: CapturePayloadReference,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
-enum StoredCapturePayload {
+#[serde(rename_all = "camelCase")]
+struct CapturePayloadReference {
+    path: String,
+    sha256: String,
+    byte_len: u64,
+}
+
+#[derive(Clone)]
+enum CapturePayload {
     Coverage(CoverageSnapshot),
     CpuProfile(CpuProfileSnapshot),
     HeapSnapshot { path: String },
 }
 
 impl StoredCapture {
-    fn heap_path(&self) -> Option<PathBuf> {
-        match &self.payload {
-            StoredCapturePayload::HeapSnapshot { path } => Some(path.into()),
-            StoredCapturePayload::Coverage(_) | StoredCapturePayload::CpuProfile(_) => None,
+    fn payload_path(&self) -> PathBuf {
+        self.payload.path.as_str().into()
+    }
+}
+
+fn write_capture_payload(
+    persistence_path: &Path,
+    metadata: &CaptureSnapshot,
+    payload: &CapturePayload,
+) -> Result<CapturePayloadReference, ServicePersistenceError> {
+    match (metadata.kind, payload) {
+        (CaptureKind::Coverage, CapturePayload::Coverage(snapshot)) => {
+            let bytes = serde_json::to_vec(snapshot)?;
+            let (staging, final_path) = capture_payload_paths_for(persistence_path, metadata);
+            write_atomic_payload_file(&staging, &final_path, &bytes)?;
+            Ok(payload_reference_from_bytes(final_path, &bytes))
+        }
+        (CaptureKind::CpuProfile, CapturePayload::CpuProfile(snapshot)) => {
+            let bytes = serde_json::to_vec(snapshot)?;
+            let (staging, final_path) = capture_payload_paths_for(persistence_path, metadata);
+            write_atomic_payload_file(&staging, &final_path, &bytes)?;
+            Ok(payload_reference_from_bytes(final_path, &bytes))
+        }
+        (CaptureKind::HeapSnapshot, CapturePayload::HeapSnapshot { path }) => {
+            payload_reference_from_file(Path::new(path))
+        }
+        _ => Err(ServicePersistenceError::CapturePayload(
+            "capture metadata kind does not match its payload".to_owned(),
+        )),
+    }
+}
+
+fn write_atomic_payload_file(
+    staging_path: &Path,
+    final_path: &Path,
+    bytes: &[u8],
+) -> Result<(), ServicePersistenceError> {
+    if let Some(parent) = final_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let expected = payload_reference_from_bytes(final_path.to_owned(), bytes);
+    if final_path.exists() {
+        let existing = payload_reference_from_file(final_path)?;
+        if existing.byte_len == expected.byte_len && existing.sha256 == expected.sha256 {
+            return Ok(());
+        }
+        return Err(ServicePersistenceError::CapturePayload(format!(
+            "immutable capture payload '{}' already exists with different content",
+            final_path.display()
+        )));
+    }
+    let mut file = AtomicWriteFile::open(staging_path)?;
+    file.write_all(bytes)?;
+    file.commit()?;
+    match fs::rename(staging_path, final_path) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            let published = payload_reference_from_file(final_path).is_ok_and(|existing| {
+                existing.byte_len == expected.byte_len && existing.sha256 == expected.sha256
+            });
+            let _ = remove_capture_payload_file(staging_path);
+            if published {
+                Ok(())
+            } else {
+                Err(rename_error.into())
+            }
         }
     }
 }
 
-fn remove_heap_files(paths: impl IntoIterator<Item = PathBuf>) {
+fn payload_reference_from_bytes(path: PathBuf, bytes: &[u8]) -> CapturePayloadReference {
+    CapturePayloadReference {
+        path: path.to_string_lossy().into_owned(),
+        sha256: hex_digest(Sha256::digest(bytes)),
+        byte_len: bytes.len() as u64,
+    }
+}
+
+fn payload_reference_from_file(
+    path: &Path,
+) -> Result<CapturePayloadReference, ServicePersistenceError> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut byte_len = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+        byte_len = byte_len.saturating_add(read as u64);
+    }
+    Ok(CapturePayloadReference {
+        path: path.to_string_lossy().into_owned(),
+        sha256: hex_digest(digest.finalize()),
+        byte_len,
+    })
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn validate_capture_payload_reference(
+    reference: &CapturePayloadReference,
+) -> Result<(), ServicePersistenceError> {
+    let actual = payload_reference_from_file(Path::new(&reference.path))?;
+    if actual.byte_len != reference.byte_len || actual.sha256 != reference.sha256 {
+        return Err(ServicePersistenceError::CapturePayload(format!(
+            "capture payload '{}' failed integrity validation (expected {} bytes / {}, found {} bytes / {})",
+            reference.path, reference.byte_len, reference.sha256, actual.byte_len, actual.sha256
+        )));
+    }
+    Ok(())
+}
+
+fn validate_capture_payload_kind(
+    reference: &CapturePayloadReference,
+    kind: CaptureKind,
+) -> Result<(), ServicePersistenceError> {
+    let expected_suffix = match kind {
+        CaptureKind::Coverage => ".coverage.json",
+        CaptureKind::CpuProfile => ".cpuprofile.json",
+        CaptureKind::HeapSnapshot => ".heapsnapshot",
+    };
+    if !reference.path.ends_with(expected_suffix) {
+        return Err(ServicePersistenceError::CapturePayload(format!(
+            "capture payload '{}' does not match expected {kind:?} storage",
+            reference.path
+        )));
+    }
+    Ok(())
+}
+
+fn validate_capture_payload_location(
+    persistence_path: &Path,
+    capture: &StoredCapture,
+) -> Result<(), ServicePersistenceError> {
+    validate_capture_payload_kind(&capture.payload, capture.metadata.kind)?;
+    if capture.metadata.kind != CaptureKind::HeapSnapshot {
+        let (_, expected_path) = capture_payload_paths_for(persistence_path, &capture.metadata);
+        if storage_path_key(Path::new(&capture.payload.path)) != storage_path_key(&expected_path) {
+            return Err(ServicePersistenceError::CapturePayload(format!(
+                "capture payload '{}' does not match immutable storage '{}'",
+                capture.payload.path,
+                expected_path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn load_capture_payload(
+    reference: &CapturePayloadReference,
+    kind: CaptureKind,
+) -> Result<CapturePayload, ServicePersistenceError> {
+    validate_capture_payload_kind(reference, kind)?;
+    match kind {
+        CaptureKind::Coverage | CaptureKind::CpuProfile => {
+            let bytes = fs::read(&reference.path)?;
+            let actual = payload_reference_from_bytes(PathBuf::from(&reference.path), &bytes);
+            if actual.byte_len != reference.byte_len || actual.sha256 != reference.sha256 {
+                return Err(ServicePersistenceError::CapturePayload(format!(
+                    "capture payload '{}' failed integrity validation",
+                    reference.path
+                )));
+            }
+            match kind {
+                CaptureKind::Coverage => {
+                    Ok(CapturePayload::Coverage(serde_json::from_slice(&bytes)?))
+                }
+                CaptureKind::CpuProfile => {
+                    Ok(CapturePayload::CpuProfile(serde_json::from_slice(&bytes)?))
+                }
+                CaptureKind::HeapSnapshot => unreachable!(),
+            }
+        }
+        CaptureKind::HeapSnapshot => {
+            validate_capture_payload_reference(reference)?;
+            Ok(CapturePayload::HeapSnapshot {
+                path: reference.path.clone(),
+            })
+        }
+    }
+}
+
+fn remove_capture_payload_files(paths: impl IntoIterator<Item = PathBuf>) {
     for path in paths {
-        if let Err(error) = remove_heap_file(&path) {
+        if let Err(error) = remove_capture_payload_file(&path) {
             eprintln!(
-                "failed to remove deleted heap capture '{}': {error}",
+                "failed to remove capture payload '{}': {error}",
                 path.display()
             );
         }
     }
 }
 
-fn remove_heap_file(path: &Path) -> std::io::Result<()> {
+fn remove_capture_payload_file(path: &Path) -> std::io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -744,43 +933,53 @@ fn heap_capture_paths_for(
     persistence_path: &Path,
     reservation: &CaptureReservation,
 ) -> (PathBuf, PathBuf) {
-    let directory = persistence_path.with_extension("captures").join(format!(
-        "{:016x}",
-        stable_name_hash(&reservation.metadata.context_id)
-    ));
-    let final_path = directory.join(format!("{}.heapsnapshot", reservation.metadata.storage_id));
-    let staging_path = directory.join(format!("{}.partial", reservation.metadata.storage_id));
+    capture_payload_paths_for(persistence_path, &reservation.metadata)
+}
+
+fn capture_payload_paths_for(
+    persistence_path: &Path,
+    metadata: &CaptureSnapshot,
+) -> (PathBuf, PathBuf) {
+    let directory = persistence_path
+        .with_extension("captures")
+        .join(format!("{:016x}", stable_name_hash(&metadata.context_id)));
+    let suffix = match metadata.kind {
+        CaptureKind::Coverage => "coverage.json",
+        CaptureKind::CpuProfile => "cpuprofile.json",
+        CaptureKind::HeapSnapshot => "heapsnapshot",
+    };
+    let final_path = directory.join(format!("{}.{}", metadata.storage_id, suffix));
+    let staging_path = directory.join(format!("{}.{}.partial", metadata.storage_id, suffix));
     (staging_path, final_path)
 }
 
-fn scavenge_heap_capture_storage(persistence_path: &Path, state: &ServiceState) {
+fn scavenge_capture_storage(persistence_path: &Path, state: &ServiceState) {
     let capture_root = persistence_path.with_extension("captures");
     let mut referenced = state
         .captures
         .values()
-        .filter_map(StoredCapture::heap_path)
+        .map(StoredCapture::payload_path)
         .map(|path| storage_path_key(&path))
         .collect::<BTreeSet<_>>();
-    for reservation in state
-        .capture_reservations
-        .values()
-        .filter(|reservation| reservation.metadata.kind == CaptureKind::HeapSnapshot)
-    {
+    for reservation in state.capture_reservations.values() {
         let (staging, final_path) = heap_capture_paths_for(persistence_path, reservation);
         referenced.insert(storage_path_key(&staging));
         referenced.insert(storage_path_key(&final_path));
+        if let Some(completed) = &reservation.completed {
+            referenced.insert(storage_path_key(Path::new(&completed.payload.path)));
+        }
     }
-    scavenge_heap_capture_directory(&capture_root, &referenced);
+    scavenge_capture_directory(&capture_root, &referenced);
 }
 
-fn scavenge_heap_capture_directory(directory: &Path, referenced: &BTreeSet<PathBuf>) {
+fn scavenge_capture_directory(directory: &Path, referenced: &BTreeSet<PathBuf>) {
     match fs::symlink_metadata(directory) {
         Ok(metadata) if metadata.file_type().is_symlink() => return,
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => {
             eprintln!(
-                "failed to inspect heap capture storage '{}': {error}",
+                "failed to inspect capture storage '{}': {error}",
                 directory.display()
             );
             return;
@@ -791,7 +990,7 @@ fn scavenge_heap_capture_directory(directory: &Path, referenced: &BTreeSet<PathB
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => {
             eprintln!(
-                "failed to inspect heap capture storage '{}': {error}",
+                "failed to inspect capture storage '{}': {error}",
                 directory.display()
             );
             return;
@@ -802,33 +1001,46 @@ fn scavenge_heap_capture_directory(directory: &Path, referenced: &BTreeSet<PathB
             Ok(entry) => entry,
             Err(error) => {
                 eprintln!(
-                    "failed to inspect an entry in heap capture storage '{}': {error}",
+                    "failed to inspect an entry in capture storage '{}': {error}",
                     directory.display()
                 );
                 continue;
             }
         };
         let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let is_capture_storage = name.ends_with(".partial")
+            || name.ends_with(".heapsnapshot")
+            || name.ends_with(".coverage.json")
+            || name.ends_with(".cpuprofile.json");
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(error) => {
                 eprintln!(
-                    "failed to inspect heap capture storage '{}': {error}",
+                    "failed to inspect capture storage '{}': {error}",
                     path.display()
                 );
                 continue;
             }
         };
         if file_type.is_dir() {
-            scavenge_heap_capture_directory(&path, referenced);
+            scavenge_capture_directory(&path, referenced);
+            if is_capture_storage
+                && !referenced.contains(&storage_path_key(&path))
+                && let Err(error) = fs::remove_dir(&path)
+            {
+                eprintln!(
+                    "failed to remove orphan capture storage '{}': {error}",
+                    path.display()
+                );
+            }
             continue;
         }
-        let is_capture_storage = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| matches!(extension, "partial" | "heapsnapshot"));
         if is_capture_storage && !referenced.contains(&storage_path_key(&path)) {
-            remove_heap_files([path]);
+            remove_capture_payload_files([path]);
         }
     }
 }
@@ -1040,7 +1252,7 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         options: MutationOptions,
     ) -> Result<bool, JsonRpcError> {
-        let (runtimes, heap_paths, proxy_cancellations) = {
+        let (runtimes, capture_paths, proxy_cancellations) = {
             let mut state = self.state.lock().await;
             if options.request_id.as_ref().is_some_and(|request_id| {
                 state
@@ -1052,21 +1264,23 @@ impl DebuggerServiceApi for DebuggerService {
             if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
                 return Ok(existing.id == context_id);
             }
-            let mut heap_paths = state
+            let mut capture_paths = state
                 .captures
                 .iter()
                 .filter(|((candidate_context, _), _)| candidate_context == &context_id)
-                .filter_map(|(_, capture)| capture.heap_path())
+                .map(|(_, capture)| capture.payload_path())
                 .collect::<Vec<_>>();
             for reservation in state
                 .capture_reservations
                 .iter()
                 .filter(|((candidate_context, _), _)| candidate_context == &context_id)
                 .map(|(_, reservation)| reservation)
-                .filter(|reservation| reservation.metadata.kind == CaptureKind::HeapSnapshot)
             {
                 let (staging, final_path) = self.heap_capture_paths(reservation);
-                heap_paths.extend([staging, final_path]);
+                capture_paths.extend([staging, final_path]);
+                if let Some(completed) = &reservation.completed {
+                    capture_paths.push(completed.payload.path.as_str().into());
+                }
             }
             let previous = state.clone();
             if state.contexts.remove(&context_id).is_none() {
@@ -1105,7 +1319,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .capture_reservations
                 .retain(|(candidate_context, _), _| candidate_context != &context_id);
             self.persist_or_restore(&mut state, previous)?;
-            (runtimes, heap_paths, proxy_cancellations)
+            (runtimes, capture_paths, proxy_cancellations)
         };
         for cancellation in proxy_cancellations {
             let _ = cancellation.send(true);
@@ -1113,7 +1327,7 @@ impl DebuggerServiceApi for DebuggerService {
         for runtime in runtimes {
             runtime.close().await;
         }
-        remove_heap_files(heap_paths);
+        remove_capture_payload_files(capture_paths);
         Ok(true)
     }
 
@@ -2373,6 +2587,7 @@ impl DebuggerServiceApi for DebuggerService {
             } else {
                 return Err(not_found("capture", &capture_name));
             };
+        let storage_id = capture.metadata.storage_id.clone();
         let debugger = state
             .target_debuggers
             .get(&(
@@ -2384,26 +2599,34 @@ impl DebuggerServiceApi for DebuggerService {
                 debugger.snapshot().connection_generation == capture.metadata.connection_generation
             })
             .cloned();
+        if completed_reservation {
+            drop(state);
+        } else {
+            let previous = state.clone();
+            state.captures.remove(&key);
+            self.persist_or_restore(&mut state, previous)?;
+            drop(state);
+        }
         if let Some(debugger) = debugger {
             debugger
                 .delete_stored_capture(capture_name.clone())
                 .await
                 .map_err(target_debugger_rpc_error)?;
         }
-        if let Some(heap_path) = capture.heap_path() {
-            remove_heap_file(&heap_path).map_err(|error| {
-                internal_error(format!(
-                    "failed to delete capture '{capture_name}' storage '{}': {error}",
-                    heap_path.display()
-                ))
-            })?;
-        }
+        let payload_path = capture.payload_path();
+        remove_capture_payload_file(&payload_path).map_err(|error| {
+            internal_error(format!(
+                "capture '{capture_name}' was removed from the catalog but its payload '{}' could not be deleted and will be retried during startup cleanup: {error}",
+                payload_path.display()
+            ))
+        })?;
         if completed_reservation {
-            state.capture_reservations.remove(&key);
-        } else {
-            let previous = state.clone();
-            state.captures.remove(&key);
-            self.persist_or_restore(&mut state, previous)?;
+            let mut state = self.state.lock().await;
+            if state.capture_reservations.get(&key).is_some_and(|current| {
+                current.metadata.storage_id == storage_id && current.completed.is_some()
+            }) {
+                state.capture_reservations.remove(&key);
+            }
         }
         Ok(true)
     }
@@ -2415,17 +2638,27 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
         source_path: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        let state = self.state.lock().await;
-        let capture = state
-            .captures
-            .get(&(context_id, capture_name.clone()))
-            .ok_or_else(|| not_found("capture", &capture_name))?;
-        let StoredCapturePayload::Coverage(mut snapshot) = capture.payload.clone() else {
+        let payload = {
+            let state = self.state.lock().await;
+            let capture = state
+                .captures
+                .get(&(context_id, capture_name.clone()))
+                .ok_or_else(|| not_found("capture", &capture_name))?;
+            if capture.metadata.kind != CaptureKind::Coverage {
+                return Err(invalid_params(&format!(
+                    "capture '{capture_name}' is not a coverage capture"
+                )));
+            }
+            capture.payload.clone()
+        };
+        let CapturePayload::Coverage(mut snapshot) =
+            load_capture_payload(&payload, CaptureKind::Coverage)
+                .map_err(capture_payload_rpc_error)?
+        else {
             return Err(invalid_params(&format!(
                 "capture '{capture_name}' is not a coverage capture"
             )));
         };
-        drop(state);
         if let Some(path) = source_path {
             snapshot.sources.retain(|source| {
                 source_path_is_descendant(&source.generated_url, &path)
@@ -2445,17 +2678,27 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
         _source_path: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
-        let state = self.state.lock().await;
-        let capture = state
-            .captures
-            .get(&(context_id, capture_name.clone()))
-            .ok_or_else(|| not_found("capture", &capture_name))?;
-        let StoredCapturePayload::CpuProfile(mut snapshot) = capture.payload.clone() else {
+        let payload = {
+            let state = self.state.lock().await;
+            let capture = state
+                .captures
+                .get(&(context_id, capture_name.clone()))
+                .ok_or_else(|| not_found("capture", &capture_name))?;
+            if capture.metadata.kind != CaptureKind::CpuProfile {
+                return Err(invalid_params(&format!(
+                    "capture '{capture_name}' is not a CPU profile capture"
+                )));
+            }
+            capture.payload.clone()
+        };
+        let CapturePayload::CpuProfile(mut snapshot) =
+            load_capture_payload(&payload, CaptureKind::CpuProfile)
+                .map_err(capture_payload_rpc_error)?
+        else {
             return Err(invalid_params(&format!(
                 "capture '{capture_name}' is not a CPU profile capture"
             )));
         };
-        drop(state);
         if snapshot.functions.is_empty() && !snapshot.nodes.is_empty() {
             crate::target_debugger::aggregate_cpu_profile(&mut snapshot)
                 .map_err(target_debugger_rpc_error)?;
@@ -2470,18 +2713,26 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
         filter: Option<String>,
     ) -> Result<HeapClassSnapshot, JsonRpcError> {
-        let path = {
+        let payload = {
             let state = self.state.lock().await;
             let capture = state
                 .captures
                 .get(&(context_id, capture_name.clone()))
                 .ok_or_else(|| not_found("capture", &capture_name))?;
-            let StoredCapturePayload::HeapSnapshot { path } = &capture.payload else {
+            if capture.metadata.kind != CaptureKind::HeapSnapshot {
                 return Err(invalid_params(&format!(
                     "capture '{capture_name}' is not a heap snapshot"
                 )));
-            };
-            path.clone()
+            }
+            capture.payload.clone()
+        };
+        let CapturePayload::HeapSnapshot { path } =
+            load_capture_payload(&payload, CaptureKind::HeapSnapshot)
+                .map_err(capture_payload_rpc_error)?
+        else {
+            return Err(invalid_state(
+                "stored heap payload kind does not match metadata",
+            ));
         };
         let capture_for_task = capture_name.clone();
         tokio::task::spawn_blocking(move || {
@@ -3290,7 +3541,7 @@ impl DebuggerServiceApi for DebuggerService {
                 )
                 .await?
         {
-            let StoredCapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
@@ -3318,16 +3569,23 @@ impl DebuggerServiceApi for DebuggerService {
             None
         };
         if let Some(reservation) = &reservation
-            && let Some(completed) = &reservation.reservation.completed
+            && reservation.reservation.completed.is_some()
         {
-            let StoredCapturePayload::Coverage(snapshot) = &completed.payload else {
+            let completed = self
+                .promote_completed_capture(
+                    &reservation.reservation.metadata.context_id,
+                    &reservation.reservation.metadata.connection_id,
+                    &reservation.reservation.metadata.target_id,
+                    &reservation.reservation.metadata.name,
+                    CaptureKind::Coverage,
+                )
+                .await?
+                .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
+            let CapturePayload::Coverage(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
-            let snapshot = snapshot.clone();
-            self.store_capture(&reservation.reservation, completed.payload.clone())
-                .await?;
             return Ok(snapshot);
         }
         let snapshot = match debugger
@@ -3346,7 +3604,7 @@ impl DebuggerServiceApi for DebuggerService {
         if let Some(reservation) = &reservation {
             self.store_capture(
                 &reservation.reservation,
-                StoredCapturePayload::Coverage(snapshot.clone()),
+                CapturePayload::Coverage(snapshot.clone()),
             )
             .await?;
         }
@@ -3371,7 +3629,7 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?
         {
-            let StoredCapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
@@ -3394,15 +3652,22 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
-        if let Some(completed) = &reservation.reservation.completed {
-            let StoredCapturePayload::Coverage(snapshot) = &completed.payload else {
+        if reservation.reservation.completed.is_some() {
+            let completed = self
+                .promote_completed_capture(
+                    &reservation.reservation.metadata.context_id,
+                    &reservation.reservation.metadata.connection_id,
+                    &reservation.reservation.metadata.target_id,
+                    &reservation.reservation.metadata.name,
+                    CaptureKind::Coverage,
+                )
+                .await?
+                .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
+            let CapturePayload::Coverage(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
-            let snapshot = snapshot.clone();
-            self.store_capture(&reservation.reservation, completed.payload.clone())
-                .await?;
             return Ok(snapshot);
         }
         let snapshot = match debugger
@@ -3418,7 +3683,7 @@ impl DebuggerServiceApi for DebuggerService {
         };
         self.store_capture(
             &reservation.reservation,
-            StoredCapturePayload::Coverage(snapshot.clone()),
+            CapturePayload::Coverage(snapshot.clone()),
         )
         .await?;
         Ok(snapshot)
@@ -3495,7 +3760,7 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?
         {
-            let StoredCapturePayload::CpuProfile(snapshot) = completed.payload else {
+            let CapturePayload::CpuProfile(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
@@ -3518,15 +3783,22 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
-        if let Some(completed) = &reservation.reservation.completed {
-            let StoredCapturePayload::CpuProfile(snapshot) = &completed.payload else {
+        if reservation.reservation.completed.is_some() {
+            let completed = self
+                .promote_completed_capture(
+                    &reservation.reservation.metadata.context_id,
+                    &reservation.reservation.metadata.connection_id,
+                    &reservation.reservation.metadata.target_id,
+                    &reservation.reservation.metadata.name,
+                    CaptureKind::CpuProfile,
+                )
+                .await?
+                .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
+            let CapturePayload::CpuProfile(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
-            let snapshot = snapshot.clone();
-            self.store_capture(&reservation.reservation, completed.payload.clone())
-                .await?;
             return Ok(snapshot);
         }
         let snapshot = match debugger
@@ -3546,7 +3818,7 @@ impl DebuggerServiceApi for DebuggerService {
             .unwrap_or(snapshot);
         self.store_capture(
             &reservation.reservation,
-            StoredCapturePayload::CpuProfile(snapshot.clone()),
+            CapturePayload::CpuProfile(snapshot.clone()),
         )
         .await?;
         Ok(snapshot)
@@ -3608,7 +3880,7 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?
         {
-            let StoredCapturePayload::HeapSnapshot { .. } = completed.payload else {
+            let CapturePayload::HeapSnapshot { .. } = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
@@ -3633,22 +3905,25 @@ impl DebuggerServiceApi for DebuggerService {
             )
             .await?,
         );
-        if let Some(completed) = &reservation.reservation.completed {
-            let StoredCapturePayload::HeapSnapshot { .. } = &completed.payload else {
+        if reservation.reservation.completed.is_some() {
+            let completed = self
+                .promote_completed_capture(
+                    &reservation.reservation.metadata.context_id,
+                    &reservation.reservation.metadata.connection_id,
+                    &reservation.reservation.metadata.target_id,
+                    &reservation.reservation.metadata.name,
+                    CaptureKind::HeapSnapshot,
+                )
+                .await?
+                .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
+            let CapturePayload::HeapSnapshot { .. } = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
             let result = completed
                 .heap_result
-                .clone()
                 .ok_or_else(|| invalid_state("completed heap capture result is missing"))?;
-            self.store_heap_capture(
-                &reservation.reservation,
-                completed.payload.clone(),
-                result.clone(),
-            )
-            .await?;
             return Ok(result);
         }
         let result = match debugger
@@ -3669,12 +3944,12 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(target_debugger_rpc_error)
         {
             self.abandon_capture(&reservation.reservation).await;
-            remove_heap_files([staging_path]);
+            remove_capture_payload_files([staging_path]);
             return Err(error);
         }
         if let Err(error) = fs::rename(&staging_path, &final_path) {
             self.abandon_capture(&reservation.reservation).await;
-            remove_heap_files([staging_path, final_path]);
+            remove_capture_payload_files([staging_path, final_path]);
             return Err(internal_error(format!(
                 "failed to publish heap capture storage: {error}"
             )));
@@ -3682,7 +3957,7 @@ impl DebuggerServiceApi for DebuggerService {
         if let Err(error) = self
             .store_heap_capture(
                 &reservation.reservation,
-                StoredCapturePayload::HeapSnapshot {
+                CapturePayload::HeapSnapshot {
                     path: final_path.to_string_lossy().into_owned(),
                 },
                 result.clone(),
@@ -3693,7 +3968,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .completed_capture_is_retained(&reservation.reservation)
                 .await
             {
-                remove_heap_files([final_path]);
+                remove_capture_payload_files([final_path]);
             }
             return Err(error);
         }
@@ -3893,7 +4168,7 @@ impl DebuggerService {
         target_id: &str,
         name: &str,
         kind: CaptureKind,
-    ) -> Result<Option<CompletedCapture>, JsonRpcError> {
+    ) -> Result<Option<PromotedCapture>, JsonRpcError> {
         let reservation = {
             let state = self.state.lock().await;
             let Some(reservation) = state
@@ -3916,13 +4191,14 @@ impl DebuggerService {
             }
             (reservation.clone(), completed.clone())
         };
-        self.finalize_capture(
-            &reservation.0,
-            reservation.1.payload.clone(),
-            reservation.1.heap_result.clone(),
-        )
-        .await?;
-        Ok(Some(reservation.1))
+        let payload = load_capture_payload(&reservation.1.payload, reservation.0.metadata.kind)
+            .map_err(capture_payload_rpc_error)?;
+        self.commit_completed_capture(&reservation.0, &reservation.1)
+            .await?;
+        Ok(Some(PromotedCapture {
+            payload,
+            heap_result: reservation.1.heap_result,
+        }))
     }
 
     async fn reserve_capture(
@@ -4014,26 +4290,23 @@ impl DebuggerService {
     async fn finalize_capture(
         &self,
         reservation: &CaptureReservation,
-        payload: StoredCapturePayload,
+        payload: CapturePayload,
         heap_result: Option<HeapCaptureResult>,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
-        let mut state = self.state.lock().await;
         let metadata = &reservation.metadata;
         let key = (metadata.context_id.clone(), metadata.name.clone());
-        if state
-            .capture_reservations
-            .get(&key)
-            .is_none_or(|current| current.metadata.storage_id != metadata.storage_id)
         {
-            return Err(invalid_state("capture reservation is no longer current"));
-        }
-        let completed = if let Some(completed) = state
-            .capture_reservations
-            .get(&key)
-            .and_then(|current| current.completed.clone())
-        {
-            completed
-        } else {
+            let state = self.state.lock().await;
+            let current = state
+                .capture_reservations
+                .get(&key)
+                .filter(|current| current.metadata.storage_id == metadata.storage_id)
+                .ok_or_else(|| invalid_state("capture reservation is no longer current"))?;
+            if let Some(completed) = &current.completed {
+                let completed = completed.clone();
+                drop(state);
+                return self.commit_completed_capture(reservation, &completed).await;
+            }
             let connection = state
                 .contexts
                 .get(&metadata.context_id)
@@ -4046,17 +4319,38 @@ impl DebuggerService {
                     "connection generation changed while the capture was being stored",
                 ));
             }
-            let completed = CompletedCapture {
-                payload,
-                heap_result,
-            };
-            state
-                .capture_reservations
-                .get_mut(&key)
-                .expect("current capture reservation disappeared while locked")
-                .completed = Some(completed.clone());
-            completed
+        }
+        let payload = write_capture_payload(&self.persistence_path, metadata, &payload)
+            .map_err(capture_payload_rpc_error)?;
+        let completed = CompletedCapture {
+            payload,
+            heap_result,
         };
+        let mut state = self.state.lock().await;
+        let current = state
+            .capture_reservations
+            .get(&key)
+            .filter(|current| current.metadata.storage_id == metadata.storage_id);
+        let valid_generation = state
+            .contexts
+            .get(&metadata.context_id)
+            .and_then(|context| context.connections.get(&metadata.connection_id))
+            .is_some_and(|connection| {
+                connection.generation == metadata.connection_generation
+                    && connection.targets.contains_key(&metadata.target_id)
+            });
+        if current.is_none() || !valid_generation {
+            drop(state);
+            let _ = remove_capture_payload_file(Path::new(&completed.payload.path));
+            return Err(invalid_state(
+                "connection generation changed while the capture was being stored",
+            ));
+        }
+        state
+            .capture_reservations
+            .get_mut(&key)
+            .expect("current capture reservation disappeared while locked")
+            .completed = Some(completed.clone());
         let previous = state.clone();
         state.capture_reservations.remove(&key);
         state.captures.insert(
@@ -4064,6 +4358,38 @@ impl DebuggerService {
             StoredCapture {
                 metadata: metadata.clone(),
                 payload: completed.payload,
+            },
+        );
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(metadata.clone())
+    }
+
+    async fn commit_completed_capture(
+        &self,
+        reservation: &CaptureReservation,
+        completed: &CompletedCapture,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        let metadata = &reservation.metadata;
+        let key = (metadata.context_id.clone(), metadata.name.clone());
+        let mut state = self.state.lock().await;
+        if state.capture_reservations.get(&key).is_none_or(|current| {
+            current.metadata.storage_id != metadata.storage_id
+                || current.completed.as_ref().is_none_or(|current| {
+                    current.payload.path != completed.payload.path
+                        || current.payload.sha256 != completed.payload.sha256
+                })
+        }) {
+            return Err(invalid_state(
+                "completed capture reservation is no longer current",
+            ));
+        }
+        let previous = state.clone();
+        state.capture_reservations.remove(&key);
+        state.captures.insert(
+            key,
+            StoredCapture {
+                metadata: metadata.clone(),
+                payload: completed.payload.clone(),
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -4099,7 +4425,7 @@ impl DebuggerService {
     async fn store_capture(
         &self,
         reservation: &CaptureReservation,
-        payload: StoredCapturePayload,
+        payload: CapturePayload,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
         self.finalize_capture(reservation, payload, None).await
     }
@@ -4107,7 +4433,7 @@ impl DebuggerService {
     async fn store_heap_capture(
         &self,
         reservation: &CaptureReservation,
-        payload: StoredCapturePayload,
+        payload: CapturePayload,
         result: HeapCaptureResult,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
         self.finalize_capture(reservation, payload, Some(result))
@@ -4656,6 +4982,32 @@ struct StoredServiceState {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LegacyStoredServiceState {
+    schema_version: u32,
+    contexts: BTreeMap<String, StoredContextState>,
+    #[serde(default)]
+    completed_requests: Vec<StoredCompletedRequest>,
+    #[serde(default)]
+    captures: Vec<LegacyStoredCapture>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyStoredCapture {
+    metadata: CaptureSnapshot,
+    payload: LegacyStoredCapturePayload,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+enum LegacyStoredCapturePayload {
+    Coverage(CoverageSnapshot),
+    CpuProfile(CpuProfileSnapshot),
+    HeapSnapshot { path: String },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredCompletedRequest {
     context_id: String,
     request_id: String,
@@ -4719,7 +5071,7 @@ struct StoredConnectionStateV1 {
 impl From<&ServiceState> for StoredServiceState {
     fn from(state: &ServiceState) -> Self {
         Self {
-            schema_version: 4,
+            schema_version: 5,
             contexts: state
                 .contexts
                 .iter()
@@ -4794,8 +5146,9 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .and_then(serde_json::Value::as_u64)
         .ok_or(ServicePersistenceError::MissingSchemaVersion)?;
     let stored = match schema_version {
-        1 => migrate_v1(serde_json::from_slice(&bytes)?),
-        2..=4 => serde_json::from_slice(&bytes)?,
+        1 => migrate_embedded_capture_state(path, migrate_v1(serde_json::from_slice(&bytes)?))?,
+        2..=4 => migrate_embedded_capture_state(path, serde_json::from_slice(&bytes)?)?,
+        5 => serde_json::from_slice(&bytes)?,
         version => return Err(ServicePersistenceError::UnsupportedSchema(version as u32)),
     };
     let completed_requests = stored
@@ -4809,7 +5162,15 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .map(|(id, context)| (id.clone(), context.kind))
         .collect();
     let mut captures = BTreeMap::new();
+    let mut payload_paths = BTreeSet::new();
     for capture in stored.captures {
+        validate_capture_payload_location(path, &capture)?;
+        validate_capture_payload_reference(&capture.payload)?;
+        if !payload_paths.insert(storage_path_key(Path::new(&capture.payload.path))) {
+            return Err(ServicePersistenceError::DuplicateCapturePayload(
+                capture.payload.path,
+            ));
+        }
         let key = (
             capture.metadata.context_id.clone(),
             capture.metadata.name.clone(),
@@ -4892,8 +5253,8 @@ fn default_context_kind() -> ContextKind {
     ContextKind::Named
 }
 
-fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
-    StoredServiceState {
+fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
+    LegacyStoredServiceState {
         schema_version: 4,
         contexts: stored
             .contexts
@@ -4928,6 +5289,82 @@ fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
     }
 }
 
+fn migrate_embedded_capture_state(
+    path: &Path,
+    legacy: LegacyStoredServiceState,
+) -> Result<StoredServiceState, ServicePersistenceError> {
+    let mut capture_keys = BTreeSet::new();
+    let mut payload_paths = BTreeSet::new();
+    for capture in &legacy.captures {
+        let key = (
+            capture.metadata.context_id.clone(),
+            capture.metadata.name.clone(),
+        );
+        if !capture_keys.insert(key.clone()) {
+            return Err(ServicePersistenceError::DuplicateCapture {
+                context_id: key.0,
+                name: key.1,
+            });
+        }
+        let payload_path = match &capture.payload {
+            LegacyStoredCapturePayload::HeapSnapshot { path } => storage_path_key(Path::new(path)),
+            LegacyStoredCapturePayload::Coverage(_) | LegacyStoredCapturePayload::CpuProfile(_) => {
+                let (_, path) = capture_payload_paths_for(path, &capture.metadata);
+                storage_path_key(&path)
+            }
+        };
+        if !payload_paths.insert(payload_path.clone()) {
+            return Err(ServicePersistenceError::DuplicateCapturePayload(
+                payload_path.to_string_lossy().into_owned(),
+            ));
+        }
+    }
+    let captures = legacy
+        .captures
+        .into_iter()
+        .map(|capture| {
+            let payload = match capture.payload {
+                LegacyStoredCapturePayload::Coverage(snapshot) => {
+                    CapturePayload::Coverage(snapshot)
+                }
+                LegacyStoredCapturePayload::CpuProfile(snapshot) => {
+                    CapturePayload::CpuProfile(snapshot)
+                }
+                LegacyStoredCapturePayload::HeapSnapshot { path } => {
+                    CapturePayload::HeapSnapshot { path }
+                }
+            };
+            let payload = write_capture_payload(path, &capture.metadata, &payload)?;
+            Ok(StoredCapture {
+                metadata: capture.metadata,
+                payload,
+            })
+        })
+        .collect::<Result<Vec<_>, ServicePersistenceError>>()?;
+    let stored = StoredServiceState {
+        schema_version: 5,
+        contexts: legacy.contexts,
+        completed_requests: legacy.completed_requests,
+        captures,
+    };
+    persist_stored_state(path, &stored)?;
+    Ok(stored)
+}
+
+fn persist_stored_state(
+    path: &Path,
+    stored: &StoredServiceState,
+) -> Result<(), ServicePersistenceError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let bytes = serde_json::to_vec_pretty(stored)?;
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(&bytes)?;
+    file.commit()?;
+    Ok(())
+}
+
 fn random_instance_id() -> Result<String, ServicePersistenceError> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes)
@@ -4947,6 +5384,10 @@ pub enum ServicePersistenceError {
     MissingSchemaVersion,
     #[error("debugger state contains duplicate capture '{name}' in context '{context_id}'")]
     DuplicateCapture { context_id: String, name: String },
+    #[error("debugger state contains duplicate capture payload path '{0}'")]
+    DuplicateCapturePayload(String),
+    #[error("invalid capture payload: {0}")]
+    CapturePayload(String),
     #[error("failed to generate agent instance identity: {0}")]
     Random(String),
 }
@@ -5233,6 +5674,10 @@ fn internal_error(message: impl Into<String>) -> JsonRpcError {
     JsonRpcError::new(error_codes::INTERNAL_ERROR, message.into())
 }
 
+fn capture_payload_rpc_error(error: ServicePersistenceError) -> JsonRpcError {
+    internal_error(format!("failed to access stored capture payload: {error}"))
+}
+
 fn cdp_rpc_error(operation: &str, error: JsonRpcError) -> JsonRpcError {
     internal_error(format!("{operation} failed: {error:?}"))
 }
@@ -5417,20 +5862,51 @@ mod tests {
         connection_id: &str,
         path: &Path,
     ) -> StoredCapture {
+        let metadata = capture_metadata(
+            context_id,
+            name,
+            CaptureKind::HeapSnapshot,
+            target_id,
+            connection_id,
+        );
         StoredCapture {
-            metadata: CaptureSnapshot {
-                context_id: context_id.into(),
-                name: name.into(),
-                kind: CaptureKind::HeapSnapshot,
-                target_id: target_id.into(),
-                connection_id: connection_id.into(),
-                connection_generation: 1,
-                storage_id: format!("storage-{name}"),
-            },
-            payload: StoredCapturePayload::HeapSnapshot {
-                path: path.to_string_lossy().into_owned(),
-            },
+            metadata,
+            payload: payload_reference_from_file(path).unwrap(),
         }
+    }
+
+    fn capture_metadata(
+        context_id: &str,
+        name: &str,
+        kind: CaptureKind,
+        target_id: &str,
+        connection_id: &str,
+    ) -> CaptureSnapshot {
+        CaptureSnapshot {
+            context_id: context_id.into(),
+            name: name.into(),
+            kind,
+            target_id: target_id.into(),
+            connection_id: connection_id.into(),
+            connection_generation: 1,
+            storage_id: format!("storage-{name}"),
+        }
+    }
+
+    fn stored_capture_from_payload(
+        persistence_path: &Path,
+        metadata: CaptureSnapshot,
+        payload: CapturePayload,
+    ) -> StoredCapture {
+        let reference = write_capture_payload(persistence_path, &metadata, &payload).unwrap();
+        StoredCapture {
+            metadata,
+            payload: reference,
+        }
+    }
+
+    fn load_stored_capture(capture: &StoredCapture) -> CapturePayload {
+        load_capture_payload(&capture.payload, capture.metadata.kind).unwrap()
     }
 
     fn capture_retry_service(label: &str) -> (PathBuf, PathBuf, DebuggerService) {
@@ -5439,8 +5915,8 @@ mod tests {
             .join("target")
             .join(format!("{label}-{}", random_instance_id().unwrap()));
         fs::create_dir_all(&root).unwrap();
-        let blocker = root.join("not-a-directory");
-        fs::write(&blocker, b"block").unwrap();
+        let blocker = root.join("service.json");
+        fs::create_dir(&blocker).unwrap();
         let mut state = ServiceState::default();
         state.contexts.insert(
             "test".into(),
@@ -5450,13 +5926,12 @@ mod tests {
                 vec![target("target-a", "A", "https://a.test")],
             )]),
         );
-        let service = service_with_state(blocker.join("service.json"), state);
+        let service = service_with_state(blocker.clone(), state);
         (root, blocker, service)
     }
 
     fn unblock_capture_persistence(blocker: &Path) {
-        fs::remove_file(blocker).unwrap();
-        fs::create_dir(blocker).unwrap();
+        fs::remove_dir(blocker).unwrap();
     }
 
     #[tokio::test]
@@ -5531,7 +6006,7 @@ mod tests {
         let error = service
             .finalize_capture(
                 &reservation,
-                StoredCapturePayload::HeapSnapshot {
+                CapturePayload::HeapSnapshot {
                     path: "unused".into(),
                 },
                 None,
@@ -5572,10 +6047,7 @@ mod tests {
 
         assert!(
             service
-                .store_capture(
-                    &reservation,
-                    StoredCapturePayload::CpuProfile(snapshot.clone()),
-                )
+                .store_capture(&reservation, CapturePayload::CpuProfile(snapshot.clone()),)
                 .await
                 .is_err()
         );
@@ -5584,8 +6056,10 @@ mod tests {
             let state = service.state.lock().await;
             let pending = &state.capture_reservations[&("test".to_owned(), "profile".to_owned())];
             assert!(matches!(
-                pending.completed.as_ref().map(|value| &value.payload),
-                Some(StoredCapturePayload::CpuProfile(value)) if value == &snapshot
+                pending.completed.as_ref().map(|value| {
+                    load_capture_payload(&value.payload, CaptureKind::CpuProfile).unwrap()
+                }),
+                Some(CapturePayload::CpuProfile(value)) if value == snapshot
             ));
             assert!(state.captures.is_empty());
         }
@@ -5611,19 +6085,20 @@ mod tests {
         let state = service.state.lock().await;
         assert!(state.capture_reservations.is_empty());
         assert!(matches!(
-            &state.captures[&("test".to_owned(), "profile".to_owned())].payload,
-            StoredCapturePayload::CpuProfile(value) if value == &snapshot
+            load_stored_capture(&state.captures[&("test".to_owned(), "profile".to_owned())]),
+            CapturePayload::CpuProfile(value) if value == snapshot
         ));
         drop(state);
         drop(service);
 
         let (shutdown, _) = watch::channel(false);
-        let restored = DebuggerService::load(shutdown, blocker.join("service.json")).unwrap();
+        let restored = DebuggerService::load(shutdown, blocker).unwrap();
         assert!(matches!(
-            &restored.state.lock().await.captures
-                [&("test".to_owned(), "profile".to_owned())]
-                .payload,
-            StoredCapturePayload::CpuProfile(value) if value == &snapshot
+            load_stored_capture(
+                &restored.state.lock().await.captures
+                    [&("test".to_owned(), "profile".to_owned())]
+            ),
+            CapturePayload::CpuProfile(value) if value == snapshot
         ));
         drop(restored);
         let _ = fs::remove_dir_all(root);
@@ -5631,6 +6106,11 @@ mod tests {
 
     #[tokio::test]
     async fn stored_coverage_path_filters_normalized_directory_descendants() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("coverage-filter-{}", random_instance_id().unwrap()));
+        let persistence_path = root.join("service.json");
         let mut state = ServiceState::default();
         state.contexts.insert(
             "test".into(),
@@ -5661,20 +6141,19 @@ mod tests {
         };
         state.captures.insert(
             ("test".into(), "coverage".into()),
-            StoredCapture {
-                metadata: CaptureSnapshot {
-                    context_id: "test".into(),
-                    name: "coverage".into(),
-                    kind: CaptureKind::Coverage,
-                    target_id: "target-a".into(),
-                    connection_id: "runtime".into(),
-                    connection_generation: 1,
-                    storage_id: "coverage-storage".into(),
-                },
-                payload: StoredCapturePayload::Coverage(snapshot),
-            },
+            stored_capture_from_payload(
+                &persistence_path,
+                capture_metadata(
+                    "test",
+                    "coverage",
+                    CaptureKind::Coverage,
+                    "target-a",
+                    "runtime",
+                ),
+                CapturePayload::Coverage(snapshot),
+            ),
         );
-        let service = service_with_state(PathBuf::from("unused"), state);
+        let service = service_with_state(persistence_path, state);
 
         let filtered = service
             .get_stored_coverage(
@@ -5694,10 +6173,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["1", "2", "4"]
         );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
     async fn stored_cpu_profile_rebuilds_analysis_without_live_target() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("cpu-offline-{}", random_instance_id().unwrap()));
+        let persistence_path = root.join("service.json");
         let snapshot = CpuProfileSnapshot {
             capture_id: "profile".into(),
             sampling_interval_micros: Some(100),
@@ -5730,20 +6215,19 @@ mod tests {
         let mut state = ServiceState::default();
         state.captures.insert(
             ("test".into(), "profile".into()),
-            StoredCapture {
-                metadata: CaptureSnapshot {
-                    context_id: "test".into(),
-                    name: "profile".into(),
-                    kind: CaptureKind::CpuProfile,
-                    target_id: "target-a".into(),
-                    connection_id: "runtime".into(),
-                    connection_generation: 1,
-                    storage_id: "profile-storage".into(),
-                },
-                payload: StoredCapturePayload::CpuProfile(snapshot),
-            },
+            stored_capture_from_payload(
+                &persistence_path,
+                capture_metadata(
+                    "test",
+                    "profile",
+                    CaptureKind::CpuProfile,
+                    "target-a",
+                    "runtime",
+                ),
+                CapturePayload::CpuProfile(snapshot),
+            ),
         );
-        let service = service_with_state(PathBuf::from("unused"), state);
+        let service = service_with_state(persistence_path, state);
 
         let profile = service
             .get_stored_cpu_profile(&CallCtx::default(), "test".into(), "profile".into(), None)
@@ -5754,6 +6238,7 @@ mod tests {
         assert_eq!(profile.functions[0].name, "work");
         assert_eq!(profile.functions[0].self_time_micros, 250);
         assert_eq!(profile.functions[0].total_time_micros, 250);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5778,39 +6263,32 @@ mod tests {
 
         assert!(
             service
-                .store_capture(
-                    &reservation,
-                    StoredCapturePayload::Coverage(snapshot.clone()),
-                )
+                .store_capture(&reservation, CapturePayload::Coverage(snapshot.clone()),)
                 .await
                 .is_err()
         );
         unblock_capture_persistence(&blocker);
-        let retry = service
-            .reserve_capture(
+        let completed = service
+            .promote_completed_capture(
                 "test",
                 "runtime",
                 "target-a",
-                1,
-                "coverage".into(),
+                "coverage",
                 CaptureKind::Coverage,
             )
             .await
+            .unwrap()
             .unwrap();
-        let completed = retry.completed.clone().unwrap();
         assert!(matches!(
-            &completed.payload,
-            StoredCapturePayload::Coverage(value) if value == &snapshot
+            completed.payload,
+            CapturePayload::Coverage(value) if value == snapshot
         ));
-        service
-            .store_capture(&retry, completed.payload)
-            .await
-            .unwrap();
         assert!(matches!(
-            &service.state.lock().await.captures
-                [&("test".to_owned(), "coverage".to_owned())]
-                .payload,
-            StoredCapturePayload::Coverage(value) if value == &snapshot
+            load_stored_capture(
+                &service.state.lock().await.captures
+                    [&("test".to_owned(), "coverage".to_owned())]
+            ),
+            CapturePayload::Coverage(value) if value == snapshot
         ));
         let _ = fs::remove_dir_all(root);
     }
@@ -5856,7 +6334,7 @@ mod tests {
             bytes_written: 14,
             timing: Default::default(),
         };
-        let payload = StoredCapturePayload::HeapSnapshot {
+        let payload = CapturePayload::HeapSnapshot {
             path: final_path.to_string_lossy().into_owned(),
         };
 
@@ -5868,30 +6346,31 @@ mod tests {
         );
         assert!(final_path.exists());
         fs::remove_dir(&persistence_path).unwrap();
-        let retry = service
-            .reserve_capture(
+        let completed = service
+            .promote_completed_capture(
                 "test",
                 "runtime",
                 "target-a",
-                1,
-                "heap".into(),
+                "heap",
                 CaptureKind::HeapSnapshot,
             )
             .await
+            .unwrap()
             .unwrap();
-        let completed = retry.completed.clone().unwrap();
         assert_eq!(completed.heap_result, Some(result));
-        service
-            .store_heap_capture(&retry, completed.payload, completed.heap_result.unwrap())
-            .await
-            .unwrap();
+        assert!(matches!(
+            completed.payload,
+            CapturePayload::HeapSnapshot { ref path }
+                if path == &final_path.to_string_lossy()
+        ));
         assert!(final_path.exists());
         assert!(matches!(
-            &service.state.lock().await.captures
-                [&("test".to_owned(), "heap".to_owned())]
-                .payload,
-            StoredCapturePayload::HeapSnapshot { path }
-                if path == &final_path.to_string_lossy()
+            load_stored_capture(
+                &service.state.lock().await.captures
+                    [&("test".to_owned(), "heap".to_owned())]
+            ),
+            CapturePayload::HeapSnapshot { path }
+                if path == final_path.to_string_lossy()
         ));
         let _ = fs::remove_dir_all(root);
     }
@@ -5929,7 +6408,7 @@ mod tests {
         let (_, final_path) = service.heap_capture_paths(&reservation);
         fs::create_dir_all(final_path.parent().unwrap()).unwrap();
         fs::write(&final_path, b"completed heap").unwrap();
-        let payload = StoredCapturePayload::HeapSnapshot {
+        let payload = CapturePayload::HeapSnapshot {
             path: final_path.to_string_lossy().into_owned(),
         };
         assert!(
@@ -6000,10 +6479,10 @@ mod tests {
         fs::write(&first_final, b"winner").unwrap();
 
         service.abandon_capture(&second).await;
-        remove_heap_files([second_staging, second_final]);
+        remove_capture_payload_files([second_staging, second_final]);
         assert_eq!(fs::read(&first_final).unwrap(), b"winner");
 
-        remove_heap_files([first_final]);
+        remove_capture_payload_files([first_final]);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6099,7 +6578,7 @@ mod tests {
                 .contains("failed to persist debugger context state"),
             "{error:?}"
         );
-        assert!(!heap_path.exists());
+        assert!(heap_path.exists());
         assert!(
             service
                 .state
@@ -6142,8 +6621,12 @@ mod tests {
             ));
         fs::create_dir_all(&root).unwrap();
         let persistence_path = root.join("service.json");
-        let heap_path = root.join("blocked.heapsnapshot");
-        fs::create_dir(&heap_path).unwrap();
+        let heap_path = persistence_path
+            .with_extension("captures")
+            .join("orphan")
+            .join("blocked.heapsnapshot");
+        fs::create_dir_all(heap_path.parent().unwrap()).unwrap();
+        fs::write(&heap_path, b"blocked").unwrap();
         let mut state = ServiceState::default();
         state.captures.insert(
             ("test".into(), "blocked".into()),
@@ -6151,18 +6634,22 @@ mod tests {
         );
         let service = service_with_state(persistence_path.clone(), state);
         service.persist(&*service.state.lock().await).unwrap();
+        fs::remove_file(&heap_path).unwrap();
+        fs::create_dir(&heap_path).unwrap();
 
         let error = service
             .delete_capture(&CallCtx::default(), "test".into(), "blocked".into())
             .await
             .unwrap_err();
         assert!(
-            error.message.contains("failed to delete capture 'blocked'"),
+            error
+                .message
+                .contains("capture 'blocked' was removed from the catalog"),
             "{error:?}"
         );
         assert!(heap_path.is_dir());
         assert!(
-            service
+            !service
                 .state
                 .lock()
                 .await
@@ -6173,19 +6660,8 @@ mod tests {
 
         let (shutdown, _) = watch::channel(false);
         let restored = DebuggerService::load(shutdown, persistence_path.clone()).unwrap();
-        assert!(
-            restored
-                .state
-                .lock()
-                .await
-                .captures
-                .contains_key(&("test".into(), "blocked".into()))
-        );
-        fs::remove_dir(&heap_path).unwrap();
-        restored
-            .delete_capture(&CallCtx::default(), "test".into(), "blocked".into())
-            .await
-            .unwrap();
+        assert!(restored.state.lock().await.captures.is_empty());
+        assert!(!heap_path.exists());
         drop(restored);
 
         let (shutdown, _) = watch::channel(false);
@@ -6207,6 +6683,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let blocker = root.join("not-a-directory");
         fs::write(&blocker, b"block").unwrap();
+        let capture_path = root.join("kept.heapsnapshot");
+        fs::write(&capture_path, b"kept").unwrap();
         let mut state = ServiceState::default();
         state.contexts.insert(
             "test".into(),
@@ -6219,6 +6697,10 @@ mod tests {
         state
             .context_kinds
             .insert("test".into(), ContextKind::Named);
+        state.captures.insert(
+            ("test".into(), "kept".into()),
+            heap_capture("test", "kept", "target-a", "runtime", &capture_path),
+        );
         let (cancel, cancelled) = watch::channel(false);
         state.playwright_proxies.insert(
             "proxy".into(),
@@ -6243,15 +6725,17 @@ mod tests {
                 .is_err()
         );
         assert!(!*cancelled.borrow());
+        assert!(capture_path.exists());
         let state = service.state.lock().await;
         assert!(state.contexts.contains_key("test"));
         assert!(state.playwright_proxies.contains_key("proxy"));
+        assert!(state.captures.contains_key(&("test".into(), "kept".into())));
         drop(state);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn startup_scavenges_only_unreferenced_heap_capture_files() {
+    fn startup_scavenges_only_unreferenced_capture_payload_files() {
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -6262,10 +6746,19 @@ mod tests {
         let persistence_path = root.join("service.json");
         let capture_root = persistence_path.with_extension("captures");
         let cataloged = capture_root.join("cataloged").join("valid.heapsnapshot");
-        let orphan_final = capture_root.join("orphan").join("lost.heapsnapshot");
+        let orphan_heap = capture_root.join("orphan").join("lost.heapsnapshot");
+        let orphan_coverage = capture_root.join("orphan").join("lost.coverage.json");
+        let orphan_cpu = capture_root.join("orphan").join("lost.cpuprofile.json");
         let orphan_partial = capture_root.join("orphan").join("interrupted.partial");
         let unrelated = capture_root.join("orphan").join("notes.txt");
-        for path in [&cataloged, &orphan_final, &orphan_partial, &unrelated] {
+        for path in [
+            &cataloged,
+            &orphan_heap,
+            &orphan_coverage,
+            &orphan_cpu,
+            &orphan_partial,
+            &unrelated,
+        ] {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, path.to_string_lossy().as_bytes()).unwrap();
         }
@@ -6281,7 +6774,9 @@ mod tests {
         let (shutdown, _) = watch::channel(false);
         let service = DebuggerService::load(shutdown, persistence_path).unwrap();
         assert!(cataloged.exists());
-        assert!(!orphan_final.exists());
+        assert!(!orphan_heap.exists());
+        assert!(!orphan_coverage.exists());
+        assert!(!orphan_cpu.exists());
         assert!(!orphan_partial.exists());
         assert!(unrelated.exists());
         assert!(
@@ -6292,6 +6787,108 @@ mod tests {
                 .contains_key(&("test".into(), "valid".into()))
         );
         drop(service);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn schema_five_validates_payload_integrity_and_kind_on_restart() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "capture-integrity-{}",
+                random_instance_id().unwrap()
+            ));
+        let persistence_path = root.join("service.json");
+        let metadata = capture_metadata(
+            "test",
+            "coverage",
+            CaptureKind::Coverage,
+            "target-a",
+            "runtime",
+        );
+        let capture = stored_capture_from_payload(
+            &persistence_path,
+            metadata,
+            CapturePayload::Coverage(CoverageSnapshot {
+                timestamp_micros: 42,
+                sources: Vec::new(),
+                analysis: None,
+            }),
+        );
+        let payload_path = capture.payload_path();
+        let original_payload = fs::read(&payload_path).unwrap();
+        let mut state = ServiceState::default();
+        state
+            .captures
+            .insert(("test".into(), "coverage".into()), capture);
+        let writer = service_with_state(persistence_path.clone(), state);
+        writer.persist(&writer.state.blocking_lock()).unwrap();
+        drop(writer);
+        let original_state = fs::read(&persistence_path).unwrap();
+
+        let (shutdown, _) = watch::channel(false);
+        let valid = DebuggerService::load(shutdown, persistence_path.clone()).unwrap();
+        assert_eq!(valid.state.blocking_lock().captures.len(), 1);
+        drop(valid);
+
+        let mut hash_corrupt_payload = original_payload.clone();
+        hash_corrupt_payload[0] ^= 1;
+        fs::write(&payload_path, hash_corrupt_payload).unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let error = match DebuggerService::load(shutdown, persistence_path.clone()) {
+            Ok(_) => panic!("hash-corrupt capture payload unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("integrity validation"),
+            "{error}"
+        );
+
+        fs::write(&payload_path, &original_payload).unwrap();
+        let mut wrong_size_state: serde_json::Value =
+            serde_json::from_slice(&original_state).unwrap();
+        let byte_len = wrong_size_state["captures"][0]["payload"]["byteLen"]
+            .as_u64()
+            .unwrap();
+        wrong_size_state["captures"][0]["payload"]["byteLen"] =
+            serde_json::Value::from(byte_len + 1);
+        fs::write(
+            &persistence_path,
+            serde_json::to_vec_pretty(&wrong_size_state).unwrap(),
+        )
+        .unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let error = match DebuggerService::load(shutdown, persistence_path.clone()) {
+            Ok(_) => panic!("wrong-size capture payload unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("integrity validation"),
+            "{error}"
+        );
+
+        fs::write(&persistence_path, &original_state).unwrap();
+        let wrong_kind_path = payload_path.with_file_name("wrong.cpuprofile.json");
+        fs::copy(&payload_path, &wrong_kind_path).unwrap();
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&persistence_path).unwrap()).unwrap();
+        persisted["captures"][0]["payload"]["path"] =
+            serde_json::Value::String(wrong_kind_path.to_string_lossy().into_owned());
+        fs::write(
+            &persistence_path,
+            serde_json::to_vec_pretty(&persisted).unwrap(),
+        )
+        .unwrap();
+        let (shutdown, _) = watch::channel(false);
+        let error = match DebuggerService::load(shutdown, persistence_path.clone()) {
+            Ok(_) => panic!("mismatched capture payload unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("expected Coverage storage"),
+            "{error}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6452,7 +7049,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_four_round_trips_capture_catalog() {
+    fn schema_four_embedded_capture_catalog_is_migrated() {
         let path = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -6461,35 +7058,119 @@ mod tests {
                 std::process::id(),
                 random_instance_id().unwrap()
             ));
-        let state = StoredServiceState {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let heap_path = path.with_file_name(format!(
+            "legacy-{}.heapsnapshot",
+            random_instance_id().unwrap()
+        ));
+        fs::write(&heap_path, b"legacy heap").unwrap();
+        let coverage = CoverageSnapshot {
+            timestamp_micros: 42,
+            sources: Vec::new(),
+            analysis: None,
+        };
+        let cpu_profile = CpuProfileSnapshot {
+            capture_id: "profile".into(),
+            sampling_interval_micros: Some(100),
+            start_time_micros: 1.0,
+            end_time_micros: 2.0,
+            nodes: Vec::new(),
+            samples: Vec::new(),
+            time_deltas_micros: Vec::new(),
+            functions: Vec::new(),
+            analysis: None,
+        };
+        let heap_metadata = CaptureSnapshot {
+            context_id: "context".into(),
+            name: "baseline".into(),
+            kind: CaptureKind::HeapSnapshot,
+            target_id: "canonical-target".into(),
+            connection_id: "browser".into(),
+            connection_generation: 11,
+            storage_id: "immutable-storage".into(),
+        };
+        let coverage_metadata = capture_metadata(
+            "context",
+            "coverage",
+            CaptureKind::Coverage,
+            "canonical-target",
+            "browser",
+        );
+        write_capture_payload(
+            &path,
+            &coverage_metadata,
+            &CapturePayload::Coverage(coverage.clone()),
+        )
+        .unwrap();
+        let legacy = LegacyStoredServiceState {
             schema_version: 4,
             contexts: BTreeMap::new(),
             completed_requests: Vec::new(),
-            captures: vec![StoredCapture {
-                metadata: CaptureSnapshot {
-                    context_id: "context".into(),
-                    name: "baseline".into(),
-                    kind: CaptureKind::HeapSnapshot,
-                    target_id: "canonical-target".into(),
-                    connection_id: "browser".into(),
-                    connection_generation: 11,
-                    storage_id: "immutable-storage".into(),
+            captures: vec![
+                LegacyStoredCapture {
+                    metadata: heap_metadata,
+                    payload: LegacyStoredCapturePayload::HeapSnapshot {
+                        path: heap_path.to_string_lossy().into_owned(),
+                    },
                 },
-                payload: StoredCapturePayload::HeapSnapshot {
-                    path: "captures/immutable.heapsnapshot".into(),
+                LegacyStoredCapture {
+                    metadata: coverage_metadata,
+                    payload: LegacyStoredCapturePayload::Coverage(coverage.clone()),
                 },
-            }],
+                LegacyStoredCapture {
+                    metadata: capture_metadata(
+                        "context",
+                        "profile",
+                        CaptureKind::CpuProfile,
+                        "canonical-target",
+                        "browser",
+                    ),
+                    payload: LegacyStoredCapturePayload::CpuProfile(cpu_profile.clone()),
+                },
+            ],
         };
-        fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
         let restored = load_state(&path).unwrap();
         let capture = &restored.captures[&("context".into(), "baseline".into())];
         assert_eq!(capture.metadata.target_id, "canonical-target");
         assert_eq!(capture.metadata.connection_generation, 11);
         assert_eq!(capture.metadata.storage_id, "immutable-storage");
         assert!(matches!(
-            capture.payload,
-            StoredCapturePayload::HeapSnapshot { .. }
+            load_stored_capture(capture),
+            CapturePayload::HeapSnapshot { path } if path == heap_path.to_string_lossy()
         ));
+        assert!(matches!(
+            load_stored_capture(&restored.captures[&("context".into(), "coverage".into())]),
+            CapturePayload::Coverage(value) if value == coverage
+        ));
+        assert!(matches!(
+            load_stored_capture(&restored.captures[&("context".into(), "profile".into())]),
+            CapturePayload::CpuProfile(value) if value == cpu_profile
+        ));
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted["schemaVersion"], 5);
+        assert!(
+            persisted["captures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|capture| capture["payload"]["sha256"].is_string())
+        );
+        assert!(
+            !String::from_utf8(fs::read(&path).unwrap())
+                .unwrap()
+                .contains("\"timestampMicros\"")
+        );
+        let payload_paths = restored
+            .captures
+            .values()
+            .map(StoredCapture::payload_path)
+            .collect::<Vec<_>>();
+        drop(restored);
         let _ = fs::remove_file(path);
+        for path in payload_paths {
+            let _ = fs::remove_file(path);
+        }
     }
 }

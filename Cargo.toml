@@ -52,3 +52,7 @@ tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "ti
 [[bench]]
 name = "source_search"
 harness = false
+
+[[bench]]
+name = "capture_persistence"
+harness = false

@@ -903,6 +903,35 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     let capture_directory = persistent_state_file(&state_file).with_extension("captures");
     let heap_files = heap_capture_files(&capture_directory);
     assert_eq!(heap_files.len(), 1, "{heap_files:?}");
+    let payload_files = capture_payload_files(&capture_directory);
+    assert_eq!(payload_files.len(), 3, "{payload_files:?}");
+    assert!(payload_files.iter().any(|path| {
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".cpuprofile.json")
+    }));
+    assert!(payload_files.iter().any(|path| {
+        path.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".coverage.json")
+    }));
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(persistent_state_file(&state_file)).unwrap()).unwrap();
+    assert_eq!(persisted["schemaVersion"], 5);
+    assert!(
+        persisted["captures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|capture| {
+                capture["payload"]["path"].is_string()
+                    && capture["payload"]["sha256"].is_string()
+                    && capture["payload"]["byteLen"].is_number()
+                    && capture["payload"].get("kind").is_none()
+            })
+    );
     run_json(
         &cli,
         &service,
@@ -1002,7 +1031,7 @@ error: target selector 'node' is ambiguous: runtime-a/<node-a>@1, runtime-b/<nod
 $ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
 42
 $ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
-capture registered context-wide
+capture registered context-wide; payload externalized from service state
 $ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
 error: capture 'offline-profile' already exists in context
 $ jsdbg heap capture --id offline-heap --context <context> --target <node-b>
@@ -1767,6 +1796,16 @@ fn wait_until_removed(path: &Path) {
 }
 
 fn heap_capture_files(root: &Path) -> Vec<PathBuf> {
+    capture_payload_files(root)
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "heapsnapshot")
+        })
+        .collect()
+}
+
+fn capture_payload_files(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut pending = vec![root.to_owned()];
     while let Some(directory) = pending.pop() {
@@ -1777,9 +1816,11 @@ fn heap_capture_files(root: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "heapsnapshot")
+            } else if !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".partial")
             {
                 files.push(path);
             }
