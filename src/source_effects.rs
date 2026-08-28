@@ -11,7 +11,7 @@ use crate::debugger_engine::{
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
-use crate::source_search::{HydratedSource, HydratedSourceBatch};
+use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
     GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
     ResolvedSourceView, SourceViewError,
@@ -661,15 +661,19 @@ impl SourceEffectInterpreter {
         &self,
         state: &DebuggerState,
         path_selector: Option<&str>,
-    ) -> HydratedSourceBatch {
+        control: &SearchControl,
+    ) -> Result<HydratedSourceBatch, SearchError> {
         let mut sources = BTreeMap::new();
         let mut skipped = BTreeSet::new();
         for (script_key, script) in state.scripts.iter() {
+            control.check()?;
             if path_selector.is_none_or(|selector| script.url.contains(selector)) {
                 let identity = (script.url.clone(), "runtime".to_owned());
                 if let Some(content) = self.generated_source_content(state, script_key) {
-                    let content_hash =
-                        crate::content_store::ContentHash::of_bytes(content.as_bytes());
+                    let content_hash = crate::content_store::ContentHash::try_of_bytes(
+                        content.as_bytes(),
+                        || control.check(),
+                    )?;
                     sources
                         .entry((
                             identity.0.clone(),
@@ -692,6 +696,7 @@ impl SourceEffectInterpreter {
                 continue;
             };
             for (logical_url, candidate) in view.logical_sources.iter() {
+                control.check()?;
                 if path_selector.is_some_and(|selector| !logical_url.contains(selector)) {
                     continue;
                 }
@@ -721,10 +726,10 @@ impl SourceEffectInterpreter {
             .map(|source| (source.path.clone(), source.kind.clone()))
             .collect::<BTreeSet<_>>();
         skipped.retain(|identity| !hydrated.contains(identity));
-        HydratedSourceBatch {
+        Ok(HydratedSourceBatch {
             sources: sources.into_values().collect(),
             skipped_sources: skipped.len().min(u32::MAX as usize) as u32,
-        }
+        })
     }
 
     pub fn map_source_position(
@@ -1073,7 +1078,9 @@ mod tests {
         );
 
         let before = model.content_store().stats().materializations;
-        let batch = interpreter.search_source_batch(&state, Some("keep"));
+        let batch = interpreter
+            .search_source_batch(&state, Some("keep"), &SearchControl::default())
+            .unwrap();
 
         assert_eq!(batch.sources.len(), 1);
         assert_eq!(batch.sources[0].path, "src/keep.ts");
@@ -1081,6 +1088,19 @@ mod tests {
             model.content_store().stats().materializations - before,
             1,
             "the unselected source must not be hydrated"
+        );
+
+        let cancelled = SearchControl::default();
+        cancelled.cancel();
+        let before = model.content_store().stats().materializations;
+        assert!(matches!(
+            interpreter.search_source_batch(&state, None, &cancelled),
+            Err(SearchError::Cancelled)
+        ));
+        assert_eq!(
+            model.content_store().stats().materializations,
+            before,
+            "cancelled batches must stop before content hydration"
         );
     }
 

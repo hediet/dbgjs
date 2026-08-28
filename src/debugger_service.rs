@@ -1987,9 +1987,10 @@ impl DebuggerServiceApi for DebuggerService {
         let batches = stream::iter(debuggers.into_iter().map(
             |(connection_id, target_id, debugger)| {
                 let path_selector = path_selector.clone();
+                let batch_control = control.clone();
                 async move {
                     debugger
-                        .source_search_batch(path_selector)
+                        .source_search_batch(path_selector, batch_control)
                         .await
                         .map(|batch| (connection_id, target_id, batch))
                 }
@@ -2006,7 +2007,7 @@ impl DebuggerServiceApi for DebuggerService {
         let mut batches = batches
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
-            .map_err(target_debugger_rpc_error)?;
+            .map_err(target_source_search_rpc_error)?;
         batches.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
 
         let mut documents = Vec::new();
@@ -2053,7 +2054,10 @@ impl DebuggerServiceApi for DebuggerService {
                         kind: "intent".to_owned(),
                         provenance: "local file".to_owned(),
                     },
-                    content_hash: crate::content_store::ContentHash::of_bytes(content.as_bytes()),
+                    content_hash: crate::content_store::ContentHash::try_of_bytes(
+                        content.as_bytes(),
+                        || worker_control.check(),
+                    )?,
                     content,
                 });
             }
@@ -5019,9 +5023,17 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::HeapAnalysis(_)
         | TargetDebuggerError::BatchRollback { .. }
         | TargetDebuggerError::DriverFailed(_)
+        | TargetDebuggerError::SourceSearch(_)
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
     };
     JsonRpcError::new(code, error.to_string())
+}
+
+fn target_source_search_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
+    match error {
+        TargetDebuggerError::SourceSearch(error) => source_search_error(error),
+        error => target_debugger_rpc_error(error),
+    }
 }
 
 fn not_found(kind: &str, id: &str) -> JsonRpcError {

@@ -58,7 +58,7 @@ use crate::service_api::{
     ValuePropertySnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
-use crate::source_search::HydratedSourceBatch;
+use crate::source_search::{HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::Position;
 
 const COMMAND_BUFFER: usize = 32;
@@ -350,11 +350,13 @@ impl TargetDebuggerHandle {
     pub async fn source_search_batch(
         &self,
         path_selector: Option<String>,
+        control: SearchControl,
     ) -> Result<HydratedSourceBatch, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::SourceSearchBatch {
                 path_selector,
+                control,
                 response,
             })
             .await
@@ -965,6 +967,7 @@ enum TargetCommand {
     },
     SourceSearchBatch {
         path_selector: Option<String>,
+        control: SearchControl,
         response: oneshot::Sender<Result<HydratedSourceBatch, TargetDebuggerError>>,
     },
     ExplainSource {
@@ -1321,12 +1324,16 @@ async fn run_target(
             }
             Next::Command(Some(TargetCommand::SourceSearchBatch {
                 path_selector,
+                control,
                 response,
             })) => {
-                let batch = driver
-                    .source_effects()
-                    .search_source_batch(driver.state(), path_selector.as_deref());
-                let _ = response.send(Ok(batch));
+                complete_source_search_batch(response, &control, || {
+                    driver.source_effects().search_source_batch(
+                        driver.state(),
+                        path_selector.as_deref(),
+                        &control,
+                    )
+                });
             }
             Next::Command(Some(TargetCommand::ExplainSource { path, response })) => {
                 let explanations = driver.source_effects().explain_source(&path);
@@ -2475,6 +2482,21 @@ async fn run_target(
     for capture in heap_captures.into_values() {
         let _ = tokio::fs::remove_file(capture.path).await;
     }
+}
+
+fn complete_source_search_batch<T>(
+    response: oneshot::Sender<Result<T, TargetDebuggerError>>,
+    control: &SearchControl,
+    hydrate: impl FnOnce() -> Result<T, SearchError>,
+) {
+    if response.is_closed() {
+        return;
+    }
+    let result = control
+        .check()
+        .and_then(|()| hydrate())
+        .map_err(TargetDebuggerError::SourceSearch);
+    let _ = response.send(result);
 }
 
 fn publish_snapshot(
@@ -5305,6 +5327,8 @@ fn source_location(source_url: String, line: u32, column: u32) -> SourceLocation
 pub enum TargetDebuggerError {
     #[error(transparent)]
     Driver(#[from] DebuggerDriverError),
+    #[error(transparent)]
+    SourceSearch(#[from] SearchError),
     #[error("breakpoint line and column must be one-based")]
     InvalidBreakpointPosition,
     #[error("the debugger session is no longer available")]
@@ -5426,8 +5450,9 @@ fn generated_script_callback_breadcrumb(
 mod tests {
     use super::{
         aggregate_cpu_profile, bounded_heap_text, breakpoint_wait_failure,
-        callback_aware_breadcrumb, effective_coverage_ranges, heap_class_display_name,
-        predicate_matches, publish_snapshot, snapshot, source_excerpt, window_highlighted_line,
+        callback_aware_breadcrumb, complete_source_search_batch, effective_coverage_ranges,
+        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
+        window_highlighted_line,
     };
     use crate::content_store::ContentStore;
     use crate::debugger_engine::{
@@ -5441,6 +5466,7 @@ mod tests {
         TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
     };
     use crate::source_view::{ContentCandidate, Position, Provenance};
+    use crate::source_search::{SearchControl, SearchError};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -5614,6 +5640,50 @@ mod tests {
         });
         assert!(predicate_matches(&installed, &predicate));
         assert!(breakpoint_wait_failure(&installed, &predicate).is_none());
+    }
+
+    #[tokio::test]
+    async fn abandoned_and_cancelled_search_batches_skip_hydration() {
+        let control = SearchControl::default();
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        drop(receiver);
+        let mut hydrated = false;
+        complete_source_search_batch(response, &control, || {
+            hydrated = true;
+            Ok(())
+        });
+        assert!(!hydrated, "a closed response must skip queued hydration");
+
+        let cancelled = SearchControl::default();
+        cancelled.cancel();
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        let mut hydrated = false;
+        complete_source_search_batch(response, &cancelled, || {
+            hydrated = true;
+            Ok(())
+        });
+        assert!(!hydrated, "a cancelled request must skip queued hydration");
+        assert!(matches!(
+            receiver.await.unwrap(),
+            Err(super::TargetDebuggerError::SourceSearch(
+                SearchError::Cancelled
+            ))
+        ));
+
+        let expired = SearchControl::with_deadline(std::time::Instant::now());
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        let mut hydrated = false;
+        complete_source_search_batch(response, &expired, || {
+            hydrated = true;
+            Ok(())
+        });
+        assert!(!hydrated, "an expired request must skip queued hydration");
+        assert!(matches!(
+            receiver.await.unwrap(),
+            Err(super::TargetDebuggerError::SourceSearch(
+                SearchError::DeadlineExceeded
+            ))
+        ));
     }
 
     #[tokio::test]

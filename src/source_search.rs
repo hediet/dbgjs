@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use grep_matcher::Matcher;
+use grep_matcher::{LineTerminator, Matcher};
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
-use grep_searcher::{BinaryDetection, SearcherBuilder, sinks};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use rayon::prelude::*;
 
 use crate::content_store::ContentHash;
@@ -182,6 +182,11 @@ struct ContentMatches {
     total: u64,
 }
 
+struct CompiledMatcher {
+    line: Option<RegexMatcher>,
+    exact: RegexMatcher,
+}
+
 struct InterruptibleReader<'a> {
     bytes: &'a [u8],
     position: usize,
@@ -227,6 +232,66 @@ impl Read for InterruptibleReader<'_> {
             self.control.cancel();
         }
         Ok(length)
+    }
+}
+
+struct ContentMatchSink<'a> {
+    matcher: &'a RegexMatcher,
+    content: &'a [u8],
+    control: &'a SearchControl,
+    max_results: usize,
+    locations: &'a mut Vec<MatchLocation>,
+    total: &'a mut u64,
+    matcher_error: &'a mut Option<String>,
+    interrupted: &'a mut Option<SearchError>,
+}
+
+impl Sink for ContentMatchSink<'_> {
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        matched_line: &SinkMatch<'_>,
+    ) -> Result<bool, Self::Error> {
+        if let Some(reason) = self.control.interruption() {
+            *self.interrupted = Some(reason);
+            return Ok(false);
+        }
+        let Ok(line_start) = usize::try_from(matched_line.absolute_byte_offset()) else {
+            *self.matcher_error = Some("source offset exceeds platform limits".to_owned());
+            return Ok(false);
+        };
+        let mut line_length = matched_line.bytes().len();
+        if matched_line.bytes().last() == Some(&b'\n') {
+            line_length -= 1;
+            if line_length > 0 && matched_line.bytes()[line_length - 1] == b'\r' {
+                line_length -= 1;
+            }
+        }
+        let line_end = line_start.saturating_add(line_length);
+        let line_number = matched_line.line_number().unwrap_or(1) as u32;
+        if let Err(error) = self
+            .matcher
+            .find_iter_at(self.content, line_start, |matched| {
+                if matched.start() > line_end || matched.end() > line_end {
+                    return false;
+                }
+                *self.total = self.total.saturating_add(1);
+                if self.locations.len() < self.max_results {
+                    self.locations.push(MatchLocation {
+                        line: line_number,
+                        column: matched.start().saturating_sub(line_start) as u32 + 1,
+                        length: matched.end().saturating_sub(matched.start()) as u32,
+                    });
+                }
+                true
+            })
+        {
+            *self.matcher_error = Some(error.to_string());
+            return Ok(false);
+        }
+        Ok(true)
     }
 }
 
@@ -349,61 +414,71 @@ pub fn validate(query: &SearchQuery) -> Result<(), SearchError> {
     build_matcher(query).map(|_| ())
 }
 
-fn build_matcher(query: &SearchQuery) -> Result<RegexMatcher, SearchError> {
-    let mut builder = RegexMatcherBuilder::new();
-    builder
+fn build_matcher(query: &SearchQuery) -> Result<CompiledMatcher, SearchError> {
+    let mut exact_builder = RegexMatcherBuilder::new();
+    exact_builder
+        .crlf(true)
+        .line_terminator(None)
+        .multi_line(true)
         .case_insensitive(!query.case_sensitive)
         .fixed_strings(!query.regex);
-    builder
+    let exact = exact_builder
         .build(&query.pattern)
-        .map_err(|error| SearchError::InvalidPattern(error.to_string()))
+        .map_err(|error| SearchError::InvalidPattern(error.to_string()))?;
+
+    let mut line_builder = RegexMatcherBuilder::new();
+    line_builder
+        .crlf(true)
+        .multi_line(true)
+        .case_insensitive(!query.case_sensitive)
+        .fixed_strings(!query.regex);
+    let line = line_builder.build(&query.pattern).ok();
+    Ok(CompiledMatcher { line, exact })
 }
 
 fn search_content(
     hash: ContentHash,
     content: UniqueContent,
-    matcher: &RegexMatcher,
+    matcher: &CompiledMatcher,
     max_results: usize,
     control: &SearchControl,
 ) -> Result<ContentMatches, SearchError> {
     if let Some(interruption) = control.interruption() {
         return Err(interruption);
     }
+    let Some(line_matcher) = matcher.line.as_ref() else {
+        return Ok(ContentMatches {
+            hash,
+            content: content.content,
+            line_ranges: Vec::new(),
+            identities: content.identities,
+            locations: Vec::new(),
+            total: 0,
+        });
+    };
     let mut locations = Vec::with_capacity(max_results.min(64));
     let mut total = 0_u64;
     let mut matcher_error = None;
     let mut interrupted = None;
     let mut searcher = SearcherBuilder::new()
         .line_number(true)
+        .line_terminator(LineTerminator::crlf())
         .binary_detection(BinaryDetection::none())
         .build();
     let mut reader = InterruptibleReader::new(content.content.as_bytes(), control);
     let search_result = searcher.search_reader(
-        matcher,
+        line_matcher,
         &mut reader,
-        sinks::UTF8(|line_number, line| {
-            if let Some(reason) = control.interruption() {
-                interrupted = Some(reason);
-                return Ok(false);
-            }
-            let line = line.strip_suffix('\n').unwrap_or(line);
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            if let Err(error) = matcher.find_iter(line.as_bytes(), |matched| {
-                total = total.saturating_add(1);
-                if locations.len() < max_results {
-                    locations.push(MatchLocation {
-                        line: line_number as u32,
-                        column: matched.start() as u32 + 1,
-                        length: matched.end().saturating_sub(matched.start()) as u32,
-                    });
-                }
-                true
-            }) {
-                matcher_error = Some(error.to_string());
-                return Ok(false);
-            }
-            Ok(true)
-        }),
+        ContentMatchSink {
+            matcher: &matcher.exact,
+            content: content.content.as_bytes(),
+            control,
+            max_results,
+            locations: &mut locations,
+            total: &mut total,
+            matcher_error: &mut matcher_error,
+            interrupted: &mut interrupted,
+        },
     );
     if let Some(interruption) = reader.interruption {
         return Err(interruption);
@@ -580,6 +655,43 @@ mod tests {
             .unwrap()
             .hits
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn preserves_crlf_endings_and_absolute_regex_anchors() {
+        let mut crlf = query(r"foo$");
+        crlf.regex = true;
+        let crlf_result = search(
+            vec![document("crlf.ts", "foo\r\nbar\r\n".into())],
+            &crlf,
+            &SearchControl::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            crlf_result
+                .hits
+                .iter()
+                .map(|hit| (hit.line, hit.column, hit.match_length))
+                .collect::<Vec<_>>(),
+            [(1, 1, 3)]
+        );
+
+        let mut anchored = query(r"\A|foo|\z");
+        anchored.regex = true;
+        let anchored_result = search(
+            vec![document("anchors.ts", "head\nfoo\ntail".into())],
+            &anchored,
+            &SearchControl::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            anchored_result
+                .hits
+                .iter()
+                .map(|hit| (hit.line, hit.column, hit.match_length))
+                .collect::<Vec<_>>(),
+            [(1, 1, 0), (2, 1, 3), (3, 5, 0)]
         );
     }
 

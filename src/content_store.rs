@@ -14,6 +14,19 @@ impl ContentHash {
         Self(Sha256::digest(bytes).into())
     }
 
+    pub(crate) fn try_of_bytes<E>(
+        bytes: &[u8],
+        mut check: impl FnMut() -> Result<(), E>,
+    ) -> Result<Self, E> {
+        let mut hasher = Sha256::new();
+        for chunk in bytes.chunks(64 * 1024) {
+            check()?;
+            hasher.update(chunk);
+        }
+        check()?;
+        Ok(Self(hasher.finalize().into()))
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -98,6 +111,18 @@ impl ContentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controlled_hashing_checks_between_chunks() {
+        let mut checks = 0;
+        let result = ContentHash::try_of_bytes(&vec![0; 128 * 1024], || {
+            checks += 1;
+            (checks < 2).then_some(()).ok_or("cancelled")
+        });
+
+        assert_eq!(result, Err("cancelled"));
+        assert_eq!(checks, 2);
+    }
 
     #[test]
     fn identical_content_reuses_one_allocation() {
