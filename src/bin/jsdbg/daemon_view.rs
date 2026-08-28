@@ -7,6 +7,7 @@ use cdp_client::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, DebuggerServiceApiClient, FrameProjectionSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
+    breakpoint_applies_to_target,
 };
 
 const VIEW_OBSERVE_TIMEOUT_MS: u64 = 1_000;
@@ -393,16 +394,11 @@ fn desired_breakpoint_counts(
     breakpoints
         .iter()
         .filter(|breakpoint| {
-            breakpoint.enabled
-                && breakpoint
-                    .target_selector
-                    .as_deref()
-                    .is_none_or(|selector| {
-                        selector == target.target_id
-                            || selector == target.target_type
-                            || selector == target.title
-                            || selector == target.url
-                    })
+            breakpoint_applies_to_target(
+                breakpoint.enabled,
+                breakpoint.target_selector.as_deref(),
+                &target.target_id,
+            )
         })
         .fold(
             (0, 0, 0),
@@ -705,6 +701,33 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn desired_breakpoints_use_canonical_target_ids() {
+        let target = TargetSnapshot {
+            target_id: "page-1".to_owned(),
+            target_type: "page".to_owned(),
+            title: "Checkout".to_owned(),
+            url: "https://example.test/checkout".to_owned(),
+            attached: false,
+            parent_id: None,
+            opener_id: None,
+            browser_context_id: None,
+            subtype: None,
+        };
+
+        for selector in [&target.target_type, &target.title, &target.url] {
+            assert_eq!(
+                desired_breakpoint_counts(&[pending_breakpoint(selector)], &target),
+                (0, 0, 0),
+                "friendly selector {selector:?} is not an installation target"
+            );
+        }
+        assert_eq!(
+            desired_breakpoint_counts(&[pending_breakpoint(&target.target_id)], &target),
+            (0, 1, 0)
+        );
+    }
+
     fn empty_context_view(id: &str, revision: u64) -> ContextView {
         ContextView {
             snapshot: ContextSnapshot {
@@ -729,6 +752,22 @@ mod tests {
             status,
             source: None,
             assessments: vec![],
+            applications: vec![],
+        }
+    }
+
+    fn pending_breakpoint(target_selector: &str) -> BreakpointSnapshot {
+        BreakpointSnapshot {
+            id: "pending".to_owned(),
+            source_path: "app.ts".to_owned(),
+            line: 1,
+            column: 1,
+            status: BreakpointStatus::Pending,
+            pending_reason: None,
+            enabled: true,
+            condition: None,
+            target_selector: Some(target_selector.to_owned()),
+            targets: vec![],
             applications: vec![],
         }
     }

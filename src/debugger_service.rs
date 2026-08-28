@@ -49,7 +49,7 @@ use crate::service_api::{
     TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
     UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
-    VariableSnapshot,
+    VariableSnapshot, breakpoint_applies_to_target,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::source_search::{
@@ -1553,11 +1553,11 @@ impl DebuggerServiceApi for DebuggerService {
         };
         let has_target_debuggers = !target_debuggers.is_empty();
         for (target_id, debugger) in target_debuggers {
-            let applies_to_target = specification.enabled
-                && specification
-                    .target_selector
-                    .as_ref()
-                    .is_none_or(|selector| selector == &target_id);
+            let applies_to_target = breakpoint_applies_to_target(
+                specification.enabled,
+                specification.target_selector.as_deref(),
+                &target_id,
+            );
             if applies_to_target {
                 debugger
                     .set_breakpoint(result.revision, runtime_breakpoint.clone())
@@ -2721,12 +2721,12 @@ impl DebuggerServiceApi for DebuggerService {
         let breakpoints = context
             .breakpoints
             .iter()
-            .filter(|(_, breakpoint)| breakpoint.enabled)
             .filter(|(_, breakpoint)| {
-                breakpoint
-                    .target_selector
-                    .as_ref()
-                    .is_none_or(|selector| selector == &target_id)
+                breakpoint_applies_to_target(
+                    breakpoint.enabled,
+                    breakpoint.target_selector.as_deref(),
+                    &target_id,
+                )
             })
             .map(|(id, breakpoint)| TargetBreakpointSpec {
                 id: id.clone(),
@@ -4375,10 +4375,11 @@ fn service_snapshot(
             .iter()
             .filter(|((candidate_context, _, target_id), _)| {
                 candidate_context == id
-                    && specification
-                        .target_selector
-                        .as_ref()
-                        .is_none_or(|selector| selector == target_id)
+                    && breakpoint_applies_to_target(
+                        specification.enabled,
+                        specification.target_selector.as_deref(),
+                        target_id,
+                    )
             })
             .filter_map(|(_, debugger)| {
                 debugger

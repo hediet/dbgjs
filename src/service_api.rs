@@ -461,6 +461,15 @@ pub struct BreakpointSpec {
     pub target_selector: Option<String>,
 }
 
+/// Tests breakpoint applicability against a canonical target ID.
+pub fn breakpoint_applies_to_target(
+    enabled: bool,
+    target_selector: Option<&str>,
+    target_id: &str,
+) -> bool {
+    enabled && target_selector.is_none_or(|selector| selector == target_id)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceSnapshotInfo {
