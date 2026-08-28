@@ -7,7 +7,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::{BufReader, Read};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use regex::Regex;
 use serde::Deserialize;
@@ -16,6 +16,7 @@ use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 const SNAPSHOT_READ_BUFFER_SIZE: usize = 1024 * 1024;
 const NO_NODE: u32 = u32::MAX;
 const MAX_STRING_RECONSTRUCTION_DEPTH: usize = 64;
+const MAX_STRING_RECONSTRUCTION_VISITS: usize = 4096;
 const MAX_RECONSTRUCTED_STRING_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -153,34 +154,52 @@ impl HeapGraph {
         })
     }
 
-    /// Flattens V8 cons/sliced string nodes with cycle and depth protection.
-    /// Results never exceed 1 MiB, and `max_chars` can impose a smaller display
-    /// bound. Regular snapshots omit slice offsets, so those return a truncated
-    /// preview of the reconstructed backing string.
+    /// Flattens V8 cons/sliced string nodes with cycle, depth, and work protection.
+    /// Slice bounds are interpreted as UTF-16 code units. Results never exceed
+    /// 1 MiB, and `max_chars` can impose a smaller display bound. Regular
+    /// snapshots omit slice offsets, so those return a truncated preview of the
+    /// reconstructed backing string.
     pub fn reconstructed_string(
         &self,
         node: NodeIndex,
         max_chars: Option<usize>,
     ) -> Result<Option<ReconstructedString>, AnalysisError> {
+        self.reconstructed_string_impl(node, max_chars)
+            .map(|(value, _)| value)
+    }
+
+    fn reconstructed_string_impl(
+        &self,
+        node: NodeIndex,
+        max_chars: Option<usize>,
+    ) -> Result<(Option<ReconstructedString>, usize), AnalysisError> {
         let index = self.checked_node(node)?;
         if !self.is_string_type(index) {
-            return Ok(None);
+            return Ok((None, 0));
         }
         let mut state = StringReconstruction {
             graph: self,
-            max_chars: max_chars.unwrap_or(usize::MAX),
-            max_bytes: MAX_RECONSTRUCTED_STRING_BYTES,
             active: HashSet::new(),
-            truncated: false,
-            uncertain: false,
+            cache: HashMap::new(),
+            visits: 0,
         };
-        let mut value = String::new();
-        state.append(node, 0, &mut value)?;
-        Ok(Some(ReconstructedString {
-            value,
-            truncated: state.truncated,
-            exact_prefix: !state.uncertain,
-        }))
+        let value = state.reconstruct(
+            node,
+            0,
+            ReconstructionLimit {
+                max_chars: max_chars.unwrap_or(usize::MAX),
+                max_bytes: MAX_RECONSTRUCTED_STRING_BYTES,
+            },
+        )?;
+        let visits = state.visits;
+        Ok((
+            Some(ReconstructedString {
+                value: value.value.as_ref().to_owned(),
+                truncated: value.truncated,
+                exact_prefix: !value.uncertain,
+            }),
+            visits,
+        ))
     }
 
     /// Looks up an object id within this capture. The index is intentionally
@@ -870,43 +889,79 @@ pub struct ReconstructedString {
 
 struct StringReconstruction<'a> {
     graph: &'a HeapGraph,
+    active: HashSet<NodeIndex>,
+    cache: HashMap<ReconstructionKey, StringFragment>,
+    visits: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ReconstructionKey {
+    node: NodeIndex,
+    depth: usize,
+    limit: ReconstructionLimit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ReconstructionLimit {
     max_chars: usize,
     max_bytes: usize,
-    active: HashSet<NodeIndex>,
+}
+
+#[derive(Clone, Debug)]
+struct StringFragment {
+    value: Arc<str>,
     truncated: bool,
     uncertain: bool,
 }
 
+impl StringFragment {
+    fn incomplete(uncertain: bool) -> Self {
+        Self {
+            value: Arc::from(""),
+            truncated: true,
+            uncertain,
+        }
+    }
+}
+
+enum Utf16Boundary {
+    Found(usize),
+    Beyond,
+    SplitsSurrogate,
+}
+
 impl StringReconstruction<'_> {
-    fn append(
+    fn reconstruct(
         &mut self,
         node: NodeIndex,
         depth: usize,
-        output: &mut String,
-    ) -> Result<(), AnalysisError> {
-        if !output.is_empty()
-            && (output.len() >= self.max_bytes
-                || (self.max_chars != usize::MAX && output.chars().count() >= self.max_chars))
-        {
-            self.truncated = true;
-            return Ok(());
+        limit: ReconstructionLimit,
+    ) -> Result<StringFragment, AnalysisError> {
+        let key = ReconstructionKey { node, depth, limit };
+        if let Some(value) = self.cache.get(&key) {
+            return Ok(value.clone());
         }
         if depth >= MAX_STRING_RECONSTRUCTION_DEPTH || !self.active.insert(node) {
-            self.truncated = true;
-            self.uncertain = true;
-            return Ok(());
+            return Ok(StringFragment::incomplete(true));
         }
-        let result = self.append_inner(node, depth, output);
+        if self.visits >= MAX_STRING_RECONSTRUCTION_VISITS {
+            self.active.remove(&node);
+            return Ok(StringFragment::incomplete(true));
+        }
+        self.visits += 1;
+        let result = self.reconstruct_inner(node, depth, limit);
         self.active.remove(&node);
-        result
+        let value = result?;
+        self.cache.insert(key, value.clone());
+        Ok(value)
     }
 
-    fn append_inner(
+    fn reconstruct_inner(
         &mut self,
         node: NodeIndex,
         depth: usize,
-        output: &mut String,
-    ) -> Result<(), AnalysisError> {
+        limit: ReconstructionLimit,
+    ) -> Result<StringFragment, AnalysisError> {
         let index = self.graph.checked_node(node)?;
         let node_type = self.graph.node_type_name(index)?;
         let raw_name = self
@@ -921,84 +976,140 @@ impl StringReconstruction<'_> {
             _ => None,
         };
         if placeholder.is_some_and(|placeholder| raw_name != placeholder) {
-            self.append_text(output, raw_name);
-            return Ok(());
+            return Ok(Self::text_fragment(raw_name, limit));
         }
         match node_type {
-            "string" => {
-                self.append_text(output, raw_name);
-            }
+            "string" => Ok(Self::text_fragment(raw_name, limit)),
             "concatenated string" => {
+                let mut output = String::new();
+                let mut truncated = false;
+                let mut uncertain = false;
                 for part in ["first", "second"] {
+                    if Self::at_limit(&output, limit) {
+                        truncated = true;
+                        break;
+                    }
                     let Some(target) = self.graph.named_edge_target(node, part) else {
-                        self.truncated = true;
-                        self.uncertain = true;
+                        truncated = true;
+                        uncertain = true;
                         continue;
                     };
-                    self.append(target, depth + 1, output)?;
+                    let value = self.reconstruct(target, depth + 1, limit)?;
+                    if output.is_empty() && Self::at_limit(&value.value, limit) {
+                        return Ok(StringFragment {
+                            value: value.value,
+                            truncated: true,
+                            uncertain: value.uncertain,
+                        });
+                    }
+                    let append_truncated = Self::append_text(&mut output, &value.value, limit);
+                    truncated |= value.truncated || append_truncated;
+                    uncertain |= value.uncertain;
+                    if append_truncated || (value.truncated && !value.uncertain) {
+                        break;
+                    }
                 }
+                Ok(StringFragment {
+                    value: Arc::from(output),
+                    truncated,
+                    uncertain,
+                })
             }
             "sliced string" => {
                 let Some(parent) = self.graph.named_edge_target(node, "parent") else {
-                    self.truncated = true;
-                    self.uncertain = true;
-                    return Ok(());
+                    return Ok(StringFragment::incomplete(true));
                 };
-                let mut parent_value = String::new();
                 let slice_bounds = (
                     self.graph.numeric_edge_value(node, "offset"),
                     self.graph.numeric_edge_value(node, "length"),
                 );
                 if let (Some(offset), Some(length)) = slice_bounds {
-                    let original_max_chars = self.max_chars;
-                    let original_truncated = self.truncated;
-                    self.max_chars = offset
-                        .saturating_add(length.min(original_max_chars))
-                        .min(MAX_RECONSTRUCTED_STRING_BYTES);
-                    self.append(parent, depth + 1, &mut parent_value)?;
-                    self.max_chars = original_max_chars;
-                    self.truncated = original_truncated || self.uncertain;
-                    if parent_value.chars().count()
-                        < offset.saturating_add(length.min(original_max_chars))
-                    {
-                        self.truncated = true;
-                    }
-                    let slice = parent_value
-                        .chars()
-                        .skip(offset)
-                        .take(length)
-                        .collect::<String>();
-                    if slice.chars().count() < length {
-                        self.truncated = true;
-                    }
-                    self.append_text(output, &slice);
+                    self.reconstruct_slice(parent, depth, offset, length, limit)
                 } else {
-                    self.append(parent, depth + 1, &mut parent_value)?;
+                    let mut value = self.reconstruct(parent, depth + 1, limit)?;
                     // Regular V8 snapshots omit the slice offset. The backing
                     // string is useful as an explicitly incomplete preview.
-                    self.truncated = true;
-                    self.uncertain = true;
-                    self.append_text(output, &parent_value);
+                    value.truncated = true;
+                    value.uncertain = true;
+                    Ok(value)
                 }
             }
-            _ => {
-                self.truncated = true;
-                self.uncertain = true;
-            }
+            _ => Ok(StringFragment::incomplete(true)),
         }
-        Ok(())
     }
 
-    fn append_text(&mut self, output: &mut String, value: &str) {
-        let remaining_chars = if self.max_chars == usize::MAX {
+    fn reconstruct_slice(
+        &mut self,
+        parent: NodeIndex,
+        depth: usize,
+        offset: usize,
+        length: usize,
+        limit: ReconstructionLimit,
+    ) -> Result<StringFragment, AnalysisError> {
+        let Some(end) = offset.checked_add(length) else {
+            return Ok(StringFragment::incomplete(true));
+        };
+        let parent_value = self.reconstruct(
+            parent,
+            depth + 1,
+            ReconstructionLimit {
+                max_chars: usize::MAX,
+                max_bytes: MAX_RECONSTRUCTED_STRING_BYTES,
+            },
+        )?;
+        let start = utf16_boundary(&parent_value.value, offset);
+        let end = utf16_boundary(&parent_value.value, end);
+        if matches!(start, Utf16Boundary::SplitsSurrogate)
+            || matches!(end, Utf16Boundary::SplitsSurrogate)
+        {
+            return Ok(StringFragment::incomplete(true));
+        }
+
+        let (Utf16Boundary::Found(start), end) = (start, end) else {
+            return Ok(StringFragment {
+                value: Arc::from(""),
+                truncated: true,
+                uncertain: parent_value.uncertain,
+            });
+        };
+        let (slice_end, complete) = match end {
+            Utf16Boundary::Found(end) => (end, true),
+            Utf16Boundary::Beyond => (parent_value.value.len(), false),
+            Utf16Boundary::SplitsSurrogate => unreachable!(),
+        };
+        let mut output = String::new();
+        let bounded = Self::append_text(&mut output, &parent_value.value[start..slice_end], limit);
+        Ok(StringFragment {
+            value: Arc::from(output),
+            truncated: !complete || bounded || parent_value.uncertain,
+            uncertain: parent_value.uncertain,
+        })
+    }
+
+    fn text_fragment(value: &str, limit: ReconstructionLimit) -> StringFragment {
+        let mut output = String::new();
+        let truncated = Self::append_text(&mut output, value, limit);
+        StringFragment {
+            value: Arc::from(output),
+            truncated,
+            uncertain: false,
+        }
+    }
+
+    fn at_limit(output: &str, limit: ReconstructionLimit) -> bool {
+        output.len() >= limit.max_bytes
+            || (limit.max_chars != usize::MAX && output.chars().count() >= limit.max_chars)
+    }
+
+    fn append_text(output: &mut String, value: &str, limit: ReconstructionLimit) -> bool {
+        let remaining_chars = if limit.max_chars == usize::MAX {
             usize::MAX
         } else {
-            self.max_chars.saturating_sub(output.chars().count())
+            limit.max_chars.saturating_sub(output.chars().count())
         };
-        let remaining_bytes = self.max_bytes.saturating_sub(output.len());
+        let remaining_bytes = limit.max_bytes.saturating_sub(output.len());
         if remaining_chars == 0 || remaining_bytes == 0 {
-            self.truncated |= !value.is_empty();
-            return;
+            return !value.is_empty();
         }
 
         let mut end = 0;
@@ -1012,7 +1123,25 @@ impl StringReconstruction<'_> {
             chars += 1;
         }
         output.push_str(&value[..end]);
-        self.truncated |= end < value.len();
+        end < value.len()
+    }
+}
+
+fn utf16_boundary(value: &str, target: usize) -> Utf16Boundary {
+    let mut utf16_offset = 0;
+    for (byte_offset, character) in value.char_indices() {
+        if utf16_offset == target {
+            return Utf16Boundary::Found(byte_offset);
+        }
+        utf16_offset += character.len_utf16();
+        if utf16_offset > target {
+            return Utf16Boundary::SplitsSurrogate;
+        }
+    }
+    if utf16_offset == target {
+        Utf16Boundary::Found(value.len())
+    } else {
+        Utf16Boundary::Beyond
     }
 }
 
@@ -2517,6 +2646,48 @@ mod tests {
             })
         );
 
+        let utf16_slice = parse_heap_graph(
+            snapshot(
+                "4,0,1,0,3, 2,1,3,0,0, 5,2,5,0,0, 5,3,7,0,0",
+                "3,4,5, 3,5,10, 3,6,15",
+                r#""(sliced string)","😀abc","2","1","parent","offset","length""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            utf16_slice
+                .reconstructed_string(NodeIndex(0), None)
+                .unwrap(),
+            Some(ReconstructedString {
+                value: "a".to_owned(),
+                truncated: false,
+                exact_prefix: true,
+            })
+        );
+
+        let split_surrogate = parse_heap_graph(
+            snapshot(
+                "4,0,1,0,3, 2,1,3,0,0, 5,2,5,0,0, 5,3,7,0,0",
+                "3,4,5, 3,5,10, 3,6,15",
+                r#""(sliced string)","😀abc","1","1","parent","offset","length""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            split_surrogate
+                .reconstructed_string(NodeIndex(0), None)
+                .unwrap(),
+            Some(ReconstructedString {
+                value: String::new(),
+                truncated: true,
+                exact_prefix: false,
+            })
+        );
+
         let regular_v8_slice = parse_heap_graph(
             snapshot(
                 "4,0,1,0,1, 2,1,3,0,0",
@@ -2626,6 +2797,43 @@ mod tests {
             .unwrap();
         assert_eq!(bounded.value.len(), MAX_RECONSTRUCTED_STRING_BYTES);
         assert!(bounded.truncated);
+    }
+
+    #[test]
+    fn memoizes_shared_string_dag_reconstruction() {
+        const NODE_COUNT: usize = 64;
+        let nodes = (0..NODE_COUNT - 1)
+            .map(|index| format!("3,0,{},0,2", index * 2 + 1))
+            .chain([format!("2,1,{},0,0", NODE_COUNT * 2 - 1)])
+            .collect::<Vec<_>>()
+            .join(",");
+        let edges = (0..NODE_COUNT - 1)
+            .flat_map(|index| {
+                let target = (index + 1) * 5;
+                [format!("3,2,{target}"), format!("3,3,{target}")]
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let graph = parse_heap_graph(
+            snapshot(
+                &nodes,
+                &edges,
+                r#""(concatenated string)","x","first","second""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let (value, visits) = graph.reconstructed_string_impl(NodeIndex(0), None).unwrap();
+        let value = value.unwrap();
+        assert_eq!(value.value.len(), MAX_RECONSTRUCTED_STRING_BYTES);
+        assert!(value.truncated);
+        assert!(value.exact_prefix);
+        assert!(
+            visits <= NODE_COUNT,
+            "shared DAG reconstruction took {visits} node visits"
+        );
     }
 
     #[test]
