@@ -253,6 +253,14 @@ pub enum ContextTransitionError {
     ActiveConnectionCannotBeRemoved,
     #[error("connection '{connection_id}' changed while the operation was pending")]
     StaleEffectCompletion { connection_id: String },
+    #[error(
+        "canonical target ID '{target_id}' from connection '{incoming_connection_id}' collides with connection '{existing_connection_id}'"
+    )]
+    TargetIdentityCollision {
+        target_id: String,
+        existing_connection_id: String,
+        incoming_connection_id: String,
+    },
 }
 
 pub fn reduce_context(
@@ -511,6 +519,7 @@ fn reduce_runtime_observation(
             {
                 return Ok(ContextTransition::unchanged(previous));
             }
+            reject_target_collisions(previous, &connection_id, std::iter::once(&target))?;
             let target_id = target.target_id.clone();
             let event = if connection.targets.contains_key(&target_id) {
                 ContextEvent::TargetChanged {
@@ -596,6 +605,7 @@ fn reduce_effect_completion(
                 completed_attempt,
                 &ConnectionStatus::Connecting,
             )?;
+            reject_target_collisions(previous, &connection_id, targets.values())?;
             let mut state = (**previous).clone();
             let connection = mutable_connection(&mut state, &connection_id);
             connection.status = ConnectionStatus::Connected {
@@ -613,6 +623,7 @@ fn reduce_effect_completion(
                 },
             ))
         }
+
         EffectCompletion::ConnectionOpenFailed {
             connection_id,
             attempt: completed_attempt,
@@ -666,6 +677,28 @@ fn reduce_effect_completion(
             ))
         }
     }
+}
+
+fn reject_target_collisions<'a>(
+    context: &ContextState,
+    incoming_connection_id: &str,
+    targets: impl IntoIterator<Item = &'a TargetSnapshot>,
+) -> Result<(), ContextTransitionError> {
+    for target in targets {
+        if let Some((existing_connection_id, _)) =
+            context.connections.iter().find(|(id, connection)| {
+                id.as_str() != incoming_connection_id
+                    && connection.targets.contains_key(&target.target_id)
+            })
+        {
+            return Err(ContextTransitionError::TargetIdentityCollision {
+                target_id: target.target_id.clone(),
+                existing_connection_id: existing_connection_id.clone(),
+                incoming_connection_id: incoming_connection_id.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn changed(
@@ -774,6 +807,20 @@ mod tests {
         (connected.state, attempt)
     }
 
+    fn page_target(target_id: &str) -> TargetSnapshot {
+        TargetSnapshot {
+            target_id: target_id.into(),
+            target_type: "page".into(),
+            title: "Page".into(),
+            url: "https://example.test".into(),
+            attached: false,
+            parent_id: None,
+            opener_id: None,
+            browser_context_id: None,
+            subtype: None,
+        }
+    }
+
     #[test]
     fn stale_connect_completion_cannot_revive_disconnected_state() {
         let configured = configured_context();
@@ -849,17 +896,7 @@ mod tests {
     #[test]
     fn target_lifecycle_updates_only_the_current_connection_generation() {
         let (connected, attempt) = connected_context();
-        let target = TargetSnapshot {
-            target_id: "page".into(),
-            target_type: "page".into(),
-            title: "Page".into(),
-            url: "https://example.test".into(),
-            attached: false,
-            parent_id: None,
-            opener_id: None,
-            browser_context_id: None,
-            subtype: None,
-        };
+        let target = page_target("page");
         let created = reduce_context(
             &connected,
             ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
@@ -907,6 +944,117 @@ mod tests {
             removed.events[0].event,
             ContextEvent::TargetDestroyed { .. }
         ));
+    }
+
+    #[test]
+    fn runtime_target_identity_collision_is_rejected() {
+        let (connected, attempt) = connected_context();
+        let first = reduce_context(
+            &connected,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+                connection_id: "browser".into(),
+                attempt,
+                target: page_target("canonical-id"),
+            }),
+        )
+        .unwrap();
+        let configured = command(
+            &first.state,
+            UserCommand::PutConnection {
+                connection_id: "other".into(),
+                configuration: "ws://other".into(),
+            },
+        );
+        let connecting = command(
+            &configured.state,
+            UserCommand::ConnectConnection {
+                connection_id: "other".into(),
+            },
+        );
+        let other_attempt = match &connecting.effects[0] {
+            ContextEffect::Connect { attempt, .. } => *attempt,
+            effect => panic!("unexpected effect: {effect:?}"),
+        };
+        let opened = reduce_context(
+            &connecting.state,
+            ContextInput::EffectCompletion(EffectCompletion::ConnectionOpened {
+                connection_id: "other".into(),
+                attempt: other_attempt,
+                product: "Chrome".into(),
+                protocol_version: "1.3".into(),
+                targets: BTreeMap::new(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            reduce_context(
+                &opened.state,
+                ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+                    connection_id: "other".into(),
+                    attempt: other_attempt,
+                    target: page_target("canonical-id"),
+                }),
+            )
+            .unwrap_err(),
+            ContextTransitionError::TargetIdentityCollision {
+                target_id: "canonical-id".into(),
+                existing_connection_id: "browser".into(),
+                incoming_connection_id: "other".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn discovered_target_identity_collision_is_rejected() {
+        let (connected, attempt) = connected_context();
+        let first = reduce_context(
+            &connected,
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+                connection_id: "browser".into(),
+                attempt,
+                target: page_target("canonical-id"),
+            }),
+        )
+        .unwrap();
+        let configured = command(
+            &first.state,
+            UserCommand::PutConnection {
+                connection_id: "other".into(),
+                configuration: "ws://other".into(),
+            },
+        );
+        let connecting = command(
+            &configured.state,
+            UserCommand::ConnectConnection {
+                connection_id: "other".into(),
+            },
+        );
+        let other_attempt = match &connecting.effects[0] {
+            ContextEffect::Connect { attempt, .. } => *attempt,
+            effect => panic!("unexpected effect: {effect:?}"),
+        };
+
+        assert_eq!(
+            reduce_context(
+                &connecting.state,
+                ContextInput::EffectCompletion(EffectCompletion::ConnectionOpened {
+                    connection_id: "other".into(),
+                    attempt: other_attempt,
+                    product: "Chrome".into(),
+                    protocol_version: "1.3".into(),
+                    targets: BTreeMap::from([
+                        ("canonical-id".into(), page_target("canonical-id"),)
+                    ]),
+                }),
+            )
+            .unwrap_err(),
+            ContextTransitionError::TargetIdentityCollision {
+                target_id: "canonical-id".into(),
+                existing_connection_id: "browser".into(),
+                incoming_connection_id: "other".into(),
+            }
+        );
     }
 
     #[test]

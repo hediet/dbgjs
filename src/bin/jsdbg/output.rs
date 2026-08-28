@@ -1,5 +1,6 @@
 use cdp_client::service_api::{
-    AgentSessionSnapshot, BreakpointPendingReason, BreakpointStatus, CompactedSourceEdgeSnapshot,
+    AgentSessionSnapshot, BreakpointPendingReason, BreakpointStatus, CaptureSnapshot,
+    CompactedSourceEdgeSnapshot,
     CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
     ConnectionStatus, ConsoleMessageSnapshot, ContextSnapshot, ContextSummary, CoverageSnapshot,
     CpuProfileFunctionSnapshot, CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot,
@@ -1481,6 +1482,32 @@ impl HumanOutput for Vec<ContextSummary> {
                 context.connection_count,
                 context.breakpoint_count
             );
+        }
+    }
+}
+
+impl HumanOutput for CaptureSnapshot {
+    fn print_human(&self) {
+        println!(
+            "{}  kind={:?}  target={}/{}@{}  storage={}",
+            self.name,
+            self.kind,
+            self.connection_id,
+            self.target_id,
+            self.connection_generation,
+            self.storage_id
+        );
+    }
+}
+
+impl HumanOutput for Vec<CaptureSnapshot> {
+    fn print_human(&self) {
+        if self.is_empty() {
+            println!("No stored captures.");
+            return;
+        }
+        for capture in self {
+            capture.print_human();
         }
     }
 }

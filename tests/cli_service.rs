@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -565,15 +565,288 @@ fn corrupt_persistence_reports_an_actionable_startup_error() {
 }
 
 #[test]
+fn cli_resolves_canonical_target_and_queries_capture_offline() {
+    let Ok(mut node) = Command::new("node")
+        .args([
+            "-e",
+            "const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let endpoint = {
+        let mut line = String::new();
+        BufReader::new(node.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        line.trim().to_owned()
+    };
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+
+    let suffix = unique_suffix();
+    let context_id = format!("identity-e2e-{suffix}");
+    let context = format!(":{context_id}");
+    let state_file = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!("jsdbg-identity-e2e-{suffix}.json"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "create", "--context", &context],
+    );
+    let connected = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "add",
+            "--node-inspector",
+            &endpoint,
+            "--connection",
+            "runtime",
+            "--context",
+            &context,
+            "--connect",
+        ],
+    );
+    assert_eq!(connected["connections"][0]["generation"], 1);
+    assert_eq!(
+        connected["connections"][0]["targets"][0]["targetId"],
+        "$node-root"
+    );
+
+    let evaluated = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            "6 * 7",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    assert_eq!(evaluated["preview"]["preview"], "42");
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "profile",
+            "start",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            "Array.from({length:10000},(_,i)=>i*i).reduce((a,b)=>a+b,0)",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "profile",
+            "stop",
+            "--id",
+            "offline-profile",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    let coverage_started = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "coverage",
+            "start",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    assert_success(
+        &["coverage", "start"],
+        coverage_started.0,
+        &coverage_started.1,
+        &coverage_started.2,
+    );
+    let duplicate = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "coverage",
+            "capture",
+            "--id",
+            "offline-profile",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    assert!(!duplicate.0.success());
+    assert!(
+        String::from_utf8_lossy(&duplicate.2).contains("capture 'offline-profile' already exists")
+    );
+    let coverage_stopped = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "coverage",
+            "stop",
+            "--context",
+            &context,
+            "--target",
+            "$node-root",
+        ],
+    );
+    assert_success(
+        &["coverage", "stop"],
+        coverage_stopped.0,
+        &coverage_stopped.1,
+        &coverage_stopped.2,
+    );
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "connection",
+            "disconnect",
+            "--context",
+            &context,
+            "--connection",
+            "runtime",
+        ],
+    );
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+
+    let captures = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["capture", "list", "--context", &context],
+    );
+    let profile = captures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|capture| capture["name"] == "offline-profile")
+        .unwrap();
+    assert_eq!(profile["kind"], "cpuProfile");
+    assert_eq!(profile["targetId"], "$node-root");
+    assert_eq!(profile["connectionId"], "runtime");
+    assert_eq!(profile["connectionGeneration"], 1);
+    assert_eq!(profile["contextId"], context_id);
+    assert!(
+        profile["storageId"]
+            .as_str()
+            .is_some_and(|storage_id| !storage_id.is_empty())
+    );
+    let shown = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["capture", "show", "offline-profile", "--context", &context],
+    );
+    assert_eq!(shown, *profile);
+    assert!(
+        run_json(
+            &cli,
+            &service,
+            &state_file,
+            &[
+                "profile",
+                "show",
+                "offline-profile",
+                "--max-lines",
+                "3",
+                "--context",
+                &context,
+            ],
+        )
+        .is_object()
+    );
+
+    let transcript = "\
+$ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
+42
+$ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
+capture registered context-wide
+$ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
+error: capture 'offline-profile' already exists in context
+$ jsdbg connection disconnect --context <context> --connection runtime
+$ jsdbg service stop
+$ jsdbg capture show offline-profile --context <context>
+kind=cpuProfile owner=runtime/<canonical-id>@1
+$ jsdbg profile show offline-profile --context <context>
+offline query succeeded
+";
+    print!("{transcript}");
+    assert_eq!(
+        transcript,
+        include_str!("transcripts/context-global-identities.txt")
+    );
+
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(persistent_state_file(&state_file).with_extension("captures"));
+    cleanup.disarm();
+}
+
+#[test]
 fn cli_service_connects_to_live_cdp() {
     let Ok(endpoint) = std::env::var("CDP_WS_ENDPOINT") else {
         return;
     };
-    let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-cli-live-{}-{}.json",
-        std::process::id(),
-        unique_suffix()
-    ));
+    let state_file = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!(
+            "jsdbg-cli-live-{}-{}.json",
+            std::process::id(),
+            unique_suffix()
+        ));
     let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
     let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
@@ -956,10 +1229,11 @@ fn cli_service_connects_to_live_cdp() {
     );
     assert_eq!(reconnected["connections"][0]["status"]["kind"], "connected");
     assert_eq!(reconnected["connections"][0]["generation"], 2);
-    run_json(
+    let collision = run_in(
         &cli,
         &service,
         &state_file,
+        &std::env::current_dir().unwrap(),
         &[
             "connection",
             "add",
@@ -970,6 +1244,12 @@ fn cli_service_connects_to_live_cdp() {
             "observer",
             "--connect",
         ],
+    );
+    assert!(!collision.0.success());
+    assert!(
+        String::from_utf8_lossy(&collision.2).contains("canonical target ID"),
+        "{}",
+        String::from_utf8_lossy(&collision.2)
     );
 
     let deleted = run_json(
@@ -1230,5 +1510,14 @@ impl Drop for ServiceCleanup {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+struct ChildCleanup(std::process::Child);
+
+impl Drop for ChildCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }

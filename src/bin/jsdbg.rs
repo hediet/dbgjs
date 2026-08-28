@@ -487,19 +487,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [coverage, show, options @ ..] if coverage == "coverage" && show == "show" => {
             let options = parse_coverage_show_options(options)?;
+            let _ = options.no_cache;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print_coverage(
                 &rpc(client
-                    .get_coverage(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        options.capture_id,
-                        options.path.clone(),
-                        options.no_cache,
-                    )
+                    .get_stored_coverage(context, options.capture_id, options.path.clone())
                     .await)?,
                 CoverageOutputOptions {
                     path: options.path.as_deref(),
@@ -536,19 +530,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [profile, show, options @ ..] if profile == "profile" && show == "show" => {
             let options = parse_cpu_profile_show_options(options)?;
+            let _ = options.no_cache;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let profile = rpc(client
-                .get_cpu_profile(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    options.capture_id,
-                    options.path.clone(),
-                    options.no_cache,
-                    true,
-                )
+                .get_stored_cpu_profile(context, options.capture_id, options.path.clone())
                 .await)?;
             output.print_cpu_profile(
                 &profile,
@@ -564,18 +551,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_cpu_profile_export_options(options)?;
             let destination = absolute_path(Path::new(&options.output))?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let profile = rpc(client
-                .get_cpu_profile(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    options.capture_id,
-                    None,
-                    false,
-                    false,
-                )
+                .get_stored_cpu_profile(context, options.capture_id, None)
                 .await)?;
             let serialized = serde_json::to_vec_pretty(&cpu_profile_export(&profile))?;
             tokio::fs::write(&destination, serialized).await?;
@@ -600,10 +579,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let options = parse_heap_class_options(options)?;
+            let _ = options.no_cache;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
-            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             if options.capture {
+                let scope = resolve_scope(&client, &selection, &scope_options).await?;
                 let operation = client.capture_heap_snapshot(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -615,15 +595,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 tokio::pin!(operation);
                 wait_for_heap_capture(&output, &client, &scope, &mut operation).await?;
             }
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let classes = rpc(client
-                .get_heap_classes(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    options.capture_id,
-                    options.filter,
-                    options.no_cache,
-                )
+                .get_stored_heap_classes(context, options.capture_id, options.filter)
                 .await)?;
             output.print_heap_classes(
                 &classes,
@@ -635,6 +610,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     trim_width: options.trim_width,
                 },
             )?;
+        }
+        [capture, list] if capture == "capture" && list == "list" => {
+            let client = ensure_service(&state_file).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.list_captures(context).await)?)?;
+        }
+        [capture, show, name] if capture == "capture" && show == "show" => {
+            let client = ensure_service(&state_file).await?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            output.print(&rpc(client.get_capture(context, name.clone()).await)?)?;
         }
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
@@ -2127,7 +2114,7 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
             connection: true,
             target: false,
         },
-        (Some("context" | "state" | "events" | "source"), _)
+        (Some("context" | "state" | "events" | "source" | "capture"), _)
         | (Some("breakpoint"), _)
         | (Some("process"), Some("attach"))
         | (Some("set"), Some("context" | "workspace")) => ScopeOptionKind {
@@ -2745,6 +2732,33 @@ async fn resolve_scope(
         }
     };
     let snapshot = rpc(client.get_context(context.clone()).await)?;
+    let use_selection = selection.context.as_deref() == Some(context.as_str());
+    if let Some(selector) = options.target.as_ref().or_else(|| {
+        (options.connection.is_none() && use_selection)
+            .then(|| selection.target.as_ref())
+            .flatten()
+    }) {
+        let target = rpc(client
+            .resolve_target(context.clone(), selector.clone())
+            .await)?;
+        if let Some(requested_connection) = options.connection.as_deref()
+            && requested_connection != target.connection_id
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "canonical target '{}' belongs to connection '{}', not requested connection '{}'",
+                    target.target_id, target.connection_id, requested_connection
+                ),
+            )
+            .into());
+        }
+        return Ok(ResolvedScope {
+            context,
+            connection: target.connection_id,
+            target: target.target_id,
+        });
+    }
     Ok(resolve_target_scope(
         context, &snapshot, selection, options,
     )?)
@@ -5402,12 +5416,14 @@ commands:
   jsdbg coverage start [target scope]
   jsdbg coverage capture [--id <name>] [target scope]
   jsdbg coverage stop [--exclude <name>] [target scope]
-  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [target scope]
+  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
   jsdbg profile start [--sampling-interval <duration>] [target scope]
   jsdbg profile stop [--id <name>] [target scope]
-  jsdbg profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [target scope]
-  jsdbg profile export [<name>] --output <path> [target scope]
+  jsdbg profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [--context <id>]
+  jsdbg profile export [<name>] --output <path> [--context <id>]
   jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
+  jsdbg capture list [--context <id>]
+  jsdbg capture show <name> [--context <id>]
   jsdbg promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
   jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
   jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
@@ -5423,7 +5439,7 @@ commands:
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
   Accepted by target, page, value, log, screenshot, coverage, profile, promise, and heap commands.
-  --connection is only needed when the target selector is ambiguous.
+  Exact canonical target IDs resolve context-wide without --connection.
 
 target cdp validates params against the generated CDP schema by default.
 Use --no-validation for vendor or newer protocol methods."

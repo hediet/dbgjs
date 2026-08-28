@@ -1,0 +1,12 @@
+$ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
+42
+$ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
+capture registered context-wide
+$ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
+error: capture 'offline-profile' already exists in context
+$ jsdbg connection disconnect --context <context> --connection runtime
+$ jsdbg service stop
+$ jsdbg capture show offline-profile --context <context>
+kind=cpuProfile owner=runtime/<canonical-id>@1
+$ jsdbg profile show offline-profile --context <context>
+offline query succeeded

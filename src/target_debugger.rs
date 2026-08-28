@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -469,6 +469,23 @@ impl TargetDebuggerHandle {
                 capture_id,
                 capture_numeric_value,
                 expose_internals,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn copy_heap_capture(
+        &self,
+        capture_id: String,
+        destination: String,
+    ) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::CopyHeapCapture {
+                capture_id,
+                destination,
                 response,
             })
             .await
@@ -986,6 +1003,11 @@ enum TargetCommand {
         capture_numeric_value: bool,
         expose_internals: bool,
         response: oneshot::Sender<Result<HeapCaptureResult, TargetDebuggerError>>,
+    },
+    CopyHeapCapture {
+        capture_id: String,
+        destination: String,
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
     GetHeapClasses {
         capture_id: String,
@@ -1875,6 +1897,28 @@ async fn run_target(
                 }
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::CopyHeapCapture {
+                capture_id,
+                destination,
+                response,
+            })) => {
+                let result = async {
+                    let capture = heap_captures.get(&capture_id).ok_or_else(|| {
+                        TargetDebuggerError::HeapCaptureNotFound(capture_id.clone())
+                    })?;
+                    if let Some(parent) = Path::new(&destination).parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                            TargetDebuggerError::HeapSnapshot(error.to_string())
+                        })?;
+                    }
+                    tokio::fs::copy(&capture.path, &destination)
+                        .await
+                        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    Ok(())
+                }
+                .await;
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::GetHeapClasses {
                 capture_id,
                 filter,
@@ -2706,6 +2750,79 @@ struct MappedHeapConstructor<'a> {
     generated_url: String,
     generated_location: SourceLocation,
     mapped: Option<(String, Position, Arc<str>)>,
+}
+
+pub fn stored_heap_classes(
+    path: &Path,
+    capture_id: String,
+    filter: Option<&str>,
+) -> Result<HeapClassSnapshot, TargetDebuggerError> {
+    let started = Instant::now();
+    let filter = filter
+        .map(regex::Regex::new)
+        .transpose()
+        .map_err(|error| TargetDebuggerError::InvalidHeapFilter(error.to_string()))?;
+    let file =
+        File::open(path).map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+    let groups = parse_constructor_groups(file)
+        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+    let parse_duration = started.elapsed();
+    let mut alias_counters = BTreeMap::<String, u64>::new();
+    let mut classes = groups
+        .iter()
+        .filter(|group| {
+            filter.as_ref().is_none_or(|filter| {
+                filter.is_match(&group.generated_name)
+                    || filter.is_match(&format!("script:{}", group.script_id))
+            })
+        })
+        .map(|group| {
+            let name = heap_class_display_name(&group.generated_name).to_owned();
+            let instances = group
+                .instances
+                .iter()
+                .take(20)
+                .map(|instance| {
+                    let counter = alias_counters.entry(name.clone()).or_default();
+                    *counter = counter.saturating_add(1);
+                    HeapInstanceSnapshot {
+                        alias: format!("{name}@{}", *counter),
+                        heap_object_id: instance.heap_object_id.to_string(),
+                        shallow_size: instance.shallow_size,
+                    }
+                })
+                .collect::<Vec<_>>();
+            HeapClassSnapshotEntry {
+                name,
+                source_url: format!("script:{}", group.script_id),
+                location: source_location(
+                    format!("script:{}", group.script_id),
+                    group.line,
+                    group.column,
+                ),
+                generated_name: group.generated_name.clone(),
+                instance_count: group.instance_count,
+                shallow_size: group.shallow_size,
+                omitted_instance_count: group.instance_count.saturating_sub(instances.len() as u64),
+                instances,
+            }
+        })
+        .collect::<Vec<_>>();
+    classes.sort_by_key(|class| std::cmp::Reverse(class.instance_count));
+    Ok(HeapClassSnapshot {
+        capture_id,
+        total_instances: classes.iter().map(|class| class.instance_count).sum(),
+        total_shallow_size: classes.iter().map(|class| class.shallow_size).sum(),
+        classes,
+        analysis: HeapClassAnalysisSnapshot {
+            snapshot_timing: None,
+            parse_duration_micros: parse_duration.as_micros() as u64,
+            projection_duration_micros: 0,
+            source_map_hydration_duration_micros: 0,
+            constructor_group_count: groups.len() as u64,
+            used_cached_groups: false,
+        },
+    })
 }
 
 async fn project_heap_classes(

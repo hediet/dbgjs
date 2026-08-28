@@ -41,12 +41,12 @@ The first executable vertical slice now validates:
 - activating a configured CDP WebSocket connection and validating it with
   `Browser.getVersion`;
 - explicit connection disconnect with WebSocket and mux cancellation;
-- initial connection-qualified target ingestion through `Target.getTargets`.
+- continuous target discovery with context-global canonical target IDs and
+  retained connection/generation provenance;
+- a context-wide immutable capture catalog for coverage, CPU profiles, and heap
+  snapshots, including offline queries after disconnect or daemon restart.
 
-This slice deliberately does not yet implement HubRPC server-streaming state
-observation, continuous target-event ingestion, attachment/session management,
-or source-graph breakpoint binding. The target model in this document remains
-the contract for those next stages.
+Strict attachment stealing and Playwright integration remain deferred.
 
 ---
 
@@ -229,7 +229,11 @@ A runtime entity reported by CDP, such as:
 - A service worker.
 - A worklet or another runtime-specific target type.
 
-A target can be observed without being attached. Target IDs are live protocol
+A target can be observed without being attached. While live, its canonical
+target ID is unique across the entire context. Discovery retains the owning
+connection and its generation as provenance. If two connections report the same
+canonical ID, discovery rejects the collision explicitly rather than silently
+qualifying, replacing, or selecting either target. IDs remain live protocol
 identifiers and must not be treated as durable identities across all restarts.
 
 ### 4.6 Target graph
@@ -373,6 +377,26 @@ export. Source-mapped function and file summaries are derived views of this raw
 value. Self time attributes each sample to its leaf frame; total time attributes
 it to that frame and its ancestors.
 
+### 4.16a Stored capture catalog
+
+Coverage, CPU-profile, and heap-snapshot names share one namespace per context.
+A name is immutable and cannot be replaced or reused by another capture kind or
+target. The service catalog maps `(context identity, capture name)` to the
+capture kind, canonical target ID, owning connection and generation, and an
+opaque immutable storage ID.
+
+For compatibility, an omitted name is the literal name `.`. Because names are
+immutable, `.` can be created only once in a context; later unnamed captures
+fail explicitly and should be given distinct names.
+
+Capture lookup is context-scoped, not connection- or target-scoped. Catalog
+listing, metadata lookup, coverage rendering, CPU-profile rendering/export, and
+heap-class queries therefore continue to work with every connection
+disconnected and after a daemon restart. Registration validates that the
+capturing target still belongs to the recorded connection generation, so a
+capture completing after reconnect cannot be attributed to the replacement
+target.
+
 ### 4.17 Breakpoint specification
 
 Persistent desired state describing:
@@ -465,7 +489,7 @@ The agent should preserve:
 - Connection and target focus.
 - Breakpoint specifications.
 - Watch expressions.
-- Captured coverage objects.
+- The immutable stored-capture catalog and coverage/CPU-profile/heap payloads.
 - Pause-on-exception policy.
 - Source-resolution and path-mapping policy.
 - Source cache or materialization policy.
@@ -630,20 +654,20 @@ attachments.
 
 Context selection and target resolution are separate operations. A
 `--target <target-id-or-selector>` scope is resolved only inside the selected
-context. A target reference either includes connection provenance or is required
-to match unambiguously across all context connections.
+context. An exact canonical target ID resolves context-wide without requiring
+`--connection`; exact ID equality takes precedence over friendly matching.
 
-A selector is a reusable predicate over connection and/or target properties, not
-a new ownership scope. Target IDs need only be unique within their connection,
-so durable references and JSON results qualify them with the connection ID.
-Set-valued selectors explicitly say that multiple matches are allowed; a command
-that requires one target fails on zero or multiple matches.
+Friendly title, URL, and substring matching remains a convenience. It must
+resolve exactly one target. Ambiguity is never hidden: an error lists every
+candidate qualified as `connection/target@generation` with its type, title, and
+URL. Set-valued selectors explicitly say that multiple matches are allowed; a
+command that requires one target fails on zero or multiple matches.
 
 The connection remains an internal lifecycle and provenance dimension: it owns
-the transport, reconnect generation, and target namespace. It is not normally a
-third interactive selection step. The CLI infers it from an unambiguous target
-match and exposes `--connection <id>` only as an ambiguity escape hatch or when
-the connection itself is the command's subject.
+the transport and reconnect generation, but not a separate target-ID namespace.
+It is not normally a third interactive selection step. The CLI infers it from
+the canonical target and exposes `--connection <id>` as an optional provenance
+constraint or when the connection itself is the command's subject.
 
 Interactive focus can be changed explicitly:
 

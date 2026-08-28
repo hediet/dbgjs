@@ -265,6 +265,36 @@ pub struct TargetNodeSnapshot {
     pub parent_target_id: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalTargetSnapshot {
+    pub context_id: String,
+    pub target_id: String,
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub target: TargetSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureKind {
+    Coverage,
+    CpuProfile,
+    HeapSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSnapshot {
+    pub context_id: String,
+    pub name: String,
+    pub kind: CaptureKind,
+    pub target_id: String,
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub storage_id: String,
+}
+
 impl ConnectionSnapshot {
     pub fn target_forest(&self) -> Vec<TargetNodeSnapshot> {
         let targets = self
@@ -1608,6 +1638,36 @@ pub trait DebuggerServiceApi {
         context_id: String,
         destination: String,
     ) -> Result<Vec<String>, JsonRpcError>;
+
+    async fn resolve_target(
+        context_id: String,
+        selector: String,
+    ) -> Result<CanonicalTargetSnapshot, JsonRpcError>;
+
+    async fn list_captures(context_id: String) -> Result<Vec<CaptureSnapshot>, JsonRpcError>;
+
+    async fn get_capture(
+        context_id: String,
+        capture_name: String,
+    ) -> Result<CaptureSnapshot, JsonRpcError>;
+
+    async fn get_stored_coverage(
+        context_id: String,
+        capture_name: String,
+        source_path: Option<String>,
+    ) -> Result<CoverageSnapshot, JsonRpcError>;
+
+    async fn get_stored_cpu_profile(
+        context_id: String,
+        capture_name: String,
+        source_path: Option<String>,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError>;
+
+    async fn get_stored_heap_classes(
+        context_id: String,
+        capture_name: String,
+        filter: Option<String>,
+    ) -> Result<HeapClassSnapshot, JsonRpcError>;
 
     async fn attach_target(
         context_id: String,

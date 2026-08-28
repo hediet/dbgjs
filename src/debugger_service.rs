@@ -31,6 +31,7 @@ use crate::context_source_model::{
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::service_api::{
     BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
+    CanonicalTargetSnapshot, CaptureKind, CaptureSnapshot,
     CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot,
     ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot,
     ContextObservation, ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot,
@@ -53,7 +54,9 @@ use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::source_search::{
     SearchControl, SearchDocument, SearchError, SearchQuery, SourceIdentity,
 };
-use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle};
+use crate::target_debugger::{
+    TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle, stored_heap_classes,
+};
 
 #[derive(Clone)]
 pub struct DebuggerService {
@@ -217,8 +220,19 @@ impl DebuggerService {
                     break;
                 }
                 let transition =
-                    reduce_context(&context, ContextInput::RuntimeObservation(observation))
-                        .expect("target observations do not fail");
+                    match reduce_context(&context, ContextInput::RuntimeObservation(observation)) {
+                        Ok(transition) => transition,
+                        Err(error @ ContextTransitionError::TargetIdentityCollision { .. }) => {
+                            eprintln!("rejecting target discovery: {error}");
+                            drop(state);
+                            runtime.close().await;
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!("rejecting target discovery: {error}");
+                            continue;
+                        }
+                    };
                 if transition.change == crate::context_engine::ContextChange::None {
                     continue;
                 }
@@ -298,8 +312,19 @@ impl DebuggerService {
                     break;
                 }
                 let transition =
-                    reduce_context(&context, ContextInput::RuntimeObservation(observation))
-                        .expect("provider target observations do not fail");
+                    match reduce_context(&context, ContextInput::RuntimeObservation(observation)) {
+                        Ok(transition) => transition,
+                        Err(error @ ContextTransitionError::TargetIdentityCollision { .. }) => {
+                            eprintln!("rejecting provider target discovery: {error}");
+                            drop(state);
+                            runtime.close().await;
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!("rejecting provider target discovery: {error}");
+                            continue;
+                        }
+                    };
                 service.commit_context(&mut state, &context_id, transition);
                 if let Some(target_id) = target_to_remove {
                     state.target_debuggers.remove(&(
@@ -528,6 +553,7 @@ struct ServiceState {
     history: BTreeMap<String, VecDeque<ContextObservation>>,
     completed_requests: BTreeMap<(String, String), u64>,
     playwright_proxies: BTreeMap<String, PlaywrightProxyRegistration>,
+    captures: BTreeMap<(String, String), StoredCapture>,
 }
 
 #[derive(Clone)]
@@ -605,6 +631,19 @@ fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
     } else {
         internal_error(message)
     }
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCapture {
+    metadata: CaptureSnapshot,
+    payload: StoredCapturePayload,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+enum StoredCapturePayload {
+    Coverage(CoverageSnapshot),
+    CpuProfile(CpuProfileSnapshot),
+    HeapSnapshot { path: String },
 }
 
 #[async_trait::async_trait]
@@ -823,6 +862,9 @@ impl DebuggerServiceApi for DebuggerService {
         state
             .target_debuggers
             .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
+        state
+            .captures
+            .retain(|(candidate_context, _), _| candidate_context != &context_id);
         self.persist_or_restore(&mut state, previous)?;
         Ok(true)
     }
@@ -926,6 +968,21 @@ impl DebuggerServiceApi for DebuggerService {
         {
             Ok(transition) => transition,
             Err(error) => {
+                if matches!(
+                    error,
+                    ContextTransitionError::TargetIdentityCollision { .. }
+                ) {
+                    let failed = reduce_context(
+                        &context,
+                        ContextInput::EffectCompletion(EffectCompletion::ConnectionOpenFailed {
+                            connection_id: connection_id.clone(),
+                            attempt,
+                            message: error.to_string(),
+                        }),
+                    )
+                    .expect("the current connecting attempt can be failed");
+                    self.commit_context(&mut state, &context_id, failed);
+                }
                 drop(state);
                 if let Some(runtime) = runtime {
                     runtime.close().await;
@@ -1996,6 +2053,121 @@ impl DebuggerServiceApi for DebuggerService {
         Ok(exported)
     }
 
+    async fn resolve_target(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        selector: String,
+    ) -> Result<CanonicalTargetSnapshot, JsonRpcError> {
+        let state = self.state.lock().await;
+        Self::resolve_canonical_target(&state, &context_id, &selector)
+    }
+
+    async fn list_captures(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+    ) -> Result<Vec<CaptureSnapshot>, JsonRpcError> {
+        let state = self.state.lock().await;
+        if !state.contexts.contains_key(&context_id) {
+            return Err(not_found("context", &context_id));
+        }
+        Ok(state
+            .captures
+            .range((context_id.clone(), String::new())..=(context_id, char::MAX.to_string()))
+            .map(|(_, capture)| capture.metadata.clone())
+            .collect())
+    }
+
+    async fn get_capture(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        let state = self.state.lock().await;
+        state
+            .captures
+            .get(&(context_id, capture_name.clone()))
+            .map(|capture| capture.metadata.clone())
+            .ok_or_else(|| not_found("capture", &capture_name))
+    }
+
+    async fn get_stored_coverage(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+        source_path: Option<String>,
+    ) -> Result<CoverageSnapshot, JsonRpcError> {
+        let state = self.state.lock().await;
+        let capture = state
+            .captures
+            .get(&(context_id, capture_name.clone()))
+            .ok_or_else(|| not_found("capture", &capture_name))?;
+        let StoredCapturePayload::Coverage(mut snapshot) = capture.payload.clone() else {
+            return Err(invalid_params(&format!(
+                "capture '{capture_name}' is not a coverage capture"
+            )));
+        };
+        if let Some(path) = source_path {
+            snapshot.sources.retain(|source| {
+                source.generated_url == path
+                    || source.associated_authored_source.as_deref() == Some(path.as_str())
+            });
+        }
+        Ok(snapshot)
+    }
+
+    async fn get_stored_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+        _source_path: Option<String>,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        let state = self.state.lock().await;
+        let capture = state
+            .captures
+            .get(&(context_id, capture_name.clone()))
+            .ok_or_else(|| not_found("capture", &capture_name))?;
+        let StoredCapturePayload::CpuProfile(snapshot) = capture.payload.clone() else {
+            return Err(invalid_params(&format!(
+                "capture '{capture_name}' is not a CPU profile capture"
+            )));
+        };
+        Ok(snapshot)
+    }
+
+    async fn get_stored_heap_classes(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+        filter: Option<String>,
+    ) -> Result<HeapClassSnapshot, JsonRpcError> {
+        let path = {
+            let state = self.state.lock().await;
+            let capture = state
+                .captures
+                .get(&(context_id, capture_name.clone()))
+                .ok_or_else(|| not_found("capture", &capture_name))?;
+            let StoredCapturePayload::HeapSnapshot { path } = &capture.payload else {
+                return Err(invalid_params(&format!(
+                    "capture '{capture_name}' is not a heap snapshot"
+                )));
+            };
+            path.clone()
+        };
+        let capture_for_task = capture_name.clone();
+        tokio::task::spawn_blocking(move || {
+            stored_heap_classes(Path::new(&path), capture_for_task, filter.as_deref())
+        })
+        .await
+        .map_err(|error| internal_error(error.to_string()))?
+        .map_err(target_debugger_rpc_error)
+    }
+
     async fn attach_target(
         &self,
         ctx: &CallCtx,
@@ -2745,11 +2917,31 @@ impl DebuggerServiceApi for DebuggerService {
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .take_coverage(capture_id, exclude_capture_id)
+        if let Some(name) = capture_id.as_deref() {
+            self.ensure_capture_name_available(&context_id, name)
+                .await?;
+        }
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let owner = debugger.snapshot();
+        let snapshot = debugger
+            .take_coverage(capture_id.clone(), exclude_capture_id)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(target_debugger_rpc_error)?;
+        if let Some(name) = capture_id {
+            self.register_capture(
+                &context_id,
+                &owner.connection_id,
+                &owner.target_id,
+                owner.connection_generation,
+                name,
+                CaptureKind::Coverage,
+                StoredCapturePayload::Coverage(snapshot.clone()),
+            )
+            .await?;
+        }
+        Ok(snapshot)
     }
 
     async fn stop_coverage(
@@ -2760,11 +2952,26 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
+        self.ensure_capture_name_available(&context_id, ".").await?;
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let owner = debugger.snapshot();
+        let snapshot = debugger
             .stop_coverage(exclude_capture_id)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(target_debugger_rpc_error)?;
+        self.register_capture(
+            &context_id,
+            &owner.connection_id,
+            &owner.target_id,
+            owner.connection_generation,
+            ".".to_owned(),
+            CaptureKind::Coverage,
+            StoredCapturePayload::Coverage(snapshot.clone()),
+        )
+        .await?;
+        Ok(snapshot)
     }
 
     async fn finish_coverage(
@@ -2775,11 +2982,14 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         exclude_capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .finish_coverage(exclude_capture_id)
-            .await
-            .map_err(target_debugger_rpc_error)?;
+        self.stop_coverage(
+            _ctx,
+            context_id,
+            connection_id,
+            target_id,
+            exclude_capture_id,
+        )
+        .await?;
         Ok(true)
     }
 
@@ -2824,11 +3034,28 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
+        let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
+        self.ensure_capture_name_available(&context_id, &name)
+            .await?;
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let owner = debugger.snapshot();
+        let snapshot = debugger
             .stop_cpu_profile(capture_id)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(target_debugger_rpc_error)?;
+        self.register_capture(
+            &context_id,
+            &owner.connection_id,
+            &owner.target_id,
+            owner.connection_generation,
+            name,
+            CaptureKind::CpuProfile,
+            StoredCapturePayload::CpuProfile(snapshot.clone()),
+        )
+        .await?;
+        Ok(snapshot)
     }
 
     async fn get_cpu_profile(
@@ -2876,11 +3103,44 @@ impl DebuggerServiceApi for DebuggerService {
         capture_numeric_value: bool,
         expose_internals: bool,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
+        let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
+        self.ensure_capture_name_available(&context_id, &name)
+            .await?;
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let owner = debugger.snapshot();
+        let result = debugger
             .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(target_debugger_rpc_error)?;
+        let path = self
+            .persistence_path
+            .with_extension("captures")
+            .join(format!("{:016x}", stable_name_hash(&context_id)))
+            .join(format!("{:016x}.heapsnapshot", stable_name_hash(&name)));
+        debugger
+            .copy_heap_capture(name.clone(), path.to_string_lossy().into_owned())
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        if let Err(error) = self
+            .register_capture(
+                &context_id,
+                &owner.connection_id,
+                &owner.target_id,
+                owner.connection_generation,
+                name,
+                CaptureKind::HeapSnapshot,
+                StoredCapturePayload::HeapSnapshot {
+                    path: path.to_string_lossy().into_owned(),
+                },
+            )
+            .await
+        {
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
+        Ok(result)
     }
 
     async fn get_heap_classes(
@@ -3069,6 +3329,83 @@ impl DebuggerServiceApi for DebuggerService {
 }
 
 impl DebuggerService {
+    async fn register_capture(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+        connection_generation: u64,
+        name: String,
+        kind: CaptureKind,
+        payload: StoredCapturePayload,
+    ) -> Result<CaptureSnapshot, JsonRpcError> {
+        validate_id("capture", &name)?;
+        let mut state = self.state.lock().await;
+        let key = (context_id.to_owned(), name.clone());
+        if let Some(existing) = state.captures.get(&key) {
+            return Err(invalid_state(&format!(
+                "capture '{name}' already exists in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
+                existing.metadata.kind,
+                existing.metadata.target_id,
+                existing.metadata.connection_id,
+                existing.metadata.connection_generation,
+            )));
+        }
+        let connection = state
+            .contexts
+            .get(context_id)
+            .and_then(|context| context.connections.get(connection_id))
+            .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
+        if connection.generation != connection_generation
+            || !connection.targets.contains_key(target_id)
+        {
+            return Err(invalid_state(
+                "connection generation changed while the capture was being stored",
+            ));
+        }
+        let metadata = CaptureSnapshot {
+            context_id: context_id.to_owned(),
+            name,
+            kind,
+            target_id: target_id.to_owned(),
+            connection_id: connection_id.to_owned(),
+            connection_generation,
+            storage_id: random_instance_id().map_err(|error| internal_error(error.to_string()))?,
+        };
+        let previous = state.clone();
+        state.captures.insert(
+            key,
+            StoredCapture {
+                metadata: metadata.clone(),
+                payload,
+            },
+        );
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(metadata)
+    }
+
+    async fn ensure_capture_name_available(
+        &self,
+        context_id: &str,
+        name: &str,
+    ) -> Result<(), JsonRpcError> {
+        validate_id("capture", name)?;
+        let state = self.state.lock().await;
+        if let Some(existing) = state
+            .captures
+            .get(&(context_id.to_owned(), name.to_owned()))
+        {
+            return Err(invalid_state(&format!(
+                "capture '{name}' already exists in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
+                existing.metadata.kind,
+                existing.metadata.target_id,
+                existing.metadata.connection_id,
+                existing.metadata.connection_generation,
+            )));
+        }
+        Ok(())
+    }
+
     async fn target_debugger(
         &self,
         context_id: &str,
@@ -3089,6 +3426,83 @@ impl DebuggerService {
             ))
             .cloned()
             .ok_or_else(|| not_found("attached target", &target_id))
+    }
+
+    fn resolve_canonical_target(
+        state: &ServiceState,
+        context_id: &str,
+        selector: &str,
+    ) -> Result<CanonicalTargetSnapshot, JsonRpcError> {
+        let context = state
+            .contexts
+            .get(context_id)
+            .ok_or_else(|| not_found("context", context_id))?;
+        let candidates = context
+            .connections
+            .iter()
+            .flat_map(|(connection_id, connection)| {
+                connection.targets.values().filter_map(move |target| {
+                    let exact = target.target_id == selector;
+                    let friendly = target.target_type.eq_ignore_ascii_case(selector)
+                        || target.title.eq_ignore_ascii_case(selector)
+                        || target.url == selector
+                        || target
+                            .title
+                            .to_lowercase()
+                            .contains(&selector.to_lowercase())
+                        || target.url.to_lowercase().contains(&selector.to_lowercase());
+                    (exact || friendly).then(|| {
+                        (
+                            exact,
+                            CanonicalTargetSnapshot {
+                                context_id: context_id.to_owned(),
+                                target_id: target.target_id.clone(),
+                                connection_id: connection_id.clone(),
+                                connection_generation: connection.generation,
+                                target: target.clone(),
+                            },
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let exact = candidates
+            .iter()
+            .filter(|(exact, _)| *exact)
+            .map(|(_, target)| target.clone())
+            .collect::<Vec<_>>();
+        let matches = if exact.is_empty() {
+            candidates
+                .into_iter()
+                .map(|(_, target)| target)
+                .collect::<Vec<_>>()
+        } else {
+            exact
+        };
+        match matches.as_slice() {
+            [target] => Ok(target.clone()),
+            [] => Err(not_found("target selector", selector)),
+            _ => {
+                let details = matches
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "\n  {}/{}@{}  type={}  title={:?}  url={}",
+                            candidate.connection_id,
+                            candidate.target_id,
+                            candidate.connection_generation,
+                            candidate.target.target_type,
+                            candidate.target.title,
+                            candidate.target.url
+                        )
+                    })
+                    .collect::<String>();
+                Err(invalid_params(&format!(
+                    "target selector '{selector}' is ambiguous across {} canonical targets in context '{context_id}'. Qualified candidates:{details}",
+                    matches.len()
+                )))
+            }
+        }
     }
 
     async fn resolve_target_id(
@@ -3471,6 +3885,8 @@ struct StoredServiceState {
     contexts: BTreeMap<String, StoredContextState>,
     #[serde(default)]
     completed_requests: Vec<StoredCompletedRequest>,
+    #[serde(default)]
+    captures: Vec<StoredCapture>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -3538,7 +3954,7 @@ struct StoredConnectionStateV1 {
 impl From<&ServiceState> for StoredServiceState {
     fn from(state: &ServiceState) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             contexts: state
                 .contexts
                 .iter()
@@ -3598,6 +4014,7 @@ impl From<&ServiceState> for StoredServiceState {
                     },
                 )
                 .collect(),
+            captures: state.captures.values().cloned().collect(),
         }
     }
 }
@@ -3613,7 +4030,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .ok_or(ServicePersistenceError::MissingSchemaVersion)?;
     let stored = match schema_version {
         1 => migrate_v1(serde_json::from_slice(&bytes)?),
-        2 | 3 => serde_json::from_slice(&bytes)?,
+        2..=4 => serde_json::from_slice(&bytes)?,
         version => return Err(ServicePersistenceError::UnsupportedSchema(version as u32)),
     };
     let completed_requests = stored
@@ -3626,6 +4043,19 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .iter()
         .map(|(id, context)| (id.clone(), context.kind))
         .collect();
+    let mut captures = BTreeMap::new();
+    for capture in stored.captures {
+        let key = (
+            capture.metadata.context_id.clone(),
+            capture.metadata.name.clone(),
+        );
+        if captures.insert(key.clone(), capture).is_some() {
+            return Err(ServicePersistenceError::DuplicateCapture {
+                context_id: key.0,
+                name: key.1,
+            });
+        }
+    }
     Ok(ServiceState {
         contexts: stored
             .contexts
@@ -3684,6 +4114,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         history: BTreeMap::new(),
         completed_requests,
         playwright_proxies: BTreeMap::new(),
+        captures,
     })
 }
 
@@ -3697,7 +4128,7 @@ fn default_context_kind() -> ContextKind {
 
 fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
     StoredServiceState {
-        schema_version: 3,
+        schema_version: 4,
         contexts: stored
             .contexts
             .into_iter()
@@ -3727,6 +4158,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> StoredServiceState {
             })
             .collect(),
         completed_requests: Vec::new(),
+        captures: Vec::new(),
     }
 }
 
@@ -3747,6 +4179,8 @@ pub enum ServicePersistenceError {
     UnsupportedSchema(u32),
     #[error("debugger state does not declare a schema version")]
     MissingSchemaVersion,
+    #[error("debugger state contains duplicate capture '{name}' in context '{context_id}'")]
+    DuplicateCapture { context_id: String, name: String },
     #[error("failed to generate agent instance identity: {0}")]
     Random(String),
 }
@@ -4107,7 +4541,8 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
         | ContextTransitionError::ActiveConnectionCannotBeReplaced
         | ContextTransitionError::ActiveConnectionCannotBeRemoved
         | ContextTransitionError::ConnectionAlreadyActive
-        | ContextTransitionError::ConnectionAlreadyDisconnecting => error_codes::INVALID_PARAMS,
+        | ContextTransitionError::ConnectionAlreadyDisconnecting
+        | ContextTransitionError::TargetIdentityCollision { .. } => error_codes::INVALID_PARAMS,
     };
     JsonRpcError::new(code, error.to_string())
 }
@@ -4115,6 +4550,109 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(target_id: &str, title: &str, url: &str) -> TargetSnapshot {
+        TargetSnapshot {
+            target_id: target_id.into(),
+            target_type: "page".into(),
+            title: title.into(),
+            url: url.into(),
+            attached: false,
+            parent_id: None,
+            opener_id: None,
+            browser_context_id: None,
+            subtype: None,
+        }
+    }
+
+    fn context_with_targets(
+        connections: impl IntoIterator<Item = (&'static str, u64, Vec<TargetSnapshot>)>,
+    ) -> Arc<ContextState> {
+        Arc::new(ContextState {
+            display_name: "test".into(),
+            revision: 1,
+            connections: Arc::new(
+                connections
+                    .into_iter()
+                    .map(|(connection_id, generation, targets)| {
+                        (
+                            connection_id.into(),
+                            Arc::new(crate::context_engine::ConnectionState {
+                                configuration: ConnectionConfiguration::DirectCdp {
+                                    endpoint: format!("ws://{connection_id}"),
+                                },
+                                configuration_version: 1,
+                                generation,
+                                status: ConnectionStatus::Connected {
+                                    product: "Chrome".into(),
+                                    protocol_version: "1.3".into(),
+                                },
+                                targets: Arc::new(
+                                    targets
+                                        .into_iter()
+                                        .map(|target| (target.target_id.clone(), target))
+                                        .collect(),
+                                ),
+                            }),
+                        )
+                    })
+                    .collect(),
+            ),
+            breakpoints: Arc::new(BTreeMap::new()),
+        })
+    }
+
+    #[test]
+    fn canonical_target_id_wins_over_friendly_matches_context_wide() {
+        let context = context_with_targets([
+            (
+                "first",
+                2,
+                vec![target("canonical", "Unrelated", "https://first.test")],
+            ),
+            (
+                "second",
+                7,
+                vec![target(
+                    "another-id",
+                    "canonical friendly title",
+                    "https://second.test/canonical",
+                )],
+            ),
+        ]);
+
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+        let resolved =
+            DebuggerService::resolve_canonical_target(&state, "test", "canonical").unwrap();
+        assert_eq!(resolved.connection_id, "first");
+        assert_eq!(resolved.target_id, "canonical");
+        assert_eq!(resolved.connection_generation, 2);
+    }
+
+    #[test]
+    fn friendly_target_ambiguity_reports_qualified_candidates() {
+        let context = context_with_targets([
+            (
+                "browser-a",
+                3,
+                vec![target("target-a", "Dashboard", "https://a.test/app")],
+            ),
+            (
+                "browser-b",
+                8,
+                vec![target("target-b", "Dashboard", "https://b.test/app")],
+            ),
+        ]);
+
+        let mut state = ServiceState::default();
+        state.contexts.insert("test".into(), context);
+        let error =
+            DebuggerService::resolve_canonical_target(&state, "test", "Dashboard").unwrap_err();
+        let error = error.message;
+        assert!(error.contains("browser-a/target-a@3"), "{error}");
+        assert!(error.contains("browser-b/target-b@8"), "{error}");
+    }
 
     #[test]
     fn validates_raw_cdp_params_against_generated_protocol_schema() {
@@ -4139,11 +4677,14 @@ mod tests {
 
     #[test]
     fn migrates_endpoint_only_persistence_to_direct_cdp_configuration() {
-        let path = std::env::temp_dir().join(format!(
-            "jsdbg-persistence-v1-{}-{}.json",
-            std::process::id(),
-            random_instance_id().unwrap()
-        ));
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "jsdbg-persistence-v1-{}-{}.json",
+                std::process::id(),
+                random_instance_id().unwrap()
+            ));
         fs::write(
             &path,
             br#"{
@@ -4167,6 +4708,7 @@ mod tests {
 
         let state = load_state(&path).unwrap();
         assert_eq!(state.context_kinds["legacy"], ContextKind::Named);
+        assert!(state.captures.is_empty());
         let connection = &state.contexts["legacy"].connections["browser"];
         assert_eq!(
             connection.configuration,
@@ -4174,6 +4716,48 @@ mod tests {
                 endpoint: "ws://127.0.0.1:9222".into()
             }
         );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn schema_four_round_trips_capture_catalog() {
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "jsdbg-persistence-v4-{}-{}.json",
+                std::process::id(),
+                random_instance_id().unwrap()
+            ));
+        let state = StoredServiceState {
+            schema_version: 4,
+            contexts: BTreeMap::new(),
+            completed_requests: Vec::new(),
+            captures: vec![StoredCapture {
+                metadata: CaptureSnapshot {
+                    context_id: "context".into(),
+                    name: "baseline".into(),
+                    kind: CaptureKind::HeapSnapshot,
+                    target_id: "canonical-target".into(),
+                    connection_id: "browser".into(),
+                    connection_generation: 11,
+                    storage_id: "immutable-storage".into(),
+                },
+                payload: StoredCapturePayload::HeapSnapshot {
+                    path: "captures/immutable.heapsnapshot".into(),
+                },
+            }],
+        };
+        fs::write(&path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+        let restored = load_state(&path).unwrap();
+        let capture = &restored.captures[&("context".into(), "baseline".into())];
+        assert_eq!(capture.metadata.target_id, "canonical-target");
+        assert_eq!(capture.metadata.connection_generation, 11);
+        assert_eq!(capture.metadata.storage_id, "immutable-storage");
+        assert!(matches!(
+            capture.payload,
+            StoredCapturePayload::HeapSnapshot { .. }
+        ));
         let _ = fs::remove_file(path);
     }
 }
