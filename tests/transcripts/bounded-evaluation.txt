@@ -1,0 +1,5 @@
+$ jsdbg target eval "(count++, 'x'.repeat(16 * 1024 * 1024))"
+kind=string previewCharacters=120 truncated=true protocolMessageBytes<65536 resultBytes<2048
+expression evaluations: 1
+ordinary primitive/object/error/promise semantics: preserved
+target eval raw references exposed: no

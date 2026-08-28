@@ -16,9 +16,11 @@ use crate::cdp::{
     PageCaptureScreenshotParams, PageCaptureScreenshotParamsFormat, ProfilerEnableParams,
     ProfilerProfile, ProfilerScriptCoverage, ProfilerSetSamplingIntervalParams,
     ProfilerStartParams, ProfilerStartPreciseCoverageParams, ProfilerStopParams,
-    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams, RuntimeExceptionDetails,
-    RuntimeGetPropertiesParams, RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor,
-    RuntimeReleaseObjectGroupParams, RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
+    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams,
+    RuntimeCallFunctionOnParams, RuntimeExceptionDetails, RuntimeGetPropertiesParams,
+    RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor, RuntimeReleaseObjectGroupParams,
+    RuntimeReleaseObjectParams, RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
+    RuntimeRemoteObjectType,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::context_source_model::ContextSourceModel;
@@ -4239,6 +4241,7 @@ async fn evaluate(
     frame_index: u32,
     expression: String,
 ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
+    const OBJECT_GROUP: &str = "jsdbg-ephemeral-evaluation";
     let result = evaluate_remote(
         driver,
         session_key,
@@ -4246,24 +4249,48 @@ async fn evaluate(
         frame_index,
         expression.clone(),
         true,
-        None,
-    )
-    .await?;
-    let mut preview = remote_value_snapshot(
-        &result,
         crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
-    );
-    preview.reference = None;
-    let kind = remote_object_kind(&result);
-    Ok(EvaluationSnapshot {
-        expression,
-        kind,
-        value: result.value,
-        unserializable_value: result.unserializable_value,
-        description: result.description,
-        object_id: result.object_id,
-        preview,
-    })
+        Some(OBJECT_GROUP),
+    )
+    .await;
+    let snapshot = result.map(|result| {
+        let mut preview = remote_value_snapshot(
+            &result.remote,
+            crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
+        );
+        preview.truncated |= result.preview_truncated;
+        preview.reference = None;
+        let kind = remote_object_kind(&result.remote);
+        EvaluationSnapshot {
+            expression,
+            kind,
+            value: result.remote.value,
+            unserializable_value: result.remote.unserializable_value,
+            description: result.remote.description,
+            object_id: None,
+            preview,
+        }
+    });
+    let release = driver
+        .client()
+        .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+            object_group: OBJECT_GROUP.to_owned(),
+        })
+        .await
+        .map_err(|error| {
+            TargetDebuggerError::Properties(format!(
+                "failed to release ephemeral evaluation values: {error:?}"
+            ))
+        });
+    match (snapshot, release) {
+        (Ok(value), Ok(_)) => Ok(value),
+        (Ok(_), Err(error)) | (Err(error), _) => Err(error),
+    }
+}
+
+struct EvaluatedRemote {
+    remote: RuntimeRemoteObject,
+    preview_truncated: bool,
 }
 
 async fn evaluate_remote(
@@ -4273,18 +4300,22 @@ async fn evaluate_remote(
     frame_index: u32,
     expression: String,
     allow_side_effects: bool,
+    max_preview_length: u32,
     object_group: Option<&str>,
-) -> Result<RuntimeRemoteObject, TargetDebuggerError> {
+) -> Result<EvaluatedRemote, TargetDebuggerError> {
+    let container_expression = evaluation_container_expression(&expression);
     let result = if let Some(pause_epoch) = pause_epoch {
         let pause = require_pause(driver, session_key, pause_epoch)?;
         let frame = pause
             .frames
             .get(frame_index as usize)
             .ok_or(TargetDebuggerError::FrameNotFound(frame_index))?;
-        let mut params =
-            DebuggerEvaluateOnCallFrameParams::new(frame.call_frame_id.clone(), expression.clone());
+        let mut params = DebuggerEvaluateOnCallFrameParams::new(
+            frame.call_frame_id.clone(),
+            container_expression.clone(),
+        );
         params.return_by_value = Some(false);
-        params.generate_preview = Some(true);
+        params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
@@ -4299,9 +4330,9 @@ async fn evaluate_remote(
         }
         evaluated.result
     } else {
-        let mut params = crate::cdp::RuntimeEvaluateParams::new(expression.clone());
+        let mut params = crate::cdp::RuntimeEvaluateParams::new(container_expression);
         params.return_by_value = Some(false);
-        params.generate_preview = Some(true);
+        params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
@@ -4316,7 +4347,153 @@ async fn evaluate_remote(
         }
         evaluated.result
     };
-    Ok(result)
+    let container_id = result.object_id.ok_or_else(|| {
+        TargetDebuggerError::Evaluation("target did not return the evaluation container".to_owned())
+    })?;
+    let mut projection_params =
+        RuntimeCallFunctionOnParams::new(bounded_projection_function(max_preview_length));
+    projection_params.object_id = Some(container_id.clone());
+    projection_params.return_by_value = Some(false);
+    projection_params.generate_preview = Some(false);
+    projection_params.object_group = object_group.map(str::to_owned);
+    let projected = driver
+        .client()
+        .runtime_call_function_on(projection_params)
+        .await
+        .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
+    if let Some(exception) = projected.exception_details {
+        return Err(TargetDebuggerError::Evaluation(exception_message(
+            &exception,
+        )));
+    }
+    let envelope_id = projected.result.object_id.ok_or_else(|| {
+        TargetDebuggerError::Evaluation(
+            "target did not return the bounded evaluation envelope".to_owned(),
+        )
+    })?;
+    let projection =
+        get_object_property_descriptors(driver, session_key, pause_epoch, envelope_id.clone())
+            .await
+            .and_then(|(properties, _)| evaluated_remote_from_envelope(&properties));
+    if object_group.is_none() {
+        let release =
+            release_evaluation_objects(driver, [container_id, envelope_id].into_iter()).await;
+        match (projection, release) {
+            (Ok(value), Ok(_)) => Ok(value),
+            (Ok(_), Err(error)) | (Err(error), _) => Err(error),
+        }
+    } else {
+        projection
+    }
+}
+
+fn evaluation_container_expression(expression: &str) -> String {
+    format!(
+        r#"({{
+  __jsdbgValue: (
+{expression}
+  )
+}})"#
+    )
+}
+
+fn bounded_projection_function(max_preview_length: u32) -> String {
+    format!(
+        r#"function() {{
+  const __jsdbgValue = this.__jsdbgValue;
+  const __jsdbgMaxLength = {max_preview_length};
+  if (typeof __jsdbgValue !== "string") {{
+    return {{ __jsdbgKind: "remote", __jsdbgValue }};
+  }}
+  let __jsdbgPreview = "";
+  let __jsdbgLength = 0;
+  let __jsdbgTruncated = false;
+  for (const __jsdbgCharacter of __jsdbgValue) {{
+    if (__jsdbgLength === __jsdbgMaxLength) {{
+      __jsdbgTruncated = true;
+      break;
+    }}
+    __jsdbgPreview += __jsdbgCharacter;
+    __jsdbgLength++;
+  }}
+  return {{
+    __jsdbgKind: "string",
+    __jsdbgValue: __jsdbgPreview,
+    __jsdbgTruncated
+  }};
+}}"#
+    )
+}
+
+async fn release_evaluation_objects(
+    driver: &DebuggerDriver,
+    object_ids: impl Iterator<Item = String>,
+) -> Result<(), TargetDebuggerError> {
+    for object_id in object_ids {
+        driver
+            .client()
+            .runtime_release_object(RuntimeReleaseObjectParams::new(object_id))
+            .await
+            .map_err(|error| {
+                TargetDebuggerError::Properties(format!(
+                    "failed to release evaluation envelope: {error:?}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+fn evaluated_remote_from_envelope(
+    properties: &[RuntimePropertyDescriptor],
+) -> Result<EvaluatedRemote, TargetDebuggerError> {
+    let property = |name: &str| {
+        properties
+            .iter()
+            .find(|property| property.name == name)
+            .and_then(|property| property.value.as_ref())
+    };
+    let kind = property("__jsdbgKind")
+        .and_then(|value| value.value.as_ref())
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            TargetDebuggerError::Evaluation(
+                "target returned an invalid bounded evaluation envelope".to_owned(),
+            )
+        })?;
+    let value = property("__jsdbgValue").ok_or_else(|| {
+        TargetDebuggerError::Evaluation(
+            "target bounded evaluation envelope omitted its value".to_owned(),
+        )
+    })?;
+    if kind == "remote" {
+        return Ok(EvaluatedRemote {
+            remote: value.clone(),
+            preview_truncated: false,
+        });
+    }
+    if kind != "string" {
+        return Err(TargetDebuggerError::Evaluation(format!(
+            "target returned unknown bounded evaluation kind '{kind}'"
+        )));
+    }
+    let preview = value
+        .value
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            TargetDebuggerError::Evaluation(
+                "target bounded string projection omitted its preview".to_owned(),
+            )
+        })?;
+    let mut remote = RuntimeRemoteObject::new(RuntimeRemoteObjectType::String);
+    remote.value = Some(serde_json::Value::String(preview.to_owned()));
+    Ok(EvaluatedRemote {
+        remote,
+        preview_truncated: property("__jsdbgTruncated")
+            .and_then(|value| value.value.as_ref())
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 async fn scope_variables(
@@ -4416,6 +4593,7 @@ async fn inspect_value(
                 0,
                 expression.clone(),
                 allow_side_effects,
+                options.max_preview_length,
                 object_group,
             )
             .await?;
@@ -4436,7 +4614,7 @@ async fn inspect_value(
     };
     let object_id = remote
         .as_ref()
-        .and_then(|value| value.object_id.clone())
+        .and_then(|value| value.remote.object_id.clone())
         .or_else(|| match &selector {
             ValueSelector::RemoteObject { object_id } => Some(object_id.clone()),
             ValueSelector::Expression { .. } => None,
@@ -4451,7 +4629,7 @@ async fn inspect_value(
     };
     let is_promise = remote
         .as_ref()
-        .is_some_and(|value| value.subtype == Some(RuntimeRemoteObjectSubtype::Promise))
+        .is_some_and(|value| value.remote.subtype == Some(RuntimeRemoteObjectSubtype::Promise))
         || has_live_promise_evidence(&internal_properties);
     let promise = if is_promise {
         object_id.as_ref().map(|object_id| {
@@ -4466,19 +4644,24 @@ async fn inspect_value(
     };
     let subtype = remote
         .as_ref()
-        .and_then(|value| value.subtype.as_ref())
+        .and_then(|value| value.remote.subtype.as_ref())
         .and_then(serialized_enum_name);
-    let class_name = remote.as_ref().and_then(|value| value.class_name.clone());
-    let preview = remote.as_ref().map_or_else(
+    let class_name = remote
+        .as_ref()
+        .and_then(|value| value.remote.class_name.clone());
+    let mut preview = remote.as_ref().map_or_else(
         || ValuePreviewSnapshot {
             kind: "object".to_owned(),
             preview: None,
             truncated: false,
             reference: object_id.clone(),
         },
-        |value| remote_value_snapshot(value, options.max_preview_length),
+        |value| remote_value_snapshot(&value.remote, options.max_preview_length),
     );
-    let remote_preview = remote.as_ref().and_then(|value| value.preview.as_ref());
+    preview.truncated |= remote.as_ref().is_some_and(|value| value.preview_truncated);
+    let remote_preview = remote
+        .as_ref()
+        .and_then(|value| value.remote.preview.as_ref());
     let property_references = properties
         .iter()
         .filter_map(|property| {
@@ -5449,26 +5632,34 @@ fn generated_script_callback_breadcrumb(
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_cpu_profile, bounded_heap_text, breakpoint_wait_failure,
-        callback_aware_breadcrumb, complete_source_search_batch, effective_coverage_ranges,
-        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
-        window_highlighted_line,
+        TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
+        breakpoint_wait_failure, callback_aware_breadcrumb, complete_source_search_batch,
+        effective_coverage_ranges, heap_class_display_name, predicate_matches, publish_snapshot,
+        snapshot, source_excerpt, window_highlighted_line,
     };
+    use crate::cdp::{
+        TargetAttachToTargetParams, TargetCloseTargetParams, TargetCreateTargetParams,
+    };
+    use crate::cdp_runtime::CdpConnection;
     use crate::content_store::ContentStore;
+    use crate::context_source_model::ContextSourceModel;
     use crate::debugger_engine::{
         self, BreakpointAssessment, BreakpointAssessmentStatus, BreakpointBinding, BreakpointKey,
         BreakpointMapping, BreakpointSourceCandidate, BreakpointState, DebuggerState, EffectId,
-        Input, PhysicalBreakpointKey, ScriptKey, ScriptSourceState, ScriptState,
+        Input, PhysicalBreakpointKey, ScriptKey, ScriptSourceState, ScriptState, SessionKey,
     };
     use crate::service_api::{
         BreakpointApplicationStatus, CoverageRangeSnapshot, CpuProfileCallFrameSnapshot,
         CpuProfileNodeSnapshot, CpuProfileSnapshot, SourceExcerpt, SourceLocation,
         TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
+        ValueInspectionOptions, ValueSelector, ValueSnapshot,
     };
     use crate::source_search::{SearchControl, SearchError};
     use crate::source_view::{ContentCandidate, Position, Provenance};
+    use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    use std::time::Duration;
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {
         CoverageRangeSnapshot {
@@ -5684,6 +5875,229 @@ mod tests {
                 SearchError::DeadlineExceeded
             ))
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires CDP_WS_ENDPOINT for Playwright-launched Chromium"]
+    async fn live_evaluation_bounds_large_primitive_transfer() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let endpoint =
+                std::env::var("CDP_WS_ENDPOINT").expect("Playwright provides CDP_WS_ENDPOINT");
+            let transport = Arc::new(
+                CdpWebSocketTransport::connect(&endpoint)
+                    .await
+                    .expect("connect WebSocket transport"),
+            );
+            let connection = CdpConnection::connect_transport(transport.clone())
+                .await
+                .expect("connect to Chromium");
+            let root = connection.root();
+            let created = root
+                .target_create_target(TargetCreateTargetParams::new("about:blank".into()))
+                .await
+                .expect("create target");
+            let mut attach = TargetAttachToTargetParams::new(created.target_id.clone());
+            attach.flatten = Some(true);
+            let attached = root
+                .target_attach_to_target(attach)
+                .await
+                .expect("attach target");
+            let session_key = SessionKey {
+                connection_generation: 1,
+                session_id: attached.session_id,
+            };
+            let debugger = TargetDebuggerHandle::start(
+                "bounded-evaluation".into(),
+                "browser".into(),
+                created.target_id.clone(),
+                1,
+                connection
+                    .open_session(session_key.clone())
+                    .expect("open target session"),
+                session_key,
+                false,
+                Arc::new(ContextSourceModel::new()),
+            )
+            .await
+            .expect("start target debugger");
+
+            let number = inspect_live(&debugger, "6 * 7", true)
+                .await
+                .expect("number evaluates");
+            assert_eq!(number.preview.kind, "number");
+            assert_eq!(number.preview.preview.as_deref(), Some("42"));
+
+            let string = inspect_live(&debugger, "'ordinary string'", true)
+                .await
+                .expect("string evaluates");
+            assert_eq!(string.preview.kind, "string");
+            assert_eq!(string.preview.preview.as_deref(), Some("ordinary string"));
+            assert!(!string.preview.truncated);
+
+            let nan = inspect_live(&debugger, "NaN", true)
+                .await
+                .expect("NaN evaluates");
+            assert_eq!(nan.preview.kind, "number");
+            assert_eq!(nan.preview.preview.as_deref(), Some("NaN"));
+            let bigint = inspect_live(&debugger, "12345678901234567890n", true)
+                .await
+                .expect("bigint evaluates");
+            assert_eq!(bigint.preview.kind, "bigint");
+            assert_eq!(
+                bigint.preview.preview.as_deref(),
+                Some("12345678901234567890n")
+            );
+
+            inspect_live(&debugger, "setTimeout(() => { debugger; }, 0)", true)
+                .await
+                .expect("schedule debugger pause");
+            let paused = debugger
+                .wait(
+                    TargetWaitPredicate::Paused { after_epoch: 0 },
+                    Duration::from_secs(5),
+                )
+                .await
+                .expect("target pauses");
+            let pause_epoch = match paused.phase {
+                TargetDebuggerPhase::Paused { epoch } => epoch,
+                phase => panic!("expected paused target, got {phase:?}"),
+            };
+            let frame_value = debugger
+                .inspect_value(
+                    Some(pause_epoch),
+                    ValueSelector::Expression {
+                        expression: "21 * 2".to_owned(),
+                        allow_side_effects: true,
+                    },
+                    ValueInspectionOptions {
+                        max_preview_length: 120,
+                        max_properties: 20,
+                        retain_references: false,
+                    },
+                )
+                .await
+                .expect("pause-frame expression evaluates");
+            assert_eq!(frame_value.preview.preview.as_deref(), Some("42"));
+            debugger.resume(pause_epoch).await.expect("target resumes");
+
+            inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount = 0", true)
+                .await
+                .expect("counter initializes");
+            transport.reset_largest_received_message_size();
+            let huge = inspect_live(
+                &debugger,
+                "(globalThis.__jsdbgEvaluationCount++, 'x'.repeat(16 * 1024 * 1024))",
+                true,
+            )
+            .await
+            .expect("huge string evaluates");
+            let expected_preview = "x".repeat(120);
+            assert_eq!(huge.preview.kind, "string");
+            assert_eq!(
+                huge.preview.preview.as_deref(),
+                Some(expected_preview.as_str())
+            );
+            assert!(huge.preview.truncated);
+            assert!(huge.properties.is_empty());
+            assert!(transport.largest_received_message_size() < 64 * 1024);
+            assert!(serde_json::to_vec(&huge).unwrap().len() < 2_048);
+            assert_no_references(&huge);
+            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+                .await
+                .expect("counter reads");
+            assert_eq!(count.preview.preview.as_deref(), Some("1"));
+
+            let object = inspect_live(&debugger, "({ answer: 42, label: 'ok' })", true)
+                .await
+                .expect("object evaluates");
+            assert_eq!(object.preview.kind, "object");
+            assert!(
+                object
+                    .properties
+                    .iter()
+                    .any(|property| property.name == "answer")
+            );
+            assert_no_references(&object);
+
+            let promise = inspect_live(&debugger, "Promise.resolve(42)", true)
+                .await
+                .expect("promise evaluates");
+            assert_eq!(promise.subtype.as_deref(), Some("promise"));
+            assert_eq!(promise.class_name.as_deref(), Some("Promise"));
+            assert!(promise.promise.is_some());
+            assert_no_references(&promise);
+
+            let thrown = inspect_live(
+                &debugger,
+                "(() => { throw new Error('bounded-evaluation-error') })()",
+                true,
+            )
+            .await
+            .expect_err("thrown expression fails");
+            assert!(thrown.to_string().contains("bounded-evaluation-error"));
+
+            let pure = inspect_live(&debugger, "'side-effect-free'", false)
+                .await
+                .expect("pure generic value evaluation succeeds");
+            assert_eq!(pure.preview.preview.as_deref(), Some("side-effect-free"));
+            assert!(
+                inspect_live(
+                    &debugger,
+                    "globalThis.__jsdbgForbiddenSideEffect = true",
+                    false,
+                )
+                .await
+                .is_err()
+            );
+
+            print!(
+                "{}",
+                include_str!("../tests/transcripts/bounded-evaluation.txt")
+            );
+            root.target_close_target(TargetCloseTargetParams::new(created.target_id))
+                .await
+                .expect("close target");
+        })
+        .await
+        .expect("live bounded evaluation scenario timed out");
+    }
+
+    async fn inspect_live(
+        debugger: &TargetDebuggerHandle,
+        expression: &str,
+        allow_side_effects: bool,
+    ) -> Result<ValueSnapshot, TargetDebuggerError> {
+        debugger
+            .inspect_value(
+                None,
+                ValueSelector::Expression {
+                    expression: expression.to_owned(),
+                    allow_side_effects,
+                },
+                ValueInspectionOptions {
+                    max_preview_length: 120,
+                    max_properties: 20,
+                    retain_references: false,
+                },
+            )
+            .await
+    }
+
+    fn assert_no_references(value: &ValueSnapshot) {
+        assert!(value.preview.reference.is_none());
+        assert!(
+            value
+                .properties
+                .iter()
+                .all(|property| property.value.reference.is_none())
+        );
+        assert!(value.promise.as_ref().is_none_or(|promise| {
+            promise.reference.is_none()
+                && promise
+                    .settlement
+                    .as_ref()
+                    .is_none_or(|settlement| settlement.reference.is_none())
+        }));
     }
 
     #[tokio::test]

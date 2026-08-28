@@ -1,4 +1,6 @@
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -21,6 +23,8 @@ pub struct CdpWebSocketTransport {
     receiver: Mutex<SplitStream<Socket>>,
     close_reason: Arc<Mutex<Option<String>>>,
     closed: watch::Sender<bool>,
+    #[cfg(test)]
+    largest_received_message_size: AtomicUsize,
 }
 
 impl CdpWebSocketTransport {
@@ -37,7 +41,20 @@ impl CdpWebSocketTransport {
             receiver: Mutex::new(receiver),
             close_reason: Arc::new(Mutex::new(None)),
             closed: watch::channel(false).0,
+            #[cfg(test)]
+            largest_received_message_size: AtomicUsize::new(0),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_largest_received_message_size(&self) {
+        self.largest_received_message_size
+            .store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn largest_received_message_size(&self) -> usize {
+        self.largest_received_message_size.load(Ordering::Relaxed)
     }
 
     pub fn close_reason(&self) -> Arc<Mutex<Option<String>>> {
@@ -135,6 +152,9 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for CdpWebSocketTransport {
                 }
                 Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
             };
+            #[cfg(test)]
+            self.largest_received_message_size
+                .fetch_max(bytes.len(), Ordering::Relaxed);
             match serde_json::from_slice(&bytes) {
                 Ok(envelope) => return Some(envelope),
                 Err(error) => {
