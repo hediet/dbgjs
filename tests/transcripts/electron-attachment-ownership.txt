@@ -1,0 +1,7 @@
+normal: ownership-conflict
+connection-after-conflict: targets=1
+force: created outcome=stolen
+force-lifecycle: detach=1 attach=1
+released: attached=false
+race: created=1 ownership-conflicts=1
+reattach-after-release: created

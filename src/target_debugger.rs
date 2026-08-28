@@ -4670,7 +4670,6 @@ fn snapshot(
             connection_id: connection_id.to_owned(),
             target_id: target_id.to_owned(),
             connection_generation,
-            attachment_reused: None,
             revision: state.revision,
             phase: TargetDebuggerPhase::Failed {
                 message: "debugger session is no longer available".to_owned(),
@@ -4810,7 +4809,6 @@ fn snapshot(
         connection_id: connection_id.to_owned(),
         target_id: target_id.to_owned(),
         connection_generation,
-        attachment_reused: None,
         revision: state.revision,
         phase,
         scripts,
@@ -4978,7 +4976,6 @@ mod tests {
             connection_id: "browser".to_owned(),
             target_id: "page".to_owned(),
             connection_generation: 1,
-            attachment_reused: None,
             revision: 1,
             phase,
             scripts: Vec::new(),

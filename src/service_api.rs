@@ -607,14 +607,33 @@ pub struct TargetDebuggerSnapshot {
     pub connection_id: String,
     pub target_id: String,
     pub connection_generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attachment_reused: Option<bool>,
     pub revision: u64,
     pub phase: TargetDebuggerPhase,
     pub scripts: Vec<TargetScriptSnapshot>,
     pub breakpoints: Vec<TargetBreakpointSnapshot>,
     pub logs: Vec<ConsoleMessageSnapshot>,
     pub pause: Option<PauseSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetAttachmentOutcome {
+    Created,
+    Stolen,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetAttachOptions {
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetAttachmentResult {
+    pub outcome: TargetAttachmentOutcome,
+    pub target: TargetDebuggerSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1448,7 +1467,8 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+        options: TargetAttachOptions,
+    ) -> Result<TargetAttachmentResult, JsonRpcError>;
 
     async fn get_target(
         context_id: String,

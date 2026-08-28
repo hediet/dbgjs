@@ -9,10 +9,10 @@ use cdp_client::service_api::{
     ObservationResult, PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot,
     PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
-    SourceSnapshotInfo, SourceTreeSnapshot, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot, ValueSnapshot,
+    SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome, TargetAttachmentResult,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
+    UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+    UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2155,6 +2155,19 @@ impl HumanOutput for TargetDebuggerSnapshot {
     }
 }
 
+impl HumanOutput for TargetAttachmentResult {
+    fn print_human(&self) {
+        println!(
+            "Attachment: {}",
+            match self.outcome {
+                TargetAttachmentOutcome::Created => "created",
+                TargetAttachmentOutcome::Stolen => "stolen",
+            }
+        );
+        print_target_human(&self.target, &self.target.target_id);
+    }
+}
+
 fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
     println!(
         "Target {}  [{}]  {}/{}  gen {}  rev {}",
@@ -2165,17 +2178,6 @@ fn print_target_human(snapshot: &TargetDebuggerSnapshot, selector: &str) {
         snapshot.connection_generation,
         snapshot.revision
     );
-    if let Some(reused) = snapshot.attachment_reused {
-        println!(
-            "  Attachment: {}",
-            if reused {
-                "reused existing debugger session"
-            } else {
-                "created new debugger session"
-            }
-        );
-    }
-
     if !snapshot.breakpoints.is_empty() {
         println!("  Breakpoints:");
         for breakpoint in &snapshot.breakpoints {

@@ -127,7 +127,8 @@ impl ElectronRendererBridge {
         self: &Arc<Self>,
         target_id: String,
         target: &ElectronRendererTarget,
-    ) -> Result<Arc<ElectronRendererTransport>, String> {
+        force: bool,
+    ) -> Result<(Arc<ElectronRendererTransport>, bool), String> {
         self.ensure_open()
             .await
             .map_err(|error| error.to_string())?;
@@ -137,6 +138,7 @@ impl ElectronRendererBridge {
             target.web_contents_id,
             target.process_id,
             target_id,
+            force,
         )
         .await
         .map_err(|error| error.to_string())
@@ -226,6 +228,7 @@ impl BridgeControl {
                 token,
                 role: "control",
                 web_contents_id: None,
+                force: false,
             },
         )
         .await?;
@@ -312,7 +315,8 @@ impl ElectronRendererTransport {
         web_contents_id: u64,
         process_id: u32,
         target_id: String,
-    ) -> Result<Arc<Self>, TransportError> {
+        force: bool,
+    ) -> Result<(Arc<Self>, bool), TransportError> {
         let stream = connect_socket(("127.0.0.1", port)).await?;
         let (read_half, mut write_half) = stream.into_split();
         write_json_line(
@@ -321,6 +325,7 @@ impl ElectronRendererTransport {
                 token,
                 role: "renderer",
                 web_contents_id: Some(web_contents_id),
+                force,
             },
         )
         .await?;
@@ -338,14 +343,18 @@ impl ElectronRendererTransport {
             })));
         }
         let (closed_tx, _) = watch::channel(None);
-        Ok(Arc::new(Self {
-            process_id,
-            target_id,
-            sender: Mutex::new(Some(write_half)),
-            receiver: Mutex::new(reader),
-            close_reason: Arc::new(Mutex::new(None)),
-            closed_tx,
-        }))
+        let stolen = response.stolen;
+        Ok((
+            Arc::new(Self {
+                process_id,
+                target_id,
+                sender: Mutex::new(Some(write_half)),
+                receiver: Mutex::new(reader),
+                close_reason: Arc::new(Mutex::new(None)),
+                closed_tx,
+            }),
+            stolen,
+        ))
     }
 
     async fn mark_closed(&self, reason: impl Into<String>) {
@@ -494,12 +503,16 @@ struct HandshakeRequest<'a> {
     role: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     web_contents_id: Option<u64>,
+    force: bool,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HandshakeResponse {
     ready: bool,
     error: Option<String>,
+    #[serde(default)]
+    stolen: bool,
 }
 
 #[derive(Serialize)]
@@ -654,10 +667,17 @@ mod tests {
             .unwrap();
         });
 
-        let transport =
-            ElectronRendererTransport::connect(port, "secret", 7, 42, "renderer-42".to_owned())
-                .await
-                .unwrap();
+        let (transport, stolen) = ElectronRendererTransport::connect(
+            port,
+            "secret",
+            7,
+            42,
+            "renderer-42".to_owned(),
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(!stolen);
         let request: CdpEnvelope =
             serde_json::from_value(json!({ "id": 1, "method": "Runtime.enable" })).unwrap();
         transport.send(request).await.unwrap();
@@ -694,10 +714,16 @@ mod tests {
             .unwrap();
         });
 
-        let transport =
-            ElectronRendererTransport::connect(port, "secret", 7, 42, "renderer-42".to_owned())
-                .await
-                .unwrap();
+        let (transport, _) = ElectronRendererTransport::connect(
+            port,
+            "secret",
+            7,
+            42,
+            "renderer-42".to_owned(),
+            false,
+        )
+        .await
+        .unwrap();
         assert!(transport.recv().await.is_none());
         let reason = timeout(Duration::from_secs(1), transport.wait_closed())
             .await
@@ -725,14 +751,48 @@ mod tests {
             .unwrap();
         });
 
-        let result =
-            ElectronRendererTransport::connect(port, "wrong", 7, 42, "renderer-42".to_owned())
-                .await;
+        let result = ElectronRendererTransport::connect(
+            port,
+            "wrong",
+            7,
+            42,
+            "renderer-42".to_owned(),
+            false,
+        )
+        .await;
         let error = match result {
             Ok(_) => panic!("handshake unexpectedly succeeded"),
             Err(error) => error,
         };
         assert!(error.to_string().contains("bad token"));
+    }
+
+    #[tokio::test]
+    async fn renderer_force_handshake_reports_stolen_owner() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let handshake: Value = read_json_line(&mut reader).await.unwrap();
+            assert_eq!(handshake["force"], true);
+            drop(reader);
+            write_json_line(&mut stream, &json!({ "ready": true, "stolen": true }))
+                .await
+                .unwrap();
+        });
+
+        let (_, stolen) = ElectronRendererTransport::connect(
+            port,
+            "secret",
+            7,
+            42,
+            "renderer-42".to_owned(),
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(stolen);
     }
 
     #[tokio::test]
@@ -756,10 +816,16 @@ mod tests {
             stream.write_all(b"not-json\n").await.unwrap();
         });
 
-        let transport =
-            ElectronRendererTransport::connect(port, "secret", 7, 42, "renderer-42".to_owned())
-                .await
-                .unwrap();
+        let (transport, _) = ElectronRendererTransport::connect(
+            port,
+            "secret",
+            7,
+            42,
+            "renderer-42".to_owned(),
+            false,
+        )
+        .await
+        .unwrap();
         assert!(transport.recv().await.is_none());
         assert!(
             transport

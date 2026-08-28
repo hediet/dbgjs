@@ -46,6 +46,11 @@ pub enum ProviderTargetEvent {
     Removed(String),
 }
 
+pub struct DirectDebuggerAttachment {
+    pub session: CdpDebuggerSession,
+    pub stole_external_owner: bool,
+}
+
 impl ConnectionRuntime {
     pub async fn connect(
         configuration: &ConnectionConfiguration,
@@ -250,12 +255,16 @@ impl ConnectionRuntime {
     pub async fn take_direct_debugger_session(
         self: &Arc<Self>,
         target_id: &str,
-    ) -> Result<Option<CdpDebuggerSession>, CdpRuntimeError> {
+        force: bool,
+    ) -> Result<Option<DirectDebuggerAttachment>, CdpRuntimeError> {
         let _guard = self.direct_debugger_attach_lock.lock().await;
         if target_id == "$node-root"
             && let Some(session) = self.cdp.take_root_debugger_session()
         {
-            return Ok(Some(session));
+            return Ok(Some(DirectDebuggerAttachment {
+                session,
+                stole_external_owner: false,
+            }));
         }
         if let Some(session) = self
             .direct_debuggers
@@ -264,7 +273,10 @@ impl ConnectionRuntime {
             .get(target_id)
             .and_then(|connection| connection.take_root_debugger_session())
         {
-            return Ok(Some(session));
+            return Ok(Some(DirectDebuggerAttachment {
+                session,
+                stole_external_owner: false,
+            }));
         }
 
         let endpoint = if target_id == "$node-root" {
@@ -295,8 +307,8 @@ impl ConnectionRuntime {
                 .target_for_process(renderer_process_id)
                 .await
                 .map_err(CdpRuntimeError::Transport)?;
-            let transport = bridge
-                .attach(target_id.to_owned(), &target)
+            let (transport, stole_external_owner) = bridge
+                .attach(target_id.to_owned(), &target, force)
                 .await
                 .map_err(CdpRuntimeError::Transport)?;
             let connection = Arc::new(
@@ -315,7 +327,10 @@ impl ConnectionRuntime {
                 .unwrap()
                 .insert(target_id.to_owned(), connection.clone());
             supervise_direct_debugger(Arc::downgrade(self), target_id.to_owned(), connection);
-            return Ok(Some(session));
+            return Ok(Some(DirectDebuggerAttachment {
+                session,
+                stole_external_owner,
+            }));
         };
         let connection = Arc::new(
             CdpConnection::connect_root_debugger(
@@ -333,7 +348,20 @@ impl ConnectionRuntime {
             .unwrap()
             .insert(target_id.to_owned(), connection.clone());
         supervise_direct_debugger(Arc::downgrade(self), target_id.to_owned(), connection);
-        Ok(Some(session))
+        Ok(Some(DirectDebuggerAttachment {
+            session,
+            stole_external_owner: false,
+        }))
+    }
+
+    pub async fn close_direct_debugger(&self, target_id: &str) -> bool {
+        let connection = self.direct_debuggers.lock().unwrap().remove(target_id);
+        if let Some(connection) = connection {
+            connection.close().await;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_direct_debugger(&self) -> bool {
@@ -347,6 +375,14 @@ impl ConnectionRuntime {
         Ok(PlaywrightCdpSource::BrowserRoot {
             endpoint: self.root_endpoint.clone(),
         })
+    }
+
+    pub fn renderer_process_id(&self, target_id: &str) -> Option<u32> {
+        self.renderer_processes
+            .lock()
+            .unwrap()
+            .get(target_id)
+            .copied()
     }
 
     pub fn retire_session(&self, session_id: &str) {

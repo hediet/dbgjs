@@ -41,8 +41,10 @@ use crate::service_api::{
     SourceContentSnapshot, SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot,
     SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
     SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind,
-    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    TargetAttachOptions,
+    TargetAttachmentOutcome, TargetAttachmentResult, TargetDebuggerSnapshot, TargetSnapshot,
+    TargetWaitPredicate, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
     VariableSnapshot,
 };
@@ -53,6 +55,7 @@ use crate::target_debugger::{TargetBreakpointSpec, TargetDebuggerError, TargetDe
 pub struct DebuggerService {
     agent_instance_id: String,
     state: Arc<Mutex<ServiceState>>,
+    attachment_lock: Arc<Mutex<()>>,
     persistence_path: PathBuf,
     shutdown: watch::Sender<bool>,
     revision_signal: watch::Sender<u64>,
@@ -68,6 +71,7 @@ impl DebuggerService {
         Ok(Self {
             agent_instance_id: random_instance_id()?,
             state: Arc::new(Mutex::new(state)),
+            attachment_lock: Arc::new(Mutex::new(())),
             persistence_path,
             shutdown,
             revision_signal,
@@ -302,13 +306,15 @@ impl DebuggerService {
                 }
                 drop(state);
 
-                if let Some(target_id) = target_to_attach
+                if !runtime.is_direct_debugger()
+                    && let Some(target_id) = target_to_attach
                     && service
                         .attach_target(
                             &CallCtx::default(),
                             context_id.clone(),
                             connection_id.clone(),
                             target_id.clone(),
+                            TargetAttachOptions::default(),
                         )
                         .await
                         .is_ok()
@@ -526,6 +532,75 @@ struct PlaywrightProxyRegistration {
     connection_id: String,
     generation: u64,
     cancel: watch::Sender<bool>,
+}
+
+struct PhysicalAttachmentOwner {
+    key: (String, String, String),
+    debugger: TargetDebuggerHandle,
+    runtime: Arc<ConnectionRuntime>,
+}
+
+fn physical_target_key(
+    state: &ServiceState,
+    key: &(String, String, String),
+    runtime: &Arc<ConnectionRuntime>,
+) -> Result<String, JsonRpcError> {
+    let connection = state
+        .contexts
+        .get(&key.0)
+        .ok_or_else(|| not_found("context", &key.0))?
+        .connections
+        .get(&key.1)
+        .ok_or_else(|| not_found("connection", &key.1))?;
+    let target = connection
+        .targets
+        .get(&key.2)
+        .ok_or_else(|| not_found("target", &key.2))?;
+    if let Some(process_id) = runtime.renderer_process_id(&key.2) {
+        return Ok(format!("process:{process_id}"));
+    }
+    Ok(match &connection.configuration {
+        ConnectionConfiguration::Process { process_id } if key.2 == "$node-root" => {
+            format!("process:{process_id}")
+        }
+        ConnectionConfiguration::ProcessTree { root_pid } if key.2 == "$node-root" => {
+            format!("process:{root_pid}")
+        }
+        ConnectionConfiguration::ProcessTree { .. } if target.url.starts_with("process:") => {
+            target.url.clone()
+        }
+        ConnectionConfiguration::NodeInspector { endpoint } => {
+            format!("node-inspector:{endpoint}")
+        }
+        ConnectionConfiguration::DirectCdp { endpoint } => {
+            format!("cdp:{endpoint}#{}", key.2)
+        }
+        _ => format!("runtime:{:p}#{}", Arc::as_ptr(runtime), key.2),
+    })
+}
+
+fn ownership_conflict(owner: &(String, String, String)) -> JsonRpcError {
+    invalid_state(&format!(
+        "target ownership conflict: physical target is already owned by {}/{}; target {}; retry with --force to steal it",
+        owner.0, owner.1, owner.2
+    ))
+}
+
+fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
+    if message.contains("already attached by another debugger")
+        || message.contains("already has a jsdbg client")
+    {
+        invalid_state(&format!(
+            "target ownership conflict: {message}{}",
+            if force {
+                ""
+            } else {
+                "; retry with --force to steal it"
+            }
+        ))
+    } else {
+        internal_error(message)
+    }
 }
 
 #[async_trait::async_trait]
@@ -855,19 +930,26 @@ impl DebuggerServiceApi for DebuggerService {
             }
         };
         let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
-        let auto_attach_targets = transition
-            .state
-            .connections
-            .get(&connection_id)
-            .map(|connection| {
-                connection
-                    .targets
-                    .values()
-                    .filter(|target| matches!(target.target_type.as_str(), "page" | "node"))
-                    .map(|target| target.target_id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let auto_attach_targets = if runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.is_direct_debugger())
+        {
+            Vec::new()
+        } else {
+            transition
+                .state
+                .connections
+                .get(&connection_id)
+                .map(|connection| {
+                    connection
+                        .targets
+                        .values()
+                        .filter(|target| matches!(target.target_type.as_str(), "page" | "node"))
+                        .map(|target| target.target_id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
         self.commit_context(&mut state, &context_id, transition);
         if let Some(runtime) = runtime {
             state.runtimes.insert(runtime_key, runtime.clone());
@@ -908,7 +990,13 @@ impl DebuggerServiceApi for DebuggerService {
         drop(state);
         for target_id in auto_attach_targets {
             let _ = self
-                .attach_target(_ctx, context_id.clone(), connection_id.clone(), target_id)
+                .attach_target(
+                    _ctx,
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id,
+                    TargetAttachOptions::default(),
+                )
                 .await;
         }
         Ok(result)
@@ -1839,34 +1927,99 @@ impl DebuggerServiceApi for DebuggerService {
 
     async fn attach_target(
         &self,
-        _ctx: &CallCtx,
+        ctx: &CallCtx,
         context_id: String,
         connection_id: String,
         target_id: String,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
-        let target_id = self
+        options: TargetAttachOptions,
+    ) -> Result<TargetAttachmentResult, JsonRpcError> {
+        let _attachment_guard = self.attachment_lock.lock().await;
+        let mut target_id = self
             .resolve_target_id(&context_id, &connection_id, &target_id)
             .await?;
-        let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
-        let (runtime, generation, waiting_for_debugger, failed_session, source_model) = {
+        let mut debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
+        let prior_owner = {
             let mut state = self.state.lock().await;
-            let failed_session = match state.target_debuggers.get(&debugger_key).cloned() {
-                Some(debugger)
-                    if matches!(
-                        debugger.snapshot().phase,
-                        crate::service_api::TargetDebuggerPhase::Failed { .. }
-                    ) =>
-                {
-                    state.target_debuggers.remove(&debugger_key);
-                    Some(debugger.session_id().to_owned())
+            let context = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let connection = context
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?;
+            if !connection.targets.contains_key(&target_id) {
+                return Err(not_found("target", &target_id));
+            }
+            let runtime = state
+                .runtimes
+                .get(&(context_id.clone(), connection_id.clone()))
+                .cloned()
+                .ok_or_else(|| invalid_state("connection is not connected"))?;
+            let physical_key = physical_target_key(&state, &debugger_key, &runtime)?;
+            let prior_owner = state.target_debuggers.iter().find_map(|(key, debugger)| {
+                let owner_runtime = state.runtimes.get(&(key.0.clone(), key.1.clone()))?.clone();
+                (physical_target_key(&state, key, &owner_runtime)
+                    .ok()
+                    .as_ref()
+                    == Some(&physical_key))
+                .then(|| PhysicalAttachmentOwner {
+                    key: key.clone(),
+                    debugger: debugger.clone(),
+                    runtime: owner_runtime,
+                })
+            });
+            if let Some(owner) = &prior_owner {
+                if !options.force {
+                    return Err(ownership_conflict(&owner.key));
                 }
-                Some(debugger) => {
-                    let mut snapshot = debugger.snapshot();
-                    snapshot.attachment_reused = Some(true);
-                    return Ok(snapshot);
+                state.target_debuggers.remove(&owner.key);
+            } else if !runtime.is_direct_debugger()
+                && connection
+                    .targets
+                    .get(&target_id)
+                    .is_some_and(|target| target.attached)
+            {
+                let message = format!(
+                    "target ownership conflict: {connection_id}/{target_id} is already attached by an external debugger"
+                );
+                return Err(if options.force {
+                    invalid_state(&format!(
+                        "{message}; jsdbg cannot detach an unknown CDP session"
+                    ))
+                } else {
+                    invalid_state(&format!(
+                        "{message}; retry with --force to steal when supported"
+                    ))
+                });
+            }
+            prior_owner
+        };
+
+        let mut outcome = TargetAttachmentOutcome::Created;
+        if let Some(owner) = prior_owner {
+            outcome = TargetAttachmentOutcome::Stolen;
+            let owner_is_requested = owner.key == debugger_key;
+            if owner.runtime.is_direct_debugger() && owner.key.2 == "$node-root" {
+                self.disconnect_connection(ctx, owner.key.0.clone(), owner.key.1.clone())
+                    .await?;
+                if owner_is_requested {
+                    self.connect_connection(ctx, context_id.clone(), connection_id.clone())
+                        .await?;
+                    target_id = self
+                        .resolve_target_id(&context_id, &connection_id, &target_id)
+                        .await?;
+                    debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
                 }
-                None => None,
-            };
+            } else if owner.runtime.is_direct_debugger() {
+                owner.runtime.close_direct_debugger(&owner.key.2).await;
+            } else {
+                detach_session(&owner.runtime, owner.debugger.session_id()).await;
+            }
+        }
+
+        let (runtime, generation, waiting_for_debugger, source_model) = {
+            let mut state = self.state.lock().await;
             let context = state
                 .contexts
                 .get(&context_id)
@@ -1893,26 +2046,20 @@ impl DebuggerServiceApi for DebuggerService {
                 .entry(context_id.clone())
                 .or_insert_with(|| Arc::new(ContextSourceModel::new()))
                 .clone();
-            (
-                runtime,
-                generation,
-                waiting_for_debugger,
-                failed_session,
-                source_model,
-            )
+            (runtime, generation, waiting_for_debugger, source_model)
         };
-        if let Some(session_id) = failed_session {
-            detach_session(&runtime, &session_id).await;
-        }
 
         let (session, session_key) = if runtime.is_direct_debugger() {
-            let session = runtime
-                .take_direct_debugger_session(&target_id)
+            let attachment = runtime
+                .take_direct_debugger_session(&target_id, options.force)
                 .await
-                .map_err(|error| internal_error(error.to_string()))?
+                .map_err(|error| direct_attachment_error(error.to_string(), options.force))?
                 .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
-            let key = session.key().clone();
-            (session, key)
+            if attachment.stole_external_owner {
+                outcome = TargetAttachmentOutcome::Stolen;
+            }
+            let key = attachment.session.key().clone();
+            (attachment.session, key)
         } else {
             let mut attach = TargetAttachToTargetParams::new(target_id.clone());
             attach.flatten = Some(true);
@@ -1971,11 +2118,14 @@ impl DebuggerServiceApi for DebuggerService {
             ));
         }
         if let Some(existing) = state.target_debuggers.get(&debugger_key) {
-            let mut snapshot = existing.snapshot();
-            snapshot.attachment_reused = Some(true);
+            let owner = existing.snapshot();
             drop(state);
             detach_session(&runtime, &session_key.session_id).await;
-            return Ok(snapshot);
+            return Err(ownership_conflict(&(
+                owner.context_id,
+                owner.connection_id,
+                owner.target_id,
+            )));
         }
         state
             .target_debuggers
@@ -2029,9 +2179,10 @@ impl DebuggerServiceApi for DebuggerService {
             self.publish_breakpoint_application(&context_id, &breakpoint_id)
                 .await;
         }
-        let mut snapshot = snapshot;
-        snapshot.attachment_reused = Some(false);
-        Ok(snapshot)
+        Ok(TargetAttachmentResult {
+            outcome,
+            target: snapshot,
+        })
     }
 
     async fn get_target(

@@ -101,7 +101,8 @@ Use `--output <path>` to choose the destination.
 
 - Stop another active renderer debugger, such as
   `Developer: Debug Renderer in New Window`, and retry.
-- If the owner is unknown, do not force-detach it.
+- Or explicitly use `process attach <pid> --force`. Only this opt-in path calls
+  Electron's debugger detach before jsdbg attaches.
 
 `renderer process ... has no live Electron webContents`
 
@@ -216,6 +217,10 @@ so `.#12345` means heap object `12345` in the latest capture.
 
 - Renderer: `process-tree-<vscode-main-pid>`
 - Extension host or agent host: `process-<pid>`
+
+Repeating an attach reports an ownership conflict. Use `--force` only when the
+existing debugger owner should be detached and replaced; successful output
+distinguishes `created` from `stolen`.
 
 Disconnect only one connection:
 

@@ -23,8 +23,9 @@ use cdp_client::service_api::{
     HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
     HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, PromiseState,
-    SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
+    SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetAttachOptions,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate, ValueInspectionOptions,
+    ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -1029,12 +1030,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 };
             let client = ensure_service(&state_file).await?;
-            rpc(client
-                .put_connection(context_id.clone(), connection_id.clone(), configuration)
-                .await)?;
-            rpc(client
-                .connect_connection(context_id.clone(), connection_id.clone())
-                .await)?;
+            let context = rpc(client.get_context(context_id.clone()).await)?;
+            let existing = context
+                .connections
+                .iter()
+                .find(|connection| connection.id == connection_id);
+            let connected = existing.is_some_and(|connection| {
+                matches!(
+                    connection.status,
+                    ConnectionStatus::Connected { .. }
+                        | ConnectionStatus::Connecting
+                        | ConnectionStatus::Disconnecting
+                )
+            });
+            if connected
+                && existing.is_some_and(|connection| connection.configuration != configuration)
+            {
+                if !options.force {
+                    return Err(io::Error::other(format!(
+                        "target ownership conflict: connection '{connection_id}' is active with another process; retry with --force to replace it"
+                    ))
+                    .into());
+                }
+                rpc(client
+                    .disconnect_connection(context_id.clone(), connection_id.clone())
+                    .await)?;
+            }
+            if !connected
+                || existing.is_some_and(|connection| connection.configuration != configuration)
+            {
+                rpc(client
+                    .put_connection(context_id.clone(), connection_id.clone(), configuration)
+                    .await)?;
+                rpc(client
+                    .connect_connection(context_id.clone(), connection_id.clone())
+                    .await)?;
+            }
             if target_id != "$node-root" {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
@@ -1053,8 +1084,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
-            let snapshot = rpc(client
-                .attach_target(context_id.clone(), connection_id.clone(), target_id.clone())
+            let result = rpc(client
+                .attach_target(
+                    context_id.clone(),
+                    connection_id.clone(),
+                    target_id.clone(),
+                    TargetAttachOptions {
+                        force: options.force,
+                    },
+                )
                 .await)?;
             if options.set_default {
                 select_scope(
@@ -1064,10 +1102,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         connection: connection_id,
                         target: target_id.clone(),
                     },
-                    &snapshot,
+                    &result.target,
                 )?;
             }
-            output.print_target(&snapshot, &target_id)?;
+            output.print(&result)?;
         }
         [context, list] if context == "context" && list == "list" => {
             let client = ensure_service(&state_file).await?;
@@ -1570,21 +1608,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ))?;
         }
         [target, attach, options @ ..] if target == "target" && attach == "attach" => {
-            let set_default = parse_set_option(options)?;
+            let options = parse_attach_options(options)?;
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let result = rpc(client
                 .attach_target(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
+                    TargetAttachOptions {
+                        force: options.force,
+                    },
                 )
                 .await)?;
-            if set_default {
-                select_scope(&selection_file, &scope, &snapshot)?;
+            if options.set_default {
+                select_scope(&selection_file, &scope, &result.target)?;
             }
-            output.print_target(&snapshot, &scope.target)?;
+            output.print(&result)?;
         }
         [target, wait, installed, breakpoint_id]
             if target == "target" && wait == "wait" && installed == "breakpoint-installed" =>
@@ -2157,17 +2198,6 @@ fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io
     Ok(options)
 }
 
-fn parse_set_option(options: &[String]) -> Result<bool, io::Error> {
-    match options {
-        [] => Ok(false),
-        [option] if option == "--set" => Ok(true),
-        [option, ..] => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown option '{option}'"),
-        )),
-    }
-}
-
 fn parse_context_create_options(
     option_expression: Option<&String>,
     options: &[String],
@@ -2400,6 +2430,42 @@ fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Erro
 struct ProcessAttachOptions {
     process_id: u32,
     set_default: bool,
+    force: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AttachOptions {
+    set_default: bool,
+    force: bool,
+}
+
+fn parse_attach_options(arguments: &[String]) -> Result<AttachOptions, io::Error> {
+    let mut options = AttachOptions::default();
+    for argument in arguments {
+        match argument.as_str() {
+            "--set" if !options.set_default => options.set_default = true,
+            "--force" if !options.force => options.force = true,
+            "--set" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--set may only be specified once",
+                ));
+            }
+            "--force" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--force may only be specified once",
+                ));
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown target attach option '{option}'"),
+                ));
+            }
+        }
+    }
+    Ok(options)
 }
 
 fn parse_context_option(arguments: &[String]) -> Result<Option<String>, io::Error> {
@@ -2488,6 +2554,7 @@ fn selected_or_explicit_connection(
 fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOptions, io::Error> {
     let mut process_id = None;
     let mut set_default = false;
+    let mut force = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -2499,6 +2566,16 @@ fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOpt
                     ));
                 }
                 set_default = true;
+                index += 1;
+            }
+            "--force" => {
+                if force {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--force may only be specified once",
+                    ));
+                }
+                force = true;
                 index += 1;
             }
             argument if argument.starts_with("--") => {
@@ -2527,6 +2604,7 @@ fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOpt
             )
         })?,
         set_default,
+        force,
     })
 }
 
@@ -5239,7 +5317,7 @@ fn usage() -> &'static str {
 commands:
   jsdbg service status|stop
   jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  jsdbg process attach <process-id> [--context <id>] [--set]
+  jsdbg process attach <process-id> [--context <id>] [--set] [--force]
   jsdbg context list
   jsdbg context create <path|:id> [display-name] [--set]
   jsdbg context show [--context <path|:id>]
@@ -5272,7 +5350,7 @@ commands:
   jsdbg source export <destination> [--context <id>]
   jsdbg target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
   jsdbg target show [target scope]
-  jsdbg target attach [target scope] [--set]
+  jsdbg target attach [target scope] [--set] [--force]
   jsdbg target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
   jsdbg target wait paused <after-epoch> [timeout-ms] [target scope]
   jsdbg target wait running [target scope]
@@ -5325,11 +5403,11 @@ Use --no-validation for vendor or newer protocol methods."
 #[cfg(test)]
 mod tests {
     use super::{
-        CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
+        AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ResolvedScope, ScopeOptions, SelectionStore,
         TargetListOptions, activate_selection_scope, apply_scope_selection, connection_list_output,
-        extract_scope_options, load_selection_store, parse_chrome_options,
+        extract_scope_options, load_selection_store, parse_attach_options, parse_chrome_options,
         parse_connection_list_options, parse_context_create_options, parse_context_option,
         parse_coverage_show_options, parse_cpu_profile_sampling_interval,
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
@@ -5564,13 +5642,27 @@ mod tests {
             "--context",
             "linkrpc-ext-host",
             "--set",
+            "--force",
         ]);
         let scope = extract_scope_options(&mut args).unwrap();
         let options = parse_process_attach_options(&args[2..]).unwrap();
         assert_eq!(options.process_id, 15388);
         assert_eq!(scope.context.as_deref(), Some("linkrpc-ext-host"));
         assert!(options.set_default);
+        assert!(options.force);
         assert!(parse_process_attach_options(&arguments(&["linkrpc-ext-host", "15388"])).is_err());
+    }
+
+    #[test]
+    fn parses_target_attach_ownership_options() {
+        assert_eq!(
+            parse_attach_options(&arguments(&["--set", "--force"])).unwrap(),
+            AttachOptions {
+                set_default: true,
+                force: true,
+            }
+        );
+        assert!(parse_attach_options(&arguments(&["--force", "--force"])).is_err());
     }
 
     #[test]

@@ -12,6 +12,29 @@ use cdp_client::local_rpc::{
 };
 
 #[test]
+fn electron_bridge_enforces_strict_ownership_and_force_stealing() {
+    let output = Command::new("node")
+        .arg(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("electron_bridge_ownership.mjs"),
+        )
+        .output()
+        .unwrap();
+    assert_success(
+        &["node", "tests/electron_bridge_ownership.mjs"],
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    let transcript = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        transcript,
+        include_str!("transcripts/electron-attachment-ownership.txt")
+    );
+}
+
+#[test]
 fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
     let root = std::env::temp_dir().join(format!(
         "jsdbg-context-resolution-{}-{}",

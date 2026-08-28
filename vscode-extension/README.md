@@ -123,10 +123,10 @@ owned process and removes the connection. An `attach` configuration with
 
 Node launches preload a small discovery hook through `NODE_OPTIONS`. Descendant
 Node processes that inherit the launch environment open loopback inspectors and
-appear as child targets under their spawning process. The daemon connects and
-auto-attaches each reported process, so VS Code exposes it as a nested debug
-session. Processes that discard the inherited environment remain ordinary,
-undiscovered OS processes.
+appear as child targets under their spawning process. The daemon reports each
+process, and an explicit target or process attach claims its debugger.
+Processes that discard the inherited environment remain ordinary, undiscovered
+OS processes.
 
 An already-running Node-compatible inspector can be added to a context without
 launching another process:
@@ -135,6 +135,10 @@ launching another process:
 jsdbg connection add --node-inspector <ws-endpoint> --context <context> --connection <connection> --connect
 jsdbg target attach --context <context> --connection <connection> --target node
 ```
+
+Attachments have one owner. A second attach reports an ownership conflict;
+`--force` explicitly detaches the prior owner where supported and reports a
+`stolen` outcome.
 
 This direct-debugger connection is also used for VS Code extension hosts after
 their inspector has been activated. It intentionally differs from the ordinary

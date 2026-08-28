@@ -38,12 +38,6 @@ async (token) => {
 		title: contents.getTitle(),
 		url: contents.getURL(),
 	});
-	const isVsCodeBrowserView = (contents) =>
-		contents.getType() === "window"
-		&& !contents.getURL().startsWith("vscode-file:")
-		&& contents.debugger.listeners("message").some(
-			(listener) => String(listener).includes(".routeCDPEvent("),
-		);
 	const writeFrame = (socket, value) => {
 		if (socket.destroyed || socket.writableEnded) {
 			return false;
@@ -75,20 +69,10 @@ async (token) => {
 			removeDebuggerListeners(entry);
 			let cleanupError;
 			if (!entry.contents.isDestroyed() && entry.contents.debugger.isAttached()) {
-				if (entry.ownedSessionId) {
-					try {
-						await entry.contents.debugger.sendCommand("Target.detachFromTarget", {
-							sessionId: entry.ownedSessionId,
-						});
-					} catch (error) {
-						cleanupError = String(error?.message || error);
-					}
-				} else {
-					try {
-						entry.contents.debugger.detach();
-					} catch (error) {
-						cleanupError = String(error?.message || error);
-					}
+				try {
+					entry.contents.debugger.detach();
+				} catch (error) {
+					cleanupError = String(error?.message || error);
 				}
 			}
 			if (notify) {
@@ -102,42 +86,18 @@ async (token) => {
 		return entry.releasePromise;
 	};
 	const routeDebuggerMessage = (entry, method, params, sessionId) => {
-		if (entry.borrowed && !entry.ownedSessionId) {
-			const event = { method, params, sessionId };
-			const byteLength = Buffer.byteLength(JSON.stringify(event));
-			if (entry.pendingEventBytes + byteLength > maxBufferedBytes) {
-				entry.socket.destroy(
-					new Error("renderer bridge pending events exceeded 128 MiB"),
-				);
-				return;
-			}
-			entry.pendingEventBytes += byteLength;
-			entry.pendingEvents.push(event);
-			return;
-		}
-		if (entry.borrowed) {
-			if (method === "Target.attachedToTarget" && entry.sessionIds.has(sessionId)) {
-				entry.sessionIds.add(params?.sessionId);
-			} else if (method === "Target.detachedFromTarget" && entry.sessionIds.has(sessionId)) {
-				entry.sessionIds.delete(params?.sessionId);
-			}
-			if (!entry.sessionIds.has(sessionId)) {
-				return;
-			}
-		}
 		const envelope = { method, params: params ?? {} };
-		if (sessionId && sessionId !== entry.ownedSessionId) {
+		if (sessionId) {
 			envelope.sessionId = sessionId;
 		}
 		writeFrame(entry.socket, { kind: "cdp", envelope });
 	};
 	const sendRendererCommand = async (entry, envelope) => {
 		try {
-			const sessionId = envelope.sessionId ?? entry.ownedSessionId;
 			const result = await entry.contents.debugger.sendCommand(
 				envelope.method,
 				envelope.params ?? {},
-				sessionId,
+				envelope.sessionId,
 			);
 			if (!Object.hasOwn(envelope, "id")) {
 				return;
@@ -168,29 +128,34 @@ async (token) => {
 			writeFrame(entry.socket, { kind: "cdp", envelope: response });
 		}
 	};
-	const attachRenderer = async (socket, webContentsId) => {
+	const attachRenderer = async (socket, webContentsId, force) => {
 		if (disposed) {
 			throw new Error("renderer bridge is disposed");
 		}
-		if (rendererClients.has(webContentsId)) {
+		const previousClient = rendererClients.get(webContentsId);
+		if (previousClient && !force) {
 			throw new Error(`Electron webContents ${webContentsId} already has a jsdbg client`);
 		}
+		let stolen = false;
+		if (previousClient) {
+			await releaseRenderer(previousClient, "renderer debugger ownership was stolen by --force");
+			stolen = true;
+		}
 		const contents = find(webContentsId);
-		const borrowed = contents.debugger.isAttached();
-		if (borrowed && !isVsCodeBrowserView(contents)) {
+		const externalOwner = contents.debugger.isAttached();
+		if (externalOwner && !force) {
 			throw new Error(
 				`Electron webContents ${webContentsId} is already attached by another debugger`,
 			);
+		}
+		if (externalOwner) {
+			contents.debugger.detach();
+			stolen = true;
 		}
 		const entry = {
 			webContentsId,
 			contents,
 			socket,
-			borrowed,
-			ownedSessionId: undefined,
-			sessionIds: new Set(),
-			pendingEvents: [],
-			pendingEventBytes: 0,
 			releasePromise: undefined,
 			onMessage: undefined,
 			onDetach: undefined,
@@ -207,22 +172,7 @@ async (token) => {
 		contents.debugger.on("message", entry.onMessage);
 		contents.debugger.on("detach", entry.onDetach);
 		try {
-			if (borrowed) {
-				const { targetInfo } = await contents.debugger.sendCommand("Target.getTargetInfo");
-				const result = await contents.debugger.sendCommand("Target.attachToTarget", {
-					targetId: targetInfo.targetId,
-					flatten: true,
-				});
-				entry.ownedSessionId = result.sessionId;
-				entry.sessionIds.add(result.sessionId);
-				for (const event of entry.pendingEvents) {
-					routeDebuggerMessage(entry, event.method, event.params, event.sessionId);
-				}
-				entry.pendingEvents.length = 0;
-				entry.pendingEventBytes = 0;
-			} else {
-				contents.debugger.attach("1.3");
-			}
+			contents.debugger.attach("1.3");
 			rendererClients.set(webContentsId, entry);
 			if (disposed || socket.destroyed) {
 				await releaseRenderer(
@@ -234,10 +184,10 @@ async (token) => {
 					disposed ? "renderer bridge was disposed during attachment" : "renderer socket closed during attachment",
 				);
 			}
-			return entry;
+			return { entry, stolen };
 		} catch (error) {
 			removeDebuggerListeners(entry);
-			if (!borrowed && !contents.isDestroyed() && contents.debugger.isAttached()) {
+			if (!contents.isDestroyed() && contents.debugger.isAttached()) {
 				contents.debugger.detach();
 			}
 			throw error;
@@ -305,15 +255,16 @@ async (token) => {
 						return;
 					}
 					if (frame.role === "renderer" && Number.isInteger(frame.webContentsId)) {
-						const attachment = attachRenderer(socket, frame.webContentsId);
+						const attachment = attachRenderer(socket, frame.webContentsId, frame.force === true);
 						pendingAttachments.add(attachment);
 						try {
-							rendererEntry = await attachment;
+							const result = await attachment;
+							rendererEntry = result.entry;
+							writeFrame(socket, { ready: true, stolen: result.stolen });
 						} finally {
 							pendingAttachments.delete(attachment);
 						}
 						pendingSockets.delete(socket);
-						writeFrame(socket, { ready: true });
 						return;
 					}
 					throw new Error("invalid renderer bridge handshake");
