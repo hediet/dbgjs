@@ -214,6 +214,8 @@ async fn bridge(
 struct ActiveScope {
     page: PlaywrightPageScope,
     sessions: HashSet<String>,
+    browser_broker_sessions: HashSet<String>,
+    primary_session_id: Option<String>,
 }
 
 impl ActiveScope {
@@ -221,6 +223,8 @@ impl ActiveScope {
         Self {
             page,
             sessions: HashSet::new(),
+            browser_broker_sessions: HashSet::new(),
+            primary_session_id: None,
         }
     }
 
@@ -262,10 +266,12 @@ fn client_request(
     }
     let session = object.get("sessionId").and_then(Value::as_str);
 
-    let policy = if session.is_some() {
-        session_method_policy(&method)
-    } else {
-        root_method_policy(&method)
+    let policy = match session {
+        Some(session_id) if scope.browser_broker_sessions.contains(session_id) => {
+            browser_broker_method_policy(&method)
+        }
+        Some(_) => session_method_policy(&method),
+        None => root_method_policy(&method),
     };
     match policy {
         MethodPolicy::Deny => scope_error(
@@ -320,7 +326,9 @@ fn forward_request(
 
 fn root_method_policy(method: &str) -> MethodPolicy {
     match method {
-        "Browser.getVersion" | "Target.getTargets" => MethodPolicy::Forward,
+        "Browser.getVersion" | "Target.getTargets" | "Target.attachToBrowserTarget" => {
+            MethodPolicy::Forward
+        }
         "Target.getTargetInfo" => MethodPolicy::RewriteSelectedTarget,
         "Target.attachToTarget" | "Target.activateTarget" | "Target.closeTarget" => {
             MethodPolicy::RequireSelectedTarget
@@ -330,6 +338,14 @@ fn root_method_policy(method: &str) -> MethodPolicy {
         "Browser.setDownloadBehavior" | "Browser.setWindowBounds" | "Target.setDiscoverTargets" => {
             MethodPolicy::SyntheticSuccess
         }
+        _ => MethodPolicy::Deny,
+    }
+}
+
+fn browser_broker_method_policy(method: &str) -> MethodPolicy {
+    match method {
+        "Target.attachToTarget" => MethodPolicy::RequireSelectedTarget,
+        "Target.detachFromTarget" => MethodPolicy::Forward,
         _ => MethodPolicy::Deny,
     }
 }
@@ -481,6 +497,15 @@ fn upstream_message(
                     .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
                 scope.sessions.insert(session_id.to_owned());
             }
+            "Target.attachToBrowserTarget" => {
+                let session_id = object
+                    .get("result")
+                    .and_then(|result| result.get("sessionId"))
+                    .and_then(Value::as_str)
+                    .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+                scope.sessions.insert(session_id.to_owned());
+                scope.browser_broker_sessions.insert(session_id.to_owned());
+            }
             _ => {}
         }
         return Ok(UpstreamAction::Forward(json_message(value)?));
@@ -501,6 +526,11 @@ fn upstream_message(
         let target_info = params
             .get("targetInfo")
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+        if target_info.get("type").and_then(Value::as_str) == Some("browser") {
+            scope.sessions.insert(session_id.to_owned());
+            scope.browser_broker_sessions.insert(session_id.to_owned());
+            return Ok(UpstreamAction::Drop);
+        }
         if target_info_id(target_info) == Some(&scope.page.target_id) {
             validate_target_info(target_info, &scope.page)?;
             scope.sessions.insert(session_id.to_owned());
@@ -514,10 +544,15 @@ fn upstream_message(
             .and_then(|params| params.get("sessionId"))
             .and_then(Value::as_str)
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        return Ok(if scope.sessions.remove(session_id) {
+        if !scope.sessions.remove(session_id) {
+            return Ok(UpstreamAction::Drop);
+        }
+        scope.browser_broker_sessions.remove(session_id);
+        return Ok(if scope.primary_session_id.as_deref() == Some(session_id) {
+            scope.primary_session_id = None;
             UpstreamAction::ForwardAndClose(json_message(value)?)
         } else {
-            UpstreamAction::Drop
+            UpstreamAction::Forward(json_message(value)?)
         });
     }
     if matches!(method, "Target.targetCreated" | "Target.targetInfoChanged") {
@@ -552,6 +587,9 @@ fn upstream_message(
     if !scope.sessions.contains(session_id) {
         return Ok(UpstreamAction::Drop);
     }
+    if scope.browser_broker_sessions.contains(session_id) {
+        return Ok(UpstreamAction::Drop);
+    }
     Ok(UpstreamAction::Forward(json_message(value)?))
 }
 
@@ -575,6 +613,7 @@ fn internal_response(
                 .and_then(Value::as_str)
             {
                 scope.sessions.insert(session_id.to_owned());
+                scope.primary_session_id = Some(session_id.to_owned());
             }
             Ok(UpstreamAction::Reply(json_message(json!({
                 "id": request_id,
@@ -785,6 +824,7 @@ mod tests {
     fn scope() -> ActiveScope {
         let mut scope = ActiveScope::new(page());
         scope.sessions.insert("selected-session".to_owned());
+        scope.primary_session_id = Some("selected-session".to_owned());
         scope
     }
 
@@ -909,6 +949,165 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(action, UpstreamAction::ForwardAndClose(_)));
+    }
+
+    #[test]
+    fn auxiliary_session_detachment_keeps_the_proxy_open() {
+        let mut scope = scope();
+        scope.sessions.insert("auxiliary-session".to_owned());
+        let action = upstream_message(
+            text(json!({
+                "method": "Target.detachedFromTarget",
+                "params": {
+                    "sessionId": "auxiliary-session",
+                    "targetId": "selected"
+                }
+            })),
+            &mut scope,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(action, UpstreamAction::Forward(_)));
+        assert!(!scope.sessions.contains("auxiliary-session"));
+        assert!(scope.sessions.contains("selected-session"));
+        assert_eq!(
+            scope.primary_session_id.as_deref(),
+            Some("selected-session")
+        );
+        let continued = client_request(
+            text(json!({
+                "id": 7,
+                "method": "Runtime.evaluate",
+                "sessionId": "selected-session",
+                "params": { "expression": "document.title" }
+            })),
+            &scope,
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(continued, ClientAction::Forward(_)));
+    }
+
+    #[test]
+    fn primary_session_detachment_closes_the_proxy() {
+        let mut scope = scope();
+        let action = upstream_message(
+            text(json!({
+                "method": "Target.detachedFromTarget",
+                "params": {
+                    "sessionId": "selected-session",
+                    "targetId": "selected"
+                }
+            })),
+            &mut scope,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(action, UpstreamAction::ForwardAndClose(_)));
+        assert!(scope.primary_session_id.is_none());
+    }
+
+    #[test]
+    fn browser_broker_can_only_attach_the_selected_target() {
+        let mut scope = scope();
+        scope.sessions.insert("browser-broker".to_owned());
+        scope
+            .browser_broker_sessions
+            .insert("browser-broker".to_owned());
+
+        let denied = client_response(
+            client_request(
+                text(json!({
+                    "id": 4,
+                    "method": "Runtime.evaluate",
+                    "sessionId": "browser-broker",
+                    "params": { "expression": "1" }
+                })),
+                &scope,
+                &mut HashMap::new(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            denied["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("allowlist")
+        );
+
+        let allowed = client_request(
+            text(json!({
+                "id": 5,
+                "method": "Target.attachToTarget",
+                "sessionId": "browser-broker",
+                "params": { "targetId": "selected", "flatten": true }
+            })),
+            &scope,
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(allowed, ClientAction::Forward(_)));
+    }
+
+    #[test]
+    fn browser_broker_session_is_tracked_separately() {
+        let mut scope = scope();
+        let mut pending = HashMap::from([(
+            "6".to_owned(),
+            PendingRequest {
+                method: "Target.attachToBrowserTarget".to_owned(),
+            },
+        )]);
+        let action = upstream_message(
+            text(json!({
+                "id": 6,
+                "result": { "sessionId": "browser-broker" }
+            })),
+            &mut scope,
+            &mut pending,
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(action, UpstreamAction::Forward(_)));
+        assert!(scope.sessions.contains("browser-broker"));
+        assert!(scope.browser_broker_sessions.contains("browser-broker"));
+        assert_eq!(
+            scope.primary_session_id.as_deref(),
+            Some("selected-session")
+        );
+    }
+
+    #[test]
+    fn browser_broker_attachment_is_hidden_from_the_client() {
+        let mut scope = scope();
+        let action = upstream_message(
+            text(json!({
+                "method": "Target.attachedToTarget",
+                "params": {
+                    "sessionId": "browser-broker",
+                    "targetInfo": {
+                        "targetId": "browser-target",
+                        "type": "browser",
+                        "title": "",
+                        "url": ""
+                    },
+                    "waitingForDebugger": false
+                }
+            })),
+            &mut scope,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(action, UpstreamAction::Drop));
+        assert!(scope.sessions.contains("browser-broker"));
+        assert!(scope.browser_broker_sessions.contains("browser-broker"));
     }
 
     #[tokio::test]

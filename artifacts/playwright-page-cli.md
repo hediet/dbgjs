@@ -10,24 +10,24 @@ Context playwright-e2e  rev 1
 ```
 
 ```console
-$ jsdbg connection add ws://127.0.0.1:45229/devtools/browser/0b026440-c0bb-4d28-a042-4455dafa8466 --context :playwright-e2e --connection browser --connect
+$ jsdbg connection add ws://127.0.0.1:43223/devtools/browser/f14dcd6f-457f-426f-af2b-a59e6071fb46 --context :playwright-e2e --connection browser --connect
 Context playwright-e2e  rev 4
   Name: playwright-e2e
   Connections:
     browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]
-      Configuration: direct CDP at ws://127.0.0.1:45229/devtools/browser/0b026440-c0bb-4d28-a042-4455dafa8466
+      Configuration: direct CDP at ws://127.0.0.1:43223/devtools/browser/f14dcd6f-457f-426f-af2b-a59e6071fb46
       Targets:
-        jsdbg Playwright E2E  jsdbg Playwright E2E  http://127.0.0.1:33357/  [a CDP client is attached]
         unrelated owner page  unrelated owner page  about:blank  [a CDP client is attached]
+        jsdbg Playwright E2E  jsdbg Playwright E2E  http://127.0.0.1:38935/  [a CDP client is attached]
 ```
 
 ```console
-$ jsdbg page playwright --eval "await page.mouse.wheel(0, 800)" --context :playwright-e2e --connection browser --target CA13CA948E4043DCC81C7347F1D37803
+$ jsdbg page playwright --eval "await page.mouse.wheel(0, 800)" --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926
 
 ```
 
 ```console
-$ jsdbg page playwright --eval "return { title: await page.title(), scrollY: await page.evaluate(() => scrollY) };" --context :playwright-e2e --connection browser --target CA13CA948E4043DCC81C7347F1D37803
+$ jsdbg page playwright --eval "return { title: await page.title(), scrollY: await page.evaluate(() => scrollY) };" --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926
 {
   "title": "jsdbg Playwright E2E",
   "scrollY": 800
@@ -35,17 +35,25 @@ $ jsdbg page playwright --eval "return { title: await page.title(), scrollY: awa
 ```
 
 ```console
-$ jsdbg page playwright - --context :playwright-e2e --connection browser --target CA13CA948E4043DCC81C7347F1D37803 <<'JS'
+$ jsdbg page playwright - --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926 <<'JS'
 return { url: page.url(), marker: await page.locator("#marker").textContent() };
 JS
 {
-  "url": "http://127.0.0.1:33357/",
+  "url": "http://127.0.0.1:38935/",
   "marker": "selected page"
 }
 ```
 
 ```console
-$ jsdbg page playwright --eval "async function rejection(operation) {\n\t\t\t\t\t\ttry { await operation(); return null; } catch (error) { return error.message; }\n\t\t\t\t\t}\n\t\t\t\t\treturn {\n\t\t\t\t\t\tnewPage: await rejection(() => page.context().newPage()),\n\t\t\t\t\t\tnewContext: await rejection(() => page.context().browser().newContext()),\n\t\t\t\t\t\tclearCookies: await rejection(() => page.context().clearCookies()),\n\t\t\t\t\t};" --context :playwright-e2e --connection browser --target CA13CA948E4043DCC81C7347F1D37803
+$ jsdbg page playwright --eval "const session = await page.context().newCDPSession(page);\n\t\t\t\tconst evaluation = await session.send(\"Runtime.evaluate\", {\n\t\t\t\t\texpression: \"document.title\",\n\t\t\t\t\treturnByValue: true,\n\t\t\t\t});\n\t\t\t\tawait session.detach();\n\t\t\t\treturn {\n\t\t\t\t\tauxiliarySessionTitle: evaluation.result.value,\n\t\t\t\t\tpageTitleAfterDetach: await page.title(),\n\t\t\t\t};" --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926
+{
+  "auxiliarySessionTitle": "jsdbg Playwright E2E",
+  "pageTitleAfterDetach": "jsdbg Playwright E2E"
+}
+```
+
+```console
+$ jsdbg page playwright --eval "async function rejection(operation) {\n\t\t\t\t\t\ttry { await operation(); return null; } catch (error) { return error.message; }\n\t\t\t\t\t}\n\t\t\t\t\treturn {\n\t\t\t\t\t\tnewPage: await rejection(() => page.context().newPage()),\n\t\t\t\t\t\tnewContext: await rejection(() => page.context().browser().newContext()),\n\t\t\t\t\t\tclearCookies: await rejection(() => page.context().clearCookies()),\n\t\t\t\t\t};" --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926
 {
   "newPage": "browserContext.newPage: Protocol error (Target.createTarget): CDP method 'Target.createTarget' is outside the selected page allowlist",
   "newContext": "browser.newContext: Protocol error (Target.createBrowserContext): CDP method 'Target.createBrowserContext' is outside the selected page allowlist",
@@ -54,10 +62,10 @@ $ jsdbg page playwright --eval "async function rejection(operation) {\n\t\t\t\t\
 ```
 
 ```console
-$ jsdbg page playwright --eval "<pending page.evaluate>" --context :playwright-e2e --connection browser --target CA13CA948E4043DCC81C7347F1D37803
+$ jsdbg page playwright --eval "<pending page.evaluate>" --context :playwright-e2e --connection browser --target DADB0FB160C1ED5F48ADFDFE808D0926
 jsdbg: page.evaluate: Target page, context or browser has been closed
     at eval (<anonymous>:3:12)
     at main (<worktree>/[eval1]:31:49)
 ```
 
-Browser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.
+Detaching an auxiliary CDP session left the page proxy usable. Browser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.

@@ -123,6 +123,29 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			marker: "selected page",
 		});
 		expect(await page.title()).toBe("jsdbg Playwright E2E");
+		const detachedSession = await runCli(
+			[
+				"page",
+				"playwright",
+				"--eval",
+				`const session = await page.context().newCDPSession(page);
+				const evaluation = await session.send("Runtime.evaluate", {
+					expression: "document.title",
+					returnByValue: true,
+				});
+				await session.detach();
+				return {
+					auxiliarySessionTitle: evaluation.result.value,
+					pageTitleAfterDetach: await page.title(),
+				};`,
+				...scope,
+			],
+			environment,
+		);
+		expect(JSON.parse(detachedSession)).toEqual({
+			auxiliarySessionTitle: "jsdbg Playwright E2E",
+			pageTitleAfterDetach: "jsdbg Playwright E2E",
+		});
 		const rejected = JSON.parse(
 			await runCli(
 				[
@@ -177,7 +200,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 		expect(await unrelatedPage.title()).toBe("unrelated owner page");
 		await appendFile(
 			transcriptPath,
-			"\nBrowser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.\n",
+			"\nDetaching an auxiliary CDP session left the page proxy usable. Browser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.\n",
 		);
 	} finally {
 		await run(cli, ["service", "stop"], environment);
