@@ -5971,25 +5971,29 @@ mod tests {
                 source_url: "app.ts".into(),
                 position: Position::ZERO,
                 condition: None,
+                friendly_candidate_selected: false,
                 pending_mappings: Arc::new(BTreeMap::new()),
-                assessments: Arc::new(BTreeMap::from([(
-                    script,
-                    BreakpointAssessment {
-                        script_version: 1,
-                        status: BreakpointAssessmentStatus::Applicable {
-                            candidate: BreakpointSourceCandidate {
-                                source_url: "app.ts".into(),
-                                content,
+                assessments: Arc::new(
+                    BTreeMap::from([(
+                        script,
+                        BreakpointAssessment {
+                            script_version: 1,
+                            status: BreakpointAssessmentStatus::Applicable {
+                                candidate: BreakpointSourceCandidate {
+                                    source_url: "app.ts".into(),
+                                    content,
+                                },
+                                mappings: Arc::new(vec![BreakpointMapping {
+                                    generated_position: new_position,
+                                    quality: "exact".into(),
+                                    generated_url: "bundle.js".into(),
+                                    projection: vec!["source map".into()],
+                                }]),
                             },
-                            mappings: Arc::new(vec![BreakpointMapping {
-                                generated_position: new_position,
-                                quality: "exact".into(),
-                                generated_url: "bundle.js".into(),
-                                projection: vec!["source map".into()],
-                            }]),
                         },
-                    },
-                )])),
+                    )])
+                    .into(),
+                ),
                 bindings: Arc::new(BTreeMap::from([
                     (
                         old_physical,
@@ -6134,30 +6138,34 @@ mod tests {
                 source_url: "app.ts".into(),
                 position: Position::ZERO,
                 condition: None,
+                friendly_candidate_selected: false,
                 pending_mappings: Arc::new(
                     pending_mapping
                         .map(|effect_id| BTreeMap::from([(candidate_script.clone(), effect_id)]))
                         .unwrap_or_default(),
                 ),
-                assessments: Arc::new(BTreeMap::from([
-                    (
-                        failed_script.clone(),
-                        BreakpointAssessment {
-                            script_version: 1,
-                            status: BreakpointAssessmentStatus::Applicable {
-                                candidate: candidate(&failed_script),
-                                mappings: mapping(failed_position),
+                assessments: Arc::new(
+                    BTreeMap::from([
+                        (
+                            failed_script.clone(),
+                            BreakpointAssessment {
+                                script_version: 1,
+                                status: BreakpointAssessmentStatus::Applicable {
+                                    candidate: candidate(&failed_script),
+                                    mappings: mapping(failed_position),
+                                },
                             },
-                        },
-                    ),
-                    (
-                        candidate_script,
-                        BreakpointAssessment {
-                            script_version: 1,
-                            status: candidate_status,
-                        },
-                    ),
-                ])),
+                        ),
+                        (
+                            candidate_script,
+                            BreakpointAssessment {
+                                script_version: 1,
+                                status: candidate_status,
+                            },
+                        ),
+                    ])
+                    .into(),
+                ),
                 bindings: Arc::new(bindings),
             }),
         );
