@@ -68,6 +68,98 @@ pub struct DebuggerService {
     persistence_path: PathBuf,
     shutdown: watch::Sender<bool>,
     revision_signal: watch::Sender<u64>,
+    capture_storage: CaptureStorage,
+}
+
+#[derive(Clone, Default)]
+struct CaptureStorage {
+    #[cfg(test)]
+    hooks: Arc<CaptureStorageTestHooks>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct CaptureStorageTestHooks {
+    fail_next_sync: AtomicBool,
+    fail_next_parent_sync: AtomicBool,
+    pause_next_remove: AtomicBool,
+    fail_next_remove: AtomicBool,
+    remove_started: tokio::sync::Notify,
+    continue_remove: tokio::sync::Notify,
+}
+
+impl CaptureStorage {
+    fn sync_file(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        if self.hooks.fail_next_sync.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other(
+                "injected capture storage sync failure",
+            ));
+        }
+        fs::File::open(path)?.sync_all()
+    }
+
+    fn sync_parent(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        if self
+            .hooks
+            .fail_next_parent_sync
+            .swap(false, Ordering::SeqCst)
+            || self.hooks.fail_next_sync.swap(false, Ordering::SeqCst)
+        {
+            return Err(std::io::Error::other(
+                "injected capture storage sync failure",
+            ));
+        }
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    async fn remove_for_delete(&self, path: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        if self.hooks.pause_next_remove.swap(false, Ordering::SeqCst) {
+            self.hooks.remove_started.notify_one();
+            self.hooks.continue_remove.notified().await;
+        }
+        #[cfg(test)]
+        if self.hooks.fail_next_remove.swap(false, Ordering::SeqCst) {
+            return Err(std::io::Error::other(
+                "injected capture storage deletion failure",
+            ));
+        }
+        remove_capture_payload_file(path)
+    }
+
+    #[cfg(test)]
+    fn fail_next_sync(&self) {
+        self.hooks.fail_next_sync.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn fail_next_parent_sync(&self) {
+        self.hooks
+            .fail_next_parent_sync
+            .store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn pause_next_remove_with_failure(&self) {
+        self.hooks.pause_next_remove.store(true, Ordering::SeqCst);
+        self.hooks.fail_next_remove.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    async fn wait_for_remove(&self) {
+        self.hooks.remove_started.notified().await;
+    }
+
+    #[cfg(test)]
+    fn continue_remove(&self) {
+        self.hooks.continue_remove.notify_one();
+    }
 }
 
 impl DebuggerService {
@@ -85,6 +177,7 @@ impl DebuggerService {
             persistence_path,
             shutdown,
             revision_signal,
+            capture_storage: CaptureStorage::default(),
         })
     }
 
@@ -570,6 +663,7 @@ struct ServiceState {
 struct CaptureReservation {
     metadata: CaptureSnapshot,
     completed: Option<CompletedCapture>,
+    deleting: bool,
 }
 
 #[derive(Clone)]
@@ -586,6 +680,53 @@ struct PromotedCapture {
 struct CaptureReservationGuard {
     service: DebuggerService,
     reservation: CaptureReservation,
+}
+
+struct CaptureDeletionGuard {
+    service: DebuggerService,
+    key: (String, String),
+    storage_id: String,
+    armed: bool,
+}
+
+impl CaptureDeletionGuard {
+    fn new(service: DebuggerService, key: (String, String), storage_id: String) -> Self {
+        Self {
+            service,
+            key,
+            storage_id,
+            armed: true,
+        }
+    }
+
+    async fn restore(&mut self) {
+        self.service
+            .restore_failed_capture_deletion(&self.key, &self.storage_id)
+            .await;
+        self.armed = false;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CaptureDeletionGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let service = self.service.clone();
+        let key = self.key.clone();
+        let storage_id = self.storage_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                service
+                    .restore_failed_capture_deletion(&key, &storage_id)
+                    .await;
+            });
+        }
+    }
 }
 
 impl CaptureReservationGuard {
@@ -729,17 +870,31 @@ fn write_capture_payload(
     metadata: &CaptureSnapshot,
     payload: &CapturePayload,
 ) -> Result<CapturePayloadReference, ServicePersistenceError> {
+    write_capture_payload_with_storage(
+        persistence_path,
+        metadata,
+        payload,
+        &CaptureStorage::default(),
+    )
+}
+
+fn write_capture_payload_with_storage(
+    persistence_path: &Path,
+    metadata: &CaptureSnapshot,
+    payload: &CapturePayload,
+    storage: &CaptureStorage,
+) -> Result<CapturePayloadReference, ServicePersistenceError> {
     match (metadata.kind, payload) {
         (CaptureKind::Coverage, CapturePayload::Coverage(snapshot)) => {
             let bytes = serde_json::to_vec(snapshot)?;
             let (staging, final_path) = capture_payload_paths_for(persistence_path, metadata);
-            write_atomic_payload_file(&staging, &final_path, &bytes)?;
+            write_atomic_payload_file(storage, &staging, &final_path, &bytes)?;
             Ok(payload_reference_from_bytes(final_path, &bytes))
         }
         (CaptureKind::CpuProfile, CapturePayload::CpuProfile(snapshot)) => {
             let bytes = serde_json::to_vec(snapshot)?;
             let (staging, final_path) = capture_payload_paths_for(persistence_path, metadata);
-            write_atomic_payload_file(&staging, &final_path, &bytes)?;
+            write_atomic_payload_file(storage, &staging, &final_path, &bytes)?;
             Ok(payload_reference_from_bytes(final_path, &bytes))
         }
         (CaptureKind::HeapSnapshot, CapturePayload::HeapSnapshot { path }) => {
@@ -752,6 +907,7 @@ fn write_capture_payload(
 }
 
 fn write_atomic_payload_file(
+    storage: &CaptureStorage,
     staging_path: &Path,
     final_path: &Path,
     bytes: &[u8],
@@ -763,6 +919,8 @@ fn write_atomic_payload_file(
     if final_path.exists() {
         let existing = payload_reference_from_file(final_path)?;
         if existing.byte_len == expected.byte_len && existing.sha256 == expected.sha256 {
+            storage.sync_file(final_path)?;
+            storage.sync_parent(final_path)?;
             return Ok(());
         }
         return Err(ServicePersistenceError::CapturePayload(format!(
@@ -773,14 +931,20 @@ fn write_atomic_payload_file(
     let mut file = AtomicWriteFile::open(staging_path)?;
     file.write_all(bytes)?;
     file.commit()?;
+    storage.sync_file(staging_path)?;
     match fs::rename(staging_path, final_path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            storage.sync_parent(final_path)?;
+            Ok(())
+        }
         Err(rename_error) => {
             let published = payload_reference_from_file(final_path).is_ok_and(|existing| {
                 existing.byte_len == expected.byte_len && existing.sha256 == expected.sha256
             });
             let _ = remove_capture_payload_file(staging_path);
             if published {
+                storage.sync_file(final_path)?;
+                storage.sync_parent(final_path)?;
                 Ok(())
             } else {
                 Err(rename_error.into())
@@ -2571,6 +2735,12 @@ impl DebuggerServiceApi for DebuggerService {
             if let Some(capture) = state.captures.get(&key).cloned() {
                 (capture, false)
             } else if let Some(reservation) = state.capture_reservations.get(&key) {
+                if reservation.deleting {
+                    return Err(invalid_state(&format!(
+                        "capture '{capture_name}' is currently being deleted from context '{}'",
+                        key.0
+                    )));
+                }
                 let Some(completed) = &reservation.completed else {
                     return Err(invalid_state(&format!(
                         "capture '{capture_name}' is currently being stored in context '{}'",
@@ -2600,6 +2770,11 @@ impl DebuggerServiceApi for DebuggerService {
             })
             .cloned();
         if completed_reservation {
+            state
+                .capture_reservations
+                .get_mut(&key)
+                .expect("completed capture reservation disappeared while locked")
+                .deleting = true;
             drop(state);
         } else {
             let previous = state.clone();
@@ -2607,19 +2782,34 @@ impl DebuggerServiceApi for DebuggerService {
             self.persist_or_restore(&mut state, previous)?;
             drop(state);
         }
+        let mut deletion_guard = completed_reservation
+            .then(|| CaptureDeletionGuard::new(self.clone(), key.clone(), storage_id.clone()));
         if let Some(debugger) = debugger {
-            debugger
-                .delete_stored_capture(capture_name.clone())
-                .await
-                .map_err(target_debugger_rpc_error)?;
+            if let Err(error) = debugger.delete_stored_capture(capture_name.clone()).await {
+                if let Some(guard) = &mut deletion_guard {
+                    guard.restore().await;
+                }
+                return Err(target_debugger_rpc_error(error));
+            }
         }
         let payload_path = capture.payload_path();
-        remove_capture_payload_file(&payload_path).map_err(|error| {
-            internal_error(format!(
+        if let Err(error) = self.capture_storage.remove_for_delete(&payload_path).await {
+            if completed_reservation {
+                deletion_guard
+                    .as_mut()
+                    .expect("completed capture deletion guard is missing")
+                    .restore()
+                    .await;
+                return Err(internal_error(format!(
+                    "failed to discard completed capture '{capture_name}'; its payload '{}' and retryable reservation were retained: {error}",
+                    payload_path.display()
+                )));
+            }
+            return Err(internal_error(format!(
                 "capture '{capture_name}' was removed from the catalog but its payload '{}' could not be deleted and will be retried during startup cleanup: {error}",
                 payload_path.display()
-            ))
-        })?;
+            )));
+        }
         if completed_reservation {
             let mut state = self.state.lock().await;
             if state.capture_reservations.get(&key).is_some_and(|current| {
@@ -2627,6 +2817,10 @@ impl DebuggerServiceApi for DebuggerService {
             }) {
                 state.capture_reservations.remove(&key);
             }
+            deletion_guard
+                .as_mut()
+                .expect("completed capture deletion guard is missing")
+                .disarm();
         }
         Ok(true)
     }
@@ -3947,11 +4141,25 @@ impl DebuggerServiceApi for DebuggerService {
             remove_capture_payload_files([staging_path]);
             return Err(error);
         }
+        if let Err(error) = self.capture_storage.sync_file(&staging_path) {
+            self.abandon_capture(&reservation.reservation).await;
+            remove_capture_payload_files([staging_path]);
+            return Err(internal_error(format!(
+                "failed to synchronize heap capture storage before publication: {error}"
+            )));
+        }
         if let Err(error) = fs::rename(&staging_path, &final_path) {
             self.abandon_capture(&reservation.reservation).await;
             remove_capture_payload_files([staging_path, final_path]);
             return Err(internal_error(format!(
                 "failed to publish heap capture storage: {error}"
+            )));
+        }
+        if let Err(error) = self.capture_storage.sync_parent(&final_path) {
+            self.abandon_capture(&reservation.reservation).await;
+            remove_capture_payload_files([final_path]);
+            return Err(internal_error(format!(
+                "failed to synchronize heap capture storage publication: {error}"
             )));
         }
         if let Err(error) = self
@@ -4177,6 +4385,11 @@ impl DebuggerService {
             else {
                 return Ok(None);
             };
+            if reservation.deleting {
+                return Err(invalid_state(&format!(
+                    "capture '{name}' is currently being deleted from context '{context_id}'"
+                )));
+            }
             let Some(completed) = reservation.completed.as_ref() else {
                 return Ok(None);
             };
@@ -4223,6 +4436,11 @@ impl DebuggerService {
             )));
         }
         if let Some(existing) = state.capture_reservations.get(&key) {
+            if existing.deleting {
+                return Err(invalid_state(&format!(
+                    "capture '{name}' is currently being deleted from context '{context_id}'"
+                )));
+            }
             if existing.completed.is_some() {
                 if existing.metadata.connection_id == connection_id
                     && existing.metadata.target_id == target_id
@@ -4282,6 +4500,7 @@ impl DebuggerService {
         let reservation = CaptureReservation {
             metadata,
             completed: None,
+            deleting: false,
         };
         state.capture_reservations.insert(key, reservation.clone());
         Ok(reservation)
@@ -4320,8 +4539,13 @@ impl DebuggerService {
                 ));
             }
         }
-        let payload = write_capture_payload(&self.persistence_path, metadata, &payload)
-            .map_err(capture_payload_rpc_error)?;
+        let payload = write_capture_payload_with_storage(
+            &self.persistence_path,
+            metadata,
+            &payload,
+            &self.capture_storage,
+        )
+        .map_err(capture_payload_rpc_error)?;
         let completed = CompletedCapture {
             payload,
             heap_result,
@@ -4373,14 +4597,15 @@ impl DebuggerService {
         let key = (metadata.context_id.clone(), metadata.name.clone());
         let mut state = self.state.lock().await;
         if state.capture_reservations.get(&key).is_none_or(|current| {
-            current.metadata.storage_id != metadata.storage_id
+            current.deleting
+                || current.metadata.storage_id != metadata.storage_id
                 || current.completed.as_ref().is_none_or(|current| {
                     current.payload.path != completed.payload.path
                         || current.payload.sha256 != completed.payload.sha256
                 })
         }) {
             return Err(invalid_state(
-                "completed capture reservation is no longer current",
+                "completed capture reservation is no longer current or is being deleted",
             ));
         }
         let previous = state.clone();
@@ -4394,6 +4619,16 @@ impl DebuggerService {
         );
         self.persist_or_restore(&mut state, previous)?;
         Ok(metadata.clone())
+    }
+
+    async fn restore_failed_capture_deletion(&self, key: &(String, String), storage_id: &str) {
+        let mut state = self.state.lock().await;
+        if let Some(reservation) = state.capture_reservations.get_mut(key)
+            && reservation.metadata.storage_id == storage_id
+            && reservation.deleting
+        {
+            reservation.deleting = false;
+        }
     }
 
     async fn abandon_capture(&self, reservation: &CaptureReservation) -> bool {
@@ -5852,6 +6087,7 @@ mod tests {
             persistence_path: path,
             shutdown,
             revision_signal,
+            capture_storage: CaptureStorage::default(),
         }
     }
 
@@ -6432,6 +6668,242 @@ mod tests {
             .unwrap();
         assert!(!final_path.exists());
         assert!(service.state.lock().await.capture_reservations.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn completed_capture_delete_blocks_promotion_and_restores_after_failure() {
+        let (root, blocker, service) = capture_retry_service("capture-delete-promote-race");
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "coverage".into(),
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 42,
+            sources: Vec::new(),
+            analysis: None,
+        };
+        assert!(
+            service
+                .store_capture(&reservation, CapturePayload::Coverage(snapshot.clone()))
+                .await
+                .is_err()
+        );
+        let (completed_reservation, completed) = {
+            let state = service.state.lock().await;
+            let reservation =
+                state.capture_reservations[&("test".to_owned(), "coverage".to_owned())].clone();
+            let completed = reservation.completed.as_ref().unwrap().clone();
+            (reservation, completed)
+        };
+        let payload_path = completed.payload.path.clone();
+
+        service.capture_storage.pause_next_remove_with_failure();
+        let deleting_service = service.clone();
+        let deletion = tokio::spawn(async move {
+            deleting_service
+                .delete_capture(&CallCtx::default(), "test".into(), "coverage".into())
+                .await
+        });
+        service.capture_storage.wait_for_remove().await;
+        assert!(
+            service.state.lock().await.capture_reservations
+                [&("test".to_owned(), "coverage".to_owned())]
+                .deleting
+        );
+
+        let commit = service
+            .commit_completed_capture(&completed_reservation, &completed)
+            .await;
+        let Err(commit_error) = commit else {
+            panic!("completed capture committed during deletion");
+        };
+        assert!(
+            commit_error.message.contains("being deleted"),
+            "{commit_error:?}"
+        );
+        let promotion = service
+            .promote_completed_capture(
+                "test",
+                "runtime",
+                "target-a",
+                "coverage",
+                CaptureKind::Coverage,
+            )
+            .await;
+        let Err(promotion_error) = promotion else {
+            panic!("capture promotion succeeded during deletion");
+        };
+        assert!(
+            promotion_error.message.contains("currently being deleted"),
+            "{promotion_error:?}"
+        );
+        let retry = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "coverage".into(),
+                CaptureKind::Coverage,
+            )
+            .await;
+        let Err(retry_error) = retry else {
+            panic!("capture retry reserved the name during deletion");
+        };
+        assert!(
+            retry_error.message.contains("currently being deleted"),
+            "{retry_error:?}"
+        );
+        service.capture_storage.continue_remove();
+        let deletion_error = deletion.await.unwrap().unwrap_err();
+        assert!(
+            deletion_error.message.contains("retryable reservation"),
+            "{deletion_error:?}"
+        );
+        {
+            let state = service.state.lock().await;
+            let reservation =
+                &state.capture_reservations[&("test".to_owned(), "coverage".to_owned())];
+            assert!(!reservation.deleting);
+            assert!(reservation.completed.is_some());
+            assert!(state.captures.is_empty());
+        }
+        assert!(Path::new(&payload_path).exists());
+
+        unblock_capture_persistence(&blocker);
+        let promoted = service
+            .promote_completed_capture(
+                "test",
+                "runtime",
+                "target-a",
+                "coverage",
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            promoted.payload,
+            CapturePayload::Coverage(value) if value == snapshot
+        ));
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, blocker).unwrap();
+        let state = restored.state.lock().await;
+        assert!(matches!(
+            load_stored_capture(
+                &state.captures[&("test".to_owned(), "coverage".to_owned())]
+            ),
+            CapturePayload::Coverage(value) if value == snapshot
+        ));
+        drop(state);
+        drop(restored);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn payload_sync_failure_prevents_catalog_publication_and_retries() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "capture-sync-failure-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let service = service_with_state(persistence_path.clone(), state);
+        let reservation = service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "coverage".into(),
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 42,
+            sources: Vec::new(),
+            analysis: None,
+        };
+        let (staging_path, final_path) =
+            capture_payload_paths_for(&persistence_path, &reservation.metadata);
+
+        service.capture_storage.fail_next_sync();
+        let error = service
+            .store_capture(&reservation, CapturePayload::Coverage(snapshot.clone()))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("injected capture storage sync failure"),
+            "{error:?}"
+        );
+        assert!(staging_path.exists());
+        assert!(!final_path.exists());
+        {
+            let state = service.state.lock().await;
+            assert!(state.captures.is_empty());
+            assert!(
+                state.capture_reservations[&("test".to_owned(), "coverage".to_owned())]
+                    .completed
+                    .is_none()
+            );
+        }
+
+        service.capture_storage.fail_next_parent_sync();
+        let error = service
+            .store_capture(&reservation, CapturePayload::Coverage(snapshot.clone()))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("injected capture storage sync failure"),
+            "{error:?}"
+        );
+        assert!(!staging_path.exists());
+        assert!(final_path.exists());
+        assert!(service.state.lock().await.captures.is_empty());
+
+        service
+            .store_capture(&reservation, CapturePayload::Coverage(snapshot.clone()))
+            .await
+            .unwrap();
+        drop(service);
+
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path).unwrap();
+        assert!(matches!(
+            load_stored_capture(
+                &restored.state.lock().await.captures
+                    [&("test".to_owned(), "coverage".to_owned())]
+            ),
+            CapturePayload::Coverage(value) if value == snapshot
+        ));
+        drop(restored);
         let _ = fs::remove_dir_all(root);
     }
 
