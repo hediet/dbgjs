@@ -16,6 +16,7 @@ use crate::cdp::CdpClient;
 use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, RootCdpEvent};
 use crate::debugger_engine::SessionKey;
 use crate::electron_renderer_transport::ElectronRendererBridge;
+use crate::playwright_proxy::PlaywrightCdpSource;
 use crate::service_api::{ConnectionConfiguration, PlaywrightChannel, TargetSnapshot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -337,6 +338,15 @@ impl ConnectionRuntime {
 
     pub fn is_direct_debugger(&self) -> bool {
         self.direct_debugger
+    }
+
+    pub fn playwright_cdp_source(&self) -> Result<PlaywrightCdpSource, ConnectionProviderError> {
+        if self.direct_debugger {
+            return Err(ConnectionProviderError::PlaywrightRequiresBrowserRoot);
+        }
+        Ok(PlaywrightCdpSource::BrowserRoot {
+            endpoint: self.root_endpoint.clone(),
+        })
     }
 
     pub fn retire_session(&self, session_id: &str) {
@@ -812,7 +822,7 @@ async fn launch_provider<const N: usize>(
     })
 }
 
-fn find_playwright_package() -> Result<PathBuf, ConnectionProviderError> {
+pub fn find_playwright_package() -> Result<PathBuf, ConnectionProviderError> {
     if let Some(path) = env::var_os("JSDBG_PLAYWRIGHT_PACKAGE") {
         let path = PathBuf::from(path);
         if path.is_file() {
@@ -989,6 +999,10 @@ pub enum ConnectionProviderError {
         "Playwright package entrypoint was not found at {0}; install dependencies or set JSDBG_PLAYWRIGHT_PACKAGE"
     )]
     PlaywrightPackageNotFound(PathBuf),
+    #[error(
+        "Playwright currently requires a browser-root CDP connection; direct Node and Electron renderer targets are not yet supported"
+    )]
+    PlaywrightRequiresBrowserRoot,
     #[error("Playwright provider did not expose stdout")]
     MissingProviderStdout,
     #[error("Playwright provider startup timed out")]

@@ -250,6 +250,14 @@ pub struct TargetSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct PlaywrightProxyEndpoint {
+    pub id: String,
+    pub websocket_url: String,
+    pub connection_generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetNodeSnapshot {
     pub connection_id: String,
     pub connection_generation: u64,
@@ -1519,6 +1527,15 @@ pub trait DebuggerServiceApi {
         params: serde_json::Value,
         validate: bool,
     ) -> Result<serde_json::Value, JsonRpcError>;
+
+    async fn open_playwright_proxy(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        expected_generation: u64,
+    ) -> Result<PlaywrightProxyEndpoint, JsonRpcError>;
+
+    async fn close_playwright_proxy(proxy_id: String) -> Result<bool, JsonRpcError>;
 
     async fn inspect_value(
         context_id: String,

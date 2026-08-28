@@ -156,9 +156,12 @@ export function run(command, args, extraEnvironment, options = {}) {
 		const child = spawn(command, args, {
 			cwd: process.cwd(),
 			env: { ...process.env, ...extraEnvironment },
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 		});
+		if (options.input !== undefined) {
+			child.stdin.end(options.input);
+		}
 		let output = "";
 		let timedOut = false;
 		const timer =

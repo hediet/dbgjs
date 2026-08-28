@@ -36,12 +36,12 @@ use crate::service_api::{
     HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
-    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, ProcessTreeSnapshot,
-    PromiseSelectionSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo, SourceContentSnapshot,
-    SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
-    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
-    SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind, TargetDebuggerSnapshot,
-    TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
+    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
+    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo,
+    SourceContentSnapshot, SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot,
+    SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
+    SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind,
+    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
     UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
     VariableSnapshot,
@@ -120,6 +120,12 @@ impl DebuggerService {
                 .is_some_and(|current| Arc::ptr_eq(current, &runtime));
             if is_current_runtime {
                 state.runtimes.remove(&runtime_key);
+                cancel_playwright_proxies(
+                    &mut state,
+                    &context_id,
+                    &connection_id,
+                    Some(generation),
+                );
                 state
                     .target_debuggers
                     .retain(|(candidate_context, candidate_connection, _), _| {
@@ -511,6 +517,15 @@ struct ServiceState {
     target_debuggers: BTreeMap<(String, String, String), TargetDebuggerHandle>,
     history: BTreeMap<String, VecDeque<ContextObservation>>,
     completed_requests: BTreeMap<(String, String), u64>,
+    playwright_proxies: BTreeMap<String, PlaywrightProxyRegistration>,
+}
+
+#[derive(Clone)]
+struct PlaywrightProxyRegistration {
+    context_id: String,
+    connection_id: String,
+    generation: u64,
+    cancel: watch::Sender<bool>,
 }
 
 #[async_trait::async_trait]
@@ -939,6 +954,12 @@ impl DebuggerServiceApi for DebuggerService {
                 .retain(|(candidate_context, candidate_connection, _), _| {
                     candidate_context != &context_id || candidate_connection != &connection_id
                 });
+            cancel_playwright_proxies(
+                &mut state,
+                &context_id,
+                &connection_id,
+                Some(attempt.generation),
+            );
             (runtime, attempt)
         };
 
@@ -2213,6 +2234,123 @@ impl DebuggerServiceApi for DebuggerService {
         result
     }
 
+    async fn open_playwright_proxy(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        expected_generation: u64,
+    ) -> Result<PlaywrightProxyEndpoint, JsonRpcError> {
+        let target_id = self
+            .resolve_target_id(&context_id, &connection_id, &target_id)
+            .await?;
+        let (runtime, source) = {
+            let state = self.state.lock().await;
+            let connection = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?;
+            if connection.generation != expected_generation {
+                return Err(invalid_state(
+                    "selected connection generation is stale; resolve the target again",
+                ));
+            }
+            let target = connection
+                .targets
+                .get(&target_id)
+                .ok_or_else(|| not_found("target", &target_id))?;
+            if target.target_type != "page" {
+                return Err(invalid_params(format!(
+                    "Playwright requires a page target, but '{target_id}' has type '{}'",
+                    target.target_type
+                )));
+            }
+            let runtime = state
+                .runtimes
+                .get(&(context_id.clone(), connection_id.clone()))
+                .cloned()
+                .ok_or_else(|| invalid_state("connection is not connected"))?;
+            let source = runtime
+                .playwright_cdp_source()
+                .map_err(|error| invalid_state(&error.to_string()))?;
+            (runtime, source)
+        };
+
+        let id = random_instance_id().map_err(|error| internal_error(error.to_string()))?;
+        let proxy = crate::playwright_proxy::start(source, target_id.clone(), id.clone())
+            .await
+            .map_err(|error| internal_error(error.to_string()))?;
+        let crate::playwright_proxy::PlaywrightProxy {
+            websocket_url,
+            cancel,
+            completion,
+        } = proxy;
+        {
+            let mut state = self.state.lock().await;
+            let is_current = state
+                .runtimes
+                .get(&(context_id.clone(), connection_id.clone()))
+                .is_some_and(|current| Arc::ptr_eq(current, &runtime))
+                && state
+                    .contexts
+                    .get(&context_id)
+                    .and_then(|context| context.connections.get(&connection_id))
+                    .is_some_and(|connection| {
+                        connection.generation == expected_generation
+                            && connection.targets.contains_key(&target_id)
+                    });
+            if !is_current {
+                cancel.send_replace(true);
+                return Err(invalid_state(
+                    "selected target changed while the Playwright proxy was opening",
+                ));
+            }
+            state.playwright_proxies.insert(
+                id.clone(),
+                PlaywrightProxyRegistration {
+                    context_id: context_id.clone(),
+                    connection_id: connection_id.clone(),
+                    generation: expected_generation,
+                    cancel: cancel.clone(),
+                },
+            );
+        }
+        let service = self.clone();
+        let cleanup_id = id.clone();
+        tokio::spawn(async move {
+            let _ = completion.await;
+            service
+                .state
+                .lock()
+                .await
+                .playwright_proxies
+                .remove(&cleanup_id);
+        });
+        Ok(PlaywrightProxyEndpoint {
+            id,
+            websocket_url,
+            connection_generation: expected_generation,
+        })
+    }
+
+    async fn close_playwright_proxy(
+        &self,
+        _ctx: &CallCtx,
+        proxy_id: String,
+    ) -> Result<bool, JsonRpcError> {
+        let registration = self.state.lock().await.playwright_proxies.remove(&proxy_id);
+        if let Some(registration) = registration {
+            registration.cancel.send_replace(true);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn inspect_value(
         &self,
         _ctx: &CallCtx,
@@ -2691,6 +2829,9 @@ impl DebuggerServiceApi for DebuggerService {
             let runtimes = {
                 let mut state = service.state.lock().await;
                 state.target_debuggers.clear();
+                for registration in std::mem::take(&mut state.playwright_proxies).into_values() {
+                    registration.cancel.send_replace(true);
+                }
                 std::mem::take(&mut state.runtimes)
                     .into_values()
                     .collect::<Vec<_>>()
@@ -2762,6 +2903,23 @@ impl DebuggerService {
             ))),
         }
     }
+}
+
+fn cancel_playwright_proxies(
+    state: &mut ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: Option<u64>,
+) {
+    state.playwright_proxies.retain(|_, registration| {
+        let matches = registration.context_id == context_id
+            && registration.connection_id == connection_id
+            && generation.is_none_or(|generation| registration.generation == generation);
+        if matches {
+            registration.cancel.send_replace(true);
+        }
+        !matches
+    });
 }
 
 async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
@@ -3203,6 +3361,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         target_debuggers: BTreeMap::new(),
         history: BTreeMap::new(),
         completed_requests,
+        playwright_proxies: BTreeMap::new(),
     })
 }
 

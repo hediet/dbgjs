@@ -5,6 +5,7 @@ use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
@@ -26,6 +27,9 @@ use cdp_client::service_api::{
     TargetDebuggerSnapshot, TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command as TokioCommand;
+use tokio::sync::mpsc;
 
 #[path = "jsdbg/bounded_tree.rs"]
 mod bounded_tree;
@@ -39,6 +43,11 @@ use output::{
 };
 
 const DEFAULT_VALUE_PROPERTY_LIMIT: u32 = 20;
+const PLAYWRIGHT_PROGRAM_LIMIT: usize = 1024 * 1024;
+const PLAYWRIGHT_OUTPUT_LIMIT: usize = 1024 * 1024 + 4096;
+const PLAYWRIGHT_ERROR_LIMIT: usize = 64 * 1024;
+const PLAYWRIGHT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.mjs");
 
 #[tokio::main]
 async fn main() {
@@ -216,6 +225,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 )
                 .await)?)?;
+        }
+        [page, playwright, arguments @ ..] if page == "page" && playwright == "playwright" => {
+            let program = read_playwright_program(arguments, io::stdin())?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let context = rpc(client.get_context(scope.context.clone()).await)?;
+            let generation = context
+                .connections
+                .iter()
+                .find(|connection| connection.id == scope.connection)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("connection '{}' no longer exists", scope.connection),
+                    )
+                })?
+                .generation;
+            let proxy = rpc(client
+                .open_playwright_proxy(scope.context, scope.connection, scope.target, generation)
+                .await)?;
+            let result = run_playwright_program(&proxy.websocket_url, &program).await;
+            let _ = client.close_playwright_proxy(proxy.id).await;
+            if let Some(value) = result? {
+                println!("{}", serde_json::to_string_pretty(&value)?);
+            }
         }
         [target, cdp, method, options @ ..] if target == "target" && cdp == "cdp" => {
             let options = parse_raw_cdp_options(options)?;
@@ -2035,8 +2070,8 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
     match (command, operation) {
         (
             Some(
-                "target" | "value" | "coverage" | "profile" | "promise" | "heap" | "screenshot"
-                | "log" | "watch",
+                "target" | "page" | "value" | "coverage" | "profile" | "promise" | "heap"
+                | "screenshot" | "log" | "watch",
             ),
             _,
         )
@@ -4893,6 +4928,217 @@ fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<St
     }
 }
 
+fn read_playwright_program(
+    arguments: &[String],
+    mut stdin: impl Read,
+) -> Result<String, io::Error> {
+    let program = match arguments {
+        [stdin_marker] if stdin_marker == "-" => {
+            let mut bytes = Vec::new();
+            std::io::Read::take(&mut stdin, (PLAYWRIGHT_PROGRAM_LIMIT + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > PLAYWRIGHT_PROGRAM_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Playwright program exceeds the {PLAYWRIGHT_PROGRAM_LIMIT}-byte limit"),
+                ));
+            }
+            String::from_utf8(bytes).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Playwright program on stdin must be UTF-8",
+                )
+            })?
+        }
+        [eval, program] if eval == "--eval" => {
+            if program.len() > PLAYWRIGHT_PROGRAM_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Playwright program exceeds the {PLAYWRIGHT_PROGRAM_LIMIT}-byte limit"),
+                ));
+            }
+            program.clone()
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "page playwright requires '-' for stdin or --eval <program>",
+            ));
+        }
+    };
+    if program.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "page playwright received an empty program",
+        ));
+    }
+    Ok(program)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaywrightProgramResult {
+    ok: bool,
+    #[serde(default)]
+    has_value: bool,
+    #[serde(default)]
+    value: serde_json::Value,
+    error: Option<String>,
+}
+
+async fn run_playwright_program(
+    endpoint: &str,
+    program: &str,
+) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let playwright_package = cdp_client::connection_provider::find_playwright_package()?;
+    let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
+    let mut child = TokioCommand::new(&node)
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(PLAYWRIGHT_PAGE_HELPER)
+        .env("JSDBG_PLAYWRIGHT_ENDPOINT", endpoint)
+        .env("JSDBG_PLAYWRIGHT_PACKAGE", playwright_package)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("failed to start Playwright with {node:?}: {error}"),
+            )
+        })?;
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("Playwright child has no stdin"))?;
+    let program = program.as_bytes().to_vec();
+    let writer = tokio::spawn(async move {
+        child_stdin.write_all(&program).await?;
+        child_stdin.shutdown().await
+    });
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("Playwright child has no stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("Playwright child has no stderr"))?;
+    let (overflow_sender, mut overflow_receiver) = mpsc::channel(1);
+    let stdout_reader = tokio::spawn(read_bounded(
+        stdout,
+        PLAYWRIGHT_OUTPUT_LIMIT,
+        overflow_sender.clone(),
+    ));
+    let stderr_reader = tokio::spawn(read_bounded(
+        stderr,
+        PLAYWRIGHT_ERROR_LIMIT,
+        overflow_sender,
+    ));
+
+    enum Completion {
+        Exited(Result<std::process::ExitStatus, io::Error>),
+        TimedOut,
+        OutputExceeded,
+    }
+    let completion = {
+        let wait = child.wait();
+        tokio::pin!(wait);
+        tokio::select! {
+            status = &mut wait => Completion::Exited(status),
+            _ = tokio::time::sleep(PLAYWRIGHT_EXECUTION_TIMEOUT) => Completion::TimedOut,
+            Some(_) = overflow_receiver.recv() => Completion::OutputExceeded,
+        }
+    };
+    let status = match completion {
+        Completion::Exited(status) => status?,
+        Completion::TimedOut => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "Playwright program exceeded the {}-second limit",
+                    PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs()
+                ),
+            )
+            .into());
+        }
+        Completion::OutputExceeded => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(
+                io::Error::other("Playwright program output exceeded its size limit").into(),
+            );
+        }
+    };
+    writer.await.map_err(io::Error::other)??;
+    let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
+    let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
+    let result: PlaywrightProgramResult =
+        serde_json::from_slice(trim_ascii(&stdout)).map_err(|error| {
+            io::Error::other(format!(
+                "Playwright returned an invalid result: {error}; stderr: {}",
+                String::from_utf8_lossy(&stderr)
+            ))
+        })?;
+    if !result.ok {
+        return Err(io::Error::other(
+            result
+                .error
+                .unwrap_or_else(|| "Playwright program failed".to_owned()),
+        )
+        .into());
+    }
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "Playwright exited with {status}; stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        ))
+        .into());
+    }
+    Ok(result.has_value.then_some(result.value))
+}
+
+async fn read_bounded<R>(
+    mut reader: R,
+    limit: usize,
+    overflow: mpsc::Sender<()>,
+) -> Result<(Vec<u8>, bool), io::Error>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut collected = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    let mut exceeded = false;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok((collected, exceeded));
+        }
+        let remaining = limit.saturating_sub(collected.len());
+        collected.extend_from_slice(&buffer[..count.min(remaining)]);
+        if count > remaining && !exceeded {
+            exceeded = true;
+            let _ = overflow.try_send(());
+        }
+    }
+}
+
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    &bytes[start..end]
+}
+
 fn parse_observation_cursor(arguments: &[String]) -> Result<ObservationCursor, io::Error> {
     match arguments {
         [] => Ok(ObservationCursor::Current),
@@ -5033,6 +5279,8 @@ commands:
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
   jsdbg target eval <expression|-> [target scope]  ('-' reads the expression from stdin)
+  jsdbg page playwright - [target scope]
+  jsdbg page playwright --eval <program> [target scope]
   jsdbg target watch <expression> [target scope]
   jsdbg target cdp <method> [--params <json>] [--no-validation] [target scope]
   jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
@@ -5067,7 +5315,7 @@ commands:
 
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
-  Accepted by target, value, log, screenshot, coverage, profile, promise, and heap commands.
+  Accepted by target, page, value, log, screenshot, coverage, profile, promise, and heap commands.
   --connection is only needed when the target selector is ambiguous.
 
 target cdp validates params against the generated CDP schema by default.
@@ -5090,8 +5338,9 @@ mod tests {
         parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
         parse_screenshot_capture_options, parse_source_grep_options, parse_source_map_arguments,
         parse_source_show_options, parse_source_tree_options, parse_target_list_options,
-        parse_value_options, png_dimensions, read_eval_expression, resolve_target_scope,
-        select_implicit_context, split_heap_reference_cli, target_list_output,
+        parse_value_options, png_dimensions, read_eval_expression, read_playwright_program,
+        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -5123,6 +5372,25 @@ mod tests {
                 .to_string()
                 .contains("'-' alone")
         );
+    }
+
+    #[test]
+    fn reads_playwright_program_only_from_explicit_forms() {
+        assert_eq!(
+            read_playwright_program(
+                &arguments(&["--eval", "return await page.title()"]),
+                "".as_bytes()
+            )
+            .unwrap(),
+            "return await page.title()"
+        );
+        assert_eq!(
+            read_playwright_program(&arguments(&["-"]), &b"await page.mouse.wheel(0, 800)"[..])
+                .unwrap(),
+            "await page.mouse.wheel(0, 800)"
+        );
+        assert!(read_playwright_program(&arguments(&[]), "".as_bytes()).is_err());
+        assert!(read_playwright_program(&arguments(&["-"]), " \n".as_bytes()).is_err());
     }
 
     #[test]

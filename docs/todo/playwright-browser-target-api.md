@@ -3,8 +3,7 @@
 ## Goal
 
 Offer an optional JavaScript API for Playwright-style page automation on a
-browser target already selected and owned by `jsdbg`. This is a design note,
-not a dependency or API commitment.
+browser target already selected and owned by `jsdbg`.
 
 ## Capabilities
 
@@ -60,14 +59,32 @@ rules.
 - Concurrent sessions require an explicit policy; they must not silently share
   mutable page defaults or event handlers.
 
+## Initial implementation
+
+`jsdbg page playwright -` reads one program from stdin, while
+`jsdbg page playwright --eval <program>` executes inline source. The program
+receives `page` in global scope and can return one JSON value.
+
+The control plane remains on the daemon's authenticated Unix socket (Unix) or
+named pipe (Windows). Playwright's public `connectOverCDP` API accepts HTTP or
+WebSocket URLs, not those native IPC transports, so the daemon creates a
+single-use authenticated capability URL on a random loopback-only WebSocket
+listener. The virtual endpoint filters discovery and attachment to the exact
+selected page and rejects requests naming another target.
+
+Sessions are bound to the selected connection generation, cancel when their
+control lease closes or the connection changes, wait at most 15 seconds for a
+client, and live at most 45 seconds. CLI execution is limited to 30 seconds;
+program input and JSON result are each limited to 1 MiB, protocol messages to
+16 MiB, and diagnostics to 64 KiB.
+
+The CDP source is an explicit adapter (`PlaywrightCdpSource`). Only
+browser-root CDP connections are implemented initially. Direct Node targets
+and Electron renderer bridge targets are rejected rather than exposed as fake
+browser roots; a future Electron adapter can implement the same source
+boundary without depending on Playwright internals.
+
 ## Deferred choices
 
-- Playwright package/version ownership and installation.
-- Whether the adapter uses Playwright's CDP connection, an in-process bridge,
-  or a separate helper process.
-- Sandboxing, module loading, timeouts, result-size limits, and cancellation
-  transport.
+- Sandboxing and module loading.
 - Long-lived session syntax and structured streaming output.
-
-No Playwright dependency, generated API, or speculative bridge should be added
-until those choices are validated against real Chromium and VS Code targets.
