@@ -16,6 +16,7 @@ use tokio_tungstenite::{accept_hdr_async_with_config, connect_async_with_config}
 
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
@@ -47,8 +48,17 @@ pub async fn start(
     let websocket_url = format!("ws://127.0.0.1:{}{path}", address.port());
     let (cancel, cancel_receiver) = watch::channel(false);
     let (completion_sender, completion) = oneshot::channel();
+    let capability_deadline = Instant::now() + SESSION_TIMEOUT;
     tokio::spawn(async move {
-        let _ = run(listener, source, page, path, cancel_receiver).await;
+        let _ = run(
+            listener,
+            source,
+            page,
+            path,
+            cancel_receiver,
+            capability_deadline,
+        )
+        .await;
         let _ = completion_sender.send(());
     });
     Ok(PlaywrightProxy {
@@ -64,6 +74,7 @@ async fn run(
     page: PlaywrightPageScope,
     path: String,
     mut cancel: watch::Receiver<bool>,
+    capability_deadline: Instant,
 ) -> Result<(), PlaywrightProxyError> {
     let Some(client) = accept_authenticated(&listener, &path, &mut cancel).await? else {
         return Ok(());
@@ -72,8 +83,47 @@ async fn run(
 
     let config = websocket_config();
     let PlaywrightCdpSource::BrowserRoot { endpoint } = source;
-    let (upstream, _) = connect_async_with_config(endpoint, Some(config.clone()), false).await?;
-    bridge(client, upstream, page, cancel).await
+    let Some(upstream) = connect_upstream(
+        endpoint,
+        config.clone(),
+        &mut cancel,
+        capability_deadline,
+        UPSTREAM_CONNECT_TIMEOUT,
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    bridge(client, upstream, page, cancel, capability_deadline).await
+}
+
+async fn connect_upstream(
+    endpoint: String,
+    config: WebSocketConfig,
+    cancel: &mut watch::Receiver<bool>,
+    capability_deadline: Instant,
+    connection_timeout: Duration,
+) -> Result<
+    Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>>,
+    PlaywrightProxyError,
+> {
+    if *cancel.borrow() {
+        return Ok(None);
+    }
+    let connection_deadline = Instant::now() + connection_timeout;
+    tokio::select! {
+        result = connect_async_with_config(endpoint, Some(config), false) => {
+            let (upstream, _) = result?;
+            Ok(Some(upstream))
+        }
+        _ = tokio::time::sleep_until(connection_deadline) => {
+            Err(PlaywrightProxyError::UpstreamConnectTimeout)
+        }
+        _ = tokio::time::sleep_until(capability_deadline) => {
+            Err(PlaywrightProxyError::CapabilityTimeout)
+        }
+        _ = cancel.changed() => Ok(None),
+    }
 }
 
 async fn accept_authenticated(
@@ -142,6 +192,7 @@ async fn bridge(
     upstream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
     page: PlaywrightPageScope,
     mut cancel: watch::Receiver<bool>,
+    capability_deadline: Instant,
 ) -> Result<(), PlaywrightProxyError> {
     let (mut client_sender, mut client_receiver) = client.split();
     let (mut upstream_sender, mut upstream_receiver) = upstream.split();
@@ -149,12 +200,12 @@ async fn bridge(
     let mut pending = HashMap::<String, PendingRequest>::new();
     let mut internal = HashMap::<String, InternalRequest>::new();
     let mut next_internal_id = -1_i64;
-    let deadline = tokio::time::sleep(SESSION_TIMEOUT);
+    let deadline = tokio::time::sleep_until(capability_deadline);
     tokio::pin!(deadline);
 
     loop {
         tokio::select! {
-            _ = &mut deadline => return Err(PlaywrightProxyError::SessionTimeout),
+            _ = &mut deadline => return Err(PlaywrightProxyError::CapabilityTimeout),
             _ = cancel.changed() => return Ok(()),
             message = client_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
@@ -798,8 +849,10 @@ pub enum PlaywrightProxyError {
     Json(#[from] serde_json::Error),
     #[error("Playwright proxy was not claimed before its deadline")]
     AcceptTimeout,
-    #[error("Playwright proxy session exceeded its deadline")]
-    SessionTimeout,
+    #[error("Playwright proxy capability exceeded its deadline")]
+    CapabilityTimeout,
+    #[error("Playwright proxy upstream connection exceeded its deadline")]
+    UpstreamConnectTimeout,
     #[error("selected page target was destroyed")]
     SelectedTargetDestroyed,
     #[error(transparent)]
@@ -1157,6 +1210,97 @@ mod tests {
             .unwrap()
             .unwrap();
         upstream.abort();
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_stalled_upstream_connection() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (cancel_sender, mut cancel) = watch::channel(false);
+        let connection = tokio::spawn(async move {
+            connect_upstream(
+                endpoint,
+                websocket_config(),
+                &mut cancel,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_secs(5),
+            )
+            .await
+            .map(|upstream| upstream.is_some())
+        });
+        let (_stalled_upstream, _) = timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        cancel_sender.send_replace(true);
+        let connected = timeout(Duration::from_millis(500), connection)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!connected);
+    }
+
+    #[tokio::test]
+    async fn stalled_upstream_connection_has_its_own_timeout() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (_cancel_sender, mut cancel) = watch::channel(false);
+        let connection = tokio::spawn(async move {
+            connect_upstream(
+                endpoint,
+                websocket_config(),
+                &mut cancel,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(100),
+            )
+            .await
+            .map(|_| ())
+        });
+        let (_stalled_upstream, _) = timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let error = timeout(Duration::from_secs(1), connection)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PlaywrightProxyError::UpstreamConnectTimeout
+        ));
+    }
+
+    #[tokio::test]
+    async fn stalled_upstream_cannot_outlive_the_capability_deadline() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (_cancel_sender, mut cancel) = watch::channel(false);
+        let connection = tokio::spawn(async move {
+            connect_upstream(
+                endpoint,
+                websocket_config(),
+                &mut cancel,
+                Instant::now() + Duration::from_millis(100),
+                Duration::from_secs(5),
+            )
+            .await
+            .map(|_| ())
+        });
+        let (_stalled_upstream, _) = timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let error = timeout(Duration::from_secs(1), connection)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(error, PlaywrightProxyError::CapabilityTimeout));
     }
 
     async fn proxy_with_mock_upstream() -> (PlaywrightProxy, tokio::task::JoinHandle<()>) {

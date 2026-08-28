@@ -80,9 +80,11 @@ Sessions are bound to the selected connection generation, cancel when their
 control lease closes or the connection changes, and close immediately when the
 selected target or its primary lifecycle session is destroyed. Auxiliary
 page-scoped CDP sessions may attach and detach without ending the proxy. Sessions
-wait at most 15 seconds for an authenticated client and live at most 45 seconds.
-CLI execution is limited to 30 seconds; program input and JSON result are each
-limited to 1 MiB, protocol messages to 16 MiB, and diagnostics to 64 KiB.
+wait at most 15 seconds for an authenticated client and 10 seconds for the
+upstream WebSocket handshake. Cancellation interrupts either wait, and the
+entire capability lifecycle is capped at 45 seconds. CLI execution is limited to
+30 seconds; program input and JSON result are each limited to 1 MiB, protocol
+messages to 16 MiB, and diagnostics to 64 KiB.
 
 The CDP source is an explicit adapter (`PlaywrightCdpSource`). Only
 browser-root CDP connections are implemented initially. Direct Node targets
