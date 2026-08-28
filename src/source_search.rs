@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Read};
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -11,6 +13,7 @@ use rayon::prelude::*;
 use crate::content_store::ContentHash;
 
 const MAX_SEARCH_THREADS: usize = 8;
+const CANCELLATION_CHECK_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceIdentity {
@@ -76,6 +79,8 @@ pub struct SearchControl {
     cancelled: Arc<AtomicBool>,
     pub deadline: Option<Instant>,
     pub progress: Option<Arc<dyn SearchProgressObserver>>,
+    #[cfg(test)]
+    cancel_after_bytes: Option<usize>,
 }
 
 impl Default for SearchControl {
@@ -84,6 +89,8 @@ impl Default for SearchControl {
             cancelled: Arc::new(AtomicBool::new(false)),
             deadline: None,
             progress: None,
+            #[cfg(test)]
+            cancel_after_bytes: None,
         }
     }
 }
@@ -169,9 +176,58 @@ struct MatchLocation {
 struct ContentMatches {
     hash: ContentHash,
     content: Arc<str>,
+    line_ranges: Vec<Range<usize>>,
     identities: BTreeSet<SourceIdentity>,
     locations: Vec<MatchLocation>,
     total: u64,
+}
+
+struct InterruptibleReader<'a> {
+    bytes: &'a [u8],
+    position: usize,
+    control: &'a SearchControl,
+    interruption: Option<SearchError>,
+}
+
+impl<'a> InterruptibleReader<'a> {
+    fn new(bytes: &'a [u8], control: &'a SearchControl) -> Self {
+        Self {
+            bytes,
+            position: 0,
+            control,
+            interruption: None,
+        }
+    }
+}
+
+impl Read for InterruptibleReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if let Some(interruption) = self.control.interruption() {
+            self.interruption = Some(interruption);
+            return Err(io::Error::other("source search interrupted"));
+        }
+        if self.position == self.bytes.len() || buffer.is_empty() {
+            return Ok(0);
+        }
+
+        let length = buffer
+            .len()
+            .min(CANCELLATION_CHECK_BYTES)
+            .min(self.bytes.len() - self.position);
+        buffer[..length]
+            .copy_from_slice(&self.bytes[self.position..self.position.saturating_add(length)]);
+        self.position += length;
+
+        #[cfg(test)]
+        if self
+            .control
+            .cancel_after_bytes
+            .is_some_and(|limit| self.position >= limit)
+        {
+            self.control.cancel();
+        }
+        Ok(length)
+    }
 }
 
 pub fn search(
@@ -321,9 +377,10 @@ fn search_content(
         .line_number(true)
         .binary_detection(BinaryDetection::none())
         .build();
-    let search_result = searcher.search_slice(
+    let mut reader = InterruptibleReader::new(content.content.as_bytes(), control);
+    let search_result = searcher.search_reader(
         matcher,
-        content.content.as_bytes(),
+        &mut reader,
         sinks::UTF8(|line_number, line| {
             if let Some(reason) = control.interruption() {
                 interrupted = Some(reason);
@@ -348,6 +405,9 @@ fn search_content(
             Ok(true)
         }),
     );
+    if let Some(interruption) = reader.interruption {
+        return Err(interruption);
+    }
     if let Some(interruption) = interrupted {
         return Err(interruption);
     }
@@ -355,13 +415,50 @@ fn search_content(
         return Err(SearchError::Search(error));
     }
     search_result.map_err(|error| SearchError::Search(error.to_string()))?;
+    let line_ranges = if locations.is_empty() {
+        Vec::new()
+    } else {
+        build_line_ranges(&content.content, control)?
+    };
     Ok(ContentMatches {
         hash,
         content: content.content,
+        line_ranges,
         identities: content.identities,
         locations,
         total,
     })
+}
+
+fn build_line_ranges(
+    content: &str,
+    control: &SearchControl,
+) -> Result<Vec<Range<usize>>, SearchError> {
+    let bytes = content.as_bytes();
+    let mut ranges = Vec::new();
+    let mut line_start = 0;
+    for chunk_start in (0..bytes.len()).step_by(CANCELLATION_CHECK_BYTES) {
+        control.check()?;
+        let chunk_end = (chunk_start + CANCELLATION_CHECK_BYTES).min(bytes.len());
+        for newline in bytes[chunk_start..chunk_end]
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, byte)| (*byte == b'\n').then_some(chunk_start + offset))
+        {
+            let line_end = if newline > line_start && bytes[newline - 1] == b'\r' {
+                newline - 1
+            } else {
+                newline
+            };
+            ranges.push(line_start..line_end);
+            line_start = newline + 1;
+        }
+    }
+    if line_start < bytes.len() {
+        ranges.push(line_start..bytes.len());
+    }
+    control.check()?;
+    Ok(ranges)
 }
 
 fn materialize_hit(
@@ -370,24 +467,30 @@ fn materialize_hit(
     location: MatchLocation,
     context_lines: usize,
 ) -> SearchHit {
-    let lines = content.content.lines().collect::<Vec<_>>();
     let index = location.line.saturating_sub(1) as usize;
     let before_start = index.saturating_sub(context_lines);
-    let after_end = (index + context_lines + 1).min(lines.len());
+    let after_end = index
+        .saturating_add(context_lines)
+        .saturating_add(1)
+        .min(content.line_ranges.len());
+    let line = |index: usize| {
+        content
+            .line_ranges
+            .get(index)
+            .and_then(|range| content.content.get(range.clone()))
+            .unwrap_or_default()
+    };
     SearchHit {
         identity: identity.clone(),
         content_hash: content.hash,
         line: location.line,
         column: location.column,
         match_length: location.length,
-        text: lines.get(index).copied().unwrap_or_default().to_owned(),
-        before_context: lines[before_start..index]
-            .iter()
-            .map(|line| (*line).to_owned())
-            .collect(),
-        after_context: lines[index.saturating_add(1)..after_end]
-            .iter()
-            .map(|line| (*line).to_owned())
+        text: line(index).to_owned(),
+        before_context: (before_start..index).map(line).map(str::to_owned).collect(),
+        after_context: (index.saturating_add(1)..after_end)
+            .map(line)
+            .map(str::to_owned)
             .collect(),
     }
 }
@@ -575,5 +678,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reports.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn cancellation_interrupts_a_no_match_scan() {
+        let control = SearchControl {
+            cancel_after_bytes: Some(CANCELLATION_CHECK_BYTES),
+            ..SearchControl::default()
+        };
+        let content = Arc::<str>::from("x".repeat(CANCELLATION_CHECK_BYTES * 4));
+
+        assert_eq!(
+            search(
+                vec![document("large.ts", content)],
+                &query("absent"),
+                &control
+            ),
+            Err(SearchError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn indexes_crlf_and_empty_lines_once_for_many_hit_contexts() {
+        let mut options = query("hit");
+        options.context_lines = 1;
+        let result = search(
+            vec![document(
+                "many.ts",
+                "first\r\nhit one\r\n\r\nhit two\n".into(),
+            )],
+            &options,
+            &SearchControl::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.hits.len(), 2);
+        assert_eq!(result.hits[0].before_context, ["first"]);
+        assert_eq!(result.hits[0].after_context, [""]);
+        assert_eq!(result.hits[1].before_context, [""]);
+        assert!(result.hits[1].after_context.is_empty());
     }
 }

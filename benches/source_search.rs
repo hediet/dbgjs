@@ -10,6 +10,9 @@ use cdp_client::source_search::{
 const LOGICAL_SOURCES: usize = 10_000;
 const UNIQUE_CONTENTS: usize = 100;
 const ITERATIONS: usize = 10;
+const MANY_HIT_LINES: usize = 10_000;
+const MANY_HIT_RESULTS: usize = 5_000;
+const MANY_HIT_ITERATIONS: usize = 3;
 
 fn main() {
     let contents = (0..UNIQUE_CONTENTS)
@@ -63,4 +66,99 @@ fn main() {
         "source-search: {LOGICAL_SOURCES} logical / {UNIQUE_CONTENTS} unique, \
          {ITERATIONS} iterations in {elapsed:?}, {per_iteration:?}/iteration"
     );
+
+    benchmark_many_hit_materialization();
+}
+
+fn benchmark_many_hit_materialization() {
+    let content = Arc::<str>::from(
+        (0..MANY_HIT_LINES)
+            .map(|index| format!("line {index:05}: needle payload\r\n"))
+            .collect::<String>(),
+    );
+    let document = SearchDocument {
+        identity: SourceIdentity {
+            path: "src/generated/large.ts".to_owned(),
+            connection_id: None,
+            target_id: None,
+            kind: "authored".to_owned(),
+            provenance: "benchmark fixture".to_owned(),
+        },
+        content_hash: ContentHash::of_bytes(content.as_bytes()),
+        content: content.clone(),
+    };
+    let query = SearchQuery {
+        pattern: "needle".to_owned(),
+        regex: false,
+        case_sensitive: true,
+        max_results: MANY_HIT_RESULTS,
+        context_lines: 2,
+    };
+
+    let indexed_warmup = search(vec![document.clone()], &query, &SearchControl::default()).unwrap();
+    let repeated_warmup =
+        repeated_line_collection(&content, "needle", MANY_HIT_RESULTS, query.context_lines);
+    assert_eq!(indexed_warmup.hits.len(), repeated_warmup.len());
+
+    let indexed_started = Instant::now();
+    for _ in 0..MANY_HIT_ITERATIONS {
+        let result = search(
+            black_box(vec![document.clone()]),
+            black_box(&query),
+            &SearchControl::default(),
+        )
+        .unwrap();
+        black_box(result);
+    }
+    let indexed = indexed_started.elapsed();
+
+    let repeated_started = Instant::now();
+    for _ in 0..MANY_HIT_ITERATIONS {
+        black_box(repeated_line_collection(
+            black_box(&content),
+            black_box("needle"),
+            MANY_HIT_RESULTS,
+            query.context_lines,
+        ));
+    }
+    let repeated = repeated_started.elapsed();
+    println!(
+        "many-hit-materialization: {MANY_HIT_LINES} lines / {MANY_HIT_RESULTS} hits, \
+         {MANY_HIT_ITERATIONS} iterations: indexed {indexed:?}, \
+         repeated-lines baseline {repeated:?}, {:.1}x faster",
+        repeated.as_secs_f64() / indexed.as_secs_f64()
+    );
+}
+
+fn repeated_line_collection(
+    content: &str,
+    pattern: &str,
+    max_results: usize,
+    context_lines: usize,
+) -> Vec<(String, Vec<String>, Vec<String>)> {
+    content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(pattern))
+        .take(max_results)
+        .map(|(index, _)| {
+            let lines = content.lines().collect::<Vec<_>>();
+            let before_start = index.saturating_sub(context_lines);
+            let after_end = index
+                .saturating_add(context_lines)
+                .saturating_add(1)
+                .min(lines.len());
+            (
+                lines[index].to_owned(),
+                lines[before_start..index]
+                    .iter()
+                    .map(|line| (*line).to_owned())
+                    .collect(),
+                lines[index.saturating_add(1)..after_end]
+                    .iter()
+                    .map(|line| (*line).to_owned())
+                    .collect(),
+            )
+        })
+        .collect()
 }
