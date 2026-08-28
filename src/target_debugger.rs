@@ -313,6 +313,7 @@ impl TargetDebuggerHandle {
         selector: ValueSelector,
         options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, TargetDebuggerError> {
+        Self::validate_value_inspection(&selector, &options)?;
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::InspectValue {
@@ -336,6 +337,19 @@ impl TargetDebuggerHandle {
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    fn validate_value_inspection(
+        selector: &ValueSelector,
+        options: &ValueInspectionOptions,
+    ) -> Result<(), TargetDebuggerError> {
+        if matches!(selector, ValueSelector::RemoteObject { .. }) && !options.retain_references {
+            return Err(TargetDebuggerError::InvalidValueInspection(
+                "an existing remote object requires retained references; use an expression for an ephemeral bounded preview"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn resolved_source_paths(
@@ -5582,6 +5596,8 @@ pub enum TargetDebuggerError {
     Evaluation(String),
     #[error("property inspection failed: {0}")]
     Properties(String),
+    #[error("invalid value inspection: {0}")]
+    InvalidValueInspection(String),
     #[error("interaction failed: {0}")]
     Interaction(String),
     #[error("screenshot capture failed: {0}")]
@@ -5716,6 +5732,25 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[test]
+    fn rejects_non_retained_existing_remote_object_inspection() {
+        let error = TargetDebuggerHandle::validate_value_inspection(
+            &ValueSelector::RemoteObject {
+                object_id: "remote-1".to_owned(),
+            },
+            &ValueInspectionOptions {
+                max_preview_length: 120,
+                max_properties: 20,
+                retain_references: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            TargetDebuggerError::InvalidValueInspection(_)
+        ));
+    }
     use std::time::Duration;
 
     fn range(start_offset: u32, end_offset: u32, count: u64) -> CoverageRangeSnapshot {

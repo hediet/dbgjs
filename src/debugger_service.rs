@@ -5020,6 +5020,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::InvalidHeapReference(_)
         | TargetDebuggerError::HeapNodeNotFound(_)
         | TargetDebuggerError::IncompatibleHeapCaptures { .. }
+        | TargetDebuggerError::InvalidValueInspection(_)
         | TargetDebuggerError::InvalidTimeout => error_codes::INVALID_PARAMS,
         TargetDebuggerError::WaitTimedOut
         | TargetDebuggerError::SettlementTimedOut
