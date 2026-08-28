@@ -803,7 +803,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &[
             "target",
             "eval",
-            "Array.from({length:10000},(_,i)=>i*i).reduce((a,b)=>a+b,0)",
+            "(()=>{const end=Date.now()+50;let value=0;while(Date.now()<end){value++}return value})()",
             "--context",
             &context,
             "--target",
@@ -961,23 +961,25 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &["capture", "show", "offline-profile", "--context", &context],
     );
     assert_eq!(shown, *profile);
-    assert!(
-        run_json(
-            &cli,
-            &service,
-            &state_file,
-            &[
-                "profile",
-                "show",
-                "offline-profile",
-                "--max-lines",
-                "3",
-                "--context",
-                &context,
-            ],
-        )
-        .is_object()
+    let offline_profile = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "profile",
+            "show",
+            "offline-profile",
+            "--max-lines",
+            "3",
+            "--context",
+            &context,
+        ],
     );
+    assert!(
+        !offline_profile["functions"].as_array().unwrap().is_empty(),
+        "{offline_profile}"
+    );
+    assert!(offline_profile["analysis"].is_object(), "{offline_profile}");
     let heap = captures
         .as_array()
         .unwrap()

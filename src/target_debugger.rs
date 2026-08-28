@@ -3632,7 +3632,7 @@ fn cpu_profile_snapshot(
             sample_count: 0,
         })
         .collect();
-    Ok(CpuProfileSnapshot {
+    let mut snapshot = CpuProfileSnapshot {
         capture_id,
         sampling_interval_micros,
         start_time_micros: profile.start_time,
@@ -3642,7 +3642,9 @@ fn cpu_profile_snapshot(
         time_deltas_micros,
         functions: Vec::new(),
         analysis: None,
-    })
+    };
+    aggregate_cpu_profile(&mut snapshot)?;
+    Ok(snapshot)
 }
 
 async fn project_cpu_profile(
@@ -3757,7 +3759,9 @@ fn cpu_profile_node_indexes(
     Ok(indexes)
 }
 
-fn aggregate_cpu_profile(snapshot: &mut CpuProfileSnapshot) -> Result<(), TargetDebuggerError> {
+pub(crate) fn aggregate_cpu_profile(
+    snapshot: &mut CpuProfileSnapshot,
+) -> Result<(), TargetDebuggerError> {
     let node_indexes = cpu_profile_node_indexes(snapshot)?;
     let mut parents = BTreeMap::<i64, i64>::new();
     for node in &snapshot.nodes {

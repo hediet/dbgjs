@@ -2425,10 +2425,14 @@ impl DebuggerServiceApi for DebuggerService {
                 "capture '{capture_name}' is not a coverage capture"
             )));
         };
+        drop(state);
         if let Some(path) = source_path {
             snapshot.sources.retain(|source| {
-                source.generated_url == path
-                    || source.associated_authored_source.as_deref() == Some(path.as_str())
+                source_path_is_descendant(&source.generated_url, &path)
+                    || source
+                        .associated_authored_source
+                        .as_deref()
+                        .is_some_and(|source| source_path_is_descendant(source, &path))
             });
         }
         Ok(snapshot)
@@ -2446,11 +2450,16 @@ impl DebuggerServiceApi for DebuggerService {
             .captures
             .get(&(context_id, capture_name.clone()))
             .ok_or_else(|| not_found("capture", &capture_name))?;
-        let StoredCapturePayload::CpuProfile(snapshot) = capture.payload.clone() else {
+        let StoredCapturePayload::CpuProfile(mut snapshot) = capture.payload.clone() else {
             return Err(invalid_params(&format!(
                 "capture '{capture_name}' is not a CPU profile capture"
             )));
         };
+        drop(state);
+        if snapshot.functions.is_empty() && !snapshot.nodes.is_empty() {
+            crate::target_debugger::aggregate_cpu_profile(&mut snapshot)
+                .map_err(target_debugger_rpc_error)?;
+        }
         Ok(snapshot)
     }
 
@@ -3270,6 +3279,24 @@ impl DebuggerServiceApi for DebuggerService {
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
+        if let Some(name) = capture_id.as_ref()
+            && let Some(completed) = self
+                .promote_completed_capture(
+                    &context_id,
+                    &connection_id,
+                    &target_id,
+                    name,
+                    CaptureKind::Coverage,
+                )
+                .await?
+        {
+            let StoredCapturePayload::Coverage(snapshot) = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return Ok(snapshot);
+        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
@@ -3334,6 +3361,23 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
+        if let Some(completed) = self
+            .promote_completed_capture(
+                &context_id,
+                &connection_id,
+                &target_id,
+                ".",
+                CaptureKind::Coverage,
+            )
+            .await?
+        {
+            let StoredCapturePayload::Coverage(snapshot) = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return Ok(snapshot);
+        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
@@ -3441,6 +3485,23 @@ impl DebuggerServiceApi for DebuggerService {
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
         let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
+        if let Some(completed) = self
+            .promote_completed_capture(
+                &context_id,
+                &connection_id,
+                &target_id,
+                &name,
+                CaptureKind::CpuProfile,
+            )
+            .await?
+        {
+            let StoredCapturePayload::CpuProfile(snapshot) = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return Ok(snapshot);
+        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
@@ -3452,7 +3513,7 @@ impl DebuggerServiceApi for DebuggerService {
                 &owner.connection_id,
                 &owner.target_id,
                 owner.connection_generation,
-                name,
+                name.clone(),
                 CaptureKind::CpuProfile,
             )
             .await?,
@@ -3479,6 +3540,10 @@ impl DebuggerServiceApi for DebuggerService {
                 return Err(error);
             }
         };
+        let snapshot = debugger
+            .get_cpu_profile(name.clone(), None, false, true)
+            .await
+            .unwrap_or(snapshot);
         self.store_capture(
             &reservation.reservation,
             StoredCapturePayload::CpuProfile(snapshot.clone()),
@@ -3533,6 +3598,25 @@ impl DebuggerServiceApi for DebuggerService {
         expose_internals: bool,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
         let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
+        if let Some(completed) = self
+            .promote_completed_capture(
+                &context_id,
+                &connection_id,
+                &target_id,
+                &name,
+                CaptureKind::HeapSnapshot,
+            )
+            .await?
+        {
+            let StoredCapturePayload::HeapSnapshot { .. } = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return completed
+                .heap_result
+                .ok_or_else(|| invalid_state("completed heap capture result is missing"));
+        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
@@ -3802,6 +3886,45 @@ impl DebuggerServiceApi for DebuggerService {
 }
 
 impl DebuggerService {
+    async fn promote_completed_capture(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+        name: &str,
+        kind: CaptureKind,
+    ) -> Result<Option<CompletedCapture>, JsonRpcError> {
+        let reservation = {
+            let state = self.state.lock().await;
+            let Some(reservation) = state
+                .capture_reservations
+                .get(&(context_id.to_owned(), name.to_owned()))
+            else {
+                return Ok(None);
+            };
+            let Some(completed) = reservation.completed.as_ref() else {
+                return Ok(None);
+            };
+            if reservation.metadata.connection_id != connection_id
+                || reservation.metadata.target_id != target_id
+                || reservation.metadata.kind != kind
+            {
+                return Err(invalid_state(&format!(
+                    "capture '{name}' completed in context '{context_id}' but catalog persistence failed; retry the same capture request with exact target '{}' or delete it to discard the completed data",
+                    reservation.metadata.target_id
+                )));
+            }
+            (reservation.clone(), completed.clone())
+        };
+        self.finalize_capture(
+            &reservation.0,
+            reservation.1.payload.clone(),
+            reservation.1.heap_result.clone(),
+        )
+        .await?;
+        Ok(Some(reservation.1))
+    }
+
     async fn reserve_capture(
         &self,
         context_id: &str,
@@ -5078,6 +5201,26 @@ fn sanitize_file_name(value: &str) -> String {
         .collect()
 }
 
+fn source_path_is_descendant(candidate: &str, prefix: &str) -> bool {
+    let candidate = normalize_capture_source_path(candidate);
+    let prefix = normalize_capture_source_path(prefix);
+    candidate == prefix
+        || candidate
+            .strip_prefix(&prefix)
+            .is_some_and(|remainder| remainder.starts_with('/'))
+}
+
+fn normalize_capture_source_path(path: &str) -> String {
+    let mut path = path.replace('\\', "/");
+    while let Some(remainder) = path.strip_prefix("../").or_else(|| path.strip_prefix("./")) {
+        path = remainder.to_owned();
+    }
+    while path.len() > 1 && path.ends_with('/') {
+        path.pop();
+    }
+    path
+}
+
 fn invalid_params(message: impl Into<String>) -> JsonRpcError {
     JsonRpcError::new(error_codes::INVALID_PARAMS, message)
 }
@@ -5402,7 +5545,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_cpu_profile_survives_persistence_failure_and_retries() {
+    async fn completed_cpu_profile_promotes_after_disconnect_without_live_target() {
         let (root, blocker, service) = capture_retry_service("cpu-profile-finalization");
         let reservation = service
             .reserve_capture(
@@ -5447,24 +5590,24 @@ mod tests {
             assert!(state.captures.is_empty());
         }
 
+        service
+            .state
+            .lock()
+            .await
+            .contexts
+            .insert("test".into(), context_with_targets([]));
         unblock_capture_persistence(&blocker);
-        let retry = service
-            .reserve_capture(
-                "test",
-                "runtime",
-                "target-a",
-                1,
-                "profile".into(),
-                CaptureKind::CpuProfile,
+        let retried = service
+            .stop_cpu_profile(
+                &CallCtx::default(),
+                "test".into(),
+                "runtime".into(),
+                "target-a".into(),
+                Some("profile".into()),
             )
             .await
             .unwrap();
-        assert_eq!(retry.metadata.storage_id, reservation.metadata.storage_id);
-        let completed = retry.completed.clone().unwrap();
-        service
-            .store_capture(&retry, completed.payload)
-            .await
-            .unwrap();
+        assert_eq!(retried, snapshot);
         let state = service.state.lock().await;
         assert!(state.capture_reservations.is_empty());
         assert!(matches!(
@@ -5484,6 +5627,133 @@ mod tests {
         ));
         drop(restored);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn stored_coverage_path_filters_normalized_directory_descendants() {
+        let mut state = ServiceState::default();
+        state.contexts.insert(
+            "test".into(),
+            context_with_targets([(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )]),
+        );
+        let source =
+            |script_id: &str, generated_url: &str, associated_authored_source: Option<&str>| {
+                crate::service_api::CoverageSourceSnapshot {
+                    script_id: script_id.into(),
+                    generated_url: generated_url.into(),
+                    associated_authored_source: associated_authored_source.map(str::to_owned),
+                    functions: Vec::new(),
+                }
+            };
+        let snapshot = CoverageSnapshot {
+            timestamp_micros: 42,
+            sources: vec![
+                source("1", "./src/index.ts", None),
+                source("2", "dist/bundle.js", Some("src/nested/worker.ts")),
+                source("3", "src-other/not-a-child.ts", None),
+                source("4", "src", None),
+            ],
+            analysis: None,
+        };
+        state.captures.insert(
+            ("test".into(), "coverage".into()),
+            StoredCapture {
+                metadata: CaptureSnapshot {
+                    context_id: "test".into(),
+                    name: "coverage".into(),
+                    kind: CaptureKind::Coverage,
+                    target_id: "target-a".into(),
+                    connection_id: "runtime".into(),
+                    connection_generation: 1,
+                    storage_id: "coverage-storage".into(),
+                },
+                payload: StoredCapturePayload::Coverage(snapshot),
+            },
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+
+        let filtered = service
+            .get_stored_coverage(
+                &CallCtx::default(),
+                "test".into(),
+                "coverage".into(),
+                Some("../src/".into()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            filtered
+                .sources
+                .iter()
+                .map(|source| source.script_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "2", "4"]
+        );
+    }
+
+    #[tokio::test]
+    async fn stored_cpu_profile_rebuilds_analysis_without_live_target() {
+        let snapshot = CpuProfileSnapshot {
+            capture_id: "profile".into(),
+            sampling_interval_micros: Some(100),
+            start_time_micros: 1.0,
+            end_time_micros: 2.0,
+            nodes: vec![crate::service_api::CpuProfileNodeSnapshot {
+                id: 1,
+                call_frame: crate::service_api::CpuProfileCallFrameSnapshot {
+                    function_name: "work".into(),
+                    script_id: "1".into(),
+                    url: "src/work.ts".into(),
+                    line_number: 4,
+                    column_number: 2,
+                },
+                hit_count: Some(1),
+                children: Vec::new(),
+                deopt_reason: None,
+                position_ticks: Vec::new(),
+                authored_location: None,
+                breadcrumb: None,
+                self_time_micros: 0,
+                total_time_micros: 0,
+                sample_count: 0,
+            }],
+            samples: vec![1],
+            time_deltas_micros: vec![250],
+            functions: Vec::new(),
+            analysis: None,
+        };
+        let mut state = ServiceState::default();
+        state.captures.insert(
+            ("test".into(), "profile".into()),
+            StoredCapture {
+                metadata: CaptureSnapshot {
+                    context_id: "test".into(),
+                    name: "profile".into(),
+                    kind: CaptureKind::CpuProfile,
+                    target_id: "target-a".into(),
+                    connection_id: "runtime".into(),
+                    connection_generation: 1,
+                    storage_id: "profile-storage".into(),
+                },
+                payload: StoredCapturePayload::CpuProfile(snapshot),
+            },
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+
+        let profile = service
+            .get_stored_cpu_profile(&CallCtx::default(), "test".into(), "profile".into(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(profile.functions.len(), 1);
+        assert_eq!(profile.functions[0].name, "work");
+        assert_eq!(profile.functions[0].self_time_micros, 250);
+        assert_eq!(profile.functions[0].total_time_micros, 250);
     }
 
     #[tokio::test]
