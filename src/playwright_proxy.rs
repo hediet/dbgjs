@@ -266,6 +266,8 @@ struct ActiveScope {
     page: PlaywrightPageScope,
     sessions: HashSet<String>,
     browser_broker_sessions: HashSet<String>,
+    session_target_ids: HashMap<String, String>,
+    descendant_target_ids: HashSet<String>,
     primary_session_id: Option<String>,
 }
 
@@ -275,18 +277,55 @@ impl ActiveScope {
             page,
             sessions: HashSet::new(),
             browser_broker_sessions: HashSet::new(),
+            session_target_ids: HashMap::new(),
+            descendant_target_ids: HashSet::new(),
             primary_session_id: None,
         }
     }
 
-    fn validate_identifiers(&self, value: &Value) -> Result<(), ScopeViolation> {
-        validate_identifiers(value, &self.page, &self.sessions)
+    fn register_page_session(&mut self, session_id: &str, target_id: &str) {
+        self.sessions.insert(session_id.to_owned());
+        self.session_target_ids
+            .insert(session_id.to_owned(), target_id.to_owned());
+    }
+
+    fn remove_session(&mut self, session_id: &str) -> bool {
+        self.browser_broker_sessions.remove(session_id);
+        self.session_target_ids.remove(session_id);
+        self.sessions.remove(session_id)
+    }
+
+    fn remove_descendant_target(&mut self, target_id: &str) -> bool {
+        if !self.descendant_target_ids.remove(target_id) {
+            return false;
+        }
+        let sessions = self
+            .session_target_ids
+            .iter()
+            .filter(|(_, candidate)| candidate.as_str() == target_id)
+            .map(|(session_id, _)| session_id.clone())
+            .collect::<Vec<_>>();
+        for session_id in sessions {
+            self.remove_session(&session_id);
+        }
+        true
+    }
+
+    fn target_for_session(&self, session_id: Option<&str>) -> Option<&str> {
+        match session_id {
+            Some(session_id) if self.browser_broker_sessions.contains(session_id) => {
+                Some(&self.page.target_id)
+            }
+            Some(session_id) => self.session_target_ids.get(session_id).map(String::as_str),
+            None => Some(&self.page.target_id),
+        }
     }
 }
 
 #[derive(Clone)]
 struct PendingRequest {
     method: String,
+    session_id: Option<String>,
 }
 
 enum InternalRequest {
@@ -312,7 +351,7 @@ fn client_request(
         .to_owned();
     let id = object.get("id").cloned();
     let response_session = object.get("sessionId").cloned();
-    if let Err(error) = scope.validate_identifiers(&Value::Object(object.clone())) {
+    if let Err(error) = validate_request_identifiers(object, &method, scope) {
         return scope_error(id, response_session, error);
     }
     let session = object.get("sessionId").and_then(Value::as_str);
@@ -370,7 +409,16 @@ fn forward_request(
     pending: &mut HashMap<String, PendingRequest>,
 ) -> Result<ClientAction, PlaywrightProxyError> {
     if let Some(id) = value.get("id") {
-        pending.insert(id_key(id)?, PendingRequest { method });
+        pending.insert(
+            id_key(id)?,
+            PendingRequest {
+                method,
+                session_id: value
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
+        );
     }
     Ok(ClientAction::Forward(json_message(value)?))
 }
@@ -404,10 +452,10 @@ fn browser_broker_method_policy(method: &str) -> MethodPolicy {
 fn session_method_policy(method: &str) -> MethodPolicy {
     match method {
         "Browser.getWindowForTarget" | "Target.getTargetInfo" => MethodPolicy::Forward,
-        "Browser.setDownloadBehavior"
-        | "Browser.setWindowBounds"
-        | "Target.setAutoAttach"
-        | "Target.setDiscoverTargets" => MethodPolicy::SyntheticSuccess,
+        "Browser.setDownloadBehavior" | "Browser.setWindowBounds" | "Target.setDiscoverTargets" => {
+            MethodPolicy::SyntheticSuccess
+        }
+        "Target.setAutoAttach" => MethodPolicy::Forward,
         _ if is_page_session_method(method) => MethodPolicy::Forward,
         _ => MethodPolicy::Deny,
     }
@@ -462,6 +510,7 @@ fn is_page_session_method(method: &str) -> bool {
                 | "setDocumentContent"
                 | "setFontFamilies"
                 | "setFontSizes"
+                | "setInterceptFileChooserDialog"
                 | "setLifecycleEventsEnabled"
                 | "stopLoading"
         ),
@@ -530,7 +579,7 @@ fn upstream_message(
                 };
                 infos.retain(|info| target_info_id(info) == Some(&scope.page.target_id));
                 for info in infos {
-                    validate_target_info(info, &scope.page)?;
+                    validate_target_info(info, &scope.page, &scope.page.target_id)?;
                 }
             }
             "Target.getTargetInfo" => {
@@ -538,7 +587,12 @@ fn upstream_message(
                     .get("result")
                     .and_then(|result| result.get("targetInfo"))
                     .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-                validate_target_info(info, &scope.page)?;
+                let expected_target = scope
+                    .target_for_session(request.session_id.as_deref())
+                    .ok_or(PlaywrightProxyError::ScopeViolation(
+                        ScopeViolation::SessionId,
+                    ))?;
+                validate_target_info(info, &scope.page, expected_target)?;
             }
             "Target.attachToTarget" => {
                 let session_id = object
@@ -546,7 +600,8 @@ fn upstream_message(
                     .and_then(|result| result.get("sessionId"))
                     .and_then(Value::as_str)
                     .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-                scope.sessions.insert(session_id.to_owned());
+                let target_id = scope.page.target_id.clone();
+                scope.register_page_session(session_id, &target_id);
             }
             "Target.attachToBrowserTarget" => {
                 let session_id = object
@@ -567,6 +622,7 @@ fn upstream_message(
         .and_then(Value::as_str)
         .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
     if method == "Target.attachedToTarget" {
+        let parent_session_id = object.get("sessionId").and_then(Value::as_str);
         let params = object
             .get("params")
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
@@ -578,13 +634,32 @@ fn upstream_message(
             .get("targetInfo")
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
         if target_info.get("type").and_then(Value::as_str) == Some("browser") {
+            if parent_session_id.is_some() {
+                return Ok(UpstreamAction::Detach(session_id.to_owned()));
+            }
             scope.sessions.insert(session_id.to_owned());
             scope.browser_broker_sessions.insert(session_id.to_owned());
             return Ok(UpstreamAction::Drop);
         }
-        if target_info_id(target_info) == Some(&scope.page.target_id) {
-            validate_target_info(target_info, &scope.page)?;
-            scope.sessions.insert(session_id.to_owned());
+        let target_id = target_info_id(target_info)
+            .ok_or(PlaywrightProxyError::InvalidCdpMessage)?
+            .to_owned();
+        if target_id == scope.page.target_id {
+            let allowed_parent = parent_session_id
+                .is_none_or(|parent| scope.browser_broker_sessions.contains(parent));
+            if !allowed_parent {
+                return Ok(UpstreamAction::Detach(session_id.to_owned()));
+            }
+            validate_target_info(target_info, &scope.page, &target_id)?;
+            scope.register_page_session(session_id, &target_id);
+            return Ok(UpstreamAction::Forward(json_message(value)?));
+        }
+        let verified_parent = parent_session_id
+            .and_then(|parent| scope.session_target_ids.get(parent))
+            .is_some();
+        if verified_parent && validate_descendant_target_info(target_info, &scope.page).is_ok() {
+            scope.descendant_target_ids.insert(target_id.clone());
+            scope.register_page_session(session_id, &target_id);
             return Ok(UpstreamAction::Forward(json_message(value)?));
         }
         return Ok(UpstreamAction::Detach(session_id.to_owned()));
@@ -595,10 +670,9 @@ fn upstream_message(
             .and_then(|params| params.get("sessionId"))
             .and_then(Value::as_str)
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        if !scope.sessions.remove(session_id) {
+        if !scope.remove_session(session_id) {
             return Ok(UpstreamAction::Drop);
         }
-        scope.browser_broker_sessions.remove(session_id);
         return Ok(if scope.primary_session_id.as_deref() == Some(session_id) {
             scope.primary_session_id = None;
             UpstreamAction::ForwardAndClose(json_message(value)?)
@@ -611,14 +685,22 @@ fn upstream_message(
             .get("params")
             .and_then(|params| params.get("targetInfo"))
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        return Ok(
-            if target_info_id(target_info) == Some(&scope.page.target_id) {
-                validate_target_info(target_info, &scope.page)?;
-                UpstreamAction::Forward(json_message(value)?)
-            } else {
-                UpstreamAction::Drop
-            },
-        );
+        let target_id =
+            target_info_id(target_info).ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+        return Ok(if target_id == scope.page.target_id {
+            validate_target_info(target_info, &scope.page, target_id)?;
+            UpstreamAction::Forward(json_message(value)?)
+        } else if object
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .is_some_and(|parent| scope.session_target_ids.contains_key(parent))
+            && validate_descendant_target_info(target_info, &scope.page).is_ok()
+        {
+            scope.descendant_target_ids.insert(target_id.to_owned());
+            UpstreamAction::Forward(json_message(value)?)
+        } else {
+            UpstreamAction::Drop
+        });
     }
     if method == "Target.targetDestroyed" {
         let target_id = object
@@ -628,6 +710,8 @@ fn upstream_message(
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
         return Ok(if target_id == scope.page.target_id {
             UpstreamAction::ForwardAndClose(json_message(value)?)
+        } else if scope.remove_descendant_target(target_id) {
+            UpstreamAction::Forward(json_message(value)?)
         } else {
             UpstreamAction::Drop
         });
@@ -663,7 +747,8 @@ fn internal_response(
                 .and_then(|result| result.get("sessionId"))
                 .and_then(Value::as_str)
             {
-                scope.sessions.insert(session_id.to_owned());
+                let target_id = scope.page.target_id.clone();
+                scope.register_page_session(session_id, &target_id);
                 scope.primary_session_id = Some(session_id.to_owned());
             }
             Ok(UpstreamAction::Reply(json_message(json!({
@@ -677,8 +762,9 @@ fn internal_response(
 fn validate_target_info(
     target_info: &Value,
     page: &PlaywrightPageScope,
+    expected_target_id: &str,
 ) -> Result<(), PlaywrightProxyError> {
-    if target_info_id(target_info) != Some(&page.target_id) {
+    if target_info_id(target_info) != Some(expected_target_id) {
         return Err(PlaywrightProxyError::ScopeViolation(
             ScopeViolation::TargetId,
         ));
@@ -695,61 +781,92 @@ fn validate_target_info(
     Ok(())
 }
 
-fn validate_identifiers(
-    value: &Value,
+fn validate_descendant_target_info(
+    target_info: &Value,
     page: &PlaywrightPageScope,
-    sessions: &HashSet<String>,
-) -> Result<(), ScopeViolation> {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                validate_identifiers(item, page, sessions)?;
-            }
-        }
-        Value::Object(object) => {
-            for (key, value) in object {
-                match key.as_str() {
-                    "targetId" => validate_string(value, |id| id == page.target_id)
-                        .then_some(())
-                        .ok_or(ScopeViolation::TargetId)?,
-                    "targetIds" => validate_string_array(value, |id| id == page.target_id)
-                        .then_some(())
-                        .ok_or(ScopeViolation::TargetId)?,
-                    "sessionId" => validate_string(value, |id| sessions.contains(id))
-                        .then_some(())
-                        .ok_or(ScopeViolation::SessionId)?,
-                    "sessionIds" => validate_string_array(value, |id| sessions.contains(id))
-                        .then_some(())
-                        .ok_or(ScopeViolation::SessionId)?,
-                    "browserContextId" => {
-                        validate_string(value, |id| page.browser_context_id.as_deref() == Some(id))
-                            .then_some(())
-                            .ok_or(ScopeViolation::BrowserContextId)?
-                    }
-                    "browserContextIds" => validate_string_array(value, |id| {
-                        page.browser_context_id.as_deref() == Some(id)
-                    })
-                    .then_some(())
-                    .ok_or(ScopeViolation::BrowserContextId)?,
-                    _ => validate_identifiers(value, page, sessions)?,
-                }
-            }
-        }
-        _ => {}
+) -> Result<(), PlaywrightProxyError> {
+    if target_info.get("type").and_then(Value::as_str) != Some("iframe") {
+        return Err(PlaywrightProxyError::ScopeViolation(
+            ScopeViolation::TargetId,
+        ));
     }
-    Ok(())
+    let target_id = target_info_id(target_info).ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+    if target_id == page.target_id {
+        return Err(PlaywrightProxyError::ScopeViolation(
+            ScopeViolation::TargetId,
+        ));
+    }
+    validate_target_info(target_info, page, target_id)
 }
 
-fn validate_string(value: &Value, predicate: impl FnOnce(&str) -> bool) -> bool {
-    value.as_str().is_some_and(predicate)
+fn validate_request_identifiers(
+    request: &Map<String, Value>,
+    method: &str,
+    scope: &ActiveScope,
+) -> Result<(), ScopeViolation> {
+    let routing_session = match request.get("sessionId") {
+        Some(Value::String(session_id)) if scope.sessions.contains(session_id) => {
+            Some(session_id.as_str())
+        }
+        Some(_) => return Err(ScopeViolation::SessionId),
+        None => None,
+    };
+    let params = match request.get("params") {
+        Some(Value::Object(params)) => Some(params),
+        Some(_) => return Err(ScopeViolation::InvalidParams),
+        None => None,
+    };
+
+    match method {
+        "Target.attachToTarget" | "Target.activateTarget" | "Target.closeTarget" => {
+            validate_optional_identifier(
+                params,
+                "targetId",
+                |target_id| target_id == scope.page.target_id,
+                ScopeViolation::TargetId,
+            )
+        }
+        "Target.getTargetInfo" | "Browser.getWindowForTarget" => {
+            let expected_target = scope
+                .target_for_session(routing_session)
+                .ok_or(ScopeViolation::SessionId)?;
+            validate_optional_identifier(
+                params,
+                "targetId",
+                |target_id| target_id == expected_target,
+                ScopeViolation::TargetId,
+            )
+        }
+        "Target.detachFromTarget" => validate_optional_identifier(
+            params,
+            "sessionId",
+            |session_id| scope.sessions.contains(session_id),
+            ScopeViolation::SessionId,
+        ),
+        "Browser.setDownloadBehavior" => validate_optional_identifier(
+            params,
+            "browserContextId",
+            |context_id| scope.page.browser_context_id.as_deref() == Some(context_id),
+            ScopeViolation::BrowserContextId,
+        ),
+        _ => Ok(()),
+    }
 }
 
-fn validate_string_array(value: &Value, predicate: impl Fn(&str) -> bool) -> bool {
-    value.as_array().is_some_and(|items| {
-        items
-            .iter()
-            .all(|item| item.as_str().is_some_and(&predicate))
-    })
+fn validate_optional_identifier(
+    params: Option<&Map<String, Value>>,
+    field: &str,
+    predicate: impl FnOnce(&str) -> bool,
+    violation: ScopeViolation,
+) -> Result<(), ScopeViolation> {
+    let Some(value) = params.and_then(|params| params.get(field)) else {
+        return Ok(());
+    };
+    value
+        .as_str()
+        .is_some_and(predicate)
+        .then_some(())
+        .ok_or(violation)
 }
 
 fn target_info_id(value: &Value) -> Option<&str> {
@@ -837,6 +954,8 @@ pub enum ScopeViolation {
     SessionId,
     #[error("browser context identifier is outside the selected page")]
     BrowserContextId,
+    #[error("CDP request parameters do not match the method schema")]
+    InvalidParams,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -876,7 +995,7 @@ mod tests {
 
     fn scope() -> ActiveScope {
         let mut scope = ActiveScope::new(page());
-        scope.sessions.insert("selected-session".to_owned());
+        scope.register_page_session("selected-session", "selected");
         scope.primary_session_id = Some("selected-session".to_owned());
         scope
     }
@@ -922,39 +1041,29 @@ mod tests {
     }
 
     #[test]
-    fn every_scope_identifier_is_validated() {
-        for (field, value, expected) in [
-            ("targetId", json!("other"), "target identifier"),
+    fn schema_identifiers_are_validated_for_their_methods() {
+        for (method, params, expected) in [
             (
-                "targetIds",
-                json!(["selected", "other"]),
+                "Target.closeTarget",
+                json!({ "targetId": "other" }),
                 "target identifier",
             ),
-            ("sessionId", json!("other"), "session identifier"),
             (
-                "sessionIds",
-                json!(["selected-session", "other"]),
+                "Target.detachFromTarget",
+                json!({ "sessionId": "other" }),
                 "session identifier",
             ),
             (
-                "browserContextId",
-                json!("other"),
-                "browser context identifier",
-            ),
-            (
-                "browserContextIds",
-                json!(["selected-context", "other"]),
+                "Browser.setDownloadBehavior",
+                json!({ "browserContextId": "other" }),
                 "browser context identifier",
             ),
         ] {
-            let mut params = Map::new();
-            params.insert(field.to_owned(), value);
             let response = client_response(
                 client_request(
                     text(json!({
                         "id": 2,
-                        "method": "Runtime.evaluate",
-                        "sessionId": "selected-session",
+                        "method": method,
                         "params": params
                     })),
                     &scope(),
@@ -967,7 +1076,45 @@ mod tests {
                     .as_str()
                     .unwrap()
                     .contains(expected),
-                "{field} was not rejected: {response}"
+                "{method} was not rejected: {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_maps_are_not_scanned_for_identifier_key_names() {
+        for (method, params) in [
+            (
+                "Network.setExtraHTTPHeaders",
+                json!({ "headers": { "targetId": "opaque" } }),
+            ),
+            (
+                "Runtime.callFunctionOn",
+                json!({
+                    "functionDeclaration": "() => 1",
+                    "arguments": [{
+                        "value": {
+                            "sessionId": "opaque",
+                            "browserContextId": "opaque"
+                        }
+                    }]
+                }),
+            ),
+        ] {
+            let action = client_request(
+                text(json!({
+                    "id": 3,
+                    "method": method,
+                    "sessionId": "selected-session",
+                    "params": params
+                })),
+                &scope(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+            assert!(
+                matches!(action, ClientAction::Forward(_)),
+                "{method} treated opaque data as protocol identifiers"
             );
         }
     }
@@ -978,7 +1125,7 @@ mod tests {
             client_request(
                 text(json!({
                     "id": 3,
-                    "method": "Target.setAutoAttach",
+                    "method": "Browser.setWindowBounds",
                     "sessionId": "selected-session"
                 })),
                 &scope(),
@@ -1005,9 +1152,100 @@ mod tests {
     }
 
     #[test]
+    fn verified_oopif_descendant_session_is_allowed() {
+        let mut scope = scope();
+        let action = upstream_message(
+            text(json!({
+                "method": "Target.attachedToTarget",
+                "sessionId": "selected-session",
+                "params": {
+                    "sessionId": "oopif-session",
+                    "targetInfo": {
+                        "targetId": "oopif-target",
+                        "type": "iframe",
+                        "title": "",
+                        "url": "http://cross-origin.test/",
+                        "browserContextId": "selected-context"
+                    },
+                    "waitingForDebugger": true
+                }
+            })),
+            &mut scope,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(action, UpstreamAction::Forward(_)));
+        assert!(scope.sessions.contains("oopif-session"));
+        assert_eq!(
+            scope
+                .session_target_ids
+                .get("oopif-session")
+                .map(String::as_str),
+            Some("oopif-target")
+        );
+        assert!(scope.descendant_target_ids.contains("oopif-target"));
+    }
+
+    #[test]
+    fn unrelated_or_unverified_target_sessions_are_detached() {
+        for (parent_session, target_type, browser_context_id) in [
+            (None, "iframe", "selected-context"),
+            (Some("selected-session"), "page", "selected-context"),
+            (Some("selected-session"), "iframe", "other-context"),
+        ] {
+            let mut scope = scope();
+            let mut event = json!({
+                "method": "Target.attachedToTarget",
+                "params": {
+                    "sessionId": "unrelated-session",
+                    "targetInfo": {
+                        "targetId": "unrelated-target",
+                        "type": target_type,
+                        "title": "",
+                        "url": "http://unrelated.test/",
+                        "browserContextId": browser_context_id
+                    },
+                    "waitingForDebugger": false
+                }
+            });
+            if let Some(parent_session) = parent_session {
+                event["sessionId"] = Value::String(parent_session.to_owned());
+            }
+            let action = upstream_message(
+                text(event),
+                &mut scope,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+            assert!(matches!(action, UpstreamAction::Detach(_)));
+            assert!(!scope.sessions.contains("unrelated-session"));
+            assert!(!scope.descendant_target_ids.contains("unrelated-target"));
+        }
+    }
+
+    #[test]
+    fn file_chooser_interception_is_page_scoped() {
+        let action = client_request(
+            text(json!({
+                "id": 8,
+                "method": "Page.setInterceptFileChooserDialog",
+                "sessionId": "selected-session",
+                "params": { "enabled": true }
+            })),
+            &scope(),
+            &mut HashMap::new(),
+        )
+        .unwrap();
+        assert!(matches!(action, ClientAction::Forward(_)));
+    }
+
+    #[test]
     fn auxiliary_session_detachment_keeps_the_proxy_open() {
         let mut scope = scope();
-        scope.sessions.insert("auxiliary-session".to_owned());
+        scope.register_page_session("auxiliary-session", "selected");
         let action = upstream_message(
             text(json!({
                 "method": "Target.detachedFromTarget",
@@ -1113,6 +1351,7 @@ mod tests {
             "6".to_owned(),
             PendingRequest {
                 method: "Target.attachToBrowserTarget".to_owned(),
+                session_id: None,
             },
         )]);
         let action = upstream_message(

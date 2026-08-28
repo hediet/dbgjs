@@ -39,6 +39,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			args: [
 				`--remote-debugging-port=${debuggingPort}`,
 				"--remote-allow-origins=*",
+				"--site-per-process",
 				"--no-first-run",
 				"--no-default-browser-check",
 			],
@@ -57,6 +58,20 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			"<title>unrelated owner page</title><p id='unrelated'>untouched</p>",
 		);
 		await page.goto(fixture.origin);
+		await expect(
+			page.frameLocator("#oopif").locator("#oopif-marker"),
+		).toHaveText("cross-origin iframe");
+		const ownerBrowser = browserContext.browser();
+		expect(ownerBrowser).not.toBeNull();
+		const ownerCdp = await ownerBrowser.newBrowserCDPSession();
+		const targetInfos = await ownerCdp.send("Target.getTargets");
+		expect(
+			targetInfos.targetInfos.some(
+				(target) =>
+					target.type === "iframe" && target.url.startsWith(fixture.oopifOrigin),
+			),
+		).toBe(true);
+		await ownerCdp.detach();
 		const endpoint = await readCdpEndpoint(debuggingPort);
 		await runCli(["context", "create", "--context", ":playwright-e2e"], environment);
 		await runCli(
@@ -123,6 +138,54 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			marker: "selected page",
 		});
 		expect(await page.title()).toBe("jsdbg Playwright E2E");
+		const oopif = await runCli(
+			[
+				"page",
+				"playwright",
+				"--eval",
+				'return { text: await page.frameLocator("#oopif").locator("#oopif-marker").textContent() };',
+				...scope,
+			],
+			environment,
+		);
+		expect(JSON.parse(oopif)).toEqual({ text: "cross-origin iframe" });
+		const fileChooser = await runCli(
+			[
+				"page",
+				"playwright",
+				"--eval",
+				`const [chooser] = await Promise.all([
+					page.waitForEvent("filechooser"),
+					page.locator("#file").click(),
+				]);
+				return { multiple: chooser.isMultiple(), title: await page.title() };`,
+				...scope,
+			],
+			environment,
+		);
+		expect(JSON.parse(fileChooser)).toEqual({
+			multiple: false,
+			title: "jsdbg Playwright E2E",
+		});
+		const opaqueHeader = await runCli(
+			[
+				"page",
+				"playwright",
+				"--eval",
+				`await page.setExtraHTTPHeaders({ targetId: "opaque-header-value" });
+				await page.goto(${JSON.stringify(`${fixture.origin}/opaque-header`)});
+				return {
+					header: await page.locator("#target-id-header").textContent(),
+					oopif: await page.frameLocator("#oopif").locator("#oopif-marker").textContent(),
+				};`,
+				...scope,
+			],
+			environment,
+		);
+		expect(JSON.parse(opaqueHeader)).toEqual({
+			header: "opaque-header-value",
+			oopif: "cross-origin iframe",
+		});
 		const detachedSession = await runCli(
 			[
 				"page",
@@ -200,7 +263,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 		expect(await unrelatedPage.title()).toBe("unrelated owner page");
 		await appendFile(
 			transcriptPath,
-			"\nDetaching an auxiliary CDP session left the page proxy usable. Browser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.\n",
+			"\nA verified cross-origin iframe, file chooser interception, and an opaque `targetId` HTTP header worked through the selected page. Detaching an auxiliary CDP session left the page proxy usable. Browser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.\n",
 		);
 	} finally {
 		await run(cli, ["service", "stop"], environment);
@@ -231,26 +294,50 @@ function shellQuote(value) {
 }
 
 async function startFixture() {
-	const server = createServer((_request, response) => {
+	const oopifServer = createServer((_request, response) => {
+		response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+		response.end('<strong id="oopif-marker">cross-origin iframe</strong>');
+	});
+	await listen(oopifServer, "localhost");
+	const oopifAddress = oopifServer.address();
+	if (typeof oopifAddress !== "object" || oopifAddress === null) {
+		throw new Error("OOPIF fixture server did not bind to TCP");
+	}
+	const oopifOrigin = `http://localhost:${oopifAddress.port}`;
+
+	const server = createServer((request, response) => {
 		response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		response.end(`<!doctype html>
 <title>jsdbg Playwright E2E</title>
 <style>body { margin: 0 } main { height: 3000px; padding: 16px }</style>
-<main><strong id="marker">selected page</strong></main>`);
+<main>
+	<strong id="marker">selected page</strong>
+	<input id="file" type="file">
+	<span id="target-id-header">${request.headers.targetid ?? ""}</span>
+	<iframe id="oopif" src="${oopifOrigin}/child"></iframe>
+</main>`);
 	});
-	await new Promise((resolveReady, reject) => {
-		server.once("error", reject);
-		server.listen(0, "127.0.0.1", resolveReady);
-	});
+	await listen(server, "127.0.0.1");
 	const address = server.address();
 	if (typeof address !== "object" || address === null) {
 		throw new Error("fixture server did not bind to TCP");
 	}
 	return {
 		origin: `http://127.0.0.1:${address.port}`,
-		close: () =>
-			new Promise((resolveClose, reject) =>
-				server.close((error) => (error ? reject(error) : resolveClose())),
-			),
+		oopifOrigin,
+		close: () => Promise.all([closeServer(server), closeServer(oopifServer)]),
 	};
+}
+
+function listen(server, host) {
+	return new Promise((resolveReady, reject) => {
+		server.once("error", reject);
+		server.listen(0, host, resolveReady);
+	});
+}
+
+function closeServer(server) {
+	return new Promise((resolveClose, reject) =>
+		server.close((error) => (error ? reject(error) : resolveClose())),
+	);
 }

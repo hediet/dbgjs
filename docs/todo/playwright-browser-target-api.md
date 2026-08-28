@@ -72,8 +72,10 @@ single-use authenticated capability URL on a random loopback-only WebSocket
 listener. Invalid or stalled peers cannot claim the capability: the listener
 continues until the secret path is authenticated, with a per-peer handshake
 deadline and cancellation. The virtual endpoint uses a page-scoped CDP
-allowlist, filters discovery and attachment to the exact selected page, and
-validates every target, session, and browser-context identifier. Browser-wide
+allowlist and filters discovery and attachment to the exact selected page plus
+iframe descendants verified through its CDP session chain. It validates
+schema-declared target, session, and browser-context parameters for each method
+without interpreting opaque headers or serialized runtime values. Browser-wide
 setup calls required by Playwright are answered locally rather than forwarded.
 
 Sessions are bound to the selected connection generation, cancel when their
