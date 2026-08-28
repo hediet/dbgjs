@@ -2464,13 +2464,12 @@ fn heap_node_snapshot(
 ) -> Result<HeapNodeSnapshot, TargetDebuggerError> {
     let summary = graph.node_summary(node).map_err(heap_analysis_error)?;
     let (name, name_truncated) = bounded_heap_text(summary.raw_name, max_string_length);
-    let (string_value, string_truncated) = match summary.string_value {
-        Some(value) => {
-            let (value, truncated) = bounded_heap_text(value, max_string_length);
-            (Some(value), truncated)
-        }
-        None => (None, name_truncated),
-    };
+    let reconstructed = graph
+        .reconstructed_string(node, max_string_length.map(|length| length as usize))
+        .map_err(heap_analysis_error)?;
+    let (string_value, string_truncated) = reconstructed
+        .map(|value| (Some(value.value), value.truncated))
+        .unwrap_or((None, name_truncated));
     let locations = graph
         .locations_for_node(node)
         .map_err(heap_analysis_error)?

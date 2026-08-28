@@ -4,7 +4,7 @@
 //! consumed with serde visitors rather than materialized as `serde_json::Value`.
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::{BufReader, Read};
 use std::sync::OnceLock;
@@ -15,6 +15,8 @@ use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 const SNAPSHOT_READ_BUFFER_SIZE: usize = 1024 * 1024;
 const NO_NODE: u32 = u32::MAX;
+const MAX_STRING_RECONSTRUCTION_DEPTH: usize = 64;
+const MAX_RECONSTRUCTED_STRING_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeIndex(pub u32);
@@ -151,6 +153,34 @@ impl HeapGraph {
         })
     }
 
+    /// Flattens V8 cons/sliced string nodes with cycle and depth protection.
+    /// Results never exceed 1 MiB, and `max_chars` can impose a smaller display
+    /// bound. Regular snapshots omit slice offsets, so those return a truncated
+    /// preview of the reconstructed backing string.
+    pub fn reconstructed_string(
+        &self,
+        node: NodeIndex,
+        max_chars: Option<usize>,
+    ) -> Result<Option<ReconstructedString>, AnalysisError> {
+        let index = self.checked_node(node)?;
+        if !self.is_string_type(index) {
+            return Ok(None);
+        }
+        let mut state = StringReconstruction {
+            graph: self,
+            max_chars: max_chars.unwrap_or(usize::MAX),
+            max_bytes: MAX_RECONSTRUCTED_STRING_BYTES,
+            active: HashSet::new(),
+            truncated: false,
+        };
+        let mut value = String::new();
+        state.append(node, 0, &mut value)?;
+        Ok(Some(ReconstructedString {
+            value,
+            truncated: state.truncated,
+        }))
+    }
+
     /// Looks up an object id within this capture. The index is intentionally
     /// owned by the graph, so ids from different captures are never conflated.
     pub fn node_by_heap_object_id(&self, heap_object_id: u64) -> Option<NodeIndex> {
@@ -256,7 +286,21 @@ impl HeapGraph {
                 continue;
             }
             if let Some(matcher) = &selector.string_value {
-                if !self.is_string_type(index) || !matcher.matches(raw_name) {
+                let matches = match self.node_type_name(index) {
+                    Ok("string") => matcher.matches(raw_name),
+                    Ok("concatenated string" | "sliced string") => self
+                        .reconstructed_string(
+                            NodeIndex(
+                                u32::try_from(index).expect("node count was checked while parsing"),
+                            ),
+                            None,
+                        )
+                        .ok()
+                        .flatten()
+                        .is_some_and(|value| matcher.matches(&value.value)),
+                    _ => false,
+                };
+                if !matches {
                     continue;
                 }
             }
@@ -336,17 +380,24 @@ impl HeapGraph {
         let mut groups = BTreeMap::<String, AggregateValue>::new();
         for index in 0..self.node_count() {
             let key = match by {
-                AggregateBy::NodeType => self.node_type_name(index).ok(),
-                AggregateBy::RawName => self.string(self.node_name[index]),
-                AggregateBy::StringValue if self.is_string_type(index) => {
-                    self.string(self.node_name[index])
-                }
+                AggregateBy::NodeType => self.node_type_name(index).ok().map(str::to_owned),
+                AggregateBy::RawName => self.string(self.node_name[index]).map(str::to_owned),
+                AggregateBy::StringValue if self.is_string_type(index) => self
+                    .reconstructed_string(
+                        NodeIndex(
+                            u32::try_from(index).expect("node count was checked while parsing"),
+                        ),
+                        None,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|value| value.value),
                 AggregateBy::StringValue => None,
             };
             let Some(key) = key else {
                 continue;
             };
-            let value = groups.entry(key.to_owned()).or_default();
+            let value = groups.entry(key).or_default();
             value.count += 1;
             value.shallow_size += u128::from(self.node_shallow_size[index]);
         }
@@ -403,6 +454,19 @@ impl HeapGraph {
         }
         let index = u32::try_from(self.edge_name_or_index[edge]).ok()?;
         self.string(index)
+    }
+
+    fn named_edge_target(&self, node: NodeIndex, name: &str) -> Option<NodeIndex> {
+        self.outgoing_references(node)
+            .ok()?
+            .find(|reference| reference.name == Some(name))
+            .map(|reference| reference.target)
+    }
+
+    fn numeric_edge_value(&self, node: NodeIndex, name: &str) -> Option<usize> {
+        let target = self.named_edge_target(node, name)?;
+        let index = self.checked_node(target).ok()?;
+        self.string(self.node_name[index])?.parse().ok()
     }
 
     fn reference(
@@ -761,6 +825,154 @@ fn dominator_eval(
         ancestor[item_index] = ancestor[parent_index];
     }
     label[vertex_index]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReconstructedString {
+    pub value: String,
+    pub truncated: bool,
+}
+
+struct StringReconstruction<'a> {
+    graph: &'a HeapGraph,
+    max_chars: usize,
+    max_bytes: usize,
+    active: HashSet<NodeIndex>,
+    truncated: bool,
+}
+
+impl StringReconstruction<'_> {
+    fn append(
+        &mut self,
+        node: NodeIndex,
+        depth: usize,
+        output: &mut String,
+    ) -> Result<(), AnalysisError> {
+        if !output.is_empty()
+            && (output.len() >= self.max_bytes
+                || (self.max_chars != usize::MAX && output.chars().count() >= self.max_chars))
+        {
+            self.truncated = true;
+            return Ok(());
+        }
+        if depth >= MAX_STRING_RECONSTRUCTION_DEPTH || !self.active.insert(node) {
+            self.truncated = true;
+            return Ok(());
+        }
+        let result = self.append_inner(node, depth, output);
+        self.active.remove(&node);
+        result
+    }
+
+    fn append_inner(
+        &mut self,
+        node: NodeIndex,
+        depth: usize,
+        output: &mut String,
+    ) -> Result<(), AnalysisError> {
+        let index = self.graph.checked_node(node)?;
+        let node_type = self.graph.node_type_name(index)?;
+        let raw_name = self
+            .graph
+            .string(self.graph.node_name[index])
+            .ok_or_else(|| {
+                AnalysisError::CorruptGraph(format!("node {} has an invalid string index", node.0))
+            })?;
+        let placeholder = match node_type {
+            "concatenated string" => Some("(concatenated string)"),
+            "sliced string" => Some("(sliced string)"),
+            _ => None,
+        };
+        if placeholder.is_some_and(|placeholder| raw_name != placeholder) {
+            self.append_text(output, raw_name);
+            return Ok(());
+        }
+        match node_type {
+            "string" => {
+                self.append_text(output, raw_name);
+            }
+            "concatenated string" => {
+                for part in ["first", "second"] {
+                    let Some(target) = self.graph.named_edge_target(node, part) else {
+                        self.truncated = true;
+                        continue;
+                    };
+                    self.append(target, depth + 1, output)?;
+                }
+            }
+            "sliced string" => {
+                let Some(parent) = self.graph.named_edge_target(node, "parent") else {
+                    self.truncated = true;
+                    return Ok(());
+                };
+                let mut parent_value = String::new();
+                let slice_bounds = (
+                    self.graph.numeric_edge_value(node, "offset"),
+                    self.graph.numeric_edge_value(node, "length"),
+                );
+                if let (Some(offset), Some(length)) = slice_bounds {
+                    let original_max_chars = self.max_chars;
+                    let original_truncated = self.truncated;
+                    self.max_chars = offset
+                        .saturating_add(length.min(original_max_chars))
+                        .min(MAX_RECONSTRUCTED_STRING_BYTES);
+                    self.append(parent, depth + 1, &mut parent_value)?;
+                    self.max_chars = original_max_chars;
+                    self.truncated = original_truncated;
+                    if parent_value.chars().count()
+                        < offset.saturating_add(length.min(original_max_chars))
+                    {
+                        self.truncated = true;
+                    }
+                    let slice = parent_value
+                        .chars()
+                        .skip(offset)
+                        .take(length)
+                        .collect::<String>();
+                    if slice.chars().count() < length {
+                        self.truncated = true;
+                    }
+                    self.append_text(output, &slice);
+                } else {
+                    self.append(parent, depth + 1, &mut parent_value)?;
+                    // Regular V8 snapshots omit the slice offset. The backing
+                    // string is useful as an explicitly incomplete preview.
+                    self.truncated = true;
+                    self.append_text(output, &parent_value);
+                }
+            }
+            _ => {
+                self.truncated = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn append_text(&mut self, output: &mut String, value: &str) {
+        let remaining_chars = if self.max_chars == usize::MAX {
+            usize::MAX
+        } else {
+            self.max_chars.saturating_sub(output.chars().count())
+        };
+        let remaining_bytes = self.max_bytes.saturating_sub(output.len());
+        if remaining_chars == 0 || remaining_bytes == 0 {
+            self.truncated |= !value.is_empty();
+            return;
+        }
+
+        let mut end = 0;
+        let mut chars = 0;
+        for (index, character) in value.char_indices() {
+            let next = index + character.len_utf8();
+            if chars == remaining_chars || next > remaining_bytes {
+                break;
+            }
+            end = next;
+            chars += 1;
+        }
+        output.push_str(&value[..end]);
+        self.truncated |= end < value.len();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2116,7 +2328,7 @@ mod tests {
               "snapshot": {{
                 "meta": {{
                   "node_fields": ["type", "name", "id", "self_size", "edge_count"],
-                  "node_types": [["synthetic", "object", "string", "concatenated string", "sliced string"], "string", "number", "number", "number"],
+                  "node_types": [["synthetic", "object", "string", "concatenated string", "sliced string", "number"], "string", "number", "number", "number"],
                   "edge_fields": ["type", "name_or_index", "to_node"],
                   "edge_types": [["property", "element", "weak", "internal", "hidden"], "string_or_number", "node"],
                   "location_fields": ["object_index", "script_id", "line", "column"]
@@ -2195,6 +2407,161 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn reconstructs_concatenated_and_sliced_string_content() {
+        let concatenated = parse_heap_graph(
+            snapshot(
+                "3,0,1,0,2, 2,1,3,0,0, 2,2,5,0,0",
+                "3,3,5, 3,4,10",
+                r#""(concatenated string)","hello ","world","first","second""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            concatenated
+                .reconstructed_string(NodeIndex(0), None)
+                .unwrap(),
+            Some(ReconstructedString {
+                value: "hello world".to_owned(),
+                truncated: false,
+            })
+        );
+        assert_eq!(
+            concatenated
+                .reconstructed_string(NodeIndex(0), Some(7))
+                .unwrap(),
+            Some(ReconstructedString {
+                value: "hello w".to_owned(),
+                truncated: true,
+            })
+        );
+        assert_eq!(
+            concatenated.select(&NodeSelector::new().string_value(TextMatcher::Contains("lo wo"))),
+            vec![NodeIndex(0)]
+        );
+
+        let sliced = parse_heap_graph(
+            snapshot(
+                "4,0,1,0,3, 2,1,3,0,0, 5,2,5,0,0, 5,3,7,0,0",
+                "3,4,5, 3,5,10, 3,6,15",
+                r#""(sliced string)","abcdefghijklmnopqrstuvwxyz","2","5","parent","offset","length""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            sliced.reconstructed_string(NodeIndex(0), None).unwrap(),
+            Some(ReconstructedString {
+                value: "cdefg".to_owned(),
+                truncated: false,
+            })
+        );
+
+        let regular_v8_slice = parse_heap_graph(
+            snapshot(
+                "4,0,1,0,1, 2,1,3,0,0",
+                "3,2,5",
+                r#""(sliced string)","backing string","parent""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            regular_v8_slice
+                .reconstructed_string(NodeIndex(0), Some(7))
+                .unwrap(),
+            Some(ReconstructedString {
+                value: "backing".to_owned(),
+                truncated: true,
+            })
+        );
+    }
+
+    #[test]
+    fn bounds_string_reconstruction_cycles_depth_and_size() {
+        let cyclic = parse_heap_graph(
+            snapshot(
+                "3,0,1,0,2, 2,1,3,0,0",
+                "3,2,0, 3,3,5",
+                r#""(concatenated string)","tail","first","second""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            cyclic.reconstructed_string(NodeIndex(0), None).unwrap(),
+            Some(ReconstructedString {
+                value: "tail".to_owned(),
+                truncated: true,
+            })
+        );
+
+        let concat_count = MAX_STRING_RECONSTRUCTION_DEPTH + 1;
+        let empty_index = concat_count + 1;
+        let nodes = (0..concat_count)
+            .map(|index| format!("3,0,{},0,2", index * 2 + 1))
+            .chain([
+                format!("2,1,{},0,0", concat_count * 2 + 1),
+                format!("2,2,{},0,0", concat_count * 2 + 3),
+            ])
+            .collect::<Vec<_>>()
+            .join(",");
+        let edges = (0..concat_count)
+            .flat_map(|index| {
+                let first = if index + 1 < concat_count {
+                    index + 1
+                } else {
+                    concat_count
+                };
+                [
+                    format!("3,3,{}", first * 5),
+                    format!("3,4,{}", empty_index * 5),
+                ]
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let deep = parse_heap_graph(
+            snapshot(
+                &nodes,
+                &edges,
+                r#""(concatenated string)","x","","first","second""#,
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let deep_value = deep
+            .reconstructed_string(NodeIndex(0), None)
+            .unwrap()
+            .unwrap();
+        assert!(deep_value.truncated);
+
+        let oversized_value = "x".repeat(MAX_RECONSTRUCTED_STRING_BYTES + 1);
+        let oversized_strings =
+            serde_json::to_string(&vec![oversized_value]).expect("serialize string table");
+        let oversized = parse_heap_graph(
+            snapshot(
+                "2,0,1,0,0",
+                "",
+                &oversized_strings[1..oversized_strings.len() - 1],
+                "",
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let bounded = oversized
+            .reconstructed_string(NodeIndex(0), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(bounded.value.len(), MAX_RECONSTRUCTED_STRING_BYTES);
+        assert!(bounded.truncated);
     }
 
     #[test]
