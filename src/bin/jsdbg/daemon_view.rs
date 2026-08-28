@@ -330,8 +330,13 @@ fn breakpoint_counts(debugger: &TargetDebuggerSnapshot) -> (usize, usize, usize)
             (0, 0, 0),
             |(installed, pending, failed), breakpoint| match breakpoint.status {
                 TargetBreakpointStatus::Installed { .. } => (installed + 1, pending, failed),
-                TargetBreakpointStatus::Pending => (installed, pending + 1, failed),
                 TargetBreakpointStatus::Failed { .. } => (installed, pending, failed + 1),
+                TargetBreakpointStatus::WaitingForScript
+                | TargetBreakpointStatus::SourceNotFound { .. }
+                | TargetBreakpointStatus::AmbiguousSource { .. }
+                | TargetBreakpointStatus::Unmapped { .. }
+                | TargetBreakpointStatus::Applicable { .. }
+                | TargetBreakpointStatus::Installing { .. } => (installed, pending + 1, failed),
             },
         )
 }
@@ -455,7 +460,6 @@ mod tests {
             connection_id: "browser".to_owned(),
             target_id: "page-1".to_owned(),
             connection_generation: 7,
-            attachment_reused: None,
             revision: 19,
             phase: TargetDebuggerPhase::Paused { epoch: 3 },
             scripts: vec![],
@@ -464,7 +468,7 @@ mod tests {
                     "installed",
                     TargetBreakpointStatus::Installed { binding_count: 1 },
                 ),
-                target_breakpoint("pending", TargetBreakpointStatus::Pending),
+                target_breakpoint("pending", TargetBreakpointStatus::WaitingForScript),
                 target_breakpoint(
                     "failed",
                     TargetBreakpointStatus::Failed {
@@ -556,6 +560,9 @@ mod tests {
                 enabled: true,
                 condition: None,
                 target_selector: Some("worker".to_owned()),
+                pending_reason: None,
+                targets: vec![],
+                applications: vec![],
             }],
         };
         assert_eq!(
@@ -584,6 +591,8 @@ mod tests {
             column: 1,
             status,
             source: None,
+            assessments: vec![],
+            applications: vec![],
         }
     }
 }
