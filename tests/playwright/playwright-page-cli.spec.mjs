@@ -45,6 +45,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 		},
 	);
 	const page = browserContext.pages()[0] ?? (await browserContext.newPage());
+	const unrelatedPage = await browserContext.newPage();
 	const stateFile = join(stateDirectory, "service.json");
 	const environment = {
 		JSDBG_SERVICE_EXE: service,
@@ -52,6 +53,9 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 	};
 
 	try {
+		await unrelatedPage.setContent(
+			"<title>unrelated owner page</title><p id='unrelated'>untouched</p>",
+		);
 		await page.goto(fixture.origin);
 		const endpoint = await readCdpEndpoint(debuggingPort);
 		await runCli(["context", "create", "--context", ":playwright-e2e"], environment);
@@ -119,9 +123,61 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			marker: "selected page",
 		});
 		expect(await page.title()).toBe("jsdbg Playwright E2E");
+		const rejected = JSON.parse(
+			await runCli(
+				[
+					"page",
+					"playwright",
+					"--eval",
+					`async function rejection(operation) {
+						try { await operation(); return null; } catch (error) { return error.message; }
+					}
+					return {
+						newPage: await rejection(() => page.context().newPage()),
+						newContext: await rejection(() => page.context().browser().newContext()),
+						clearCookies: await rejection(() => page.context().clearCookies()),
+					};`,
+					...scope,
+				],
+				environment,
+			),
+		);
+		for (const error of Object.values(rejected)) {
+			expect(error).toContain("outside the selected page allowlist");
+		}
+		expect(await unrelatedPage.title()).toBe("unrelated owner page");
+		expect(await unrelatedPage.locator("#unrelated").textContent()).toBe("untouched");
+
+		const destruction = run(cli, [
+			"page",
+			"playwright",
+			"--eval",
+			`await page.evaluate(() => {
+				document.title = "proxy command pending";
+				return new Promise(() => {});
+			})`,
+			...scope,
+		], environment, { timeoutMs: 15_000 });
+		await expect.poll(() => page.title()).toBe("proxy command pending");
+		await page.close();
+		const destroyed = await destruction;
+		await appendTranscriptCommand(
+			[
+				"page",
+				"playwright",
+				"--eval",
+				"<pending page.evaluate>",
+				...scope,
+			],
+			destroyed.output,
+		);
+		expect(destroyed.code, destroyed.output).not.toBe(0);
+		expect(destroyed.timedOut, destroyed.output).toBe(false);
+		expect(destroyed.durationMs, destroyed.output).toBeLessThan(10_000);
+		expect(await unrelatedPage.title()).toBe("unrelated owner page");
 		await appendFile(
 			transcriptPath,
-			"\nThe original Playwright owner remained connected after all three one-shot proxy sessions.\n",
+			"\nBrowser-wide operations were rejected, the unrelated page remained untouched, and destroying the selected page cancelled its pending proxy command promptly. The original Playwright owner remained connected.\n",
 		);
 	} finally {
 		await run(cli, ["service", "stop"], environment);
@@ -133,13 +189,18 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 
 async function runCli(args, environment, input) {
 	const result = await run(cli, args, environment, { input, timeoutMs: 45_000 });
-	const command = `jsdbg ${args.map(shellQuote).join(" ")}`;
-	await appendFile(
-		transcriptPath,
-		`\n\`\`\`console\n$ ${command}${input === undefined ? "" : ` <<'JS'\n${input}\nJS`}\n${result.output.trim()}\n\`\`\`\n`,
-	);
+	await appendTranscriptCommand(args, result.output, input);
 	expect(result.code, result.output).toBe(0);
 	return result.output.trim();
+}
+
+async function appendTranscriptCommand(args, output, input) {
+	const command = `jsdbg ${args.map(shellQuote).join(" ")}`;
+	const stableOutput = output.replaceAll(process.cwd(), "<worktree>");
+	await appendFile(
+		transcriptPath,
+		`\n\`\`\`console\n$ ${command}${input === undefined ? "" : ` <<'JS'\n${input}\nJS`}\n${stableOutput.trim()}\n\`\`\`\n`,
+	);
 }
 
 function shellQuote(value) {

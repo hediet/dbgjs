@@ -69,12 +69,17 @@ The control plane remains on the daemon's authenticated Unix socket (Unix) or
 named pipe (Windows). Playwright's public `connectOverCDP` API accepts HTTP or
 WebSocket URLs, not those native IPC transports, so the daemon creates a
 single-use authenticated capability URL on a random loopback-only WebSocket
-listener. The virtual endpoint filters discovery and attachment to the exact
-selected page and rejects requests naming another target.
+listener. Invalid or stalled peers cannot claim the capability: the listener
+continues until the secret path is authenticated, with a per-peer handshake
+deadline and cancellation. The virtual endpoint uses a page-scoped CDP
+allowlist, filters discovery and attachment to the exact selected page, and
+validates every target, session, and browser-context identifier. Browser-wide
+setup calls required by Playwright are answered locally rather than forwarded.
 
 Sessions are bound to the selected connection generation, cancel when their
-control lease closes or the connection changes, wait at most 15 seconds for a
-client, and live at most 45 seconds. CLI execution is limited to 30 seconds;
+control lease closes or the connection changes, and close immediately when the
+selected target is destroyed. They wait at most 15 seconds for an authenticated
+client and live at most 45 seconds. CLI execution is limited to 30 seconds;
 program input and JSON result are each limited to 1 MiB, protocol messages to
 16 MiB, and diagnostics to 64 KiB.
 

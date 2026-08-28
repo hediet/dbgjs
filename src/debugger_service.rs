@@ -250,6 +250,12 @@ impl DebuggerService {
                         });
                 service.commit_context(&mut state, &context_id, transition);
                 if let Some(target_id) = removed_target {
+                    cancel_playwright_proxies_for_target(
+                        &mut state,
+                        &context_id,
+                        &connection_id,
+                        &target_id,
+                    );
                     state.target_debuggers.remove(&(
                         context_id.clone(),
                         connection_id.clone(),
@@ -329,6 +335,12 @@ impl DebuggerService {
                     };
                 service.commit_context(&mut state, &context_id, transition);
                 if let Some(target_id) = target_to_remove {
+                    cancel_playwright_proxies_for_target(
+                        &mut state,
+                        &context_id,
+                        &connection_id,
+                        &target_id,
+                    );
                     state.target_debuggers.remove(&(
                         context_id.clone(),
                         connection_id.clone(),
@@ -599,6 +611,7 @@ impl Drop for CaptureReservationGuard {
 struct PlaywrightProxyRegistration {
     context_id: String,
     connection_id: String,
+    target_id: String,
     generation: u64,
     cancel: watch::Sender<bool>,
 }
@@ -2794,7 +2807,7 @@ impl DebuggerServiceApi for DebuggerService {
         let target_id = self
             .resolve_target_id(&context_id, &connection_id, &target_id)
             .await?;
-        let (runtime, source) = {
+        let (runtime, source, browser_context_id) = {
             let state = self.state.lock().await;
             let connection = state
                 .contexts
@@ -2826,13 +2839,20 @@ impl DebuggerServiceApi for DebuggerService {
             let source = runtime
                 .playwright_cdp_source()
                 .map_err(|error| invalid_state(&error.to_string()))?;
-            (runtime, source)
+            (runtime, source, target.browser_context_id.clone())
         };
 
         let id = random_instance_id().map_err(|error| internal_error(error.to_string()))?;
-        let proxy = crate::playwright_proxy::start(source, target_id.clone(), id.clone())
-            .await
-            .map_err(|error| internal_error(error.to_string()))?;
+        let proxy = crate::playwright_proxy::start(
+            source,
+            crate::playwright_proxy::PlaywrightPageScope {
+                target_id: target_id.clone(),
+                browser_context_id,
+            },
+            id.clone(),
+        )
+        .await
+        .map_err(|error| internal_error(error.to_string()))?;
         let crate::playwright_proxy::PlaywrightProxy {
             websocket_url,
             cancel,
@@ -2863,6 +2883,7 @@ impl DebuggerServiceApi for DebuggerService {
                 PlaywrightProxyRegistration {
                     context_id: context_id.clone(),
                     connection_id: connection_id.clone(),
+                    target_id: target_id.clone(),
                     generation: expected_generation,
                     cancel: cancel.clone(),
                 },
@@ -3843,6 +3864,23 @@ fn cancel_playwright_proxies(
         let matches = registration.context_id == context_id
             && registration.connection_id == connection_id
             && generation.is_none_or(|generation| registration.generation == generation);
+        if matches {
+            registration.cancel.send_replace(true);
+        }
+        !matches
+    });
+}
+
+fn cancel_playwright_proxies_for_target(
+    state: &mut ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    target_id: &str,
+) {
+    state.playwright_proxies.retain(|_, registration| {
+        let matches = registration.context_id == context_id
+            && registration.connection_id == connection_id
+            && registration.target_id == target_id;
         if matches {
             registration.cancel.send_replace(true);
         }
