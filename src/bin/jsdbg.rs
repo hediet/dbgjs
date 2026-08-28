@@ -4989,20 +4989,20 @@ Use --no-validation for vendor or newer protocol methods."
 #[cfg(test)]
 mod tests {
     use super::{
-        CliSelection, ConnectionKindFilter, ConnectionStatusFilter, ResolvedScope, ScopeOptions,
+        CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
+        DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH, ResolvedScope, ScopeOptions,
         SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
         connection_list_output, extract_scope_options, load_selection_store, parse_chrome_options,
         parse_connection_list_options, parse_context_create_options, parse_context_option,
         parse_coverage_show_options, parse_cpu_profile_sampling_interval,
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
         parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
-        parse_heap_string_options,
-        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
-        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_grep_options,
-        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
-        parse_target_list_options, parse_value_options, png_dimensions, resolve_target_scope,
-        select_implicit_context, split_heap_reference_cli, target_list_output,
-        DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
+        parse_heap_string_options, parse_process_attach_options, parse_process_list_options,
+        parse_promise_list_options, parse_raw_cdp_options, parse_screenshot_capture_options,
+        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
+        parse_source_tree_options, parse_target_list_options, parse_value_options, png_dimensions,
+        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -5526,23 +5526,15 @@ mod tests {
     fn bounds_heap_show_references_unless_explicitly_expanded() {
         let defaults = parse_heap_show_options(&arguments(&[])).unwrap();
         assert_eq!(defaults.limit, DEFAULT_HEAP_SHOW_REFERENCE_LIMIT);
-        assert_eq!(
-            defaults.max_string_length,
-            Some(DEFAULT_HEAP_STRING_LENGTH)
-        );
+        assert_eq!(defaults.max_string_length, Some(DEFAULT_HEAP_STRING_LENGTH));
 
-        let limited = parse_heap_show_options(&arguments(&[
-            "--limit",
-            "7",
-            "--max-string-length",
-            "40",
-        ]))
-        .unwrap();
+        let limited =
+            parse_heap_show_options(&arguments(&["--limit", "7", "--max-string-length", "40"]))
+                .unwrap();
         assert_eq!(limited.limit, 7);
         assert_eq!(limited.max_string_length, Some(40));
 
-        let expanded =
-            parse_heap_show_options(&arguments(&["--all", "--full-strings"])).unwrap();
+        let expanded = parse_heap_show_options(&arguments(&["--all", "--full-strings"])).unwrap();
         assert_eq!(expanded.limit, u32::MAX);
         assert_eq!(expanded.max_string_length, None);
     }
