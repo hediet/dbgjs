@@ -4009,6 +4009,11 @@ async fn evaluate(
         true,
     )
     .await?;
+    let mut preview = remote_value_snapshot(
+        &result,
+        crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
+    );
+    preview.reference = None;
     let kind = remote_object_kind(&result);
     Ok(EvaluationSnapshot {
         expression,
@@ -4017,6 +4022,7 @@ async fn evaluate(
         unserializable_value: result.unserializable_value,
         description: result.description,
         object_id: result.object_id,
+        preview,
     })
 }
 
@@ -4267,6 +4273,11 @@ where
 }
 
 fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapshot {
+    let mut preview = remote_value_snapshot(
+        &value,
+        crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
+    );
+    preview.reference = None;
     let kind = remote_object_kind(&value);
     VariableSnapshot {
         name,
@@ -4275,6 +4286,7 @@ fn variable_snapshot(name: String, value: RuntimeRemoteObject) -> VariableSnapsh
         unserializable_value: value.unserializable_value,
         description: value.description,
         object_id: value.object_id,
+        preview,
     }
 }
 

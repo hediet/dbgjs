@@ -565,6 +565,131 @@ fn cli_service_connects_to_live_cdp() {
             .as_array()
             .is_some_and(|targets| targets.iter().any(|target| target["targetType"] == "page"))
     );
+    let target_id = connected["connections"][0]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["targetType"] == "page")
+        .unwrap()["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let long_value = "x".repeat(140);
+    let setup_expression = format!(
+        "globalThis.__jsdbgConsistentValue = {{ short: 'ok', long: '{long_value}', nested: {{ answer: 42 }} }}"
+    );
+    let eval_json = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "target",
+            "eval",
+            &setup_expression,
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    let value_json = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "value",
+            "globalThis.__jsdbgConsistentValue",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_eq!(
+        value_presentation(&eval_json),
+        value_presentation(&redact_references(value_json.clone()))
+    );
+    assert!(!contains_reference(&eval_json));
+    let long_property = eval_json["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|property| property["name"] == "long")
+        .unwrap();
+    assert_eq!(
+        long_property["value"]["preview"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        120
+    );
+    assert_eq!(long_property["value"]["truncated"], true);
+
+    let eval_human = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "target",
+            "eval",
+            "globalThis.__jsdbgConsistentValue",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_success(
+        &["target", "eval", "globalThis.__jsdbgConsistentValue"],
+        eval_human.0,
+        &eval_human.1,
+        &eval_human.2,
+    );
+    let value_human = run_human_in(
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "value",
+            "globalThis.__jsdbgConsistentValue",
+            "--context",
+            "live-browser",
+            "--connection",
+            "browser",
+            "--target",
+            &target_id,
+        ],
+    );
+    assert_success(
+        &["value", "globalThis.__jsdbgConsistentValue"],
+        value_human.0,
+        &value_human.1,
+        &value_human.2,
+    );
+    let eval_rendering = normalize_value_rendering(&String::from_utf8(eval_human.1).unwrap());
+    let value_rendering = normalize_value_rendering(&String::from_utf8(value_human.1).unwrap());
+    assert_eq!(eval_rendering, value_rendering);
+    let transcript = format!(
+        "$ jsdbg target eval globalThis.__jsdbgConsistentValue\n{eval_rendering}\
+         $ jsdbg value globalThis.__jsdbgConsistentValue\n{value_rendering}\
+         equivalent bounded rendering: yes\n\
+         target eval raw references exposed: no\n"
+    );
+    print!("{transcript}");
+    assert_eq!(
+        transcript,
+        include_str!("transcripts/consistent-values.txt")
+    );
 
     let connections = run_json(
         &cli,
@@ -697,6 +822,66 @@ fn cli_service_connects_to_live_cdp() {
     cleanup.disarm();
 }
 
+fn value_presentation(value: &Value) -> Value {
+    serde_json::json!({
+        "subtype": value["subtype"],
+        "className": value["className"],
+        "preview": value["preview"],
+        "properties": value["properties"],
+        "promise": value["promise"],
+    })
+}
+
+fn redact_references(mut value: Value) -> Value {
+    match &mut value {
+        Value::Array(values) => {
+            for value in values {
+                *value = redact_references(value.take());
+            }
+        }
+        Value::Object(fields) => {
+            if fields.contains_key("reference") {
+                fields.insert("reference".to_owned(), Value::Null);
+            }
+            for value in fields.values_mut() {
+                *value = redact_references(value.take());
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
+fn contains_reference(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(contains_reference),
+        Value::Object(fields) => {
+            fields
+                .get("reference")
+                .is_some_and(|reference| !reference.is_null())
+                || fields.values().any(contains_reference)
+        }
+        _ => false,
+    }
+}
+
+fn normalize_value_rendering(rendering: &str) -> String {
+    let mut result = String::new();
+    for line in rendering.lines() {
+        let line = line
+            .rsplit_once(" (")
+            .filter(|(_, suffix)| suffix.ends_with(')'))
+            .map_or(line, |(value, _)| value);
+        if line.starts_with("  long: ") {
+            result.push_str("  long: <120 x characters>...\n");
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
 fn run_json(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) -> Value {
     run_json_in(
         cli,
@@ -746,6 +931,16 @@ fn run_human(cli: &Path, service: &Path, state_file: &Path, arguments: &[&str]) 
     );
     assert_success(arguments, status, &stdout, &stderr);
     String::from_utf8(stdout).expect("human CLI output should be UTF-8")
+}
+
+fn run_human_in(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+) -> (ExitStatus, Vec<u8>, Vec<u8>) {
+    run_in_with_format(cli, service, state_file, cwd, arguments, false)
 }
 
 fn run_in_with_format(

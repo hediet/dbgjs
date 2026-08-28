@@ -12,7 +12,9 @@ use cdp_client::context_identity::{
     resolve_context_expression,
 };
 use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
-use cdp_client::promise_debugging::{DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH};
+use cdp_client::promise_debugging::{
+    DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
+};
 use cdp_client::service_api::{
     BreakpointSpec, ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
     CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot, HeapAggregateBy,
@@ -193,16 +195,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                 )
                 .await)?;
-            output.print(&rpc(client
-                .evaluate_target(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    pause_epoch(&snapshot),
-                    0,
-                    expression.clone(),
-                )
-                .await)?)?;
+            output.print(
+                &rpc(client
+                    .inspect_value(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        pause_epoch(&snapshot),
+                        ValueSelector::Expression {
+                            expression: expression.clone(),
+                            allow_side_effects: true,
+                        },
+                        DEFAULT_VALUE_PREVIEW_LENGTH,
+                    )
+                    .await)?
+                .without_references(),
+            )?;
         }
         [target, cdp, method, options @ ..] if target == "target" && cdp == "cdp" => {
             let options = parse_raw_cdp_options(options)?;
@@ -2754,6 +2762,12 @@ async fn evaluate_watches(
                     unserializable_value: None,
                     description: Some("unavailable in this frame".to_owned()),
                     object_id: None,
+                    preview: cdp_client::service_api::ValuePreviewSnapshot {
+                        kind: "error".to_owned(),
+                        preview: Some("unavailable in this frame".to_owned()),
+                        truncated: false,
+                        reference: None,
+                    },
                 },
             },
         );

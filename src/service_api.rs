@@ -707,6 +707,7 @@ pub struct EvaluationSnapshot {
     pub unserializable_value: Option<String>,
     pub description: Option<String>,
     pub object_id: Option<String>,
+    pub preview: ValuePreviewSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -731,6 +732,22 @@ pub struct ValueSnapshot {
     pub preview: ValuePreviewSnapshot,
     pub properties: Vec<ValuePropertySnapshot>,
     pub promise: Option<PromiseSnapshot>,
+}
+
+impl ValueSnapshot {
+    pub fn without_references(mut self) -> Self {
+        self.preview.reference = None;
+        for property in &mut self.properties {
+            property.value.reference = None;
+        }
+        if let Some(promise) = &mut self.promise {
+            promise.reference = None;
+            if let Some(settlement) = &mut promise.settlement {
+                settlement.reference = None;
+            }
+        }
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -764,6 +781,7 @@ pub struct VariableSnapshot {
     pub unserializable_value: Option<String>,
     pub description: Option<String>,
     pub object_id: Option<String>,
+    pub preview: ValuePreviewSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -800,7 +818,7 @@ pub struct ValuePreviewSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseSnapshot {
-    pub reference: String,
+    pub reference: Option<String>,
     pub origin: PromiseOrigin,
     pub state: PromiseState,
     pub settlement: Option<ValuePreviewSnapshot>,
@@ -1710,8 +1728,9 @@ pub trait DebuggerServiceApi {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, TargetSnapshot,
-        TargetWaitPredicate,
+        ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, PromiseClassification,
+        PromiseOrigin, PromiseSnapshot, PromiseState, TargetSnapshot, TargetWaitPredicate,
+        ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector, ValueSnapshot,
     };
 
     #[test]
@@ -1727,6 +1746,54 @@ mod tests {
             )
             .unwrap(),
             predicate
+        );
+    }
+
+    #[test]
+    fn value_snapshot_can_hide_every_live_reference_without_losing_previews() {
+        let preview = |text: &str, reference: &str| ValuePreviewSnapshot {
+            kind: "object".to_owned(),
+            preview: Some(text.to_owned()),
+            truncated: false,
+            reference: Some(reference.to_owned()),
+        };
+        let snapshot = ValueSnapshot {
+            selector: ValueSelector::Expression {
+                expression: "value".to_owned(),
+                allow_side_effects: true,
+            },
+            subtype: None,
+            class_name: Some("Object".to_owned()),
+            preview: preview("Object", "object:1"),
+            properties: vec![ValuePropertySnapshot {
+                name: "child".to_owned(),
+                value: preview("Object", "object:2"),
+            }],
+            promise: Some(PromiseSnapshot {
+                reference: Some("promise:1".to_owned()),
+                origin: PromiseOrigin::Live,
+                state: PromiseState::Fulfilled,
+                settlement: Some(preview("Object", "object:3")),
+                retained: None,
+                classification: PromiseClassification::Indeterminate,
+            }),
+        }
+        .without_references();
+
+        assert_eq!(snapshot.preview.preview.as_deref(), Some("Object"));
+        assert!(snapshot.preview.reference.is_none());
+        assert!(snapshot.properties[0].value.reference.is_none());
+        assert!(snapshot.promise.as_ref().unwrap().reference.is_none());
+        assert!(
+            snapshot
+                .promise
+                .as_ref()
+                .unwrap()
+                .settlement
+                .as_ref()
+                .unwrap()
+                .reference
+                .is_none()
         );
     }
 

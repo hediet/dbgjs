@@ -4,7 +4,8 @@ use crate::service_api::{
     PromiseClassification, PromiseOrigin, PromiseSnapshot, PromiseState, ValuePreviewSnapshot,
 };
 
-pub const DEFAULT_PROMISE_PREVIEW_LENGTH: u32 = 120;
+pub const DEFAULT_VALUE_PREVIEW_LENGTH: u32 = 120;
+pub const DEFAULT_PROMISE_PREVIEW_LENGTH: u32 = DEFAULT_VALUE_PREVIEW_LENGTH;
 pub const DEFAULT_PROMISE_LIMIT: u32 = 100;
 
 const PROMISE_STATE_PROPERTIES: [&str; 2] = ["[[PromiseState]]", "[[PromiseStatus]]"];
@@ -35,7 +36,7 @@ pub fn inspect_live_promise(
         .flatten();
 
     PromiseSnapshot {
-        reference: object_id,
+        reference: Some(object_id),
         origin: PromiseOrigin::Live,
         state,
         settlement,
@@ -100,7 +101,7 @@ pub fn inspect_heap_promises(
         total_promises = total_promises.saturating_add(1);
         if promises.len() < limit as usize {
             promises.push(PromiseSnapshot {
-                reference: format!("{capture_id}#{}", summary.heap_object_id),
+                reference: Some(format!("{capture_id}#{}", summary.heap_object_id)),
                 origin: PromiseOrigin::HeapSnapshot,
                 state,
                 settlement,
@@ -282,14 +283,14 @@ mod tests {
             inspect_heap_promises(&graph, "offline", Some(PromiseState::Rejected), 10, 20).unwrap();
         assert_eq!(rejected.len(), 1);
         assert_eq!(rejected_total, 1);
-        assert_eq!(rejected[0].reference, "offline#3");
+        assert_eq!(rejected[0].reference.as_deref(), Some("offline#3"));
         assert_eq!(rejected[0].retained, Some(true));
 
         let (pending, pending_total) =
             inspect_heap_promises(&graph, "offline", Some(PromiseState::Pending), 10, 20).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending_total, 1);
-        assert_eq!(pending[0].reference, "offline#7");
+        assert_eq!(pending[0].reference.as_deref(), Some("offline#7"));
 
         let (bounded, total) = inspect_heap_promises(&graph, "offline", None, 1, 20).unwrap();
         assert_eq!(bounded.len(), 1);

@@ -1,0 +1,12 @@
+$ jsdbg target eval globalThis.__jsdbgConsistentValue
+Object
+  short: ok
+  long: <120 x characters>...
+  nested: Object
+$ jsdbg value globalThis.__jsdbgConsistentValue
+Object
+  short: ok
+  long: <120 x characters>...
+  nested: Object
+equivalent bounded rendering: yes
+target eval raw references exposed: no

@@ -1176,7 +1176,7 @@ fn promise_line(promise: &PromiseSnapshot) -> String {
         });
     format!(
         "{}  state:{}, classification:{}{settlement}",
-        promise.reference,
+        promise.reference.as_deref().unwrap_or("<no reference>"),
         promise_state_name(promise.state),
         promise_classification_name(promise.classification),
     )
@@ -2209,15 +2209,11 @@ impl HumanOutput for ValueSnapshot {
 
         println!("{}", render_value_snapshot(self));
         for property in &self.properties {
-            let value = property.value.preview.as_deref().unwrap_or("<no preview>");
-            let truncated = if property.value.truncated { "..." } else { "" };
-            let reference = property
-                .value
-                .reference
-                .as_deref()
-                .map(|reference| format!(" ({reference})"))
-                .unwrap_or_default();
-            println!("  {}: {value}{truncated}{reference}", property.name);
+            println!(
+                "  {}: {}",
+                property.name,
+                render_value_preview_with_reference(&property.value)
+            );
         }
     }
 }
@@ -3365,37 +3361,44 @@ fn runtime_location(location: &cdp_client::service_api::SourceLocation) -> Strin
 }
 
 fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
-    evaluation
-        .value
-        .as_ref()
-        .map(format_value)
-        .or_else(|| evaluation.unserializable_value.clone())
-        .or_else(|| evaluation.description.clone())
-        .unwrap_or_else(|| evaluation.kind.clone())
+    render_value_preview(&evaluation.preview)
 }
 
 fn render_value_snapshot(value: &ValueSnapshot) -> String {
-    let preview = value
-        .preview
-        .preview
+    value
+        .class_name
         .as_deref()
-        .or(value.class_name.as_deref())
-        .unwrap_or(&value.preview.kind);
-    let truncated = if value.preview.truncated { "..." } else { "" };
+        .filter(|_| value.preview.preview.is_none())
+        .map_or_else(
+            || render_value_preview_with_reference(&value.preview),
+            |class_name| {
+                let reference = value
+                    .preview
+                    .reference
+                    .as_deref()
+                    .map(|reference| format!(" ({reference})"))
+                    .unwrap_or_default();
+                format!("{class_name}{reference}")
+            },
+        )
+}
+
+fn render_value_preview_with_reference(
+    value: &cdp_client::service_api::ValuePreviewSnapshot,
+) -> String {
+    let preview = render_value_preview(value);
     let reference = value
-        .preview
         .reference
         .as_deref()
         .map(|reference| format!(" ({reference})"))
         .unwrap_or_default();
-    format!("{preview}{truncated}{reference}")
+    format!("{preview}{reference}")
 }
 
-fn format_value(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(value) => format!("{value:?}"),
-        _ => value.to_string(),
-    }
+fn render_value_preview(value: &cdp_client::service_api::ValuePreviewSnapshot) -> String {
+    let preview = value.preview.as_deref().unwrap_or(&value.kind);
+    let truncated = if value.truncated { "..." } else { "" };
+    format!("{preview}{truncated}")
 }
 
 fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
@@ -3511,22 +3514,58 @@ mod tests {
         ProcessTreeOutputOptions, SourceTreeOutputOptions, aggregate_coverage_entries,
         coverage_entries, effective_file_metrics, heap_path_lines, looks_minified_identifier,
         page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
-        render_heap_classes_human, render_uncompacted_source_graph, source_tree_lines,
-        style_process_label, style_session_label,
+        render_evaluation, render_heap_classes_human, render_uncompacted_source_graph,
+        render_value_snapshot, source_tree_lines, style_process_label, style_session_label,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
         CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
-        CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, HeapClassAnalysisSnapshot,
-        HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot, HeapNodeSnapshot,
-        HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming, HeapTraversalDirection,
-        ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
+        CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
+        HeapClassAnalysisSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapInstanceSnapshot,
+        HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot, HeapSnapshotTiming,
+        HeapTraversalDirection, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
         SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
         UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
         UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-        UncompactedSourceRevisionSnapshot,
+        UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot, ValueSelector, ValueSnapshot,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn evaluation_and_value_snapshot_share_bounded_preview_rendering() {
+        let preview = ValuePreviewSnapshot {
+            kind: "string".to_owned(),
+            preview: Some("bounded".to_owned()),
+            truncated: true,
+            reference: None,
+        };
+        let evaluation = EvaluationSnapshot {
+            expression: "value".to_owned(),
+            kind: "string".to_owned(),
+            value: Some(serde_json::json!("unbounded legacy value")),
+            unserializable_value: None,
+            description: None,
+            object_id: None,
+            preview: preview.clone(),
+        };
+        let value = ValueSnapshot {
+            selector: ValueSelector::Expression {
+                expression: "value".to_owned(),
+                allow_side_effects: false,
+            },
+            subtype: None,
+            class_name: None,
+            preview,
+            properties: Vec::new(),
+            promise: None,
+        };
+
+        assert_eq!(render_evaluation(&evaluation), "bounded...");
+        assert_eq!(
+            render_evaluation(&evaluation),
+            render_value_snapshot(&value)
+        );
+    }
 
     #[test]
     fn source_graph_renders_a_spanning_forest_with_references() {
