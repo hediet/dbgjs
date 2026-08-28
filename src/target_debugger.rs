@@ -5465,8 +5465,8 @@ mod tests {
         CpuProfileNodeSnapshot, CpuProfileSnapshot, SourceExcerpt, SourceLocation,
         TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
     };
-    use crate::source_view::{ContentCandidate, Position, Provenance};
     use crate::source_search::{SearchControl, SearchError};
+    use crate::source_view::{ContentCandidate, Position, Provenance};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
