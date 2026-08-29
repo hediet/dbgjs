@@ -2134,18 +2134,29 @@ impl DebuggerServiceApi for DebuggerService {
                     SourceSnapshotInfo {
                         path: script.url,
                         kind: "runtime".into(),
-                        status: format!("{:?}", script.status),
+                        status: match script.status {
+                            crate::service_api::TargetScriptStatus::Unresolved => "unresolved",
+                            crate::service_api::TargetScriptStatus::Pending => "loading",
+                            crate::service_api::TargetScriptStatus::Resolved { .. } => "resolved",
+                            crate::service_api::TargetScriptStatus::Failed { .. } => "failed",
+                        }
+                        .into(),
                         connection_id: Some(connection_id.clone()),
                         target_id: Some(target_id.clone()),
                         source_map_url: script.source_map_url,
                     },
                 );
                 for authored in authored_sources {
+                    let kind = if authored.ends_with("?formatted") {
+                        "formatted"
+                    } else {
+                        "authored"
+                    };
                     sources.insert(
                         (authored.clone(), connection_id.clone(), target_id.clone()),
                         SourceSnapshotInfo {
                             path: authored,
-                            kind: "authored".into(),
+                            kind: kind.into(),
                             status: "resolved".into(),
                             connection_id: Some(connection_id.clone()),
                             target_id: Some(target_id.clone()),

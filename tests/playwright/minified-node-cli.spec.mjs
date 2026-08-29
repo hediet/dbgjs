@@ -85,13 +85,13 @@ setInterval(() => {}, 1000);
 	try {
 		await runCli(
 			"Create and select a durable context for the Node.js investigation.",
-			["context", "create", "--context", "minified-node"],
+			["context", "create", "--context", ":minified-node"],
 			environment,
 		);
 		serviceStarted = true;
 		await runCli(
 			"Select the context so the remaining commands need no repeated context flag.",
-			["set", "context", "--context", "minified-node"],
+			["set", "context", "--context", ":minified-node"],
 			environment,
 		);
 		await runCli(
@@ -113,7 +113,7 @@ setInterval(() => {}, 1000);
 		);
 		await runCli(
 			"Claim the launch-owned direct debugger session before Node.js leaves its startup wait.",
-			["target", "attach", "--connection", "runtime", "--force"],
+			["target", "attach", "--connection", "runtime"],
 			environment,
 		);
 
@@ -123,34 +123,13 @@ setInterval(() => {}, 1000);
 			environment,
 		);
 		await runCli(
-			"Place a temporary runtime breakpoint to hydrate the lazily loaded bundle source.",
-			["breakpoint", "set", "hydrate-bundle", bundlePath, "1"],
-			environment,
-		);
-		await runCli(
-			"Release the launch wait. The main bundle is now parsed with breakpoint intent already present.",
+			"Release the launch wait so Node.js parses and starts the bundle.",
 			["target", "release"],
-			environment,
-		);
-		await runCli(
-			"Wait until source hydration and physical breakpoint installation have completed.",
-			[
-				"target",
-				"wait",
-				"breakpoint-installed",
-				"hydrate-bundle",
-				"30000",
-			],
-			environment,
-		);
-		await runCli(
-			"Remove the temporary breakpoint now that the source graph contains the bundle.",
-			["breakpoint", "delete", "hydrate-bundle"],
 			environment,
 		);
 
 		await runCli(
-			"List the loaded bundle source. There is no authored source-map entry to fall back to.",
+			"Discover the loaded bundle by name. The source inventory gives us its canonical runtime URL and a derived formatted projection; there is no source-map-authored file.",
 			["source", "list", "--path", basename(bundlePath)],
 			environment,
 		);
@@ -167,7 +146,7 @@ setInterval(() => {}, 1000);
 		const sourceUrl = runtimeSource.path;
 
 		const original = await runCli(
-			"Inspect the exact runtime text: the entire application is a one-line minified bundle.",
+			"Inspect the listed runtime source. The entire application is a one-line minified bundle.",
 			["source", "show", sourceUrl, "--view", "original"],
 			environment,
 		);
