@@ -24,9 +24,10 @@ use cdp_client::service_api::{
     HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
     HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, PromiseState,
-    SourceDisplayOptions, SourceSearchOptions, SourceTreeKind, StepKind, TargetAttachOptions,
-    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus,
-    TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
+    SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions, SourceTreeKind,
+    SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
+    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus, TargetWaitPredicate,
+    ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -1475,6 +1476,64 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     breakpoint_id.clone(),
                     parse_mutation_options(options)?,
                 )
+                .await)?)?;
+        }
+        [source, formatting, get]
+            if source == "source" && formatting == "formatting" && get == "get" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            let context = rpc(client.get_context(context_id).await)?;
+            output.print(&context.source_formatting)?;
+        }
+        [source, formatting, set, mode]
+            if source == "source" && formatting == "formatting" && set == "set" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .set_source_formatting(context_id, parse_source_formatting_mode(mode)?)
+                .await)?)?;
+        }
+        [source, formatting, rule, list]
+            if source == "source"
+                && formatting == "formatting"
+                && rule == "rule"
+                && list == "list" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            let context = rpc(client.get_context(context_id).await)?;
+            output.print(&context.source_formatting)?;
+        }
+        [source, formatting, rule, add, arguments @ ..]
+            if source == "source"
+                && formatting == "formatting"
+                && rule == "rule"
+                && add == "add" =>
+        {
+            let (mode, target_pattern, url_pattern) = parse_source_formatting_rule(arguments)?;
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .add_source_formatting_rule(context_id, mode, target_pattern, url_pattern)
+                .await)?)?;
+        }
+        [source, formatting, rule, remove, rule_id]
+            if source == "source"
+                && formatting == "formatting"
+                && rule == "rule"
+                && remove == "remove" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client
+                .delete_source_formatting_rule(context_id, rule_id.clone())
                 .await)?)?;
         }
         [source, list, options @ ..] if source == "source" && list == "list" => {
@@ -3241,6 +3300,7 @@ fn parse_source_show_options(
     let mut positional = Vec::new();
     let mut line = None;
     let mut context_lines = 20_u32;
+    let mut view = SourceViewPreference::Policy;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -3258,6 +3318,10 @@ fn parse_source_show_options(
                     required_source_option(values, index, "--context-lines")?,
                 )?;
             }
+            "--view" => {
+                index += 1;
+                view = parse_source_view(required_source_option(values, index, "--view")?)?;
+            }
             option if option.starts_with("--") => {
                 return Err(invalid_option("source show", option));
             }
@@ -3271,6 +3335,7 @@ fn parse_source_show_options(
         SourceDisplayOptions {
             line,
             context_lines,
+            view,
         },
     ))
 }
@@ -3283,6 +3348,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
     let mut max_results = 200_u32;
     let mut context_lines = 0_u32;
     let mut timeout_ms = None;
+    let mut view = SourceViewPreference::Policy;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -3313,6 +3379,10 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
                     required_source_option(values, index, "--timeout-ms")?,
                 )?));
             }
+            "--view" => {
+                index += 1;
+                view = parse_source_view(required_source_option(values, index, "--view")?)?;
+            }
             option if option.starts_with("--") => {
                 return Err(invalid_option("source grep", option));
             }
@@ -3337,7 +3407,77 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
         max_results,
         context_lines,
         timeout_ms,
+        view,
     })
+}
+
+fn parse_source_formatting_mode(value: &str) -> Result<SourceFormattingMode, io::Error> {
+    match value {
+        "off" => Ok(SourceFormattingMode::Off),
+        "auto" => Ok(SourceFormattingMode::Auto),
+        "on" => Ok(SourceFormattingMode::On),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "formatting mode must be one of: off, auto, on",
+        )),
+    }
+}
+
+fn parse_source_view(value: &str) -> Result<SourceViewPreference, io::Error> {
+    match value {
+        "original" => Ok(SourceViewPreference::Original),
+        "formatted" => Ok(SourceViewPreference::Formatted),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--view must be one of: original, formatted",
+        )),
+    }
+}
+
+fn parse_source_formatting_rule(
+    values: &[String],
+) -> Result<(SourceFormattingMode, Option<String>, Option<String>), io::Error> {
+    let mut mode = None;
+    let mut target_pattern = None;
+    let mut url_pattern = None;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--mode" => {
+                index += 1;
+                mode = Some(parse_source_formatting_mode(required_source_option(
+                    values, index, "--mode",
+                )?)?);
+            }
+            "--target" => {
+                index += 1;
+                target_pattern =
+                    Some(required_source_option(values, index, "--target")?.to_owned());
+            }
+            "--url" => {
+                index += 1;
+                url_pattern = Some(required_source_option(values, index, "--url")?.to_owned());
+            }
+            option if option.starts_with("--") => {
+                return Err(invalid_option("source formatting rule add", option));
+            }
+            value => return Err(unexpected_argument("source formatting rule add", value)),
+        }
+        index += 1;
+    }
+    let mode = mode.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source formatting rule add requires --mode <off|auto|on>",
+        )
+    })?;
+    if target_pattern.is_none() && url_pattern.is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source formatting rule add requires --target, --url, or both",
+        ));
+    }
+    Ok((mode, target_pattern, url_pattern))
 }
 
 fn parse_source_map_arguments(values: &[String]) -> Result<(String, u32, u32), io::Error> {
@@ -5394,12 +5534,16 @@ commands:
   jsdbg breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
   jsdbg breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
+  jsdbg source formatting get|set <off|auto|on> [--context <id>]
+  jsdbg source formatting rule list [--context <id>]
+  jsdbg source formatting rule add --mode <off|auto|on> [--target <glob>] [--url <glob>] [--context <id>]
+  jsdbg source formatting rule remove <rule-id> [--context <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
   jsdbg source tree <loaded|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   jsdbg source graph [--uncompacted] [--context <id>]
-  jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--context <id>]
-  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--context <id>]
+  jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
+  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
   jsdbg source map <path> <line> <column> [--context <id>]
   jsdbg source cache evict [--context <id>]
   jsdbg source export <destination> [--context <id>]
@@ -5472,17 +5616,17 @@ mod tests {
         parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
         parse_heap_string_options, parse_mutation_options, parse_process_attach_options,
         parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
-        parse_screenshot_capture_options, parse_source_grep_options, parse_source_map_arguments,
-        parse_source_show_options, parse_source_tree_options, parse_target_list_options,
-        parse_value_options, png_dimensions, read_eval_expression, read_playwright_program,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
-        target_list_output,
+        parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
+        parse_source_view, parse_target_list_options, parse_value_options, png_dimensions,
+        read_eval_expression, read_playwright_program, resolve_target_scope,
+        select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
         ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection, PromiseState,
-        TargetSnapshot, ValueSelector,
+        SourceFormattingMode, SourceViewPreference, TargetSnapshot, ValueSelector,
     };
     use std::fs;
 
@@ -5960,6 +6104,7 @@ mod tests {
                 .collect(),
             target_forest: Vec::new(),
             breakpoints: Vec::new(),
+            source_formatting: Default::default(),
         }
     }
 
@@ -6371,6 +6516,8 @@ mod tests {
             "2",
             "--timeout-ms",
             "1500",
+            "--view",
+            "formatted",
         ]))
         .unwrap();
         assert_eq!(options.pattern, "trim.*Whitespace");
@@ -6380,6 +6527,7 @@ mod tests {
         assert_eq!(options.max_results, 25);
         assert_eq!(options.context_lines, 2);
         assert_eq!(options.timeout_ms, Some(1500));
+        assert_eq!(options.view, SourceViewPreference::Formatted);
     }
 
     #[test]
@@ -6390,15 +6538,36 @@ mod tests {
             "1352",
             "--context-lines",
             "12",
+            "--view",
+            "original",
         ]))
         .unwrap();
         assert_eq!(path, "src/model.ts");
         assert_eq!(options.line, Some(1352));
         assert_eq!(options.context_lines, 12);
+        assert_eq!(options.view, SourceViewPreference::Original);
 
         let (path, line, column) =
             parse_source_map_arguments(&arguments(&["src/model.ts", "1352", "3"])).unwrap();
         assert_eq!(path, "src/model.ts");
         assert_eq!((line, column), (1352, 3));
+    }
+
+    #[test]
+    fn parses_source_formatting_rules() {
+        let (mode, target, url) = parse_source_formatting_rule(&arguments(&[
+            "--mode",
+            "auto",
+            "--target",
+            "page-*",
+            "--url",
+            "**/*.min.js",
+        ]))
+        .unwrap();
+        assert_eq!(mode, SourceFormattingMode::Auto);
+        assert_eq!(target.as_deref(), Some("page-*"));
+        assert_eq!(url.as_deref(), Some("**/*.min.js"));
+        assert!(parse_source_formatting_rule(&arguments(&["--mode", "on"])).is_err());
+        assert!(parse_source_view("policy").is_err());
     }
 }

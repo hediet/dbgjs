@@ -3,6 +3,10 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use oxc_allocator::Allocator;
+use oxc_codegen::{Codegen, CodegenOptions};
+use oxc_parser::Parser;
+use oxc_span::SourceType;
 use serde::{Deserialize, Serialize};
 use sourcemap::{DecodedMap, RawToken, SourceMap, decode_slice};
 
@@ -111,6 +115,10 @@ pub enum SourceDiagnostic {
     MissingContent {
         logical_url: String,
     },
+    FormattingFailed {
+        generated_url: String,
+        error: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,6 +146,8 @@ pub enum SourceViewError {
     InvalidIndexedSourceMap(String),
     #[error("source content is not available: {0}")]
     MissingContent(String),
+    #[error("source formatting failed: {0}")]
+    FormattingFailed(String),
     #[error(transparent)]
     SourceFileStore(#[from] SourceFileStoreError),
     #[error(transparent)]
@@ -308,8 +318,21 @@ impl ResolvedSourceView {
             }
         }
 
-        if input.minified {
-            let (formatted, mapping) = format_minified(input.content);
+        let formatted = if input.minified {
+            match format_minified(input.url, input.content) {
+                Ok(formatted) => Some(formatted),
+                Err(error) => {
+                    self.diagnostics.push(SourceDiagnostic::FormattingFailed {
+                        generated_url: input.url.into(),
+                        error: error.to_string(),
+                    });
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some((formatted, mapping)) = formatted {
             let formatted_content = self.store.intern(&formatted);
             let resolved_url = format!("{}?formatted", input.url);
             let candidates = vec![
@@ -342,7 +365,7 @@ impl ResolvedSourceView {
                     generated_url: input.url.into(),
                     content: formatted_content,
                     steps: vec![ProjectionStep::Format {
-                        formatter: "prototype-js-whitespace-v1".into(),
+                        formatter: "oxc-codegen-0.146".into(),
                     }],
                 },
             );
@@ -351,7 +374,7 @@ impl ResolvedSourceView {
                 formatted_snapshot,
                 generated_snapshot,
                 ProjectionKind::Format {
-                    formatter: "prototype-js-whitespace-v1".into(),
+                    formatter: "oxc-codegen-0.146".into(),
                 },
             )?;
             self.generated.insert(
@@ -897,54 +920,63 @@ fn indexed_depth(value: &serde_json::Value) -> usize {
         .unwrap_or(0)
 }
 
-fn format_minified(source: &str) -> (String, FormatProjection) {
-    let mut formatted = String::with_capacity(source.len() + source.len() / 4);
-    let mut points = Vec::with_capacity(source.chars().count() + 1);
-    let mut indent = 0usize;
-    let mut at_line_start = true;
-
-    for (input_offset, character) in source.char_indices() {
-        if character == '}' {
-            indent = indent.saturating_sub(1);
-            ensure_newline(&mut formatted);
-            at_line_start = true;
-        }
-        if at_line_start {
-            formatted.push_str(&"  ".repeat(indent));
-            at_line_start = false;
-        }
-        points.push((input_offset, formatted.len()));
-        formatted.push(character);
-        match character {
-            '{' => {
-                indent += 1;
-                formatted.push('\n');
-                at_line_start = true;
+fn format_minified(url: &str, source: &str) -> Result<(String, FormatProjection), SourceViewError> {
+    let allocator = Allocator::default();
+    let source_path = url.split(['?', '#']).next().unwrap_or(url);
+    let source_type = SourceType::from_path(source_path).unwrap_or_else(|_| SourceType::script());
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    let parsed = if parsed.panicked || !parsed.diagnostics.is_empty() {
+        Parser::new(&allocator, source, source_type.with_script(true)).parse()
+    } else {
+        parsed
+    };
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
+        let message = parsed
+            .diagnostics
+            .first()
+            .map_or_else(|| "parser panicked".to_owned(), ToString::to_string);
+        return Err(SourceViewError::FormattingFailed(message));
+    }
+    let mut options = CodegenOptions::default();
+    options.source_map_path = Some(url.into());
+    let generated = Codegen::new().with_options(options).build(&parsed.program);
+    let formatted = generated.code;
+    let generated_index = LineIndex::new(source);
+    let formatted_index = LineIndex::new(&formatted);
+    let mut points = vec![(0, 0)];
+    if let Some(map) = generated.map {
+        for token in map.get_tokens() {
+            let Some(input_offset) = generated_index.byte_offset(Position {
+                line: token.get_src_line(),
+                column: token.get_src_col(),
+            }) else {
+                continue;
+            };
+            let Some(output_offset) = formatted_index.byte_offset(Position {
+                line: token.get_dst_line(),
+                column: token.get_dst_col(),
+            }) else {
+                continue;
+            };
+            if points
+                .last()
+                .is_none_or(|&(input, output)| input_offset >= input && output_offset >= output)
+            {
+                points.push((input_offset, output_offset));
             }
-            '}' | ';' => {
-                formatted.push('\n');
-                at_line_start = true;
-            }
-            _ => {}
         }
     }
     points.push((source.len(), formatted.len()));
-    let generated_index = LineIndex::new(source);
-    let formatted_index = LineIndex::new(&formatted);
-    (
+    points.sort_unstable();
+    points.dedup();
+    Ok((
         formatted,
         FormatProjection {
             generated_index,
             formatted_index,
             points,
         },
-    )
-}
-
-fn ensure_newline(output: &mut String) {
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
+    ))
 }
 
 impl FormatProjection {
@@ -1606,6 +1638,54 @@ mod tests {
             source.uri.as_str(),
             "https://main.vscode-cdn.net/sourcemaps/commit/src/vs/nls.ts"
         );
+    }
+
+    #[test]
+    fn oxc_formatting_preserves_javascript_tokens_and_maps_both_directions() {
+        let source = r#"const text="};";function add(a,b){return a+b;}console.log(text,add(1,2));"#;
+        let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+        view.add_generated(GeneratedSourceInput {
+            url: "bundle.min.js",
+            content: source,
+            source_map: None,
+            source_map_url: None,
+            minified: true,
+        })
+        .unwrap();
+
+        let formatted = view.text("bundle.min.js?formatted").unwrap();
+        assert!(formatted.contains(r#"const text = "};";"#));
+        assert!(formatted.lines().count() > 1);
+        let generated = Position {
+            line: 0,
+            column: source.find("return").unwrap() as u32,
+        };
+        let projected = view.forward("bundle.min.js", generated);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].source_url, "bundle.min.js?formatted");
+        assert_eq!(
+            view.reverse("bundle.min.js?formatted", projected[0].position)[0].position,
+            generated
+        );
+    }
+
+    #[test]
+    fn invalid_javascript_falls_back_to_the_original_source() {
+        let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+        view.add_generated(GeneratedSourceInput {
+            url: "broken.min.js",
+            content: "function {",
+            source_map: None,
+            source_map_url: None,
+            minified: true,
+        })
+        .unwrap();
+
+        assert_eq!(&*view.text("broken.min.js").unwrap(), "function {");
+        assert!(matches!(
+            view.diagnostics(),
+            [SourceDiagnostic::FormattingFailed { .. }]
+        ));
     }
 
     fn empty_view(policy: ResolutionPolicy) -> ResolvedSourceView {

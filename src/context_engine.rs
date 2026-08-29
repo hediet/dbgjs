@@ -3,7 +3,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::service_api::{ConnectionConfiguration, ConnectionStatus, TargetSnapshot};
+use crate::service_api::{
+    ConnectionConfiguration, ConnectionStatus, SourceFormattingMode, SourceFormattingRule,
+    SourceFormattingSettings, TargetSnapshot,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,6 +15,8 @@ pub struct ContextState {
     pub revision: u64,
     pub connections: Arc<BTreeMap<String, Arc<ConnectionState>>>,
     pub breakpoints: Arc<BTreeMap<String, Arc<BreakpointState>>>,
+    #[serde(default)]
+    pub source_formatting: SourceFormattingSettings,
 }
 
 impl ContextState {
@@ -21,6 +26,7 @@ impl ContextState {
             revision: 0,
             connections: Arc::new(BTreeMap::new()),
             breakpoints: Arc::new(BTreeMap::new()),
+            source_formatting: SourceFormattingSettings::default(),
         })
     }
 }
@@ -94,6 +100,15 @@ pub enum UserCommand {
     },
     RemoveBreakpoint {
         breakpoint_id: String,
+    },
+    SetSourceFormatting {
+        mode: SourceFormattingMode,
+    },
+    AddSourceFormattingRule {
+        rule: SourceFormattingRule,
+    },
+    RemoveSourceFormattingRule {
+        rule_id: String,
     },
 }
 
@@ -460,6 +475,44 @@ fn reduce_user_command(
                 ContextChange::Durable,
                 Vec::new(),
                 ContextEvent::BreakpointRemoved { breakpoint_id },
+            ))
+        }
+        UserCommand::SetSourceFormatting { mode } => {
+            let mut state = (**previous).clone();
+            state.source_formatting.default_mode = mode;
+            Ok(changed(
+                state,
+                ContextChange::Durable,
+                Vec::new(),
+                ContextEvent::ContextUpdated,
+            ))
+        }
+        UserCommand::AddSourceFormattingRule { rule } => {
+            let mut state = (**previous).clone();
+            state.source_formatting.rules.push(rule);
+            Ok(changed(
+                state,
+                ContextChange::Durable,
+                Vec::new(),
+                ContextEvent::ContextUpdated,
+            ))
+        }
+        UserCommand::RemoveSourceFormattingRule { rule_id } => {
+            let Some(index) = previous
+                .source_formatting
+                .rules
+                .iter()
+                .position(|rule| rule.id == rule_id)
+            else {
+                return Ok(ContextTransition::unchanged(previous));
+            };
+            let mut state = (**previous).clone();
+            state.source_formatting.rules.remove(index);
+            Ok(changed(
+                state,
+                ContextChange::Durable,
+                Vec::new(),
+                ContextEvent::ContextUpdated,
             ))
         }
     }
@@ -1186,5 +1239,40 @@ mod tests {
         assert_eq!(first.0, second.0);
         assert_eq!(first.1, second.1);
         assert_eq!(first.2, second.2);
+    }
+
+    #[test]
+    fn formatting_rules_are_ordered_durable_context_state() {
+        let state = ContextState::new("test".into());
+        let configured = command(
+            &state,
+            UserCommand::SetSourceFormatting {
+                mode: SourceFormattingMode::Auto,
+            },
+        );
+        let configured = command(
+            &configured.state,
+            UserCommand::AddSourceFormattingRule {
+                rule: SourceFormattingRule {
+                    id: "fmt-1".into(),
+                    mode: SourceFormattingMode::Off,
+                    target_pattern: Some("worker-*".into()),
+                    url_pattern: Some("**/vendor/**".into()),
+                },
+            },
+        );
+        assert_eq!(
+            configured.state.source_formatting.default_mode,
+            SourceFormattingMode::Auto
+        );
+        assert_eq!(configured.state.source_formatting.rules[0].id, "fmt-1");
+
+        let removed = command(
+            &configured.state,
+            UserCommand::RemoveSourceFormattingRule {
+                rule_id: "fmt-1".into(),
+            },
+        );
+        assert!(removed.state.source_formatting.rules.is_empty());
     }
 }

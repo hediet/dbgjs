@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use futures_util::{StreamExt, stream};
+use globset::{Glob, GlobMatcher};
 use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -43,9 +44,10 @@ use crate::service_api::{
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
     ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseState, ScreenshotSnapshot, ServiceInfo,
-    SourceContentSnapshot, SourceDisplayOptions, SourceGraphViewSnapshot, SourceMappingSnapshot,
-    SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
-    SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, StepKind as ApiStepKind,
+    SourceContentSnapshot, SourceDisplayOptions, SourceFormattingMode, SourceFormattingRule,
+    SourceFormattingSettings, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
+    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
+    SourceTreeKind, SourceTreeSnapshot, SourceViewPreference, StepKind as ApiStepKind,
     TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult, TargetDebuggerSnapshot,
     TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
     UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
@@ -54,7 +56,7 @@ use crate::service_api::{
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::source_search::{
-    SearchControl, SearchDocument, SearchError, SearchQuery, SourceIdentity,
+    HydratedSource, SearchControl, SearchDocument, SearchError, SearchQuery, SourceIdentity,
 };
 use crate::target_debugger::{
     TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle, stored_heap_classes,
@@ -1231,6 +1233,27 @@ fn storage_path_key(path: &Path) -> PathBuf {
         })
 }
 
+impl DebuggerService {
+    async fn update_source_formatting(
+        &self,
+        context_id: &str,
+        command: UserCommand,
+    ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        let mut state = self.state.lock().await;
+        let previous = state.clone();
+        let context = state
+            .contexts
+            .get(context_id)
+            .cloned()
+            .ok_or_else(|| not_found("context", context_id))?;
+        let transition = reduce_context(&context, ContextInput::UserCommand(command))
+            .map_err(transition_rpc_error)?;
+        let result = self.commit_context(&mut state, context_id, transition);
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(result.source_formatting)
+    }
+}
+
 #[async_trait::async_trait]
 impl DebuggerServiceApi for DebuggerService {
     async fn service_info(&self, _ctx: &CallCtx) -> Result<ServiceInfo, JsonRpcError> {
@@ -2004,6 +2027,81 @@ impl DebuggerServiceApi for DebuggerService {
         Ok(result)
     }
 
+    async fn set_source_formatting(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        mode: SourceFormattingMode,
+    ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        self.update_source_formatting(&context_id, UserCommand::SetSourceFormatting { mode })
+            .await
+    }
+
+    async fn add_source_formatting_rule(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        mode: SourceFormattingMode,
+        target_pattern: Option<String>,
+        url_pattern: Option<String>,
+    ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        if target_pattern.is_none() && url_pattern.is_none() {
+            return Err(invalid_params(
+                "a formatting rule requires --target, --url, or both",
+            ));
+        }
+        validate_formatting_pattern(target_pattern.as_deref())?;
+        validate_formatting_pattern(url_pattern.as_deref())?;
+        let mut state = self.state.lock().await;
+        let previous = state.clone();
+        let context = state
+            .contexts
+            .get(&context_id)
+            .cloned()
+            .ok_or_else(|| not_found("context", &context_id))?;
+        let mut index = 1_u64;
+        let rule_id = loop {
+            let candidate = format!("fmt-{index}");
+            if context
+                .source_formatting
+                .rules
+                .iter()
+                .all(|rule| rule.id != candidate)
+            {
+                break candidate;
+            }
+            index = index.saturating_add(1);
+        };
+        let transition = reduce_context(
+            &context,
+            ContextInput::UserCommand(UserCommand::AddSourceFormattingRule {
+                rule: SourceFormattingRule {
+                    id: rule_id,
+                    mode,
+                    target_pattern,
+                    url_pattern,
+                },
+            }),
+        )
+        .map_err(transition_rpc_error)?;
+        let result = self.commit_context(&mut state, &context_id, transition);
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(result.source_formatting)
+    }
+
+    async fn delete_source_formatting_rule(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        rule_id: String,
+    ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        self.update_source_formatting(
+            &context_id,
+            UserCommand::RemoveSourceFormattingRule { rule_id },
+        )
+        .await
+    }
+
     async fn list_sources(
         &self,
         _ctx: &CallCtx,
@@ -2276,26 +2374,80 @@ impl DebuggerServiceApi for DebuggerService {
         path: String,
         options: SourceDisplayOptions,
     ) -> Result<SourceContentSnapshot, JsonRpcError> {
-        let debuggers = {
+        let (debuggers, formatting) = {
             let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state
+            let context = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let debuggers = state
                 .target_debuggers
                 .iter()
                 .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
-                .map(|(_, debugger)| debugger.clone())
-                .collect::<Vec<_>>()
+                .map(|((_, _, target_id), debugger)| (target_id.clone(), debugger.clone()))
+                .collect::<Vec<_>>();
+            (
+                debuggers,
+                compile_formatting_settings(&context.source_formatting)?,
+            )
         };
-        for debugger in debuggers {
+        let mut original_fallback = None;
+        for (target_id, debugger) in debuggers {
+            let base_path = path.strip_suffix("?formatted").unwrap_or(&path);
+            if options.view == SourceViewPreference::Formatted {
+                if let Some(content) = debugger
+                    .source_content(format!("{base_path}?formatted"))
+                    .await
+                    .map_err(target_debugger_rpc_error)?
+                {
+                    return source_content_range(content, &options);
+                }
+                continue;
+            }
+            let original = debugger
+                .source_content(base_path.to_owned())
+                .await
+                .map_err(target_debugger_rpc_error)?;
+            let selected_path = match options.view {
+                SourceViewPreference::Original => base_path.to_owned(),
+                SourceViewPreference::Formatted => unreachable!(),
+                SourceViewPreference::Policy if path.ends_with("?formatted") => path.clone(),
+                SourceViewPreference::Policy => {
+                    let mode = effective_formatting_mode(&formatting, &target_id, base_path);
+                    if mode == SourceFormattingMode::On
+                        || mode == SourceFormattingMode::Auto
+                            && original
+                                .as_ref()
+                                .is_some_and(|source| appears_minified(base_path, &source.content))
+                    {
+                        format!("{base_path}?formatted")
+                    } else {
+                        base_path.to_owned()
+                    }
+                }
+            };
+            if selected_path == base_path {
+                if let Some(content) = original {
+                    return source_content_range(content, &options);
+                }
+                continue;
+            }
             if let Some(content) = debugger
-                .source_content(path.clone())
+                .source_content(selected_path)
                 .await
                 .map_err(target_debugger_rpc_error)?
             {
                 return source_content_range(content, &options);
             }
+            if options.view == SourceViewPreference::Policy && original_fallback.is_none() {
+                original_fallback = original;
+            }
+        }
+        if let Some(content) = original_fallback {
+            return source_content_range(content, &options);
+        }
+        if options.view == SourceViewPreference::Formatted {
+            return Err(not_found("formatted source", &path));
         }
         if path.is_empty() {
             return Err(not_found("source", "<empty>"));
@@ -2347,7 +2499,7 @@ impl DebuggerServiceApi for DebuggerService {
         });
         let control = deadline.map_or_else(SearchControl::default, SearchControl::with_deadline);
         let mut cancellation = SearchCancellationGuard::new(control.cancellation_flag());
-        let (debuggers, local_sources) = {
+        let (debuggers, local_sources, formatting) = {
             let state = self.state.lock().await;
             let Some(context) = state.contexts.get(&context_id) else {
                 return Err(not_found("context", &context_id));
@@ -2371,7 +2523,11 @@ impl DebuggerServiceApi for DebuggerService {
                         .is_none_or(|selector| path.contains(selector))
                 })
                 .collect::<BTreeSet<_>>();
-            (debuggers, local_sources)
+            (
+                debuggers,
+                local_sources,
+                compile_formatting_settings(&context.source_formatting)?,
+            )
         };
 
         let path_selector = options.path.clone();
@@ -2403,8 +2559,9 @@ impl DebuggerServiceApi for DebuggerService {
 
         let mut documents = Vec::new();
         let mut skipped_sources = 0_u32;
-        for (connection_id, target_id, batch) in batches {
+        for (connection_id, target_id, mut batch) in batches {
             skipped_sources = skipped_sources.saturating_add(batch.skipped_sources);
+            select_source_views(&mut batch.sources, &formatting, &target_id, options.view);
             documents.extend(batch.sources.into_iter().map(|source| SearchDocument {
                 identity: SourceIdentity {
                     path: source.path,
@@ -2652,6 +2809,7 @@ impl DebuggerServiceApi for DebuggerService {
                     SourceDisplayOptions {
                         line: None,
                         context_lines: 0,
+                        view: SourceViewPreference::Policy,
                     },
                 )
                 .await
@@ -5035,6 +5193,7 @@ fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> Contex
                 applications: Vec::new(),
             })
             .collect(),
+        source_formatting: context.source_formatting.clone(),
     }
 }
 
@@ -5258,6 +5417,8 @@ struct StoredContextState {
     revision: u64,
     connections: BTreeMap<String, StoredConnectionState>,
     breakpoints: BTreeMap<String, StoredBreakpointState>,
+    #[serde(default)]
+    source_formatting: SourceFormattingSettings,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -5351,6 +5512,7 @@ impl From<&ServiceState> for StoredServiceState {
                                     )
                                 })
                                 .collect(),
+                            source_formatting: context.source_formatting.clone(),
                         },
                     )
                 })
@@ -5464,6 +5626,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                                 })
                                 .collect(),
                         ),
+                        source_formatting: context.source_formatting,
                     }),
                 )
             })
@@ -5515,6 +5678,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
                             })
                             .collect(),
                         breakpoints: context.breakpoints,
+                        source_formatting: SourceFormattingSettings::default(),
                     },
                 )
             })
@@ -5851,11 +6015,170 @@ fn source_content_range(
             source.total_lines
         )));
     }
+
     let context = options.context_lines;
     source.start_line = line.saturating_sub(context).max(1);
     source.end_line = line.saturating_add(context).min(source.total_lines);
     source.content = lines[source.start_line as usize - 1..source.end_line as usize].join("\n");
     Ok(source)
+}
+
+fn validate_formatting_pattern(pattern: Option<&str>) -> Result<(), JsonRpcError> {
+    if let Some(pattern) = pattern {
+        Glob::new(pattern).map_err(|error| {
+            invalid_params(&format!("invalid glob pattern '{pattern}': {error}"))
+        })?;
+    }
+    Ok(())
+}
+
+struct CompiledFormattingRule {
+    mode: SourceFormattingMode,
+    target_pattern: Option<GlobMatcher>,
+    url_pattern: Option<GlobMatcher>,
+}
+
+struct CompiledFormattingSettings {
+    default_mode: SourceFormattingMode,
+    rules: Vec<CompiledFormattingRule>,
+}
+
+fn compile_formatting_settings(
+    settings: &SourceFormattingSettings,
+) -> Result<CompiledFormattingSettings, JsonRpcError> {
+    let compile = |pattern: Option<&str>| {
+        pattern
+            .map(|pattern| {
+                Glob::new(pattern)
+                    .map(|glob| glob.compile_matcher())
+                    .map_err(|error| {
+                        invalid_state(&format!(
+                            "persisted source formatting glob '{pattern}' is invalid: {error}"
+                        ))
+                    })
+            })
+            .transpose()
+    };
+    let rules = settings
+        .rules
+        .iter()
+        .map(|rule| {
+            Ok(CompiledFormattingRule {
+                mode: rule.mode,
+                target_pattern: compile(rule.target_pattern.as_deref())?,
+                url_pattern: compile(rule.url_pattern.as_deref())?,
+            })
+        })
+        .collect::<Result<_, JsonRpcError>>()?;
+    Ok(CompiledFormattingSettings {
+        default_mode: settings.default_mode,
+        rules,
+    })
+}
+
+fn effective_formatting_mode(
+    settings: &CompiledFormattingSettings,
+    target_id: &str,
+    source_url: &str,
+) -> SourceFormattingMode {
+    settings
+        .rules
+        .iter()
+        .fold(settings.default_mode, |mode, rule| {
+            if rule
+                .target_pattern
+                .as_ref()
+                .is_none_or(|pattern| pattern.is_match(target_id))
+                && rule
+                    .url_pattern
+                    .as_ref()
+                    .is_none_or(|pattern| pattern.is_match(source_url))
+            {
+                rule.mode
+            } else {
+                mode
+            }
+        })
+}
+
+fn appears_minified(source_url: &str, content: &str) -> bool {
+    if source_url
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with(".min.js") || url.ends_with(".min.mjs"))
+    {
+        return true;
+    }
+    if content.len() < 256 {
+        return false;
+    }
+    let mut line_count = 1_usize;
+    let mut current_line = 0_usize;
+    let mut longest_line = 0_usize;
+    for byte in content.bytes() {
+        if byte == b'\n' {
+            line_count += 1;
+            longest_line = longest_line.max(current_line);
+            current_line = 0;
+        } else {
+            current_line += 1;
+        }
+    }
+    longest_line = longest_line.max(current_line);
+    longest_line >= 500 || line_count <= 2 && content.len() >= 1_024
+}
+
+fn select_source_views(
+    sources: &mut Vec<HydratedSource>,
+    settings: &CompiledFormattingSettings,
+    target_id: &str,
+    preference: SourceViewPreference,
+) {
+    let formatted = sources
+        .iter()
+        .filter_map(|source| source.path.strip_suffix("?formatted"))
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let minified = sources
+        .iter()
+        .filter(|source| source.kind == "runtime")
+        .map(|source| {
+            (
+                source.path.clone(),
+                appears_minified(&source.path, &source.content),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    sources.retain(|source| {
+        if let Some(base) = source.path.strip_suffix("?formatted") {
+            return match preference {
+                SourceViewPreference::Original => false,
+                SourceViewPreference::Formatted => true,
+                SourceViewPreference::Policy => {
+                    let mode = effective_formatting_mode(settings, target_id, base);
+                    mode == SourceFormattingMode::On
+                        || mode == SourceFormattingMode::Auto
+                            && minified.get(base).copied().unwrap_or(false)
+                }
+            };
+        }
+        if source.kind != "runtime" {
+            return true;
+        }
+        if !formatted.contains(&source.path) {
+            return preference != SourceViewPreference::Formatted;
+        }
+        match preference {
+            SourceViewPreference::Original => true,
+            SourceViewPreference::Formatted => false,
+            SourceViewPreference::Policy => {
+                let mode = effective_formatting_mode(settings, target_id, &source.path);
+                !(mode == SourceFormattingMode::On
+                    || mode == SourceFormattingMode::Auto
+                        && minified.get(&source.path).copied().unwrap_or(false))
+            }
+        }
+    });
 }
 
 fn stable_name_hash(value: &str) -> u64 {
@@ -6074,6 +6397,7 @@ mod tests {
                     .collect(),
             ),
             breakpoints: Arc::new(BTreeMap::new()),
+            source_formatting: SourceFormattingSettings::default(),
         })
     }
 
@@ -7644,5 +7968,98 @@ mod tests {
         for path in payload_paths {
             let _ = fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn formatting_policy_uses_last_matching_target_and_url_rule() {
+        let settings = SourceFormattingSettings {
+            default_mode: SourceFormattingMode::Auto,
+            rules: vec![
+                SourceFormattingRule {
+                    id: "fmt-1".into(),
+                    mode: SourceFormattingMode::Off,
+                    target_pattern: None,
+                    url_pattern: Some("**/vendor/**".into()),
+                },
+                SourceFormattingRule {
+                    id: "fmt-2".into(),
+                    mode: SourceFormattingMode::On,
+                    target_pattern: Some("page-*".into()),
+                    url_pattern: Some("**/vendor/special.min.js".into()),
+                },
+            ],
+        };
+        let settings = compile_formatting_settings(&settings).unwrap();
+        assert_eq!(
+            effective_formatting_mode(
+                &settings,
+                "page-1",
+                "https://example.test/vendor/special.min.js"
+            ),
+            SourceFormattingMode::On
+        );
+        assert_eq!(
+            effective_formatting_mode(
+                &settings,
+                "worker-1",
+                "https://example.test/vendor/special.min.js"
+            ),
+            SourceFormattingMode::Off
+        );
+        assert_eq!(
+            effective_formatting_mode(&settings, "page-1", "https://example.test/app.js"),
+            SourceFormattingMode::Auto
+        );
+    }
+
+    #[test]
+    fn source_view_selection_keeps_exactly_one_unmapped_representation() {
+        let content = |path: &str, kind: &str, text: &str| HydratedSource {
+            path: path.into(),
+            kind: kind.into(),
+            provenance: kind.into(),
+            content_hash: crate::content_store::ContentHash::of_bytes(text.as_bytes()),
+            content: Arc::from(text),
+        };
+        let settings = compile_formatting_settings(&SourceFormattingSettings {
+            default_mode: SourceFormattingMode::On,
+            rules: Vec::new(),
+        })
+        .unwrap();
+        let mut sources = vec![
+            content("app.js", "runtime", "const x=1;"),
+            content("app.js?formatted", "authored", "const x = 1;\n"),
+        ];
+        select_source_views(
+            &mut sources,
+            &settings,
+            "page-1",
+            SourceViewPreference::Policy,
+        );
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, "app.js?formatted");
+
+        let mut sources = vec![
+            content("app.js", "runtime", "const x=1;"),
+            content("app.js?formatted", "authored", "const x = 1;\n"),
+        ];
+        select_source_views(
+            &mut sources,
+            &settings,
+            "page-1",
+            SourceViewPreference::Original,
+        );
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].path, "app.js");
+    }
+
+    #[test]
+    fn auto_formatting_detection_is_bounded_and_explainable() {
+        assert!(appears_minified("app.min.js", "x"));
+        assert!(appears_minified("app.js", &"x".repeat(1_024)));
+        assert!(!appears_minified(
+            "app.js",
+            "function readable() {\n  return 1;\n}\n"
+        ));
     }
 }

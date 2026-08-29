@@ -104,6 +104,42 @@ pub struct ContextSnapshot {
     pub connections: Vec<ConnectionSnapshot>,
     pub target_forest: Vec<TargetNodeSnapshot>,
     pub breakpoints: Vec<BreakpointSnapshot>,
+    #[serde(default)]
+    pub source_formatting: SourceFormattingSettings,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceFormattingMode {
+    #[default]
+    Off,
+    Auto,
+    On,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFormattingRule {
+    pub id: String,
+    pub mode: SourceFormattingMode,
+    pub target_pattern: Option<String>,
+    pub url_pattern: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFormattingSettings {
+    pub default_mode: SourceFormattingMode,
+    pub rules: Vec<SourceFormattingRule>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceViewPreference {
+    #[default]
+    Policy,
+    Original,
+    Formatted,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -519,6 +555,8 @@ pub struct SourceSearchOptions {
     pub context_lines: u32,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub view: SourceViewPreference,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -536,6 +574,8 @@ pub struct SourceSearchSnapshot {
 pub struct SourceDisplayOptions {
     pub line: Option<u32>,
     pub context_lines: u32,
+    #[serde(default)]
+    pub view: SourceViewPreference,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1598,6 +1638,23 @@ pub trait DebuggerServiceApi {
         breakpoint_id: String,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn set_source_formatting(
+        context_id: String,
+        mode: SourceFormattingMode,
+    ) -> Result<SourceFormattingSettings, JsonRpcError>;
+
+    async fn add_source_formatting_rule(
+        context_id: String,
+        mode: SourceFormattingMode,
+        target_pattern: Option<String>,
+        url_pattern: Option<String>,
+    ) -> Result<SourceFormattingSettings, JsonRpcError>;
+
+    async fn delete_source_formatting_rule(
+        context_id: String,
+        rule_id: String,
+    ) -> Result<SourceFormattingSettings, JsonRpcError>;
 
     async fn list_sources(
         context_id: String,

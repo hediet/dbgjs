@@ -8,12 +8,12 @@ use cdp_client::service_api::{
     HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapReferencesSnapshot,
     HeapSnapshotProgress, HeapSnapshotResult, ObservationResult, PlaywrightChannel, ProcessRole,
     ProcessSnapshot, ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo,
-    SourceContentSnapshot, SourceExcerpt, SourceGraphViewSnapshot, SourceLocation,
-    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot,
-    TargetAttachmentOutcome, TargetAttachmentResult, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot, ValueSnapshot,
+    SourceContentSnapshot, SourceExcerpt, SourceFormattingMode, SourceFormattingSettings,
+    SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
+    SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome, TargetAttachmentResult,
+    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
+    UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+    UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -550,6 +550,7 @@ impl HumanOutput for SourceContentSnapshot {
             print!("{}", self.content);
             return;
         }
+
         println!(
             "{} (lines {}-{} of {})",
             self.path, self.start_line, self.end_line, self.total_lines
@@ -557,6 +558,37 @@ impl HumanOutput for SourceContentSnapshot {
         for (index, line) in self.content.lines().enumerate() {
             println!("{:>6} | {line}", self.start_line + index as u32);
         }
+    }
+}
+
+impl HumanOutput for SourceFormattingSettings {
+    fn print_human(&self) {
+        println!(
+            "DEFAULT  {}",
+            source_formatting_mode_label(self.default_mode)
+        );
+        if self.rules.is_empty() {
+            return;
+        }
+        println!();
+        println!("RULE    MODE  TARGET  URL");
+        for rule in &self.rules {
+            println!(
+                "{:<7} {:<5} {:<7} {}",
+                rule.id,
+                source_formatting_mode_label(rule.mode),
+                rule.target_pattern.as_deref().unwrap_or("*"),
+                rule.url_pattern.as_deref().unwrap_or("*")
+            );
+        }
+    }
+}
+
+fn source_formatting_mode_label(mode: SourceFormattingMode) -> &'static str {
+    match mode {
+        SourceFormattingMode::Off => "off",
+        SourceFormattingMode::Auto => "auto",
+        SourceFormattingMode::On => "on",
     }
 }
 

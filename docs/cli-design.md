@@ -1088,7 +1088,39 @@ than choosing by current target focus.
 Locations shown to users are one-based. CDP's zero-based locations are converted
 at the protocol boundary.
 
-### 13.3 Source search
+### 13.3 Automatic formatting
+
+Formatting is a derived source projection and never mutates runtime content.
+Each context owns a default `off`, `auto`, or `on` mode plus ordered rules that
+may match canonical target IDs and source URLs with glob patterns. Rules are
+evaluated in displayed order and the last matching rule wins:
+
+```text
+jsdbg source formatting set auto
+jsdbg source formatting rule add --mode off --url "**/vendor/**"
+jsdbg source formatting rule add --mode on --target "page-*" --url "**/*.min.js"
+jsdbg source formatting get
+```
+
+`auto` deterministically recognizes conventional `.min.js` names and
+high-density source layout. The formatter is parser-based; invalid JavaScript
+remains available as original source with an explicit formatting diagnostic.
+Formatted sources retain a UTF-16-aware bidirectional projection to runtime
+locations.
+
+Source display and search use the effective context policy by default. A
+one-command override does not change that policy:
+
+```text
+jsdbg source show app.js --view original
+jsdbg source show app.js --view formatted
+jsdbg source grep checkout --view formatted
+```
+
+There is intentionally no `--view policy`; omitting `--view` is the policy
+behavior.
+
+### 13.4 Source search
 
 Searching logical/projected sources is a first-class operation:
 
@@ -1123,7 +1155,7 @@ Identical content can be deduplicated for searching while retaining all graph
 identities, versions, projection paths, and live endpoint associations in
 results.
 
-### 13.4 Optional disk materialization
+### 13.5 Optional disk materialization
 
 Source content storage must permit memory, disk, or hybrid implementations behind
 the same content-addressed interface.

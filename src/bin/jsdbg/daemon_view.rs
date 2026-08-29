@@ -500,6 +500,7 @@ mod tests {
                 parent_target_id: None,
             }],
             breakpoints: vec![],
+            source_formatting: Default::default(),
         };
         let debugger = TargetDebuggerSnapshot {
             context_id: "shop".to_owned(),
@@ -631,6 +632,7 @@ mod tests {
                 targets: vec![],
                 applications: vec![],
             }],
+            source_formatting: Default::default(),
         };
         let actual = render(
             &[ContextView {
@@ -738,6 +740,7 @@ mod tests {
                 connections: vec![],
                 target_forest: vec![],
                 breakpoints: vec![],
+                source_formatting: Default::default(),
             },
             debuggers: BTreeMap::new(),
         }

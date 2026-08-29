@@ -28,7 +28,7 @@ impl Default for SourceEffectOptions {
         Self {
             policy: ResolutionPolicy::PreferSourcesContent,
             workspace: BTreeMap::new(),
-            format_unmapped_sources: false,
+            format_unmapped_sources: true,
         }
     }
 }

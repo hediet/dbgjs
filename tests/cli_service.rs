@@ -262,6 +262,83 @@ fn cli_spawns_service_and_manages_shared_context_state() {
 }
 
 #[test]
+fn cli_persists_ordered_source_formatting_rules() {
+    let state_file = std::env::temp_dir().join(format!(
+        "jsdbg-source-formatting-{}-{}.json",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "create", ":formatting", "Formatting", "--set"],
+    );
+
+    let mut transcript = String::new();
+    let commands: &[(&[&str], &str)] = &[
+        (
+            &["source", "formatting", "get"],
+            "jsdbg source formatting get",
+        ),
+        (
+            &["source", "formatting", "set", "auto"],
+            "jsdbg source formatting set auto",
+        ),
+        (
+            &[
+                "source",
+                "formatting",
+                "rule",
+                "add",
+                "--mode",
+                "off",
+                "--url",
+                "**/vendor/**",
+            ],
+            "jsdbg source formatting rule add --mode off --url '**/vendor/**'",
+        ),
+        (
+            &[
+                "source",
+                "formatting",
+                "rule",
+                "add",
+                "--mode",
+                "on",
+                "--target",
+                "page-*",
+                "--url",
+                "**/*.min.js",
+            ],
+            "jsdbg source formatting rule add --mode on --target 'page-*' --url '**/*.min.js'",
+        ),
+        (
+            &["source", "formatting", "rule", "remove", "fmt-1"],
+            "jsdbg source formatting rule remove fmt-1",
+        ),
+    ];
+    for (arguments, rendered) in commands {
+        transcript.push_str("$ ");
+        transcript.push_str(rendered);
+        transcript.push('\n');
+        transcript.push_str(&run_human(&cli, &service, &state_file, arguments));
+    }
+    assert_eq!(
+        transcript,
+        include_str!("transcripts/source-formatting.txt")
+    );
+
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    cleanup.disarm();
+}
+
+#[test]
 fn service_ensure_starts_the_shared_daemon() {
     let state_file = std::env::temp_dir().join(format!(
         "jsdbg-service-ensure-{}-{}.json",
