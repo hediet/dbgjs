@@ -198,6 +198,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
+        [target, release] if target == "target" && release == "release" => {
+            let client = ensure_service(&state_file).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_scope(&client, &selection, &scope_options).await?;
+            let snapshot = rpc(client
+                .release_target(
+                    scope.context.clone(),
+                    scope.connection.clone(),
+                    scope.target.clone(),
+                )
+                .await)?;
+            print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
         [target, resume, options @ ..]
             if target == "target"
                 && resume == "resume"
@@ -1377,6 +1390,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     headless: options.headless,
                     user_data_dir: options.user_data_dir,
                     args: options.args,
+                },
+                options.connect,
+                &state_file,
+                &selection_file,
+                options.set_default,
+                output,
+            )
+            .await?;
+        }
+        [connection, add, node, program, options @ ..]
+            if connection == "connection" && add == "add" && node == "--node" =>
+        {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            let options = parse_node_options(options)?;
+            add_connection(
+                &context_id,
+                connection_id,
+                ConnectionConfiguration::Node {
+                    program: program.clone(),
+                    args: options.args,
+                    cwd: options.cwd,
+                    runtime_executable: options.runtime_executable,
+                    runtime_args: options.runtime_args,
+                    env: options.env,
                 },
                 options.connect,
                 &state_file,
@@ -4972,6 +5011,71 @@ struct ChromeOptions {
     args: Vec<String>,
 }
 
+struct NodeOptions {
+    cwd: String,
+    runtime_executable: String,
+    args: Vec<String>,
+    runtime_args: Vec<String>,
+    env: BTreeMap<String, String>,
+    connect: bool,
+    set_default: bool,
+}
+
+fn parse_node_options(options: &[String]) -> Result<NodeOptions, io::Error> {
+    let mut parsed = NodeOptions {
+        cwd: env::current_dir()?.to_string_lossy().into_owned(),
+        runtime_executable: env::var("JSDBG_NODE").unwrap_or_else(|_| "node".to_owned()),
+        args: Vec::new(),
+        runtime_args: Vec::new(),
+        env: BTreeMap::new(),
+        connect: false,
+        set_default: false,
+    };
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--connect" => parsed.connect = true,
+            "--set" => parsed.set_default = true,
+            option @ ("--cwd" | "--runtime-executable" | "--arg" | "--runtime-arg" | "--env") => {
+                index += 1;
+                let value = options.get(index).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{option} requires a value"),
+                    )
+                })?;
+                match option {
+                    "--cwd" => parsed.cwd = value.clone(),
+                    "--runtime-executable" => parsed.runtime_executable = value.clone(),
+                    "--arg" => parsed.args.push(value.clone()),
+                    "--runtime-arg" => parsed.runtime_args.push(value.clone()),
+                    "--env" => {
+                        let (name, value) = value.split_once('=').ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "--env requires NAME=VALUE")
+                        })?;
+                        if name.is_empty() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "--env requires a non-empty name",
+                            ));
+                        }
+                        parsed.env.insert(name.to_owned(), value.to_owned());
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            option => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown Node.js connection option '{option}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(parsed)
+}
+
 fn parse_chrome_options(options: &[String]) -> Result<ChromeOptions, io::Error> {
     let mut executable = None;
     let mut parsed = ChromeOptions {
@@ -5525,6 +5629,7 @@ commands:
   jsdbg connection list [--status <status>] [--kind <kind>] [--context <id>] [--connection <id>]
   jsdbg connection add <ws-endpoint> --connection <id> [--context <id>] [--connect]
   jsdbg connection add --node-inspector <ws-endpoint> --connection <id> [--context <id>] --connect
+  jsdbg connection add --node <program> --connection <id> [--context <id>] [--cwd <path>] [--runtime-executable <path>] [--runtime-arg <value>]... [--arg <value>]... [--env <name=value>]... [--connect] [--set]
   jsdbg connection add --process <process-id> --connection <id> [--context <id>] --connect
   jsdbg connection add --process-tree <root-pid> --connection <id> [--context <id>] --connect
   jsdbg connection add --playwright <url> --connection <id> [--context <id>] [--channel <channel>] [--headed] [--ignore-https-errors] [--connect] [--set]
@@ -5550,6 +5655,7 @@ commands:
   jsdbg target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
   jsdbg target show [target scope]
   jsdbg target attach [target scope] [--set] [--force]
+  jsdbg target release [target scope]
   jsdbg target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
   jsdbg target wait paused <after-epoch> [timeout-ms] [target scope]
   jsdbg target wait running [target scope]
@@ -5614,13 +5720,14 @@ mod tests {
         parse_coverage_show_options, parse_cpu_profile_sampling_interval,
         parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
         parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
-        parse_heap_string_options, parse_mutation_options, parse_process_attach_options,
-        parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
-        parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
-        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
-        parse_source_view, parse_target_list_options, parse_value_options, png_dimensions,
-        read_eval_expression, read_playwright_program, resolve_target_scope,
-        select_implicit_context, split_heap_reference_cli, target_list_output,
+        parse_heap_string_options, parse_mutation_options, parse_node_options,
+        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
+        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_formatting_rule,
+        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
+        parse_source_tree_options, parse_source_view, parse_target_list_options,
+        parse_value_options, png_dimensions, read_eval_expression, read_playwright_program,
+        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -6311,6 +6418,35 @@ mod tests {
             options.args,
             ["--disable-extensions", "--window-size=1200,800"]
         );
+    }
+
+    #[test]
+    fn parses_node_connection_options() {
+        let options = parse_node_options(&arguments(&[
+            "--cwd",
+            "/workspace/app",
+            "--runtime-executable",
+            "/usr/bin/node",
+            "--runtime-arg",
+            "--enable-source-maps",
+            "--arg",
+            "worker",
+            "--env",
+            "NODE_ENV=test",
+            "--connect",
+            "--set",
+        ]))
+        .unwrap();
+        assert_eq!(options.cwd, "/workspace/app");
+        assert_eq!(options.runtime_executable, "/usr/bin/node");
+        assert_eq!(options.runtime_args, ["--enable-source-maps"]);
+        assert_eq!(options.args, ["worker"]);
+        assert_eq!(
+            options.env.get("NODE_ENV").map(String::as_str),
+            Some("test")
+        );
+        assert!(options.connect);
+        assert!(options.set_default);
     }
 
     #[test]
