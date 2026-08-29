@@ -240,17 +240,18 @@ impl BreakpointCandidateBucket {
 enum BreakpointCandidateSelection {
     None,
     Waiting {
-        scripts: BTreeSet<ScriptKey>,
+        candidate_scripts: OrdSet<ScriptKey>,
+        unresolved_scripts: OrdSet<ScriptKey>,
     },
     Unique {
         candidate: BreakpointSourceCandidate,
-        scripts: BTreeSet<ScriptKey>,
+        scripts: OrdSet<ScriptKey>,
         friendly: bool,
     },
     Ambiguous {
         candidates: Arc<Vec<BreakpointSourceCandidate>>,
         omitted_candidate_count: usize,
-        scripts: BTreeSet<ScriptKey>,
+        scripts: OrdSet<ScriptKey>,
     },
 }
 
@@ -258,9 +259,17 @@ impl BreakpointCandidateSelection {
     fn special_scripts(&self) -> BTreeSet<ScriptKey> {
         match self {
             Self::None => BTreeSet::new(),
-            Self::Waiting { scripts }
-            | Self::Unique { scripts, .. }
-            | Self::Ambiguous { scripts, .. } => scripts.clone(),
+            Self::Waiting {
+                candidate_scripts,
+                unresolved_scripts,
+            } => candidate_scripts
+                .iter()
+                .chain(unresolved_scripts.iter())
+                .cloned()
+                .collect(),
+            Self::Unique { scripts, .. } | Self::Ambiguous { scripts, .. } => {
+                scripts.iter().cloned().collect()
+            }
         }
     }
 
@@ -301,13 +310,12 @@ impl BreakpointCandidateSelection {
 
     fn changed_scripts(&self, next: &Self, completed: &ScriptKey) -> BTreeSet<ScriptKey> {
         let same_status_payload = self.same_status_payload(next);
+        if same_status_payload {
+            return BTreeSet::from([completed.clone()]);
+        }
         let previous = self.special_scripts();
         let next = next.special_scripts();
-        let mut changed: BTreeSet<ScriptKey> = if same_status_payload {
-            previous.symmetric_difference(&next).cloned().collect()
-        } else {
-            previous.union(&next).cloned().collect()
-        };
+        let mut changed: BTreeSet<ScriptKey> = previous.union(&next).cloned().collect();
         changed.insert(completed.clone());
         changed
     }
@@ -330,20 +338,21 @@ impl BreakpointCandidateIndex {
                         .collect(),
                 ),
                 omitted_candidate_count: bucket.keys.len().saturating_sub(bucket.bounded.len()),
-                scripts: bucket.matching_scripts.iter().cloned().collect(),
+                scripts: bucket.matching_scripts.clone(),
             };
         }
         let Some(indexed) = bucket.bounded.values().next() else {
             return BreakpointCandidateSelection::None;
         };
         if friendly && !self.unresolved.is_empty() {
-            let mut scripts = indexed.scripts.iter().cloned().collect::<BTreeSet<_>>();
-            scripts.extend(self.unresolved.iter().cloned());
-            BreakpointCandidateSelection::Waiting { scripts }
+            BreakpointCandidateSelection::Waiting {
+                candidate_scripts: indexed.scripts.clone(),
+                unresolved_scripts: self.unresolved.clone(),
+            }
         } else {
             BreakpointCandidateSelection::Unique {
                 candidate: indexed.candidate.clone(),
-                scripts: indexed.scripts.iter().cloned().collect(),
+                scripts: indexed.scripts.clone(),
                 friendly,
             }
         }
@@ -1667,7 +1676,10 @@ fn apply_breakpoint_selection_to_script(
         return;
     };
     match selection {
-        BreakpointCandidateSelection::Waiting { scripts } if scripts.contains(script) => {
+        BreakpointCandidateSelection::Waiting {
+            candidate_scripts,
+            unresolved_scripts,
+        } if candidate_scripts.contains(script) || unresolved_scripts.contains(script) => {
             replace_breakpoint_assessment(
                 state,
                 breakpoint,
@@ -5008,6 +5020,58 @@ mod tests {
                         BreakpointAssessmentStatus::SourceNotFound { .. }
                     )
                 })
+        }));
+    }
+
+    #[test]
+    fn same_source_candidate_membership_updates_only_the_completed_script() {
+        const SCRIPT_COUNT: usize = 2_000;
+        const BREAKPOINT_COUNT: usize = 32;
+
+        let session = SessionKey {
+            connection_generation: 1,
+            session_id: "session".into(),
+        };
+        let store = crate::content_store::ContentStore::default();
+        let content = store.intern("shared source");
+        let candidate = BreakpointSourceCandidate {
+            source_url: "shared.ts".to_owned(),
+            content: ContentCandidate {
+                content,
+                provenance: crate::source_view::Provenance::Workspace {
+                    logical_url: "shared.ts".to_owned(),
+                },
+            },
+        };
+        let mut indexes = vec![BreakpointCandidateIndex::default(); BREAKPOINT_COUNT];
+        let mut selections = indexes
+            .iter()
+            .map(BreakpointCandidateIndex::selection)
+            .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        for index in 0..SCRIPT_COUNT {
+            let script = ScriptKey {
+                session: session.clone(),
+                script_id: format!("script-{index:04}"),
+            };
+            for breakpoint in 0..BREAKPOINT_COUNT {
+                indexes[breakpoint].exact.insert(&script, candidate.clone());
+                let next = indexes[breakpoint].selection();
+                assert_eq!(
+                    selections[breakpoint].changed_scripts(&next, &script),
+                    BTreeSet::from([script.clone()])
+                );
+                selections[breakpoint] = next;
+            }
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "{SCRIPT_COUNT} same-source scripts x {BREAKPOINT_COUNT} breakpoints: {elapsed:?}"
+        );
+        assert!(indexes.iter().all(|index| {
+            index.exact.keys.len() == 1
+                && index.exact.matching_scripts.len() == SCRIPT_COUNT
+                && index.selection().same_status_payload(&selections[0])
         }));
     }
 
