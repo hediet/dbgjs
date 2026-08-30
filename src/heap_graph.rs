@@ -48,7 +48,7 @@ pub struct HeapGraph {
 
     // Edges (SoA, grouped by source node).
     edge_type: Vec<u32>,
-    edge_name_or_index: Vec<u64>,
+    edge_name_or_index: Vec<i64>,
     edge_target: Vec<u32>,
 
     // Locations (SoA, in snapshot order).
@@ -1167,7 +1167,7 @@ pub struct HeapReference<'a> {
     pub target: NodeIndex,
     pub edge_type: &'a str,
     /// The unmodified V8 `name_or_index` field.
-    pub name_or_index: u64,
+    pub name_or_index: i64,
     /// Resolved for named edge kinds; `element` and `hidden` retain only their
     /// numeric `name_or_index`.
     pub name: Option<&'a str>,
@@ -1814,7 +1814,7 @@ struct GraphBuilder {
     node_shallow_size: Vec<u64>,
     node_edge_count: Vec<u32>,
     edge_type: Vec<u32>,
-    edge_name_or_index: Vec<u64>,
+    edge_name_or_index: Vec<i64>,
     edge_target: Vec<u32>,
     location_node: Vec<u32>,
     location_script_id: Vec<i64>,
@@ -1901,17 +1901,15 @@ impl GraphBuilder {
             if matches!(edge_type.as_str(), "element" | "hidden") {
                 continue;
             }
-            let Ok(name) = usize::try_from(raw_name) else {
-                return Err(HeapGraphParseError::InvalidStringIndex {
-                    context: "edge name",
+            let name =
+                usize::try_from(raw_name).map_err(|_| HeapGraphParseError::SignedOverflow {
+                    field: "edge name",
                     value: raw_name,
-                    string_count: strings.len(),
-                });
-            };
+                })?;
             if name >= strings.len() {
                 return Err(HeapGraphParseError::InvalidStringIndex {
                     context: "edge name",
-                    value: raw_name,
+                    value: u64::try_from(raw_name).expect("edge name was converted to usize"),
                     string_count: strings.len(),
                 });
             }
@@ -2241,10 +2239,10 @@ impl<'de> Visitor<'de> for EdgesVisitor<'_> {
     where
         A: SeqAccess<'de>,
     {
-        let mut record = vec![0_u64; self.metadata.edge_field_count];
+        let mut record = vec![0_i64; self.metadata.edge_field_count];
         loop {
             for (index, value) in record.iter_mut().enumerate() {
-                let Some(next) = sequence.next_element::<u64>()? else {
+                let Some(next) = sequence.next_element::<i64>()? else {
                     if index == 0 {
                         return Ok(());
                     }
@@ -2265,7 +2263,11 @@ impl<'de> Visitor<'de> for EdgesVisitor<'_> {
                     },
                 );
             }
-            let raw_type = record[self.metadata.edge_type_offset];
+            let raw_type = checked_signed_u64(
+                record[self.metadata.edge_type_offset],
+                "edge type",
+                &mut self.builder.error,
+            )?;
             if raw_type >= u64::try_from(self.metadata.edge_types.len()).unwrap_or(u64::MAX) {
                 return sequence_error(
                     &mut self.builder.error,
@@ -2276,7 +2278,11 @@ impl<'de> Visitor<'de> for EdgesVisitor<'_> {
                     },
                 );
             }
-            let raw_target = record[self.metadata.edge_to_node_offset];
+            let raw_target = checked_signed_u64(
+                record[self.metadata.edge_to_node_offset],
+                "edge target",
+                &mut self.builder.error,
+            )?;
             let field_count =
                 u64::try_from(self.metadata.node_field_count).expect("node field count fits u64");
             if raw_target % field_count != 0 {
@@ -2474,6 +2480,19 @@ fn checked_u32<E: serde::de::Error>(
 ) -> Result<u32, E> {
     u32::try_from(value).map_err(|_| {
         let parse_error = HeapGraphParseError::Overflow { field, value };
+        let message = parse_error.to_string();
+        *error = Some(parse_error);
+        E::custom(message)
+    })
+}
+
+fn checked_signed_u64<E: serde::de::Error>(
+    value: i64,
+    field: &'static str,
+    error: &mut Option<HeapGraphParseError>,
+) -> Result<u64, E> {
+    u64::try_from(value).map_err(|_| {
+        let parse_error = HeapGraphParseError::SignedOverflow { field, value };
         let message = parse_error.to_string();
         *error = Some(parse_error);
         E::custom(message)
@@ -2834,6 +2853,22 @@ mod tests {
             visits <= NODE_COUNT,
             "shared DAG reconstruction took {visits} node visits"
         );
+    }
+
+    #[test]
+    fn preserves_negative_element_indices() {
+        let json = snapshot("0,0,1,0,1, 1,1,3,0,0", "1,-128,5", r#""root","Object""#, "");
+        let graph = parse_heap_graph(json.as_bytes()).unwrap();
+
+        let reference = graph
+            .outgoing_references(NodeIndex(0))
+            .unwrap()
+            .next()
+            .unwrap();
+        assert_eq!(reference.edge_type, "element");
+        assert_eq!(reference.name_or_index, -128);
+        assert_eq!(reference.name, None);
+        assert_eq!(reference.target, NodeIndex(1));
     }
 
     #[test]

@@ -1407,7 +1407,7 @@ pub struct HeapReferenceSnapshot {
     pub edge_index: u32,
     pub edge_type: String,
     pub name: Option<String>,
-    pub name_or_index: u64,
+    pub name_or_index: i64,
     pub source: String,
     pub target: String,
 }
@@ -1463,7 +1463,7 @@ pub struct HeapPathStepSnapshot {
     pub edge_index: u32,
     pub edge_type: String,
     pub name: Option<String>,
-    pub name_or_index: u64,
+    pub name_or_index: i64,
     pub direction: HeapTraversalDirection,
 }
 
