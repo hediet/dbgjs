@@ -53,6 +53,71 @@ The first executable vertical slice now validates:
 Strict attachment stealing and selected-page Playwright programs are also
 implemented through the same target identities and lifecycle checks.
 
+## CDP over stdio
+
+A durable connection can launch an adapter whose stdin and stdout carry CDP
+using the same framing as MCP stdio: each compact UTF-8 JSON message occupies
+one line and must not contain embedded newlines. Stdout is protocol-only;
+adapter diagnostics belong on stderr.
+
+```console
+jsdbg connection add --stdio --connection custom --connect -- \
+  ./my-cdp-adapter --foobar
+```
+
+The command and all of its arguments follow `--`, so adapter options cannot be
+mistaken for jsdbg options. Connection options precede it:
+
+```console
+jsdbg connection add --stdio --connection browser \
+  --cwd ./adapter --env TOKEN=secret --topology browser --connect -- \
+  node ./adapter.mjs --remote production
+```
+
+`--topology target` is the default and represents one direct debugger target.
+`--topology browser` represents a browser-root CDP endpoint that can discover
+multiple targets. The service owns the spawned adapter process and terminates
+it when the connection disconnects. Browser-root Playwright programs currently
+still require a WebSocket CDP endpoint.
+
+## Relay
+
+`jsdbg context relay --stdio [--context <id>]` and
+`jsdbg target relay --stdio [target scope]` expose a context or a single
+target as CDP over the same compact newline-delimited JSON framing described
+above, so any external CDP consumer (Playwright, Puppeteer, an MCP-style tool)
+can drive `jsdbg`-managed targets directly instead of through `jsdbg` commands.
+
+```console
+jsdbg context relay --stdio --context :shop
+jsdbg target relay --stdio --target page
+```
+
+Internally, the service opens a short-lived authenticated loopback WebSocket
+endpoint (the same shape as the Playwright proxy endpoint) and the CLI process
+bridges it to its own stdin/stdout verbatim; it does not interpret CDP itself.
+
+- **Context relay** exposes a virtual browser root covering every target across
+  every connection in the context, using context-global canonical target IDs.
+  It minimally supports `Browser.getVersion`, `Target.getTargets`,
+  `Target.setDiscoverTargets`, `Target.setAutoAttach`, flattened
+  `Target.attachToTarget`/`Target.detachFromTarget`, and mirrors every raw
+  target event (not only typed debugger events) to attached sessions.
+- **Target relay** exposes exactly one target as a direct CDP root, equivalent
+  to connecting straight to that target's own endpoint: every request forwards
+  opaquely and every raw event mirrors back, with no `Target.*` domain of its
+  own.
+
+Opening either relay takes **exclusive ownership of the target's context**
+immediately, before any client connects: ordinary local target debugging
+commands (breakpoints, evaluation, stepping, raw CDP, and so on) fail with a
+clear error until the relay closes. Relay-internal attachment and forwarding
+bypass that guard, existing attachments remain valid once the relay closes,
+and attaching a target while relayed can stay lazy. A relay never restarts
+the underlying WebSocket, stdio, Electron, Node, or process provider
+connection; it only adds a CDP-shaped facade in front of the same live
+attachments.
+
 ---
 
 # Part I: Core design

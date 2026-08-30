@@ -30,7 +30,7 @@ sourcemap = "=9.3.2"
 sysinfo = "0.37"
 percent-encoding = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = "0.28"
 terminal_size = "0.4"
 unicode-width = "0.2"

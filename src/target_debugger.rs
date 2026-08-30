@@ -83,6 +83,8 @@ pub struct TargetDebuggerHandle {
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
     session_id: String,
     heap_snapshot_progress: watch::Receiver<Option<crate::cdp_runtime::HeapSnapshotStreamProgress>>,
+    raw_events: broadcast::Sender<crate::cdp_runtime::RawCdpEvent>,
+    raw_event_history: Arc<std::sync::Mutex<Vec<crate::cdp_runtime::RawCdpEvent>>>,
 }
 
 impl TargetDebuggerHandle {
@@ -113,6 +115,8 @@ impl TargetDebuggerHandle {
             sources,
         );
         let heap_snapshot_progress = driver.heap_snapshot_progress();
+        let raw_events = driver.raw_events_sender();
+        let raw_event_history = driver.raw_event_history();
         driver.apply(Input::Connected).await?;
         driver
             .apply(Input::SessionAttached {
@@ -150,7 +154,20 @@ impl TargetDebuggerHandle {
             pause_events,
             session_id: session_key.session_id,
             heap_snapshot_progress,
+            raw_events,
+            raw_event_history,
         })
+    }
+
+    /// Subscribes to every raw CDP notification observed on this target, mirroring the wire
+    /// event verbatim rather than only the subset the debugger engine reducer understands.
+    /// Relay dispatchers use this to forward console, network, and lifecycle events.
+    pub fn subscribe_raw_events(&self) -> broadcast::Receiver<crate::cdp_runtime::RawCdpEvent> {
+        self.raw_events.subscribe()
+    }
+
+    pub fn raw_event_history(&self) -> Arc<std::sync::Mutex<Vec<crate::cdp_runtime::RawCdpEvent>>> {
+        self.raw_event_history.clone()
     }
 
     pub fn snapshot(&self) -> TargetDebuggerSnapshot {
@@ -4926,23 +4943,27 @@ fn snapshot_from_driver(
             continue;
         };
         result_breakpoint.source = breakpoint.bindings.keys().find_map(|physical| {
-            driver
-                .logical_source_content(&physical.script, &breakpoint.source_url)
-                .map(|content| {
-                    let location = SourceLocation {
-                        source_url: breakpoint.source_url.clone(),
-                        line: breakpoint.position.line.saturating_add(1),
-                        column: breakpoint.position.column.saturating_add(1),
-                    };
-                    let breadcrumb = driver.breadcrumb(
-                        &physical.script,
-                        &breakpoint.source_url,
-                        location.line,
-                        location.column,
-                        &content,
-                    );
-                    source_excerpt(&breakpoint.source_url, &location, &content, breadcrumb)
-                })
+            let confirmed_position = driver
+                .state()
+                .physical_breakpoints
+                .get(physical)
+                .and_then(|physical| physical.confirmed_position)
+                .unwrap_or(physical.position);
+            let (source_url, position, content) =
+                driver.project_generated_position(&physical.script, confirmed_position)?;
+            let location = SourceLocation {
+                source_url: source_url.clone(),
+                line: position.line.saturating_add(1),
+                column: position.column.saturating_add(1),
+            };
+            let breadcrumb = driver.breadcrumb(
+                &physical.script,
+                &source_url,
+                location.line,
+                location.column,
+                &content,
+            );
+            Some(source_excerpt(&source_url, &location, &content, breadcrumb))
         });
     }
     if let Some(pause) = result.pause.as_mut()
@@ -5381,6 +5402,11 @@ fn snapshot(
                 .iter()
                 .filter_map(|(physical, binding)| {
                     let script = state.scripts.get(&physical.script)?;
+                    let confirmed_position = state
+                        .physical_breakpoints
+                        .get(physical)
+                        .and_then(|physical| physical.confirmed_position)
+                        .unwrap_or(physical.position);
                     let mapping =
                         breakpoint
                             .assessments
@@ -5405,8 +5431,8 @@ fn snapshot(
                         script_id: physical.script.script_id.clone(),
                         script_url: script.url.clone(),
                         script_version: physical.script_version,
-                        generated_line: physical.position.line.saturating_add(1),
-                        generated_column: physical.position.column.saturating_add(1),
+                        generated_line: confirmed_position.line.saturating_add(1),
+                        generated_column: confirmed_position.column.saturating_add(1),
                         mapping,
                         status: match binding {
                             BreakpointBinding::WaitingForRemoval(_) => {

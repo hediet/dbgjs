@@ -1,19 +1,20 @@
 use cdp_client::service_api::{
-    AgentSessionSnapshot, BreakpointPendingReason, BreakpointStatus, CaptureSnapshot,
-    CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot,
-    ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot, ContextSnapshot,
-    ContextSummary, CoverageSnapshot, CpuProfileFunctionSnapshot, CpuProfileSnapshot,
-    EvaluationSnapshot, FrameProjectionSnapshot, HeapAggregateSnapshot, HeapCaptureResult,
-    HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot, HeapDominatorSnapshot,
-    HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapReferencesSnapshot,
-    HeapSnapshotProgress, HeapSnapshotResult, ObservationResult, PlaywrightChannel, ProcessRole,
-    ProcessSnapshot, ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ServiceInfo,
-    SourceContentSnapshot, SourceExcerpt, SourceFormattingMode, SourceFormattingSettings,
-    SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, SourceSearchSnapshot,
-    SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome, TargetAttachmentResult,
-    TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
-    UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
-    UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValueSnapshot,
+    AgentSessionSnapshot, BreakpointPendingReason, BreakpointSnapshot, BreakpointStatus,
+    CaptureSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
+    CompactedSourceNodeSnapshot, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileFunctionSnapshot,
+    CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, HeapAggregateSnapshot,
+    HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
+    HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
+    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, ObservationResult,
+    PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, PromiseSelectionSnapshot,
+    PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceFormattingMode,
+    SourceFormattingSettings, SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot,
+    SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome,
+    TargetAttachmentResult, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetSnapshot, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -172,6 +173,30 @@ impl OutputFormat {
                 }
             }
             Self::Json => println!("{}", serde_json::to_string_pretty(&deleted)?),
+        }
+        Ok(())
+    }
+
+    pub fn print_breakpoint(
+        &self,
+        context: &ContextSnapshot,
+        breakpoint_id: &str,
+        sources: &[SourceExcerpt],
+    ) -> Result<(), serde_json::Error> {
+        let breakpoint = context
+            .breakpoints
+            .iter()
+            .find(|breakpoint| breakpoint.id == breakpoint_id)
+            .expect("updated context contains the requested breakpoint");
+        match self {
+            Self::Human => {
+                print_breakpoint_human(breakpoint);
+                for source in sources {
+                    println!();
+                    print_source_excerpt("Source", source);
+                }
+            }
+            Self::Json => println!("{}", serde_json::to_string_pretty(breakpoint)?),
         }
         Ok(())
     }
@@ -2194,22 +2219,51 @@ impl HumanOutput for ContextSnapshot {
                     }
                 }
             }
-
-            fn breakpoint_status(status: &BreakpointStatus) -> String {
-                match status {
-                    BreakpointStatus::Unconfirmed => "unconfirmed".into(),
-                    BreakpointStatus::Disabled => "disabled".into(),
-                    BreakpointStatus::Pending => "pending".into(),
-                    BreakpointStatus::PartiallyBound { application_count } => {
-                        format!("partially-bound:{application_count}")
-                    }
-                    BreakpointStatus::Bound { application_count } => {
-                        format!("bound:{application_count}")
-                    }
-                    BreakpointStatus::Failed { message } => format!("failed:{message}"),
-                }
-            }
         }
+    }
+}
+
+fn print_breakpoint_human(breakpoint: &BreakpointSnapshot) {
+    println!(
+        "Breakpoint {}  {}:{}:{}  [{}]",
+        breakpoint.id,
+        breakpoint.source_path,
+        breakpoint.line,
+        breakpoint.column,
+        breakpoint_status(&breakpoint.status)
+    );
+    if let Some(reason) = &breakpoint.pending_reason {
+        print_breakpoint_pending_reason(reason, "  ");
+    }
+    for application in &breakpoint.applications {
+        if let Some(mapping) = &application.mapping {
+            println!(
+                "  bound on {}/{}: CDP confirmed script {} v{} at {}:{}:{} via {}",
+                application.connection_id,
+                application.target_id,
+                application.script_id,
+                application.script_version,
+                application.script_url,
+                application.generated_line,
+                application.generated_column,
+                mapping.projection.join(" -> ")
+            );
+        }
+    }
+}
+
+fn breakpoint_status(status: &BreakpointStatus) -> String {
+    match status {
+        BreakpointStatus::Unconfirmed => "unconfirmed".into(),
+        BreakpointStatus::Disabled => "disabled".into(),
+        BreakpointStatus::Pending => "pending".into(),
+        BreakpointStatus::PartiallyBound { application_count } => {
+            format!("partially bound; {application_count} application(s)")
+        }
+        BreakpointStatus::Bound { application_count } => {
+            format!("bound; {application_count} application(s)")
+        }
+        BreakpointStatus::Failed { message } => format!("failed: {message}"),
     }
 }
 
@@ -3618,6 +3672,15 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
             runtime_executable,
             ..
         } => format!("Node.js at {runtime_executable} running {program}"),
+        ConnectionConfiguration::Stdio {
+            command, topology, ..
+        } => format!(
+            "CDP over stdio from {command} ({})",
+            match topology {
+                cdp_client::service_api::CdpStdioTopology::Browser => "browser",
+                cdp_client::service_api::CdpStdioTopology::Target => "target",
+            }
+        ),
     }
 }
 
@@ -3630,6 +3693,7 @@ fn connection_configuration_kind(configuration: &ConnectionConfiguration) -> &'s
         ConnectionConfiguration::Playwright { .. } => "playwright",
         ConnectionConfiguration::Chrome { .. } => "chrome",
         ConnectionConfiguration::Node { .. } => "node",
+        ConnectionConfiguration::Stdio { .. } => "stdio",
     }
 }
 

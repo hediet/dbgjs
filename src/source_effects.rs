@@ -14,7 +14,7 @@ use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
 use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
     GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
-    ResolvedSourceView, SourceViewError,
+    ResolvedSourceView, SourceViewError, appears_minified,
 };
 
 pub struct SourceEffectOptions {
@@ -206,7 +206,9 @@ impl SourceEffectInterpreter {
                     content,
                     source_map: source_map.as_deref(),
                     source_map_url: source_map_url.as_deref(),
-                    minified: source_map.is_none() && self.options.format_unmapped_sources,
+                    minified: source_map.is_none()
+                        && self.options.format_unmapped_sources
+                        && appears_minified(generated_url, content),
                 })?;
                 let logical_sources = view
                     .files()
@@ -1275,6 +1277,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install_id,
                 backend_id: "chrome-breakpoint-1".into(),
+                confirmed_position: physical.position,
             },
             &mut revisions,
         )

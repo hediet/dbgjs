@@ -432,6 +432,7 @@ fn connection_kind(configuration: &ConnectionConfiguration) -> &'static str {
         ConnectionConfiguration::Playwright { .. } => "playwright",
         ConnectionConfiguration::Chrome { .. } => "chrome",
         ConnectionConfiguration::Node { .. } => "node",
+        ConnectionConfiguration::Stdio { .. } => "stdio",
     }
 }
 

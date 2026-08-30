@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::cdp::CdpClient;
 use crate::cdp_runtime::{
     CdpDebuggerSession, CdpRuntimeError, CdpRuntimeEvent, CdpRuntimeEventError,
-    HeapSnapshotStreamProgress, SourceMapCacheStats,
+    HeapSnapshotStreamProgress, RawCdpEvent, SourceMapCacheStats,
 };
 use crate::debugger_engine::{DebuggerState, Effect, Input, SessionPhase, reduce};
 use crate::source_effects::{SourceEffectError, SourceEffectInterpreter};
@@ -57,6 +57,16 @@ impl DebuggerDriver {
         &self,
     ) -> tokio::sync::watch::Receiver<Option<HeapSnapshotStreamProgress>> {
         self.session.heap_snapshot_progress()
+    }
+
+    /// Subscribes to every raw CDP notification for this target's session, regardless of
+    /// whether the reducer understands it. Used by relay dispatchers to mirror events verbatim.
+    pub fn raw_events_sender(&self) -> tokio::sync::broadcast::Sender<RawCdpEvent> {
+        self.session.raw_events_sender()
+    }
+
+    pub fn raw_event_history(&self) -> Arc<std::sync::Mutex<Vec<RawCdpEvent>>> {
+        self.session.raw_event_history()
     }
 
     pub async fn begin_heap_snapshot(&self, destination: PathBuf) -> std::io::Result<()> {
@@ -116,6 +126,15 @@ impl DebuggerDriver {
     ) -> Option<(String, crate::source_view::Position, Arc<str>)> {
         self.sources
             .project_generated_offset(&self.state, script, utf16_offset)
+    }
+
+    pub fn project_generated_position(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+        position: crate::source_view::Position,
+    ) -> Option<(String, crate::source_view::Position, Arc<str>)> {
+        self.sources
+            .project_generated_position(&self.state, script, position)
     }
 
     pub fn source_effects(&self) -> &SourceEffectInterpreter {

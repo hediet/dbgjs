@@ -1,7 +1,8 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -98,6 +99,472 @@ fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
     assert!(String::from_utf8_lossy(&stale.2).contains("stale context binding"));
 
     run_json_in(&cli, &service, &state_file, &child, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+#[test]
+fn cli_connects_to_a_target_over_mcp_style_stdio() {
+    let root = std::env::temp_dir().join(format!(
+        "jsdbg-stdio-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["context", "create", ":stdio", "Stdio", "--set"],
+    );
+    let connected = run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "connection",
+            "add",
+            "--stdio",
+            "--connection",
+            "adapter",
+            "--connect",
+            "--",
+            "node",
+            "--input-type=module",
+            "--eval",
+            "process.stdin.resume(); process.stdin.on('end', () => process.exit(0));",
+        ],
+    );
+
+    let connection = &connected["connections"][0];
+    assert_eq!(connection["configuration"]["kind"], "stdio");
+    assert_eq!(connection["configuration"]["command"], "node");
+    assert_eq!(connection["configuration"]["topology"], "target");
+    assert_eq!(connection["status"]["kind"], "connected");
+    assert_eq!(connection["targets"][0]["targetType"], "runtime");
+    assert_eq!(connection["targets"][0]["url"], "stdio:node");
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["connection", "disconnect", "--connection", "adapter"],
+    );
+    run_json_in(&cli, &service, &state_file, &root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+/// A minimal CDP-over-stdio target: acknowledges every request with an empty result (enough
+/// for the debugger driver's attach handshake), answers `Runtime.evaluate` for real, and emits
+/// one raw `Runtime.consoleAPICalled` event right after its first response so relay tests can
+/// verify raw event mirroring alongside request/response forwarding.
+const FAKE_CDP_TARGET_SCRIPT: &str = r#"
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf('\n')) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.id === undefined) continue;
+    let result = {};
+    let emitEvent = false;
+    if (message.method === 'Runtime.evaluate') {
+      const value = eval(String(message.params.expression));
+      result = { result: { type: typeof value, value } };
+      // Only fire once the relay client's own probe arrives, well after the driver's
+      // attach handshake (Runtime.enable/Debugger.enable/...) - a raw event emitted during
+      // attach itself would be broadcast before any relay client has subscribed to it.
+      emitEvent = true;
+    } else if (message.method === 'Debugger.enable') {
+      result = { debuggerId: 'fake-debugger-id' };
+    }
+    process.stdout.write(JSON.stringify({ id: message.id, result }) + '\n');
+    if (emitEvent) {
+      process.stdout.write(JSON.stringify({
+        method: 'Runtime.consoleAPICalled',
+        params: {
+          type: 'log',
+          args: [{ type: 'string', value: 'hello-from-fake-target' }],
+          executionContextId: 1,
+          timestamp: Date.now(),
+        },
+      }) + '\n');
+    }
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+"#;
+
+#[test]
+fn target_relay_forwards_cdp_and_enforces_exclusive_context_ownership() {
+    let root = std::env::temp_dir().join(format!(
+        "jsdbg-target-relay-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["context", "create", ":target-relay", "TargetRelay", "--set"],
+    );
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "connection",
+            "add",
+            "--stdio",
+            "--connection",
+            "adapter",
+            "--connect",
+            "--",
+            "node",
+            "--input-type=module",
+            "--eval",
+            FAKE_CDP_TARGET_SCRIPT,
+        ],
+    );
+
+    let mut relay = spawn_stdio(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "target",
+            "relay",
+            "--stdio",
+            "--context",
+            ":target-relay",
+            "--connection",
+            "adapter",
+        ],
+    );
+
+    relay.send(&serde_json::json!({
+        "id": 1,
+        "method": "Runtime.evaluate",
+        "params": { "expression": "6 * 7" },
+    }));
+
+    let mut saw_response = false;
+    let mut saw_event = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while (!saw_response || !saw_event) && Instant::now() < deadline {
+        let message = relay.recv_line(Duration::from_secs(10));
+        if message.get("id").and_then(Value::as_i64) == Some(1) {
+            assert_eq!(message["result"]["result"]["value"], 42);
+            saw_response = true;
+        } else if message["method"] == "Runtime.consoleAPICalled" {
+            assert_eq!(
+                message["params"]["args"][0]["value"],
+                "hello-from-fake-target"
+            );
+            saw_event = true;
+        }
+    }
+    assert!(
+        saw_response,
+        "relay must forward the Runtime.evaluate response"
+    );
+    assert!(saw_event, "relay must mirror the raw console event");
+
+    // While the relay owns the context exclusively, an ordinary local command against the
+    // same already-attached target must fail clearly rather than silently racing the relay.
+    let (status, _stdout, stderr) = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "target",
+            "cdp",
+            "Runtime.evaluate",
+            "--params",
+            r#"{"expression":"1 + 1"}"#,
+            "--context",
+            ":target-relay",
+            "--connection",
+            "adapter",
+        ],
+    );
+    assert!(!status.success(), "raw cdp must fail while relayed");
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("exclusively owned by an active relay"),
+        "stderr: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+
+    // Ending the relay client (closing its stdin, which closes the loopback WebSocket) must
+    // restore ordinary local access without restarting the underlying stdio connection or
+    // disturbing the attachment the relay itself created.
+    relay.shutdown();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (status, stdout, stderr) = run_in(
+            &cli,
+            &service,
+            &state_file,
+            &root,
+            &[
+                "target",
+                "cdp",
+                "Runtime.evaluate",
+                "--params",
+                r#"{"expression":"1 + 1"}"#,
+                "--context",
+                ":target-relay",
+                "--connection",
+                "adapter",
+            ],
+        );
+        if status.success() {
+            let value: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(value["result"]["value"], 2);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "relay never released the context; stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["connection", "disconnect", "--connection", "adapter"],
+    );
+    run_json_in(&cli, &service, &state_file, &root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+#[test]
+fn context_relay_exposes_virtual_browser_root_and_enforces_exclusivity() {
+    let root = std::env::temp_dir().join(format!(
+        "jsdbg-context-relay-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "context",
+            "create",
+            ":context-relay",
+            "ContextRelay",
+            "--set",
+        ],
+    );
+    let connected = run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "connection",
+            "add",
+            "--stdio",
+            "--connection",
+            "adapter",
+            "--connect",
+            "--",
+            "node",
+            "--input-type=module",
+            "--eval",
+            FAKE_CDP_TARGET_SCRIPT,
+        ],
+    );
+    let canonical_target_id = connected["connections"][0]["targets"][0]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let mut relay = spawn_stdio(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["context", "relay", "--stdio", "--context", ":context-relay"],
+    );
+
+    relay.send(&serde_json::json!({ "id": 1, "method": "Browser.getVersion" }));
+    let version = relay.recv_line(Duration::from_secs(10));
+    assert_eq!(version["id"], 1);
+    assert!(version["result"]["protocolVersion"].is_string());
+
+    relay.send(&serde_json::json!({ "id": 2, "method": "Target.getTargets" }));
+    let targets = relay.recv_line(Duration::from_secs(10));
+    assert_eq!(targets["id"], 2);
+    let target_infos = targets["result"]["targetInfos"].as_array().unwrap();
+    assert_eq!(target_infos.len(), 1);
+    assert_eq!(target_infos[0]["targetId"], canonical_target_id);
+
+    relay.send(&serde_json::json!({
+        "id": 3,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": canonical_target_id, "flatten": true },
+    }));
+
+    // `Target.attachToTarget` returns its `sessionId` directly *and* emits `attachedToTarget`;
+    // read messages until both have been observed since their relative order is not fixed.
+    let mut session_id = None;
+    let mut saw_attached_event = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while (session_id.is_none() || !saw_attached_event) && Instant::now() < deadline {
+        let message = relay.recv_line(Duration::from_secs(10));
+        if message["id"] == 3 {
+            session_id = Some(message["result"]["sessionId"].as_str().unwrap().to_owned());
+        } else if message["method"] == "Target.attachedToTarget" {
+            assert_eq!(
+                message["params"]["targetInfo"]["targetId"],
+                canonical_target_id
+            );
+            saw_attached_event = true;
+        }
+    }
+    let session_id = session_id.expect("Target.attachToTarget must return a sessionId");
+    assert!(
+        saw_attached_event,
+        "attaching must emit Target.attachedToTarget"
+    );
+
+    // Session-scoped messages carry the relay's own sessionId and forward opaquely to the
+    // attached target, with the external request id preserved on the response. The response
+    // and the raw event this evaluation triggers travel independent async paths (an actor
+    // round trip vs. a direct broadcast forward), so their relative arrival order is not
+    // guaranteed - exactly like real CDP, where clients correlate responses by id rather than
+    // by position relative to unrelated events.
+    relay.send(&serde_json::json!({
+        "sessionId": session_id,
+        "id": 4,
+        "method": "Runtime.evaluate",
+        "params": { "expression": "2 + 2" },
+    }));
+    let evaluated = loop {
+        let message = relay.recv_line(Duration::from_secs(10));
+        if message["id"] == 4 {
+            break message;
+        }
+    };
+    assert_eq!(
+        evaluated["result"]["result"]["value"], 4,
+        "unexpected evaluate response: {evaluated}"
+    );
+    assert_eq!(evaluated["sessionId"], session_id);
+    assert_eq!(evaluated["id"], 4);
+
+    // Exclusive relay ownership applies context-wide, even to a target the relay has not
+    // itself explicitly attached through the ordinary local attach path.
+    let (status, _stdout, stderr) = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &[
+            "target",
+            "cdp",
+            "Runtime.evaluate",
+            "--params",
+            r#"{"expression":"1 + 1"}"#,
+            "--context",
+            ":context-relay",
+            "--connection",
+            "adapter",
+        ],
+    );
+    assert!(!status.success(), "raw cdp must fail while context-relayed");
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("exclusively owned by an active relay"),
+        "stderr: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+
+    relay.shutdown();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (status, stdout, stderr) = run_in(
+            &cli,
+            &service,
+            &state_file,
+            &root,
+            &[
+                "target",
+                "cdp",
+                "Runtime.evaluate",
+                "--params",
+                r#"{"expression":"1 + 1"}"#,
+                "--context",
+                ":context-relay",
+                "--connection",
+                "adapter",
+            ],
+        );
+        if status.success() {
+            let value: Value = serde_json::from_slice(&stdout).unwrap();
+            assert_eq!(value["result"]["value"], 2);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "context relay never released the context; stderr: {}",
+            String::from_utf8_lossy(&stderr)
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    run_json_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["connection", "disconnect", "--connection", "adapter"],
+    );
+    run_json_in(&cli, &service, &state_file, &root, &["service", "stop"]);
     wait_until_removed(&state_file);
     cleanup_persistent_state(&state_file);
     let _ = fs::remove_dir_all(root);
@@ -1764,6 +2231,102 @@ fn run_json_in(
             String::from_utf8_lossy(&stderr)
         )
     })
+}
+
+/// A long-lived interactive CLI subprocess (e.g. `target relay --stdio`), for tests that must
+/// exchange multiple NDJSON messages with it instead of running it to completion.
+struct StdioProcess {
+    child: Child,
+    stdin: Option<std::process::ChildStdin>,
+    lines: mpsc::Receiver<String>,
+    stderr: Arc<Mutex<String>>,
+}
+
+impl StdioProcess {
+    fn send(&mut self, value: &Value) {
+        let mut line = serde_json::to_string(value).unwrap();
+        line.push('\n');
+        self.stdin
+            .as_mut()
+            .expect("stdio process stdin is still open")
+            .write_all(line.as_bytes())
+            .unwrap();
+    }
+
+    fn recv_line(&mut self, timeout: Duration) -> Value {
+        let line = self.lines.recv_timeout(timeout).unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for a relay message; stderr so far: {}",
+                self.stderr.lock().unwrap()
+            )
+        });
+        serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("invalid JSON line {line:?}: {error}"))
+    }
+
+    /// Closes stdin (which ends the relay's stdio bridge and its loopback WebSocket) and waits
+    /// for the process to exit.
+    fn shutdown(mut self) {
+        drop(self.stdin.take());
+        let _ = self.child.wait();
+    }
+}
+
+fn spawn_stdio(
+    cli: &Path,
+    service: &Path,
+    state_file: &Path,
+    cwd: &Path,
+    arguments: &[&str],
+) -> StdioProcess {
+    let mut child = Command::new(cli)
+        .current_dir(cwd)
+        .args(arguments)
+        .env("JSDBG_SERVICE_EXE", service)
+        .env("JSDBG_SERVICE_STATE", state_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take().unwrap();
+    let stderr_pipe = child.stderr.take().unwrap();
+
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if sender.send(line.trim_end().to_owned()).is_err() => break,
+                Ok(_) => {}
+            }
+        }
+    });
+
+    let stderr_buffer = Arc::new(Mutex::new(String::new()));
+    let stderr_writer = stderr_buffer.clone();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr_pipe);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => stderr_writer.lock().unwrap().push_str(&line),
+            }
+        }
+    });
+
+    StdioProcess {
+        child,
+        stdin,
+        lines: receiver,
+        stderr: stderr_buffer,
+    }
 }
 
 fn run_json_with_stdin(

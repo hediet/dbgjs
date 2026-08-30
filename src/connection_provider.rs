@@ -17,7 +17,10 @@ use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, Roo
 use crate::debugger_engine::SessionKey;
 use crate::electron_renderer_transport::ElectronRendererBridge;
 use crate::playwright_proxy::PlaywrightCdpSource;
-use crate::service_api::{ConnectionConfiguration, PlaywrightChannel, TargetSnapshot};
+use crate::service_api::{
+    CdpStdioTopology, ConnectionConfiguration, PlaywrightChannel, TargetSnapshot,
+};
+use crate::stdio_transport::CdpStdioTransport;
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("providers/playwright.mjs");
@@ -56,6 +59,17 @@ impl ConnectionRuntime {
         configuration: &ConnectionConfiguration,
         connection_generation: u64,
     ) -> Result<Arc<Self>, ConnectionProviderError> {
+        if let ConnectionConfiguration::Stdio {
+            command,
+            args,
+            cwd,
+            env,
+            topology,
+        } = configuration
+        {
+            return Self::connect_stdio(command, args, cwd, env, *topology, connection_generation)
+                .await;
+        }
         let (endpoint, provider, direct_debugger, provider_events, renderer_bridge) =
             match configuration {
                 ConnectionConfiguration::DirectCdp { endpoint } => {
@@ -193,8 +207,9 @@ impl ConnectionRuntime {
                         false,
                     )
                 }
+                ConnectionConfiguration::Stdio { .. } => unreachable!(),
             };
-        let cdp = match if direct_debugger {
+        let cdp_result = if direct_debugger {
             CdpConnection::connect_root_debugger(
                 &endpoint,
                 connection_generation,
@@ -203,7 +218,8 @@ impl ConnectionRuntime {
             .await
         } else {
             CdpConnection::connect(&endpoint).await
-        } {
+        };
+        let cdp = match cdp_result {
             Ok(cdp) => Arc::new(cdp),
             Err(error) => {
                 if let Some(mut provider) = provider {
@@ -242,6 +258,50 @@ impl ConnectionRuntime {
             runtime.supervise_provider_events(events, connection_generation);
         }
         Ok(runtime)
+    }
+
+    async fn connect_stdio(
+        command: &str,
+        args: &[String],
+        cwd: &str,
+        env: &BTreeMap<String, String>,
+        topology: CdpStdioTopology,
+        connection_generation: u64,
+    ) -> Result<Arc<Self>, ConnectionProviderError> {
+        let (transport, mut child) = launch_stdio(command, args, cwd, env).await?;
+        let direct_debugger = topology == CdpStdioTopology::Target;
+        let cdp = if direct_debugger {
+            CdpConnection::connect_root_debugger_transport(
+                transport,
+                connection_generation,
+                "$node-root".to_owned(),
+            )
+            .await
+        } else {
+            CdpConnection::connect_transport(transport).await
+        };
+        let cdp = match cdp {
+            Ok(cdp) => Arc::new(cdp),
+            Err(error) => {
+                terminate_provider(&mut child).await;
+                return Err(error.into());
+            }
+        };
+        let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
+        Ok(Arc::new(Self {
+            cdp,
+            provider: Some(Mutex::new(child)),
+            direct_debugger,
+            connection_generation,
+            root_endpoint: format!("stdio:{command}"),
+            direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
+            renderer_processes: std::sync::Mutex::new(BTreeMap::new()),
+            renderer_bridge: None,
+            direct_debugger_attach_lock: Mutex::new(()),
+            provider_target_events: Mutex::new(Some(provider_target_events)),
+            provider_target_sender,
+        }))
     }
 
     pub fn root(&self) -> &CdpClient<hubrpc::connection::channel::Channel> {
@@ -371,6 +431,9 @@ impl ConnectionRuntime {
     pub fn playwright_cdp_source(&self) -> Result<PlaywrightCdpSource, ConnectionProviderError> {
         if self.direct_debugger {
             return Err(ConnectionProviderError::PlaywrightRequiresBrowserRoot);
+        }
+        if self.root_endpoint.starts_with("stdio:") {
+            return Err(ConnectionProviderError::PlaywrightRequiresWebSocketRoot);
         }
         Ok(PlaywrightCdpSource::BrowserRoot {
             endpoint: self.root_endpoint.clone(),
@@ -669,8 +732,52 @@ pub fn validate_configuration(
                 return Err(ConnectionProviderError::EmptyNodeExecutable);
             }
         }
+        ConnectionConfiguration::Stdio { command, cwd, .. } => {
+            if command.is_empty() {
+                return Err(ConnectionProviderError::EmptyStdioCommand);
+            }
+            if cwd.is_empty() {
+                return Err(ConnectionProviderError::EmptyStdioCwd);
+            }
+        }
     }
     Ok(())
+}
+
+async fn launch_stdio(
+    executable: &str,
+    args: &[String],
+    cwd: &str,
+    environment: &BTreeMap<String, String>,
+) -> Result<(Arc<CdpStdioTransport>, Child), ConnectionProviderError> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .envs(environment)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    configure_provider_process(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|source| ConnectionProviderError::Spawn {
+            executable: PathBuf::from(executable),
+            source,
+        })?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or(ConnectionProviderError::MissingStdioStdin)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(ConnectionProviderError::MissingProviderStdout)?;
+    Ok((
+        Arc::new(CdpStdioTransport::from_child_stdio(stdout, stdin)),
+        child,
+    ))
 }
 
 async fn launch_playwright(
@@ -1026,7 +1133,7 @@ pub enum ConnectionProviderError {
     UnsupportedPageScheme(String),
     #[error("process IDs must be greater than zero, got {0}")]
     InvalidProcessId(u32),
-    #[error("failed to launch Playwright provider with {executable}: {source}")]
+    #[error("failed to launch connection process with {executable}: {source}")]
     Spawn {
         executable: PathBuf,
         source: std::io::Error,
@@ -1039,6 +1146,10 @@ pub enum ConnectionProviderError {
         "Playwright currently requires a browser-root CDP connection; direct Node and Electron renderer targets are not yet supported"
     )]
     PlaywrightRequiresBrowserRoot,
+    #[error(
+        "Playwright currently requires a WebSocket browser-root CDP connection; stdio browser connections are not yet supported"
+    )]
+    PlaywrightRequiresWebSocketRoot,
     #[error("Playwright provider did not expose stdout")]
     MissingProviderStdout,
     #[error("Playwright provider startup timed out")]
@@ -1065,6 +1176,12 @@ pub enum ConnectionProviderError {
     EmptyNodeCwd,
     #[error("Node.js runtime executable must not be empty")]
     EmptyNodeExecutable,
+    #[error("stdio CDP command must not be empty")]
+    EmptyStdioCommand,
+    #[error("stdio CDP cwd must not be empty")]
+    EmptyStdioCwd,
+    #[error("stdio CDP process did not expose stdin")]
+    MissingStdioStdin,
     #[error(transparent)]
     Cdp(#[from] CdpRuntimeError),
 }

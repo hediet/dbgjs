@@ -164,6 +164,33 @@ pub struct GeneratedSourceInput<'a> {
     pub minified: bool,
 }
 
+pub(crate) fn appears_minified(source_url: &str, content: &str) -> bool {
+    if source_url
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with(".min.js") || url.ends_with(".min.mjs"))
+    {
+        return true;
+    }
+    if content.len() < 256 {
+        return false;
+    }
+    let mut line_count = 1_usize;
+    let mut current_line = 0_usize;
+    let mut longest_line = 0_usize;
+    for byte in content.bytes() {
+        if byte == b'\n' {
+            line_count += 1;
+            longest_line = longest_line.max(current_line);
+            current_line = 0;
+        } else {
+            current_line += 1;
+        }
+    }
+    longest_line = longest_line.max(current_line);
+    longest_line >= 500 || line_count <= 2 && content.len() >= 1_024
+}
+
 type ReverseIndex = BTreeMap<(String, Position), Vec<Position>>;
 
 pub(crate) struct MapProjection {

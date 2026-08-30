@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 use crate::cdp::{
     CdpClient, DebuggerDisableParams, DebuggerEnableParams, DebuggerGetScriptSourceParams,
@@ -33,6 +33,10 @@ use crate::debugger_engine::{Effect, Input, RawFrame, RawScope, SessionKey, Step
 use crate::session_transport::CdpSessionMux;
 use crate::source_view::Position;
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
+
+/// Backlog for each session's raw CDP event broadcast. Generous because relay consumers must
+/// not silently miss console/network/lifecycle events while draining a burst.
+const RAW_EVENT_BUFFER: usize = 1024;
 
 pub struct CdpConnection {
     transport: Arc<dyn ManagedCdpTransport>,
@@ -102,6 +106,8 @@ impl CdpConnection {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
         let heap_snapshot = Arc::new(Mutex::new(None));
         let (heap_snapshot_progress, _) = watch::channel(None);
+        let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
+        let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?),
             Box::new(CdpEventHandler {
@@ -109,6 +115,8 @@ impl CdpConnection {
                 sender: event_sender,
                 heap_snapshot: heap_snapshot.clone(),
                 heap_snapshot_progress: heap_snapshot_progress.clone(),
+                raw_events: raw_events.clone(),
+                raw_event_history: raw_event_history.clone(),
             }),
         );
         let root = CdpClient::root(root_channel.clone());
@@ -124,6 +132,8 @@ impl CdpConnection {
             source_map_cache_bypasses: AtomicU64::new(0),
             heap_snapshot,
             heap_snapshot_progress,
+            raw_events,
+            raw_event_history,
         };
         let mux_loop = mux.clone();
         tokio::spawn(async move { mux_loop.run().await });
@@ -147,6 +157,8 @@ impl CdpConnection {
         let (event_sender, event_receiver) = mpsc::unbounded_channel();
         let heap_snapshot = Arc::new(Mutex::new(None));
         let (heap_snapshot_progress, _) = watch::channel(None);
+        let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
+        let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
         let channel = Channel::new(
             Box::new(
                 self.mux
@@ -158,6 +170,8 @@ impl CdpConnection {
                 sender: event_sender,
                 heap_snapshot: heap_snapshot.clone(),
                 heap_snapshot_progress: heap_snapshot_progress.clone(),
+                raw_events: raw_events.clone(),
+                raw_event_history: raw_event_history.clone(),
             }),
         );
         let client = CdpClient::root(channel.clone());
@@ -175,6 +189,8 @@ impl CdpConnection {
             source_map_cache_bypasses: AtomicU64::new(0),
             heap_snapshot,
             heap_snapshot_progress,
+            raw_events,
+            raw_event_history,
         })
     }
 
@@ -286,6 +302,8 @@ pub struct CdpDebuggerSession {
     source_map_cache_bypasses: AtomicU64,
     heap_snapshot: Arc<Mutex<Option<HeapSnapshotWriter>>>,
     heap_snapshot_progress: watch::Sender<Option<HeapSnapshotStreamProgress>>,
+    raw_events: broadcast::Sender<RawCdpEvent>,
+    raw_event_history: Arc<std::sync::Mutex<Vec<RawCdpEvent>>>,
 }
 
 impl CdpDebuggerSession {
@@ -299,6 +317,17 @@ impl CdpDebuggerSession {
 
     pub async fn raw_request(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
         self.channel.call(method, params).await
+    }
+
+    /// Subscribes to every raw CDP notification observed on this session, independent of
+    /// whether the debugger engine reducer recognizes the method. Relay consumers use this
+    /// to mirror events verbatim instead of only the typed subset the reducer understands.
+    pub fn raw_events_sender(&self) -> broadcast::Sender<RawCdpEvent> {
+        self.raw_events.clone()
+    }
+
+    pub fn raw_event_history(&self) -> Arc<std::sync::Mutex<Vec<RawCdpEvent>>> {
+        self.raw_event_history.clone()
     }
 
     pub fn set_source_map_cache_enabled(&self, enabled: bool) {
@@ -529,9 +558,27 @@ impl CdpDebuggerSession {
                     .debugger_set_breakpoint(params)
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
+                let confirmed_position = crate::source_view::Position {
+                    line: u32::try_from(installed.actual_location.line_number).map_err(|_| {
+                        CdpRuntimeError::InvalidBreakpointLocation {
+                            line: installed.actual_location.line_number,
+                            column: installed.actual_location.column_number,
+                        }
+                    })?,
+                    column: u32::try_from(
+                        installed.actual_location.column_number.unwrap_or_default(),
+                    )
+                    .map_err(|_| {
+                        CdpRuntimeError::InvalidBreakpointLocation {
+                            line: installed.actual_location.line_number,
+                            column: installed.actual_location.column_number,
+                        }
+                    })?,
+                };
                 Ok(Some(Input::BreakpointInstalled {
                     effect_id: *effect_id,
                     backend_id: installed.breakpoint_id,
+                    confirmed_position,
                 }))
             }
             Effect::RemoveBreakpoint {
@@ -801,6 +848,15 @@ impl CdpDebuggerSession {
     }
 }
 
+/// A verbatim CDP notification observed on one session, independent of whether the debugger
+/// engine reducer recognizes `method`. Used to mirror every target event to relay consumers.
+#[derive(Clone, Debug)]
+pub struct RawCdpEvent {
+    pub session: SessionKey,
+    pub method: String,
+    pub params: Value,
+}
+
 #[derive(Debug)]
 pub enum CdpRuntimeEvent {
     ScriptParsed {
@@ -910,6 +966,8 @@ struct CdpEventHandler {
     sender: mpsc::UnboundedSender<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
     heap_snapshot: Arc<Mutex<Option<HeapSnapshotWriter>>>,
     heap_snapshot_progress: watch::Sender<Option<HeapSnapshotStreamProgress>>,
+    raw_events: broadcast::Sender<RawCdpEvent>,
+    raw_event_history: Arc<std::sync::Mutex<Vec<RawCdpEvent>>>,
 }
 
 #[async_trait]
@@ -922,6 +980,24 @@ impl RequestHandler for CdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
+        if method == "Debugger.globalObjectCleared" {
+            self.raw_event_history.lock().unwrap().clear();
+        } else if method == "Debugger.scriptParsed" {
+            self.raw_event_history.lock().unwrap().push(RawCdpEvent {
+                session: self.session.clone(),
+                method: method.clone(),
+                params: params.clone(),
+            });
+        }
+        // Skip the clone entirely when nobody subscribes to raw events (the common case);
+        // heap snapshot chunk notifications in particular can carry megabytes of JSON.
+        if self.raw_events.receiver_count() > 0 {
+            let _ = self.raw_events.send(RawCdpEvent {
+                session: self.session.clone(),
+                method: method.clone(),
+                params: params.clone(),
+            });
+        }
         if method == "HeapProfiler.addHeapSnapshotChunk" {
             match deserialize::<HeapProfilerAddHeapSnapshotChunkParams>(&method, params) {
                 Ok(params) => {
@@ -1364,6 +1440,8 @@ pub enum CdpRuntimeError {
         message: String,
         data: Option<Value>,
     },
+    #[error("CDP returned an invalid confirmed breakpoint location {line}:{column:?}")]
+    InvalidBreakpointLocation { line: i64, column: Option<i64> },
     #[error(
         "failed to resolve source-map URL {source_map_url:?} against generated URL {generated_url:?}: {source}"
     )]
@@ -1615,6 +1693,8 @@ mod tests {
         })));
         let (heap_snapshot_progress, _) = watch::channel(None);
         let (sender, mut events) = mpsc::unbounded_channel();
+        let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
+        let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
         let handler = CdpEventHandler {
             session: SessionKey {
                 connection_generation: 1,
@@ -1623,6 +1703,8 @@ mod tests {
             sender,
             heap_snapshot: heap_snapshot.clone(),
             heap_snapshot_progress: heap_snapshot_progress.clone(),
+            raw_events,
+            raw_event_history,
         };
 
         handler
@@ -1680,6 +1762,71 @@ mod tests {
 
         drop(heap_snapshot.lock().await.take());
         tokio::fs::remove_file(path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn raw_events_mirror_every_notification_including_untyped_ones() {
+        let heap_snapshot = Arc::new(Mutex::new(None));
+        let (heap_snapshot_progress, _) = watch::channel(None);
+        let (sender, mut events) = mpsc::unbounded_channel();
+        let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
+        let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handler = CdpEventHandler {
+            session: SessionKey {
+                connection_generation: 1,
+                session_id: "session".to_owned(),
+            },
+            sender,
+            heap_snapshot,
+            heap_snapshot_progress,
+            raw_events: raw_events.clone(),
+            raw_event_history,
+        };
+        let mut subscriber = raw_events.subscribe();
+
+        // A method the reducer does not recognize (`CdpRuntimeEvent::Other`) must still be
+        // mirrored verbatim, not only the typed subset `into_input` understands.
+        handler
+            .handle_notification(
+                "Page.customSignal".to_owned(),
+                serde_json::json!({ "flag": true }),
+            )
+            .await;
+        let untyped = subscriber.recv().await.unwrap();
+        assert_eq!(untyped.method, "Page.customSignal");
+        assert_eq!(untyped.params, serde_json::json!({ "flag": true }));
+        assert_eq!(untyped.session.session_id, "session");
+        assert!(matches!(
+            events.try_recv().unwrap().unwrap(),
+            CdpRuntimeEvent::Other { .. }
+        ));
+
+        // A method the reducer *does* recognize must be mirrored raw as well as forwarded to
+        // the typed event channel: relay consumers do not depend on the reducer's behavior.
+        handler
+            .handle_notification("Debugger.resumed".to_owned(), serde_json::json!({}))
+            .await;
+        let typed = subscriber.recv().await.unwrap();
+        assert_eq!(typed.method, "Debugger.resumed");
+        assert!(matches!(
+            events.try_recv().unwrap().unwrap(),
+            CdpRuntimeEvent::Resumed { .. }
+        ));
+
+        // Subscribing late still only observes events sent afterward (broadcast semantics),
+        // and a second independent subscriber receives its own copy of the same event.
+        let mut second_subscriber = raw_events.subscribe();
+        handler
+            .handle_notification("Network.loadingFinished".to_owned(), serde_json::json!({}))
+            .await;
+        assert_eq!(
+            subscriber.recv().await.unwrap().method,
+            "Network.loadingFinished"
+        );
+        assert_eq!(
+            second_subscriber.recv().await.unwrap().method,
+            "Network.loadingFinished"
+        );
     }
 }
 

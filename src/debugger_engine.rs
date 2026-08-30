@@ -405,6 +405,7 @@ pub enum PhysicalBreakpointStatus {
 pub struct PhysicalBreakpointState {
     pub owners: Arc<BTreeSet<BreakpointKey>>,
     pub status: PhysicalBreakpointStatus,
+    pub confirmed_position: Option<Position>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -687,6 +688,7 @@ pub enum Input {
     BreakpointInstalled {
         effect_id: EffectId,
         backend_id: String,
+        confirmed_position: Position,
     },
     BreakpointRemoved {
         effect_id: EffectId,
@@ -1093,6 +1095,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
         Input::BreakpointInstalled {
             effect_id,
             backend_id,
+            confirmed_position,
         } => {
             let Some(PendingEffect::InstallBreakpoint { physical }) =
                 take_pending(&mut state, effect_id)
@@ -1112,6 +1115,11 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 .status = PhysicalBreakpointStatus::Installed {
                 backend_id: backend_id.clone(),
             };
+            Arc::make_mut(&mut state.physical_breakpoints)
+                .get_mut(&physical)
+                .map(Arc::make_mut)
+                .unwrap()
+                .confirmed_position = Some(confirmed_position);
             let breakpoints = Arc::make_mut(&mut state.breakpoints);
             for owner in owners.iter() {
                 if let Some(breakpoint) = breakpoints.get_mut(owner) {
@@ -2222,6 +2230,7 @@ fn bind_physical(
         Arc::new(PhysicalBreakpointState {
             owners: Arc::new(BTreeSet::from([owner.clone()])),
             status: PhysicalBreakpointStatus::Installing(effect_id),
+            confirmed_position: None,
         }),
     );
     Arc::make_mut(&mut state.breakpoints)
@@ -3470,6 +3479,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install_effect.unwrap(),
                 backend_id: "chrome-bp-1".into(),
+                confirmed_position: state.physical_breakpoints.keys().next().unwrap().position,
             },
         );
         assert!(installed.state.breakpoints.values().all(|breakpoint| {
@@ -3511,6 +3521,10 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install,
                 backend_id: "backend-stable".into(),
+                confirmed_position: Position {
+                    line: 10,
+                    column: 2,
+                },
             },
         );
         let original_assessment = installed.state.breakpoints[&key].assessments[&script].clone();
@@ -3672,6 +3686,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: mapped.effects[0].effect_id(),
                 backend_id: "backend-old".into(),
+                confirmed_position: Position { line: 1, column: 1 },
             },
         );
         let old_physical = installed.state.breakpoints[&key]
@@ -3784,6 +3799,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: new_install,
                 backend_id: "backend-new".into(),
+                confirmed_position: new_physical.position,
             },
         );
         assert!(matches!(
@@ -4152,6 +4168,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: mapped.effects[0].effect_id(),
                 backend_id: "backend-old".into(),
+                confirmed_position: Position { line: 1, column: 1 },
             },
         );
         let old_physical = installed.state.breakpoints[&key]
@@ -4297,6 +4314,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install,
                 backend_id: "stale-backend".into(),
+                confirmed_position: Position::ZERO,
             },
         );
         assert!(matches!(
@@ -4504,6 +4522,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install_id,
                 backend_id: "backend-1".into(),
+                confirmed_position: Position::ZERO,
             },
         );
         let removing = reduce(
@@ -4569,6 +4588,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: install_id,
                 backend_id: "backend-1".into(),
+                confirmed_position: Position::ZERO,
             },
         );
         let removing = reduce(&installed.state, Input::RemoveBreakpoint { key: first_key });
@@ -4635,6 +4655,7 @@ mod tests {
             Input::BreakpointInstalled {
                 effect_id: reinstall_id,
                 backend_id: "backend-2".into(),
+                confirmed_position: Position::ZERO,
             },
         );
         assert!(matches!(
@@ -4770,6 +4791,7 @@ mod tests {
                     status: PhysicalBreakpointStatus::Installed {
                         backend_id: "stale-backend".into(),
                     },
+                    confirmed_position: Some(physical.position),
                 }),
             );
         }
