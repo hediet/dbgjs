@@ -2046,10 +2046,10 @@ fn process_render_tree(tree: &ProcessTreeSnapshot) -> Option<ProcessRenderNode<'
             .target
             .parent_id
             .as_deref()
+            .or(target.target.opener_id.as_deref())
             .and_then(|parent| targets_by_id.get(parent).copied());
         if let Some(parent) = parent
             && parent.target.target_id != "$node-root"
-            && parent.process_id == target.process_id
         {
             target_children
                 .entry(parent.target.target_id.clone())

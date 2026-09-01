@@ -16,9 +16,9 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use hubrpc::connection::channel::{Channel, RequestHandler};
-use hubrpc::prelude::{error_codes, JsonRpcError, MessageTransport, TransportError};
+use hubrpc::prelude::{JsonRpcError, MessageTransport, TransportError, error_codes};
 use serde_json::Value;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
@@ -28,7 +28,7 @@ use crate::cdp::{
     TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
     TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
-use crate::cdp_transport::{closed_transport_error, ManagedCdpTransport};
+use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::service_api::TargetSnapshot;
 use crate::session_transport::{CdpEnvelope, CdpSessionMux};
 use crate::target_domain::{from_json, invalid_params, target_info_from_snapshot, to_json};
@@ -69,6 +69,12 @@ pub struct TargetAttachment {
 pub struct AttachedSession {
     pub session_id: String,
     pub stole_external_owner: bool,
+}
+
+pub struct TargetObservation {
+    pub revision: u64,
+    pub targets: Vec<HostTarget>,
+    pub revisions: watch::Receiver<u64>,
 }
 
 /// Everything the virtual root needs from a host in order to speak the `Target` domain on its
@@ -286,6 +292,20 @@ impl VirtualBrowserRoot {
             .await;
     }
 
+    pub async fn refresh_targets(&self) -> TargetObservation {
+        self.state.refresh_known().await;
+        self.observe_targets()
+    }
+
+    pub fn observe_targets(&self) -> TargetObservation {
+        self.state.observe_targets()
+    }
+
+    pub async fn set_target_discovery(&self, enabled: bool) {
+        self.state.discover.store(enabled, Ordering::Relaxed);
+        self.state.sync_discovery_demand().await;
+    }
+
     pub fn start(
         source: Arc<dyn TargetSource>,
         mut events: mpsc::UnboundedReceiver<TargetSourceEvent>,
@@ -432,6 +452,7 @@ struct VirtualRootState {
     mux: CdpSessionMux,
     root_channel: OnceLock<Channel>,
     known: std::sync::Mutex<BTreeMap<String, HostTarget>>,
+    revisions: watch::Sender<u64>,
     sessions: std::sync::Mutex<BTreeMap<String, RootSession>>,
     discover: AtomicBool,
     auto_attach: AtomicBool,
@@ -441,11 +462,13 @@ struct VirtualRootState {
 
 impl VirtualRootState {
     fn new(source: Arc<dyn TargetSource>, mux: CdpSessionMux) -> Self {
+        let (revisions, _) = watch::channel(0);
         Self {
             source,
             mux,
             root_channel: OnceLock::new(),
             known: std::sync::Mutex::new(BTreeMap::new()),
+            revisions,
             sessions: std::sync::Mutex::new(BTreeMap::new()),
             discover: AtomicBool::new(false),
             auto_attach: AtomicBool::new(false),
@@ -480,14 +503,34 @@ impl VirtualRootState {
             .filter(|(_, target)| target.snapshot.attached)
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
-        *known = listed
+        let replacement = listed
             .into_iter()
             .map(|mut target| {
                 target.snapshot.attached |= attached.contains(&target.snapshot.target_id);
                 (target.snapshot.target_id.clone(), target)
             })
             .collect();
+        if *known != replacement {
+            *known = replacement;
+            self.advance_revision();
+        }
         known.values().cloned().collect()
+    }
+
+    fn observe_targets(&self) -> TargetObservation {
+        let known = self.known.lock().unwrap();
+        let revisions = self.revisions.subscribe();
+        let revision = *revisions.borrow();
+        TargetObservation {
+            revision,
+            targets: known.values().cloned().collect(),
+            revisions,
+        }
+    }
+
+    fn advance_revision(&self) {
+        let revision = *self.revisions.borrow() + 1;
+        self.revisions.send_replace(revision);
     }
 
     async fn apply_source_event(&self, event: TargetSourceEvent) {
@@ -500,10 +543,14 @@ impl VirtualRootState {
                             target.snapshot.attached |= previous.snapshot.attached;
                             let changed = previous != &target;
                             known.insert(target.snapshot.target_id.clone(), target.clone());
+                            if changed {
+                                self.advance_revision();
+                            }
                             (false, changed)
                         }
                         None => {
                             known.insert(target.snapshot.target_id.clone(), target.clone());
+                            self.advance_revision();
                             (true, true)
                         }
                     }
@@ -532,7 +579,14 @@ impl VirtualRootState {
                 }
             }
             TargetSourceEvent::Removed(target_id) => {
-                let existed = self.known.lock().unwrap().remove(&target_id).is_some();
+                let existed = {
+                    let mut known = self.known.lock().unwrap();
+                    let existed = known.remove(&target_id).is_some();
+                    if existed {
+                        self.advance_revision();
+                    }
+                    existed
+                };
                 self.detach_sessions_for_target(&target_id).await;
                 if existed && self.discover.load(Ordering::Relaxed) {
                     self.notify_root(
@@ -1060,6 +1114,31 @@ mod tests {
         assert!(
             harness.calls.lock().unwrap().discovery.is_empty(),
             "a one-shot query must not turn discovery on"
+        );
+    }
+
+    #[tokio::test]
+    async fn target_observation_is_revisioned_and_does_not_signal_unchanged_refreshes() {
+        let harness = Harness::start(vec![host_target("$node-root", 4242)]);
+        let mut observation = harness.root.observe_targets();
+        assert_eq!(observation.revision, 0);
+        assert!(observation.targets.is_empty());
+
+        let refreshed = harness.root.refresh_targets().await;
+        assert_eq!(refreshed.revision, 1);
+        assert_eq!(refreshed.targets.len(), 1);
+        observation.revisions.changed().await.unwrap();
+        assert_eq!(*observation.revisions.borrow(), refreshed.revision);
+
+        let unchanged = harness.root.refresh_targets().await;
+        assert_eq!(unchanged.revision, refreshed.revision);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                observation.revisions.changed(),
+            )
+            .await
+            .is_err()
         );
     }
 

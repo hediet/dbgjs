@@ -43,12 +43,22 @@ async (token) => {
 	const descriptor = (contents) => ({
 		webContentsId: contents.id,
 		processId: safeProcessId(contents),
+		hostWebContentsId: safeRelatedWebContentsId(contents, "hostWebContents"),
+		openerWebContentsId: safeRelatedWebContentsId(contents, "opener"),
 		type: contents.getType(),
 		title: safeTitle(contents),
 		url: safeUrl(contents),
 		waitingForDebugger: startupBlocks.get(contents.id)?.blocked === true,
 		attached: isAttached(contents),
 	});
+	const safeRelatedWebContentsId = (contents, property) => {
+		try {
+			const related = contents[property];
+			return related && !related.isDestroyed() ? related.id : undefined;
+		} catch {
+			return undefined;
+		}
+	};
 	// A bridge-owned startup block is jsdbg's own pre-attachment, not a foreign debugger.
 	const isAttached = (contents) => {
 		try {

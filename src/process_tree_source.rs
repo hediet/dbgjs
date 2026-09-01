@@ -18,8 +18,10 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    TargetGetTargetsParams, TargetSetDiscoverTargetsParams, TargetTargetCreatedParams,
-    TargetTargetDestroyedParams, TargetTargetInfo, TargetTargetInfoChangedParams,
+    TargetAttachedToTargetParams, TargetDetachedFromTargetParams, TargetGetTargetInfoParams,
+    TargetGetTargetsParams, TargetSetAutoAttachParams, TargetSetDiscoverTargetsParams,
+    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfo,
+    TargetTargetInfoChangedParams,
 };
 use crate::connection_provider::ProviderEvent;
 use crate::electron_renderer_transport::{
@@ -56,13 +58,16 @@ pub struct ProcessTreeTargetSource {
     control: Mutex<Option<ChildStdin>>,
     events: mpsc::UnboundedSender<TargetSourceEvent>,
     nodes: std::sync::Mutex<BTreeMap<String, NodeRecord>>,
-    renderers: std::sync::Mutex<BTreeMap<String, ElectronRendererTarget>>,
+    renderers: Arc<std::sync::Mutex<BTreeMap<String, ElectronRendererTarget>>>,
+    renderer_correlations: std::sync::Mutex<BTreeSet<String>>,
+    native_target_aliases: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
     nested_targets: Arc<std::sync::Mutex<BTreeMap<String, NestedTargetRecord>>>,
     supervised_targets: Arc<std::sync::Mutex<BTreeSet<String>>>,
     attachments: Mutex<BTreeMap<String, Arc<TargetEndpoint>>>,
     next_scan_id: AtomicU64,
     scans: std::sync::Mutex<BTreeMap<u64, oneshot::Sender<()>>>,
     discovering: AtomicBool,
+    discovery_change: Mutex<()>,
     tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -89,13 +94,16 @@ impl ProcessTreeTargetSource {
             control: Mutex::new(Some(control)),
             events,
             nodes: std::sync::Mutex::new(BTreeMap::new()),
-            renderers: std::sync::Mutex::new(BTreeMap::new()),
+            renderers: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            renderer_correlations: std::sync::Mutex::new(BTreeSet::new()),
+            native_target_aliases: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             nested_targets: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             supervised_targets: Arc::new(std::sync::Mutex::new(BTreeSet::new())),
             attachments: Mutex::new(BTreeMap::new()),
             next_scan_id: AtomicU64::new(1),
             scans: std::sync::Mutex::new(BTreeMap::new()),
             discovering: AtomicBool::new(false),
+            discovery_change: Mutex::new(()),
             tasks: std::sync::Mutex::new(Vec::new()),
         });
         source.supervise_provider_events(provider_events);
@@ -176,7 +184,9 @@ impl ProcessTreeTargetSource {
                         if discovers_children && source.discovering.load(Ordering::Relaxed) {
                             let nested_source = source.clone();
                             source.track(tokio::spawn(async move {
-                                nested_source.start_nested_discovery(&target_id).await;
+                                nested_source
+                                    .start_nested_discovery_if_enabled(&target_id)
+                                    .await;
                             }));
                         }
                     }
@@ -224,13 +234,25 @@ impl ProcessTreeTargetSource {
                         if source.discovering.load(Ordering::Relaxed) {
                             let nested_source = source.clone();
                             source.track(tokio::spawn(async move {
-                                nested_source.start_nested_discovery(&target_id).await;
+                                nested_source
+                                    .correlate_renderer_if_enabled(&target_id)
+                                    .await;
                             }));
                         }
                     }
                     BridgeEvent::TargetDestroyed { web_contents_id } => {
                         let target_id = renderer_target_id(web_contents_id);
                         source.renderers.lock().unwrap().remove(&target_id);
+                        source
+                            .renderer_correlations
+                            .lock()
+                            .unwrap()
+                            .remove(&target_id);
+                        source
+                            .native_target_aliases
+                            .lock()
+                            .unwrap()
+                            .retain(|_, alias| alias != &target_id);
                         source.remove_nested_targets(&target_id);
                         source.supervised_targets.lock().unwrap().remove(&target_id);
                         if let Some(endpoint) = source.attachments.lock().await.remove(&target_id) {
@@ -241,6 +263,161 @@ impl ProcessTreeTargetSource {
                 }
             }
         }));
+    }
+
+    async fn correlate_renderer(&self, renderer_id: &str) {
+        let is_new = self
+            .renderer_correlations
+            .lock()
+            .unwrap()
+            .insert(renderer_id.to_owned());
+        if !is_new {
+            if let Some(endpoint) = self.attachments.lock().await.get(renderer_id).cloned() {
+                let mut params = TargetSetAutoAttachParams::new(true, false);
+                params.flatten = Some(true);
+                let _ = endpoint.client().target_set_auto_attach(params).await;
+            }
+            return;
+        }
+        let already_attached = self.attachments.lock().await.contains_key(renderer_id);
+        let attachment = match self.attach(renderer_id, false).await {
+            Ok(attachment) => attachment,
+            Err(_) => {
+                self.renderer_correlations
+                    .lock()
+                    .unwrap()
+                    .remove(renderer_id);
+                return;
+            }
+        };
+        let result = attachment
+            .endpoint
+            .client()
+            .target_get_target_info(TargetGetTargetInfoParams::new())
+            .await;
+        if let Ok(result) = result {
+            let native_target_id = result.target_info.target_id;
+            self.native_target_aliases
+                .lock()
+                .unwrap()
+                .insert(native_target_id.clone(), renderer_id.to_owned());
+            let removed = {
+                let mut nested = self.nested_targets.lock().unwrap();
+                let removed = nested
+                    .iter()
+                    .filter(|(_, record)| record.native_target_id == native_target_id)
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
+                for id in &removed {
+                    nested.remove(id);
+                }
+                removed
+            };
+            for id in removed {
+                let _ = self.events.send(TargetSourceEvent::Removed(id));
+            }
+        } else {
+            self.renderer_correlations
+                .lock()
+                .unwrap()
+                .remove(renderer_id);
+        }
+        let mut notifications = attachment.endpoint.subscribe();
+        let mut auto_attach = TargetSetAutoAttachParams::new(true, false);
+        auto_attach.flatten = Some(true);
+        if attachment
+            .endpoint
+            .client()
+            .target_set_auto_attach(auto_attach)
+            .await
+            .is_ok()
+        {
+            self.supervised_targets
+                .lock()
+                .unwrap()
+                .insert(renderer_id.to_owned());
+            let nested_targets = self.nested_targets.clone();
+            let aliases = self.native_target_aliases.clone();
+            let renderers = self.renderers.clone();
+            let events = self.events.clone();
+            let parent_id = renderer_id.to_owned();
+            let process_id = renderers
+                .lock()
+                .unwrap()
+                .get(renderer_id)
+                .map(|renderer| renderer.process_id);
+            self.track(tokio::spawn(async move {
+                while let Some((method, params)) = notifications.recv().await {
+                    match method.as_str() {
+                        "Target.attachedToTarget" => {
+                            if let Ok(params) =
+                                serde_json::from_value::<TargetAttachedToTargetParams>(params)
+                            {
+                                upsert_nested_target(
+                                    &nested_targets,
+                                    &events,
+                                    &parent_id,
+                                    process_id,
+                                    &aliases,
+                                    &renderers,
+                                    true,
+                                    params.target_info,
+                                );
+                            }
+                        }
+                        "Target.targetInfoChanged" => {
+                            if let Ok(params) =
+                                serde_json::from_value::<TargetTargetInfoChangedParams>(params)
+                            {
+                                upsert_nested_target(
+                                    &nested_targets,
+                                    &events,
+                                    &parent_id,
+                                    process_id,
+                                    &aliases,
+                                    &renderers,
+                                    true,
+                                    params.target_info,
+                                );
+                            }
+                        }
+                        "Target.detachedFromTarget" => {
+                            if let Ok(params) =
+                                serde_json::from_value::<TargetDetachedFromTargetParams>(params)
+                                && let Some(target_id) = params.target_id
+                            {
+                                remove_nested_target(
+                                    &nested_targets,
+                                    &aliases,
+                                    &events,
+                                    &parent_id,
+                                    &target_id,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }));
+            return;
+        }
+        self.renderer_correlations
+            .lock()
+            .unwrap()
+            .remove(renderer_id);
+        if !already_attached {
+            let endpoint = self.attachments.lock().await.remove(renderer_id);
+            if let Some(endpoint) = endpoint {
+                endpoint.close().await;
+            }
+        }
+    }
+
+    async fn correlate_renderer_if_enabled(&self, renderer_id: &str) {
+        let _discovery_change = self.discovery_change.lock().await;
+        if self.discovering.load(Ordering::Relaxed) {
+            self.correlate_renderer(renderer_id).await;
+        }
     }
 
     async fn start_nested_discovery(&self, parent_target_id: &str) {
@@ -256,6 +433,7 @@ impl ProcessTreeTargetSource {
                     .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
                     .await;
             }
+
             return;
         }
         let attachment = match self.attach(parent_target_id, false).await {
@@ -285,6 +463,8 @@ impl ProcessTreeTargetSource {
             });
         let mut notifications = endpoint.subscribe();
         let nested_targets = self.nested_targets.clone();
+        let native_target_aliases = self.native_target_aliases.clone();
+        let renderers = self.renderers.clone();
         let events = self.events.clone();
         let parent_id = parent_target_id.to_owned();
         self.track(tokio::spawn(async move {
@@ -299,6 +479,9 @@ impl ProcessTreeTargetSource {
                                 &events,
                                 &parent_id,
                                 process_id,
+                                &native_target_aliases,
+                                &renderers,
+                                false,
                                 params.target_info,
                             );
                         }
@@ -312,6 +495,9 @@ impl ProcessTreeTargetSource {
                                 &events,
                                 &parent_id,
                                 process_id,
+                                &native_target_aliases,
+                                &renderers,
+                                false,
                                 params.target_info,
                             );
                         }
@@ -322,6 +508,7 @@ impl ProcessTreeTargetSource {
                         {
                             remove_nested_target(
                                 &nested_targets,
+                                &native_target_aliases,
                                 &events,
                                 &parent_id,
                                 &params.target_id,
@@ -355,9 +542,19 @@ impl ProcessTreeTargetSource {
                     &self.events,
                     parent_target_id,
                     process_id,
+                    &self.native_target_aliases,
+                    &self.renderers,
+                    false,
                     target,
                 );
             }
+        }
+    }
+
+    async fn start_nested_discovery_if_enabled(&self, parent_target_id: &str) {
+        let _discovery_change = self.discovery_change.lock().await;
+        if self.discovering.load(Ordering::Relaxed) {
+            self.start_nested_discovery(parent_target_id).await;
         }
     }
 
@@ -456,6 +653,7 @@ impl TargetSource for ProcessTreeTargetSource {
     }
 
     async fn set_discovery(&self, enabled: bool) {
+        let _discovery_change = self.discovery_change.lock().await;
         if self.discovering.swap(enabled, Ordering::Relaxed) == enabled {
             return;
         }
@@ -466,25 +664,28 @@ impl TargetSource for ProcessTreeTargetSource {
         }
         if enabled {
             self.refresh_renderers().await;
-            let mut renderer_ids = self
+            let renderer_ids = self
                 .renderers
                 .lock()
                 .unwrap()
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>();
-            renderer_ids.extend(
-                self.nodes
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(_, record)| {
-                        record.endpoint.is_some() && record.target.snapshot.target_type == "browser"
-                    })
-                    .map(|(id, _)| id.clone()),
-            );
             for renderer_id in renderer_ids {
-                self.start_nested_discovery(&renderer_id).await;
+                self.correlate_renderer(&renderer_id).await;
+            }
+            let browser_ids = self
+                .nodes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, record)| {
+                    record.endpoint.is_some() && record.target.snapshot.target_type == "browser"
+                })
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            for browser_id in browser_ids {
+                self.start_nested_discovery(&browser_id).await;
             }
         } else {
             let renderer_ids = self
@@ -496,10 +697,16 @@ impl TargetSource for ProcessTreeTargetSource {
                 .collect::<Vec<_>>();
             for renderer_id in renderer_ids {
                 if let Some(endpoint) = self.attachments.lock().await.get(&renderer_id).cloned() {
-                    let _ = endpoint
-                        .client()
-                        .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
-                        .await;
+                    if self.renderers.lock().unwrap().contains_key(&renderer_id) {
+                        let mut params = TargetSetAutoAttachParams::new(false, false);
+                        params.flatten = Some(true);
+                        let _ = endpoint.client().target_set_auto_attach(params).await;
+                    } else {
+                        let _ = endpoint
+                            .client()
+                            .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
+                            .await;
+                    }
                 }
             }
         }
@@ -637,15 +844,53 @@ fn upsert_nested_target(
     events: &mpsc::UnboundedSender<TargetSourceEvent>,
     parent_target_id: &str,
     process_id: Option<u32>,
+    native_target_aliases: &std::sync::Mutex<BTreeMap<String, String>>,
+    renderers: &std::sync::Mutex<BTreeMap<String, ElectronRendererTarget>>,
+    prefer_parent: bool,
     info: TargetTargetInfo,
 ) {
     let native_target_id = info.target_id.clone();
     let target_id = nested_target_id(parent_target_id, &native_target_id);
-    let parent_id = info
-        .parent_id
-        .as_ref()
-        .map(|id| nested_target_id(parent_target_id, id))
+    if let Some(existing) = native_target_aliases
+        .lock()
+        .unwrap()
+        .get(&native_target_id)
+        .cloned()
+    {
+        if existing == target_id {
+            // Continue so metadata updates replace the existing observation.
+        } else if prefer_parent && nested_targets.lock().unwrap().remove(&existing).is_some() {
+            let _ = events.send(TargetSourceEvent::Removed(existing));
+        } else {
+            return;
+        }
+    }
+    native_target_aliases
+        .lock()
+        .unwrap()
+        .insert(native_target_id.clone(), target_id.clone());
+    let explicit_parent = info.parent_id.as_ref().or(info.opener_id.as_ref());
+    let (parent_alias, opener_alias) = {
+        let aliases = native_target_aliases.lock().unwrap();
+        (
+            explicit_parent.and_then(|id| aliases.get(id).cloned()),
+            info.opener_id
+                .as_ref()
+                .and_then(|id| aliases.get(id).cloned()),
+        )
+    };
+    let parent_id = explicit_parent
+        .map(|id| {
+            parent_alias
+                .clone()
+                .unwrap_or_else(|| nested_target_id(parent_target_id, id))
+        })
         .unwrap_or_else(|| parent_target_id.to_owned());
+    let process_id = parent_alias
+        .as_ref()
+        .and_then(|renderer_id| renderers.lock().unwrap().get(renderer_id).cloned())
+        .map(|renderer| renderer.process_id)
+        .or(process_id);
     let target = HostTarget {
         snapshot: TargetSnapshot {
             target_id: target_id.clone(),
@@ -656,7 +901,7 @@ fn upsert_nested_target(
             parent_id: Some(parent_id),
             opener_id: info
                 .opener_id
-                .map(|id| nested_target_id(parent_target_id, &id)),
+                .map(|id| opener_alias.unwrap_or_else(|| nested_target_id(parent_target_id, &id))),
             browser_context_id: info.browser_context_id,
             subtype: info.subtype,
         },
@@ -676,26 +921,37 @@ fn upsert_nested_target(
 
 fn remove_nested_target(
     nested_targets: &std::sync::Mutex<BTreeMap<String, NestedTargetRecord>>,
+    native_target_aliases: &std::sync::Mutex<BTreeMap<String, String>>,
     events: &mpsc::UnboundedSender<TargetSourceEvent>,
     parent_target_id: &str,
     native_target_id: &str,
 ) {
     let target_id = nested_target_id(parent_target_id, native_target_id);
     if nested_targets.lock().unwrap().remove(&target_id).is_some() {
+        native_target_aliases
+            .lock()
+            .unwrap()
+            .retain(|_, alias| alias != &target_id);
         let _ = events.send(TargetSourceEvent::Removed(target_id));
     }
 }
 
 fn renderer_host_target(target: &ElectronRendererTarget) -> HostTarget {
+    let target_id = renderer_target_id(target.web_contents_id);
+    let parent_id = target
+        .host_web_contents_id
+        .map(renderer_target_id)
+        .filter(|parent_id| parent_id != &target_id)
+        .unwrap_or_else(|| ROOT_TARGET_ID.to_owned());
     HostTarget {
         snapshot: TargetSnapshot {
-            target_id: renderer_target_id(target.web_contents_id),
+            target_id,
             target_type: "page".to_owned(),
             title: target.title.clone(),
             url: target.url.clone(),
             attached: target.attached,
-            parent_id: Some(ROOT_TARGET_ID.to_owned()),
-            opener_id: None,
+            parent_id: Some(parent_id),
+            opener_id: target.opener_web_contents_id.map(renderer_target_id),
             browser_context_id: None,
             subtype: Some("electron-renderer".to_owned()),
         },
@@ -727,5 +983,161 @@ fn node_target_snapshot(
         opener_id: None,
         browser_context_id: None,
         subtype,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target_info(target_id: &str, parent_id: Option<&str>) -> TargetTargetInfo {
+        let mut info = TargetTargetInfo::new(
+            target_id.to_owned(),
+            "iframe".to_owned(),
+            "frame".to_owned(),
+            "https://example.com".to_owned(),
+            false,
+            false,
+        );
+        info.parent_id = parent_id.map(str::to_owned);
+        info
+    }
+
+    #[test]
+    fn native_renderer_target_is_not_published_twice() {
+        let nested = std::sync::Mutex::new(BTreeMap::new());
+        let aliases = std::sync::Mutex::new(BTreeMap::from([(
+            "native-page".to_owned(),
+            "renderer-2".to_owned(),
+        )]));
+        let renderers = std::sync::Mutex::new(BTreeMap::new());
+        let (events, mut receiver) = mpsc::unbounded_channel();
+
+        upsert_nested_target(
+            &nested,
+            &events,
+            "browser",
+            Some(1),
+            &aliases,
+            &renderers,
+            false,
+            target_info("native-page", None),
+        );
+
+        assert!(nested.lock().unwrap().is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_child_uses_the_correlated_renderer_as_its_parent() {
+        let nested = std::sync::Mutex::new(BTreeMap::new());
+        let aliases = std::sync::Mutex::new(BTreeMap::from([(
+            "native-page".to_owned(),
+            "renderer-2".to_owned(),
+        )]));
+        let renderers = std::sync::Mutex::new(BTreeMap::from([(
+            "renderer-2".to_owned(),
+            ElectronRendererTarget {
+                web_contents_id: 2,
+                process_id: 77,
+                host_web_contents_id: None,
+                opener_web_contents_id: None,
+                target_type: "window".to_owned(),
+                title: "Workbench".to_owned(),
+                url: "vscode-file://workbench".to_owned(),
+                waiting_for_debugger: false,
+                attached: false,
+            },
+        )]));
+        let (events, mut receiver) = mpsc::unbounded_channel();
+
+        upsert_nested_target(
+            &nested,
+            &events,
+            "browser",
+            Some(1),
+            &aliases,
+            &renderers,
+            false,
+            target_info("native-frame", Some("native-page")),
+        );
+
+        let TargetSourceEvent::Upserted(target) = receiver.try_recv().unwrap() else {
+            panic!("expected target upsert");
+        };
+        assert_eq!(target.snapshot.parent_id.as_deref(), Some("renderer-2"));
+        assert_eq!(target.process_id, Some(77));
+    }
+
+    #[test]
+    fn renderer_related_route_replaces_a_browser_global_alias() {
+        let nested = std::sync::Mutex::new(BTreeMap::new());
+        let aliases = std::sync::Mutex::new(BTreeMap::new());
+        let renderers = std::sync::Mutex::new(BTreeMap::new());
+        let (events, mut receiver) = mpsc::unbounded_channel();
+
+        upsert_nested_target(
+            &nested,
+            &events,
+            "browser",
+            Some(1),
+            &aliases,
+            &renderers,
+            false,
+            target_info("native-frame", None),
+        );
+        let TargetSourceEvent::Upserted(browser_target) = receiver.try_recv().unwrap() else {
+            panic!("expected browser target upsert");
+        };
+
+        upsert_nested_target(
+            &nested,
+            &events,
+            "renderer-2",
+            Some(77),
+            &aliases,
+            &renderers,
+            true,
+            target_info("native-frame", None),
+        );
+
+        let TargetSourceEvent::Removed(removed) = receiver.try_recv().unwrap() else {
+            panic!("expected browser alias removal");
+        };
+        assert_eq!(removed, browser_target.snapshot.target_id);
+        let TargetSourceEvent::Upserted(renderer_target) = receiver.try_recv().unwrap() else {
+            panic!("expected renderer target upsert");
+        };
+        assert_eq!(
+            renderer_target.snapshot.target_id,
+            "renderer-2/target/native-frame"
+        );
+        assert_eq!(
+            aliases
+                .lock()
+                .unwrap()
+                .get("native-frame")
+                .map(String::as_str),
+            Some("renderer-2/target/native-frame")
+        );
+        assert_eq!(nested.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn web_contents_host_and_opener_are_preserved_as_target_relations() {
+        let target = renderer_host_target(&ElectronRendererTarget {
+            web_contents_id: 3,
+            process_id: 77,
+            host_web_contents_id: Some(2),
+            opener_web_contents_id: Some(1),
+            target_type: "webview".to_owned(),
+            title: "Webview".to_owned(),
+            url: "vscode-webview://example".to_owned(),
+            waiting_for_debugger: false,
+            attached: false,
+        });
+
+        assert_eq!(target.snapshot.parent_id.as_deref(), Some("renderer-2"));
+        assert_eq!(target.snapshot.opener_id.as_deref(), Some("renderer-1"));
     }
 }

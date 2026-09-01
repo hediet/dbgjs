@@ -513,23 +513,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .take_coverage(scope.context, scope.connection, scope.target, None, None)
                 .await)?)?;
         }
-        [coverage, capture, id, capture_id]
-            if coverage == "coverage" && capture == "capture" && id == "--id" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
-                .take_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    Some(capture_id.clone()),
-                    None,
-                )
-                .await)?;
-            output.print_coverage_capture(&snapshot, capture_id)?;
-        }
         [coverage, capture, exclude, capture_id]
             if coverage == "coverage" && capture == "capture" && exclude == "--exclude" =>
         {
@@ -553,6 +536,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     trim_width: true,
                 },
             )?;
+        }
+        [coverage, capture, options @ ..]
+            if coverage == "coverage" && capture == "capture" && !options.is_empty() =>
+        {
+            let options = parse_coverage_capture_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let snapshot = rpc(client
+                .take_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id.clone(),
+                    None,
+                )
+                .await)?;
+            if let Some(capture_id) = options.capture_id.as_deref()
+                && !options.render_requested
+            {
+                output.print_coverage_capture(&snapshot, capture_id)?;
+            } else {
+                output.print_coverage(
+                    &snapshot,
+                    CoverageOutputOptions {
+                        path: options.path.as_deref(),
+                        all: options.all,
+                        max_lines: options.max_lines,
+                        trim_width: options.trim_width,
+                    },
+                )?;
+            }
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
             let client = ensure_service(&state_file).await?;
@@ -3558,6 +3573,15 @@ struct CoverageShowOptions {
     trim_width: bool,
 }
 
+struct CoverageCaptureOptions {
+    capture_id: Option<String>,
+    path: Option<String>,
+    all: bool,
+    max_lines: usize,
+    trim_width: bool,
+    render_requested: bool,
+}
+
 struct CpuProfileShowOptions {
     capture_id: String,
     path: Option<String>,
@@ -4771,6 +4795,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
                         .clone(),
                 );
             }
+
             "--all" => all = true,
             "--no-cache" => no_cache = true,
             "--no-trim" => trim_width = false,
@@ -4821,6 +4846,48 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         max_lines,
         no_cache,
         trim_width,
+    })
+}
+
+fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOptions, io::Error> {
+    let mut capture_id = None;
+    let mut render_values = Vec::with_capacity(values.len());
+    let mut index = 0;
+    while index < values.len() {
+        if values[index] == "--id" {
+            let value = values.get(index + 1).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "--id requires a capture name")
+            })?;
+            if capture_id.replace(value.clone()).is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--id may only be specified once",
+                ));
+            }
+            index += 2;
+        } else {
+            render_values.push(values[index].clone());
+            index += 1;
+        }
+    }
+    let render_requested = !render_values.is_empty();
+    let mut show_values = Vec::with_capacity(render_values.len() + 1);
+    show_values.push(".".to_owned());
+    show_values.extend(render_values);
+    let options = parse_coverage_show_options(&show_values)?;
+    if options.no_cache {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--no-cache is only valid for stored coverage",
+        ));
+    }
+    Ok(CoverageCaptureOptions {
+        capture_id,
+        path: options.path,
+        all: options.all,
+        max_lines: options.max_lines,
+        trim_width: options.trim_width,
+        render_requested,
     })
 }
 
@@ -6320,7 +6387,7 @@ commands:
   jsdbg target type <text> [target scope]
   jsdbg screenshot capture [--output <path>] [target scope]
   jsdbg coverage start [target scope]
-  jsdbg coverage capture [--id <name>] [target scope]
+  jsdbg coverage capture [--id <name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
   jsdbg coverage stop [--exclude <name>] [target scope]
   jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
   jsdbg profile start [--sampling-interval <duration>] [target scope]
@@ -6368,17 +6435,17 @@ mod tests {
         SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
         connection_list_output, extract_scope_options, load_selection_store, parse_attach_options,
         parse_chrome_options, parse_connection_list_options, parse_context_create_options,
-        parse_context_option, parse_coverage_show_options, parse_cpu_profile_sampling_interval,
-        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
-        parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
-        parse_heap_string_options, parse_mutation_options, parse_node_options,
-        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
-        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_formatting_rule,
-        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
-        parse_source_tree_options, parse_source_view, parse_stdio_options,
-        parse_target_list_options, parse_value_options, png_dimensions, read_eval_expression,
-        read_playwright_program, resolve_target_scope, select_implicit_context,
-        split_heap_reference_cli, target_list_output,
+        parse_context_option, parse_coverage_capture_options, parse_coverage_show_options,
+        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
+        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
+        parse_heap_select_options, parse_heap_show_options, parse_heap_string_options,
+        parse_mutation_options, parse_node_options, parse_process_attach_options,
+        parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
+        parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
+        parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
+        png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
+        select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
@@ -7092,6 +7159,29 @@ mod tests {
     fn parses_coverage_no_trim_option() {
         let options = parse_coverage_show_options(&arguments(&["--no-trim"])).unwrap();
         assert!(!options.trim_width);
+    }
+
+    #[test]
+    fn parses_coverage_capture_rendering_options() {
+        let options = parse_coverage_capture_options(&arguments(&[
+            "--id",
+            "baseline",
+            "--path",
+            "src/vs",
+            "--max-lines",
+            "25",
+            "--no-trim",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id.as_deref(), Some("baseline"));
+        assert_eq!(options.path.as_deref(), Some("src/vs"));
+        assert_eq!(options.max_lines, 25);
+        assert!(!options.trim_width);
+        assert!(parse_coverage_capture_options(&arguments(&["--no-cache"])).is_err());
+        assert!(parse_coverage_capture_options(&arguments(&["--id"])).is_err());
+        assert!(
+            parse_coverage_capture_options(&arguments(&["--id", "one", "--id", "two"])).is_err()
+        );
     }
 
     #[test]

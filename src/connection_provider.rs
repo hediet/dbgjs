@@ -719,6 +719,22 @@ impl ConnectionRuntime {
             .and_then(|root| root.target_process_id(target_id))
     }
 
+    pub async fn refresh_targets(&self) -> Option<crate::virtual_browser_root::TargetObservation> {
+        Some(self.virtual_root.as_ref()?.refresh_targets().await)
+    }
+
+    pub fn observe_targets(&self) -> Option<crate::virtual_browser_root::TargetObservation> {
+        Some(self.virtual_root.as_ref()?.observe_targets())
+    }
+
+    pub async fn set_target_discovery(&self, enabled: bool) -> bool {
+        let Some(root) = &self.virtual_root else {
+            return false;
+        };
+        root.set_target_discovery(enabled).await;
+        true
+    }
+
     /// True when the target is genuinely blocked waiting for a debugger to resume it.
     pub fn target_waiting_for_debugger(&self, target_id: &str) -> bool {
         self.virtual_root

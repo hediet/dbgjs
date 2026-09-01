@@ -43,6 +43,10 @@ jsdbg process list --root vscode --no-cmd-line --no-trim
 every matching subprocess tree. `--vscode` remains an alias for
 `--root vscode`.
 
+For `--root node`, nested matching Node processes remain inside the topmost
+matching Node tree instead of being repeated as separate roots. The result is a
+covering forest: every discovered subprocess appears in at most one tree.
+
 Root discovery is passive by default. Add `--full` to run the same process-tree
 target discovery used by a connection:
 
@@ -51,8 +55,10 @@ jsdbg process list --root vscode --full --no-cmd-line
 ```
 
 The full view temporarily enables demand-driven discovery and nests Electron
-WebContents, browser roots, pages, OOPIFs, and workers beneath their backing OS
-processes. When the command exits, it releases the temporary discovery demand.
+WebContents, pages, OOPIFs, and workers beneath their backing OS processes.
+Node inspectors and browser DevTools endpoints are attachment capabilities of
+their OS process, so they are not repeated as synthetic child targets. When the
+command exits, it releases the temporary discovery demand.
 For Node and Electron roots, `--full` may activate the root inspector in the
 same way as a process-tree connection.
 
@@ -151,18 +157,40 @@ Use `--output <path>` to choose the destination.
 
 ### Inspect nested renderer targets
 
-While a process-tree connection is being observed, jsdbg subscribes to each
-renderer endpoint's `Target` domain. OOPIFs and workers therefore appear in the
-same target inventory instead of requiring a separate raw-CDP query:
+While a process-tree connection is being observed, jsdbg correlates each
+Electron WebContents with its native CDP target and enables related-target
+auto-attach on that page. Its OOPIFs and workers therefore appear beneath the
+correct renderer without copying the browser-global target inventory beneath
+every renderer:
 
 ```powershell
 jsdbg target list --type iframe
 jsdbg target graph
 jsdbg target attach --target <printed-target-id> --set
+jsdbg screenshot capture --output iframe.png
 ```
 
-Browser debug ports compose the same way: the browser endpoint is published
-once and its pages, OOPIFs, and workers are contributed as nested targets.
+Tree output shortens descendants relative to their displayed parent. If a
+renderer is `renderer-2` and its child is printed as `./target/F2CDE85C`, the
+copyable target ID is `renderer-2/target/F2CDE85C`. `target attach`, `target
+cdp`, evaluation, source inspection, and screenshot capture all accept that
+same ID. An OOPIF cannot execute `Page.captureScreenshot` directly, so the
+screenshot capability follows the frame-owner relation and clips a temporary
+capture from the embedding page; it does not user-attach the rest of the tree.
+
+Playwright does not yet expose a selected OOPIF as a standalone `Page`.
+Playwright requires a page-root CDP session with coherent target and main-frame
+identity; use the raw target operations above for nested iframe automation.
+
+Browser debug ports compose the same way: the endpoint is an attachment route
+for its OS process, while its pages, OOPIFs, and workers are contributed as
+resources.
+
+The virtual Target facade and `process list --full` observe the same revisioned
+target inventory. A full list performs one refresh, holds a temporary discovery
+lease while the inventory settles, then renders an immutable observation.
+Future process and target watchers can subscribe to the same revision stream
+instead of introducing another polling or discovery path.
 
 ### Pause a future renderer before startup
 

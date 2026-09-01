@@ -88,11 +88,12 @@ entire capability lifecycle is capped at 45 seconds. CLI execution is limited to
 30 seconds; program input and JSON result are each limited to 1 MiB, protocol
 messages to 16 MiB, and diagnostics to 64 KiB.
 
-The CDP source is an explicit adapter (`PlaywrightCdpSource`). Only
-browser-root CDP connections are implemented initially. Direct Node targets
-and Electron renderer bridge targets are rejected rather than exposed as fake
-browser roots; a future Electron adapter can implement the same source
-boundary without depending on Playwright internals.
+The CDP source is an explicit adapter (`PlaywrightCdpSource`). Browser-root
+connections are supported. Process-tree page targets can reuse that adapter,
+but a selected OOPIF cannot yet be exposed as a standalone Playwright page:
+Playwright requires a page-root session whose target and main-frame identities
+are coherent. Direct Node targets are rejected rather than exposed as fake
+browser roots.
 
 ## Deferred choices
 

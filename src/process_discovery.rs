@@ -8,13 +8,11 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 
-use crate::cdp::{TargetGetTargetsParams, TargetSetDiscoverTargetsParams};
 use crate::connection_provider::ConnectionRuntime;
 use crate::service_api::{
     AgentSessionSnapshot, ConnectionConfiguration, ProcessRole, ProcessRootKind, ProcessSnapshot,
     ProcessTargetSnapshot, ProcessTreeSnapshot,
 };
-use crate::target_domain::target_snapshot_from_info;
 
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -176,7 +174,12 @@ pub async fn discover_recognized_process_trees()
 
 pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
     for tree in trees {
-        match discover_process_tree_targets(tree.root_process_id).await {
+        let process_ids = tree
+            .processes
+            .iter()
+            .map(|process| process.process_id)
+            .collect::<BTreeSet<_>>();
+        match discover_process_tree_targets(tree.root_process_id, &process_ids).await {
             Ok(targets) => tree.targets = targets,
             Err(error) => tree.target_discovery_error = Some(error),
         }
@@ -185,6 +188,7 @@ pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
 
 async fn discover_process_tree_targets(
     root_process_id: u32,
+    process_ids: &BTreeSet<u32>,
 ) -> Result<Vec<ProcessTargetSnapshot>, String> {
     let runtime = ConnectionRuntime::connect(
         &ConnectionConfiguration::ProcessTree {
@@ -195,35 +199,27 @@ async fn discover_process_tree_targets(
     .await
     .map_err(|error| error.to_string())?;
     let result = async {
-        let mut targets = runtime
-            .root()
-            .target_get_targets(TargetGetTargetsParams::new())
+        let mut observation = runtime
+            .refresh_targets()
             .await
-            .map_err(|error| format!("initial Target.getTargets failed: {error:?}"))?
-            .target_infos;
-        runtime
-            .root()
-            .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
-            .await
-            .map_err(|error| format!("Target.setDiscoverTargets failed: {error:?}"))?;
+            .ok_or_else(|| "process tree has no observable target source".to_owned())?;
+        if !runtime.set_target_discovery(true).await {
+            return Err("process tree cannot enable target discovery".to_owned());
+        }
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut signature = target_signature(&targets);
         let mut stable_since = tokio::time::Instant::now();
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let current = runtime
-                .root()
-                .target_get_targets(TargetGetTargetsParams::new())
-                .await
-                .map_err(|error| format!("Target.getTargets failed: {error:?}"))?
-                .target_infos;
-            let current_signature = target_signature(&current);
-            if current_signature != signature {
-                signature = current_signature;
+            if matches!(
+                tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed(),)
+                    .await,
+                Ok(Ok(()))
+            ) {
+                observation = runtime
+                    .observe_targets()
+                    .ok_or_else(|| "process tree target source disappeared".to_owned())?;
                 stable_since = tokio::time::Instant::now();
             }
-            targets = current;
             if stable_since.elapsed() >= Duration::from_millis(500)
                 || tokio::time::Instant::now() >= deadline
             {
@@ -231,32 +227,27 @@ async fn discover_process_tree_targets(
             }
         }
 
-        Ok(targets
+        Ok(observation
+            .targets
             .into_iter()
-            .map(|target| {
-                let process_id = runtime.target_process_id(&target.target_id);
-                ProcessTargetSnapshot {
-                    process_id,
-                    target: target_snapshot_from_info(target),
-                }
+            .map(|target| ProcessTargetSnapshot {
+                process_id: target.process_id,
+                target: target.snapshot,
+            })
+            .filter(|target| {
+                target.process_id.is_none_or(|process_id| {
+                    process_ids.contains(&process_id)
+                        && !matches!(
+                            target.target.target_type.as_str(),
+                            "node" | "process" | "browser"
+                        )
+                })
             })
             .collect())
     }
     .await;
-    let _ = runtime
-        .root()
-        .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
-        .await;
+    runtime.set_target_discovery(false).await;
     runtime.close().await;
-    result
-}
-
-fn target_signature(targets: &[crate::cdp::TargetTargetInfo]) -> Vec<(String, Option<String>)> {
-    let mut result = targets
-        .iter()
-        .map(|target| (target.target_id.clone(), target.parent_id.clone()))
-        .collect::<Vec<_>>();
-    result.sort();
     result
 }
 
@@ -802,6 +793,11 @@ fn process_trees(
         .collect::<BTreeMap<_, _>>();
     let mut children = BTreeMap::<u32, Vec<u32>>::new();
     for process in &processes {
+        if let Some(parent) = by_pid.get(&process.parent_process_id)
+            && !can_be_process_child(parent, process)
+        {
+            continue;
+        }
         children
             .entry(process.parent_process_id)
             .or_default()
@@ -816,7 +812,14 @@ fn process_trees(
         .filter(|process| process_root_kind(process, &by_pid, &children) == Some(root_kind))
         .map(|process| process.process_id)
         .collect::<BTreeSet<_>>();
-    let mut roots = candidates.iter().copied().collect::<Vec<_>>();
+    let mut roots = candidates
+        .iter()
+        .copied()
+        .filter(|process_id| {
+            root_kind != ProcessRootKind::Node
+                || !has_candidate_ancestor(*process_id, &candidates, &by_pid)
+        })
+        .collect::<Vec<_>>();
     roots.sort_unstable();
 
     roots
@@ -861,7 +864,8 @@ fn append_process_tree(
     let Some(process) = processes.get(&process_id) else {
         return;
     };
-    if process_id != root_process_id
+    if root_kind != ProcessRootKind::Node
+        && process_id != root_process_id
         && process_root_kind(process, processes, children) == Some(root_kind)
     {
         return;
@@ -942,6 +946,38 @@ fn append_process_tree(
             value
         }
     }
+}
+
+fn has_candidate_ancestor(
+    process_id: u32,
+    candidates: &BTreeSet<u32>,
+    processes: &BTreeMap<u32, &WindowsProcess>,
+) -> bool {
+    let mut visited = BTreeSet::new();
+    let mut child = processes.get(&process_id).copied();
+    while let Some(current_child) = child {
+        let current = current_child.parent_process_id;
+        if !visited.insert(current) {
+            return false;
+        }
+        let Some(parent) = processes.get(&current).copied() else {
+            return false;
+        };
+        if !can_be_process_child(parent, current_child) {
+            return false;
+        }
+        if candidates.contains(&current) {
+            return true;
+        }
+        child = Some(parent);
+    }
+    false
+}
+
+fn can_be_process_child(parent: &WindowsProcess, child: &WindowsProcess) -> bool {
+    parent.creation_date.is_empty()
+        || child.creation_date.is_empty()
+        || parent.creation_date <= child.creation_date
 }
 
 fn apply_vscode_diagnostics(tree: &mut ProcessTreeSnapshot, diagnostics: VscodeMainDiagnostics) {
@@ -1399,12 +1435,13 @@ mod tests {
     }
 
     #[test]
-    fn treats_each_nested_matching_runtime_as_a_separate_root() {
+    fn returns_a_covering_forest_for_nested_matching_runtimes() {
         let trees = process_trees(
             vec![
                 process(10, 1, "node.exe", r#""node.exe" parent.js"#),
-                process(11, 10, "node.exe", r#""node.exe" child.js"#),
-                process(12, 11, "helper.exe", "helper.exe"),
+                process(11, 10, "helper.exe", "helper.exe"),
+                process(12, 11, "node.exe", r#""node.exe" child.js"#),
+                process(13, 12, "helper.exe", "helper.exe"),
             ],
             ProcessRootKind::Node,
         );
@@ -1414,7 +1451,7 @@ mod tests {
                 .iter()
                 .map(|tree| tree.root_process_id)
                 .collect::<Vec<_>>(),
-            vec![10, 11]
+            vec![10]
         );
         assert_eq!(
             trees[0]
@@ -1422,15 +1459,31 @@ mod tests {
                 .iter()
                 .map(|process| process.process_id)
                 .collect::<Vec<_>>(),
-            vec![10]
+            vec![10, 11, 12, 13]
         );
+    }
+
+    #[test]
+    fn rejects_parent_links_to_newer_reused_process_ids() {
+        let mut root = process(10, 1, "chrome.exe", r#""chrome.exe""#);
+        root.creation_date = "20260823020000.000000+000".to_owned();
+        let mut stale_child = process(20, 10, "csrss.exe", "csrss.exe");
+        stale_child.creation_date = "20260823010000.000000+000".to_owned();
+        let stale_descendant = process(30, 20, "services.exe", "services.exe");
+
+        let trees = process_trees(
+            vec![root, stale_child, stale_descendant],
+            ProcessRootKind::Browser,
+        );
+
+        assert_eq!(trees.len(), 1);
         assert_eq!(
-            trees[1]
+            trees[0]
                 .processes
                 .iter()
                 .map(|process| process.process_id)
                 .collect::<Vec<_>>(),
-            vec![11, 12]
+            vec![10]
         );
     }
 

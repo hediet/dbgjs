@@ -37,8 +37,8 @@ use crate::context_source_model::{
 use crate::debugger_engine::{SessionKey, StepKind};
 use crate::discovery::{DiscoveryState, PauseChildrenLease};
 use crate::resource_graph::{
-    GraphDelta, RelationKind, ResourceFacts, ResourceGraph, ResourceId, ResourceKind,
-    ResourceUpsert, SourceId,
+    GraphDelta, GraphSink, RelationKind, ResourceFacts, ResourceGraph, ResourceId, ResourceKind,
+    ResourceUpsert, SharedResourceGraph, SourceId,
 };
 use crate::service_api::{
     BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
@@ -112,7 +112,7 @@ impl CaptureStorage {
                 "injected capture storage sync failure",
             ));
         }
-        fs::File::open(path)?.sync_all()
+        fs::OpenOptions::new().write(true).open(path)?.sync_all()
     }
 
     fn sync_parent(&self, path: &Path) -> std::io::Result<()> {
@@ -723,7 +723,7 @@ fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> Conte
 #[derive(Clone, Default)]
 struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
-    resource_graphs: BTreeMap<String, ResourceGraph>,
+    resource_graphs: BTreeMap<String, SharedResourceGraph>,
     source_models: BTreeMap<String, Arc<ContextSourceModel>>,
     context_kinds: BTreeMap<String, ContextKind>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
@@ -1487,7 +1487,7 @@ impl DebuggerServiceApi for DebuggerService {
         let snapshot = state
             .resource_graphs
             .get(&context_id)
-            .map(ResourceGraph::snapshot)
+            .map(GraphSink::snapshot)
             .unwrap_or_else(|| ResourceGraph::default().snapshot());
         Ok(resource_graph_api_snapshot(snapshot))
     }
@@ -1988,11 +1988,13 @@ impl DebuggerServiceApi for DebuggerService {
                 .resource_graphs
                 .get(&context_id)
                 .and_then(|graph| {
-                    graph.capability_from_source(
-                        &root,
-                        &source,
-                        &CapabilityKind::PauseFutureChildren,
-                    )
+                    graph.read(|graph| {
+                        graph.capability_from_source(
+                            &root,
+                            &source,
+                            &CapabilityKind::PauseFutureChildren,
+                        )
+                    })
                 })
                 .and_then(|capability| capability.as_pause_future_children())
                 .ok_or_else(|| {
@@ -3996,11 +3998,65 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
     ) -> Result<ScreenshotSnapshot, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .capture_screenshot()
-            .await
-            .map_err(target_debugger_rpc_error)
+        let target_id = self
+            .resolve_target_id(&context_id, &connection_id, &target_id)
+            .await?;
+        let selected = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let (target_type, parent_id) = {
+            let state = self.state.lock().await;
+            let target = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?
+                .targets
+                .get(&target_id)
+                .ok_or_else(|| not_found("target", &target_id))?;
+            (target.target_type.clone(), target.parent_id.clone())
+        };
+        if target_type != "iframe" {
+            return selected
+                .capture_screenshot()
+                .await
+                .map_err(target_debugger_rpc_error);
+        }
+        let parent_id = parent_id.ok_or_else(|| {
+            invalid_state("iframe screenshot requires a discovered embedding page")
+        })?;
+        let frame_id = target_id
+            .rsplit_once("/target/")
+            .map(|(_, frame_id)| frame_id)
+            .ok_or_else(|| invalid_state("iframe target has no native frame identifier"))?;
+        let owner_id = format!(
+            "screenshot-{}",
+            random_instance_id().map_err(|error| internal_error(error.to_string()))?
+        );
+        let service = self.clone();
+        let frame_id = frame_id.to_owned();
+        tokio::spawn(async move {
+            let (parent, created) = service
+                .relay_ensure_attached(&owner_id, &context_id, &connection_id, &parent_id)
+                .await?;
+            let result = capture_embedded_frame_screenshot(&parent, &frame_id).await;
+            if created {
+                service
+                    .relay_release_attachment(
+                        &owner_id,
+                        &context_id,
+                        &connection_id,
+                        &parent_id,
+                        &parent,
+                    )
+                    .await;
+            }
+            result
+        })
+        .await
+        .map_err(|error| internal_error(format!("iframe screenshot task failed: {error}")))?
     }
 
     async fn start_coverage(
@@ -5104,7 +5160,9 @@ impl DebuggerService {
                 .resource_graphs
                 .get(&context_id)
                 .and_then(|graph| {
-                    graph.capability_from_source(&resource, &source, &CapabilityKind::Debug)
+                    graph.read(|graph| {
+                        graph.capability_from_source(&resource, &source, &CapabilityKind::Debug)
+                    })
                 })
                 .and_then(|capability| capability.as_debug())
                 .ok_or_else(|| {
@@ -5296,12 +5354,6 @@ impl DebuggerService {
             .ok_or_else(|| not_found("attached target", &target_id))
     }
 
-    /// The context-wide revision signal, for a relay to notice target discovery changes across
-    /// every connection without polling the whole context on a timer.
-    pub(crate) fn relay_revision_signal(&self) -> watch::Receiver<u64> {
-        self.revision_signal.subscribe()
-    }
-
     /// Every canonical target currently known in `context_id`, paired with its owning
     /// connection id, for a relay's `Target.getTargets` and discovery diffing.
     pub(crate) async fn relay_targets(
@@ -5315,40 +5367,33 @@ impl DebuggerService {
         let Some(graph) = state.resource_graphs.get(context_id) else {
             return Ok(Vec::new());
         };
-        Ok(graph
-            .snapshot()
-            .resources
-            .into_values()
-            .filter_map(|resource| {
-                let string = |name: &str| {
-                    resource
-                        .attributes
-                        .get(name)
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                };
-                let connection_id = string("connectionId")?;
-                let target_id = string("targetId")?;
-                Some((
-                    connection_id,
-                    TargetSnapshot {
-                        target_id,
-                        target_type: string("targetType").unwrap_or_else(|| "other".to_owned()),
-                        title: string("title").unwrap_or_default(),
-                        url: string("url").unwrap_or_default(),
-                        attached: resource
-                            .attributes
-                            .get("attached")
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false),
-                        parent_id: string("parentTargetId"),
-                        opener_id: string("openerTargetId"),
-                        browser_context_id: string("browserContextId"),
-                        subtype: string("subtype"),
-                    },
-                ))
-            })
-            .collect())
+        Ok(relay_targets_from_graph(graph.snapshot()))
+    }
+
+    /// Atomically seeds a relay's target inventory and subscribes it to every later graph revision.
+    pub(crate) async fn relay_target_observation(
+        &self,
+        context_id: &str,
+    ) -> Result<
+        (
+            Vec<(String, TargetSnapshot)>,
+            watch::Receiver<crate::resource_graph::GraphRevision>,
+        ),
+        JsonRpcError,
+    > {
+        let mut state = self.state.lock().await;
+        if !state.contexts.contains_key(context_id) {
+            return Err(not_found("context", context_id));
+        }
+        let observation = state
+            .resource_graphs
+            .entry(context_id.to_owned())
+            .or_default()
+            .observe();
+        Ok((
+            relay_targets_from_graph(observation.snapshot),
+            observation.revisions,
+        ))
     }
 
     /// Fetches an already-attached target's debugger handle for relay forwarding, bypassing the
@@ -5505,7 +5550,9 @@ impl DebuggerService {
                 .resource_graphs
                 .get(context_id)
                 .and_then(|graph| {
-                    graph.capability_from_source(&resource, &source, &CapabilityKind::Debug)
+                    graph.read(|graph| {
+                        graph.capability_from_source(&resource, &source, &CapabilityKind::Debug)
+                    })
                 })
                 .and_then(|capability| capability.as_debug())
                 .ok_or_else(|| {
@@ -5795,6 +5842,89 @@ impl DebuggerService {
     }
 }
 
+async fn capture_embedded_frame_screenshot(
+    parent: &TargetDebuggerHandle,
+    frame_id: &str,
+) -> Result<ScreenshotSnapshot, JsonRpcError> {
+    let owner = parent
+        .raw_cdp_request(
+            "DOM.getFrameOwner".to_owned(),
+            serde_json::json!({ "frameId": frame_id }),
+        )
+        .await?;
+    let backend_node_id = owner
+        .get("backendNodeId")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| invalid_state("embedding frame owner has no backend node identifier"))?;
+    let box_model = parent
+        .raw_cdp_request(
+            "DOM.getBoxModel".to_owned(),
+            serde_json::json!({ "backendNodeId": backend_node_id }),
+        )
+        .await?;
+    let content = box_model
+        .pointer("/model/content")
+        .and_then(serde_json::Value::as_array)
+        .filter(|quad| quad.len() == 8)
+        .ok_or_else(|| invalid_state("embedding frame has no valid content box"))?;
+    let coordinates = content
+        .iter()
+        .map(|coordinate| {
+            coordinate
+                .as_f64()
+                .filter(|coordinate| coordinate.is_finite())
+                .ok_or_else(|| invalid_state("embedding frame content box is not finite"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let xs = [
+        coordinates[0],
+        coordinates[2],
+        coordinates[4],
+        coordinates[6],
+    ];
+    let ys = [
+        coordinates[1],
+        coordinates[3],
+        coordinates[5],
+        coordinates[7],
+    ];
+    let x = xs.into_iter().fold(f64::INFINITY, f64::min);
+    let y = ys.into_iter().fold(f64::INFINITY, f64::min);
+    let width = xs.into_iter().fold(f64::NEG_INFINITY, f64::max) - x;
+    let height = ys.into_iter().fold(f64::NEG_INFINITY, f64::max) - y;
+    if width <= 0.0 || height <= 0.0 {
+        return Err(invalid_state(
+            "embedding frame content box has no visible area",
+        ));
+    }
+    let screenshot = parent
+        .raw_cdp_request(
+            "Page.captureScreenshot".to_owned(),
+            serde_json::json!({
+                "format": "png",
+                "fromSurface": true,
+                "captureBeyondViewport": true,
+                "clip": {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "scale": 1
+                }
+            }),
+        )
+        .await?;
+    let data_base64 = screenshot
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| invalid_state("screenshot response contained no image data"))?
+        .to_owned();
+    Ok(ScreenshotSnapshot {
+        media_type: "image/png".to_owned(),
+        data_base64,
+    })
+}
+
 fn cancel_playwright_proxies(
     state: &mut ServiceState,
     context_id: &str,
@@ -6056,13 +6186,14 @@ fn stage_connection_resource_graph(
         .connections
         .get(connection_id)
         .ok_or_else(|| format!("connection '{connection_id}' does not exist"))?;
-    let mut graph = state
+    let graph = state
         .resource_graphs
-        .get(context_id)
-        .cloned()
-        .unwrap_or_default();
-    sync_connection_resource_graph(&mut graph, connection_id, connection, runtime)?;
-    state.resource_graphs.insert(context_id.to_owned(), graph);
+        .entry(context_id.to_owned())
+        .or_default()
+        .clone();
+    graph.try_update(|graph| {
+        sync_connection_resource_graph(graph, connection_id, connection, runtime)
+    })?;
     Ok(())
 }
 
@@ -6072,7 +6203,7 @@ fn retract_connection_resource_graph(
     connection_id: &str,
     generation: u64,
 ) {
-    if let Some(graph) = state.resource_graphs.get_mut(context_id) {
+    if let Some(graph) = state.resource_graphs.get(context_id) {
         graph.retract_source(&connection_source_id(connection_id, generation));
     }
 }
@@ -6137,6 +6268,44 @@ fn resource_graph_api_snapshot(
         resources,
         relations,
     }
+}
+
+fn relay_targets_from_graph(
+    snapshot: crate::resource_graph::GraphSnapshot,
+) -> Vec<(String, TargetSnapshot)> {
+    snapshot
+        .resources
+        .into_values()
+        .filter_map(|resource| {
+            let string = |name: &str| {
+                resource
+                    .attributes
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            };
+            let connection_id = string("connectionId")?;
+            let target_id = string("targetId")?;
+            Some((
+                connection_id,
+                TargetSnapshot {
+                    target_id,
+                    target_type: string("targetType").unwrap_or_else(|| "other".to_owned()),
+                    title: string("title").unwrap_or_default(),
+                    url: string("url").unwrap_or_default(),
+                    attached: resource
+                        .attributes
+                        .get("attached")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                    parent_id: string("parentTargetId"),
+                    opener_id: string("openerTargetId"),
+                    browser_context_id: string("browserContextId"),
+                    subtype: string("subtype"),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn capability_kind_name(kind: CapabilityKind) -> &'static str {

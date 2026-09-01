@@ -211,7 +211,14 @@ async fn run_context_relay(
         Box::new(RootHandler(state.clone())),
     );
     state.set_root_channel(root_channel.clone());
-    state.prime_known_targets().await;
+    let Ok((targets, mut revision)) = state
+        .service
+        .relay_target_observation(&state.context_id)
+        .await
+    else {
+        return;
+    };
+    state.prime_known_targets(targets).await;
 
     let mut mux_task = tokio::spawn({
         let mux = mux.clone();
@@ -222,7 +229,6 @@ async fn run_context_relay(
         async move { root_channel.run().await }
     });
     let mut transport_closed = Box::pin(transport.wait_closed());
-    let mut revision = state.service.relay_revision_signal();
     loop {
         tokio::select! {
             _ = cancel.changed() => break,
@@ -317,10 +323,11 @@ impl ContextRelayState {
 
     /// Silently seeds the known-target baseline so the first revision-triggered diff after a
     /// client enables discovery does not treat every pre-existing target as newly created.
-    async fn prime_known_targets(&self) {
-        if let Ok(targets) = self.targets().await {
-            *self.known_targets.lock().await = index_targets(targets);
+    async fn prime_known_targets(&self, mut targets: Vec<(String, TargetSnapshot)>) {
+        if let Some(connection_id) = &self.connection_id {
+            targets.retain(|(candidate, _)| candidate == connection_id);
         }
+        *self.known_targets.lock().await = index_targets(targets);
     }
 
     async fn dispose(&self) {
@@ -383,7 +390,7 @@ impl ContextRelayState {
 
     /// Re-reads the context's canonical target set and mirrors the delta as `Target.*`
     /// discovery events (gated by `discover`) and, for newly appeared targets, auto-attach
-    /// (gated by `auto_attach`). Called each time the context-wide revision signal changes.
+    /// (gated by `auto_attach`). Called each time the context resource graph revision changes.
     async fn sync_targets(self: &Arc<Self>) {
         let Ok(current) = self.targets().await else {
             return;

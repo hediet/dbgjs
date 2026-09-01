@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::capability::{
     CapabilityError, CapabilityHandleId, CapabilityKind, CapabilityObject, CapabilityRegistry,
@@ -1004,42 +1005,101 @@ pub trait GraphSink: Send + Sync {
     fn snapshot(&self) -> GraphSnapshot;
 }
 
-/// The shared graph handed to providers. Cloning shares one graph.
-#[derive(Clone, Default)]
+/// An atomic graph snapshot and a signal for every later revision. The watch channel retains the
+/// latest revision, so a slow consumer can resnapshot instead of silently applying incomplete
+/// deltas.
+pub struct GraphObservation {
+    pub snapshot: GraphSnapshot,
+    pub revisions: watch::Receiver<GraphRevision>,
+}
+
+struct SharedResourceGraphState {
+    graph: ResourceGraph,
+    revisions: watch::Sender<GraphRevision>,
+}
+
+/// The shared graph handed to providers. Cloning shares one graph and its revision stream.
+#[derive(Clone)]
 pub struct SharedResourceGraph {
-    inner: Arc<Mutex<ResourceGraph>>,
+    inner: Arc<Mutex<SharedResourceGraphState>>,
+}
+
+impl Default for SharedResourceGraph {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedResourceGraph {
     pub fn new() -> Self {
+        let graph = ResourceGraph::new();
+        let (revisions, _) = watch::channel(graph.revision());
         Self {
-            inner: Arc::new(Mutex::new(ResourceGraph::new())),
+            inner: Arc::new(Mutex::new(SharedResourceGraphState { graph, revisions })),
         }
     }
 
     /// Reads the graph under the lock, e.g. to resolve a [`crate::scope::Scope`] or to fetch a
     /// callable capability object.
     pub fn read<R>(&self, reader: impl FnOnce(&ResourceGraph) -> R) -> R {
-        let graph = self.inner.lock().unwrap();
-        reader(&graph)
+        let state = self.inner.lock().unwrap();
+        reader(&state.graph)
+    }
+
+    /// Atomically captures the current graph and subscribes to every later revision.
+    pub fn observe(&self) -> GraphObservation {
+        let state = self.inner.lock().unwrap();
+        GraphObservation {
+            snapshot: state.graph.snapshot(),
+            revisions: state.revisions.subscribe(),
+        }
+    }
+
+    /// Stages a multi-step graph update on a clone and publishes it as one observable revision.
+    pub fn try_update<R, E>(
+        &self,
+        update: impl FnOnce(&mut ResourceGraph) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut state = self.inner.lock().unwrap();
+        let previous = state.graph.revision();
+        let mut graph = state.graph.clone();
+        let result = update(&mut graph)?;
+        let revision = graph.revision();
+        state.graph = graph;
+        if revision != previous {
+            state.revisions.send_replace(revision);
+        }
+        Ok(result)
     }
 }
 
 impl GraphSink for SharedResourceGraph {
     fn apply(&self, delta: GraphDelta) -> Result<GraphRevision, GraphError> {
-        self.inner.lock().unwrap().apply(delta)
+        let mut state = self.inner.lock().unwrap();
+        let previous = state.graph.revision();
+        let revision = state.graph.apply(delta)?;
+        if revision != previous {
+            state.revisions.send_replace(revision);
+        }
+        Ok(revision)
     }
 
     fn retract_source(&self, source: &SourceId) -> GraphRevision {
-        self.inner.lock().unwrap().retract_source(source)
+        let mut state = self.inner.lock().unwrap();
+        let previous = state.graph.revision();
+        let revision = state.graph.retract_source(source);
+        if revision != previous {
+            state.revisions.send_replace(revision);
+        }
+        revision
     }
 
     fn revision(&self) -> GraphRevision {
-        self.inner.lock().unwrap().revision()
+        self.inner.lock().unwrap().graph.revision()
     }
 
     fn snapshot(&self) -> GraphSnapshot {
-        self.inner.lock().unwrap().snapshot()
+        self.inner.lock().unwrap().graph.snapshot()
     }
 }
 
@@ -1363,5 +1423,64 @@ mod tests {
         assert!(shared.read(|graph| graph.contains(&process)));
         sink.retract_source(&source);
         assert!(shared.read(|graph| graph.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn shared_graph_observation_starts_at_its_atomic_snapshot_revision() {
+        let shared = SharedResourceGraph::new();
+        let source = SourceId::new("s");
+        let process = id("process", "1");
+        let mut observation = shared.observe();
+        assert_eq!(
+            observation.snapshot.revision,
+            *observation.revisions.borrow()
+        );
+
+        shared
+            .apply(
+                GraphDelta::for_source(source.clone()).upsert(ResourceUpsert::new(
+                    process.clone(),
+                    ResourceFacts::of_kind(ResourceKind::process()),
+                )),
+            )
+            .unwrap();
+        observation.revisions.changed().await.unwrap();
+        assert_eq!(*observation.revisions.borrow_and_update(), GraphRevision(1));
+        assert!(shared.snapshot().resources.contains_key(&process));
+
+        shared.retract_source(&source);
+        observation.revisions.changed().await.unwrap();
+        assert_eq!(*observation.revisions.borrow_and_update(), GraphRevision(2));
+        assert!(shared.snapshot().resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_staged_update_does_not_publish_partial_graph_state() {
+        let shared = SharedResourceGraph::new();
+        let source = SourceId::new("s");
+        let process = id("process", "1");
+        let mut observation = shared.observe();
+
+        let result: Result<(), &'static str> = shared.try_update(|graph| {
+            graph
+                .apply(GraphDelta::for_source(source).upsert(ResourceUpsert::new(
+                    process,
+                    ResourceFacts::of_kind(ResourceKind::process()),
+                )))
+                .unwrap();
+            Err("reject staged update")
+        });
+
+        assert_eq!(result, Err("reject staged update"));
+        assert!(shared.snapshot().resources.is_empty());
+        assert_eq!(shared.revision(), GraphRevision(0));
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                observation.revisions.changed(),
+            )
+            .await
+            .is_err()
+        );
     }
 }

@@ -13,6 +13,7 @@ const fixtureProgram = resolve("tests/playwright/process-tree-browser-fixture.mj
 const artifactsDirectory = resolve("artifacts");
 const processTreeTranscriptPath = join(artifactsDirectory, "process-tree-browser-cli.md");
 const vscodeTranscriptPath = join(artifactsDirectory, "vscode-iframe-cli.md");
+const vscodeIframeScreenshotPath = join(artifactsDirectory, "vscode-iframe.png");
 const markdownFence = "```";
 
 export async function generateTargetTreeTranscripts() {
@@ -49,7 +50,7 @@ export async function generateProcessTreeBrowserTranscript(options = {}) {
 		const transcript = new Transcript(
 			processTreeTranscriptPath,
 			"Composing a browser root discovered inside a process tree",
-			"This is a generated live Windows E2E run. A Node root process owns a headless Chrome child with a DevTools port. Passive root recognition finds the browser process; `process list --full` then runs the same process-tree target discovery used by a durable connection and nests the browser page and OOPIF beneath their OS process.",
+			"This is a generated live Windows E2E run. A Node root process owns a headless Chrome child with a DevTools port. Passive root recognition finds the browser process; `process list --full` then uses that debugger route to nest the browser page and OOPIF beneath the canonical OS process rather than printing a duplicate browser-endpoint node.",
 			options.write !== false,
 		);
 
@@ -174,31 +175,27 @@ export async function generateVscodeIframeTranscript(options = {}) {
 	};
 	const transcript = new Transcript(
 		vscodeTranscriptPath,
-		"Discovering and debugging an iframe inside a live VS Code process tree",
-		"This transcript is generated from the VS Code instance that launched the generator. Passive process listing recognizes VS Code roots. With `--full`, the command runs the same process-tree target discovery as a connection and nests Electron WebContents, iframe, and worker targets beneath their OS renderer process.",
+		"Selectively debugging an iframe inside a live VS Code process tree",
+		"This transcript is generated from the VS Code instance that launched the generator. Connecting the process tree discovers resources and routes without creating a debugger-engine attachment for every target. Provider-internal supervision correlates Electron WebContents with native CDP identities and contributes related OOPIFs and workers; only the explicitly selected iframe contributes loaded scripts.",
 		options.write !== false,
 	);
 	let serviceStarted = false;
 
 	try {
-		const fullProcessTree = await transcript.runCli(
-			"Recognize the current VS Code root and actively expand the selected renderer through the shared process-tree target discovery.",
+		const processTrees = await transcript.runCli(
+			"List every recognized VS Code process tree without starting the debugger service or attaching any target.",
 			[
 				"process",
 				"list",
 				"--root",
 				"vscode",
-				"--full",
 				"--no-cmd-line",
-				"--no-trim",
-				"--filter",
-				`p:${rendererProcess.processId}`,
 			],
 			environment,
 			{ timeoutMs: 60_000 },
 		);
-		assert.match(fullProcessTree, /electron-renderer|renderer-\d+/);
-		assert.match(fullProcessTree, /\[iframe\]/);
+		assert.match(processTrees, new RegExp(`VS Code process tree ${tree.rootProcessId}\\b`));
+		assert.match(processTrees, new RegExp(`p:${rendererProcess.processId}\\s+renderer`));
 		await transcript.runCli(
 			"Create an isolated context for live VS Code discovery.",
 			["context", "create", "--context", ":vscode-iframe-demo", "VS Code iframe demo", "--set"],
@@ -206,27 +203,44 @@ export async function generateVscodeIframeTranscript(options = {}) {
 		);
 		serviceStarted = true;
 		await transcript.runCli(
-			"Attach directly to the renderer's full VS Code process locator. This creates its process-tree connection, resolves the Electron WebContents by process identity, and enables renderer-local CDP target discovery.",
+			"Connect the selected VS Code process tree. This discovers its targets but does not create debugger-engine attachments for them.",
 			[
-				"process",
-				"attach",
-				`vscode://${tree.rootProcessId}/process/${rendererProcess.processId}`,
-				"--set",
+				"connection",
+				"add",
+				"--process-tree",
+				String(tree.rootProcessId),
+				"--connection",
+				connectionId,
+				"--connect",
 			],
 			environment,
 			{ timeoutMs: 60_000 },
 		);
 
-		const targets = await waitForVscodeIframe(environment);
+		const targets = await waitForVscodeIframe(environment, rendererProcess.windowTitle);
 		const renderer = targets.find(
-			(target) => target.selected && target.subtype === "electron-renderer",
+			(target) =>
+				target.subtype === "electron-renderer" &&
+				target.title === rendererProcess.windowTitle,
 		);
-		assert.ok(renderer, "process attach did not select an Electron renderer target");
+		assert.ok(renderer, "the selected VS Code window did not contribute an Electron renderer");
 		const iframe = selectVscodeIframe(targets, renderer.targetId);
 		assert.ok(iframe, `renderer '${renderer.targetId}' has no iframe descendant`);
+		const main = targets.find(
+			(target) =>
+				target.targetType === "node" &&
+				target.url === `process:${tree.rootProcessId}`,
+		);
+		assert.ok(main, "the selected VS Code tree did not contribute its main process target");
 
+		const beforeAttach = await transcript.runCli(
+			"Show that discovery alone contributed no loaded scripts because no debugger target is attached.",
+			["source", "tree", "loaded", "--all"],
+			environment,
+		);
+		assert.match(beforeAttach, /No loaded sources are currently observed/);
 		const targetTree = await transcript.runCli(
-			"Render the connected VS Code target inventory as a spanning tree. The selected WebContents renderer now owns the recursively discovered iframe.",
+			"Render the connected VS Code target inventory as a spanning tree. WebContents contain only their related iframe and worker targets.",
 			["target", "list"],
 			environment,
 			{ timeoutMs: 60_000 },
@@ -251,7 +265,7 @@ export async function generateVscodeIframeTranscript(options = {}) {
 			environment,
 		);
 		await transcript.runCli(
-			"Transfer exclusive renderer ownership to the discovered VS Code iframe and select it.",
+			"Attach the debugger engine only to the discovered VS Code iframe and select it.",
 			["target", "attach", "--target", iframe.targetId, "--set", "--force"],
 			environment,
 		);
@@ -265,6 +279,71 @@ export async function generateVscodeIframeTranscript(options = {}) {
 			environment,
 		);
 		await transcript.runCli(
+			"Capture the selected iframe through its ordinary page screenshot capability.",
+			["screenshot", "capture", "--output", vscodeIframeScreenshotPath],
+			environment,
+			{ timeoutMs: 60_000 },
+		);
+		const loadedSources = await waitForLoadedSources(environment);
+		assert.doesNotMatch(loadedSources, /No loaded sources are currently observed/);
+		await transcript.runCli(
+			"Dump the loaded-source tree contributed by the one explicitly attached iframe.",
+			["source", "tree", "loaded", "--max-lines", "40", "--no-trim"],
+			environment,
+		);
+		await transcript.runCli(
+			"Release the iframe before checking the renderer's own generated scripts and source maps.",
+			["target", "release", "--target", iframe.targetId],
+			environment,
+		);
+		await transcript.runCli(
+			"Attach the renderer WebContents without attaching any of the other discovered targets.",
+			["target", "attach", "--target", renderer.targetId, "--set", "--force"],
+			environment,
+		);
+		await transcript.runCli(
+			"Start precise coverage to materialize the renderer's source-map projections.",
+			["coverage", "start"],
+			environment,
+		);
+		await transcript.wait("Let the live renderer collect precise coverage.", 1_000);
+		const rendererCoverage = await transcript.runCli(
+			"Capture and resolve the renderer coverage through loadable source maps.",
+			["coverage", "capture", "--max-lines", "25", "--no-trim"],
+			environment,
+			{ timeoutMs: 120_000 },
+		);
+		assert.match(rendererCoverage, /\.tsx?\b/);
+		await transcript.runCli(
+			"Release the renderer before attaching the VS Code main process.",
+			["target", "release", "--target", renderer.targetId],
+			environment,
+		);
+		await transcript.runCli(
+			"Attach only the VS Code main process target.",
+			["target", "attach", "--target", main.targetId, "--set", "--force"],
+			environment,
+			{ timeoutMs: 60_000 },
+		);
+		await transcript.runCli(
+			"Start precise coverage to materialize the main process source-map projections.",
+			["coverage", "start"],
+			environment,
+		);
+		await transcript.wait("Let the live VS Code main process collect precise coverage.", 1_000);
+		const mainCoverage = await transcript.runCli(
+			"Capture and resolve the main process coverage through loadable source maps.",
+			["coverage", "capture", "--max-lines", "25", "--no-trim"],
+			environment,
+			{ timeoutMs: 120_000 },
+		);
+		assert.match(mainCoverage, /\.tsx?\b/);
+		await transcript.runCli(
+			"Render the terminal source tree reached through the verified renderer and main-process maps.",
+			["source", "tree", "resolved", "--max-lines", "40", "--no-trim"],
+			environment,
+		);
+		await transcript.runCli(
 			"Disconnect the live VS Code process tree.",
 			["connection", "disconnect", "--connection", connectionId],
 			environment,
@@ -272,7 +351,7 @@ export async function generateVscodeIframeTranscript(options = {}) {
 		await transcript.runCli("Stop the isolated debugger service.", ["service", "stop"], environment);
 		serviceStarted = false;
 		await transcript.finish(
-			`The OS process inventory exposed the renderer process, while the connected target tree exposed WebContents target ${renderer.targetId} and its iframe descendant ${iframe.targetId}. The iframe ID was directly attachable and evaluable.`,
+			`The passive forest exposed renderer process ${rendererProcess.processId}. Connecting the tree exposed WebContents ${renderer.targetId} and iframe ${iframe.targetId} while the loaded-source tree remained empty. Only after explicitly attaching ${iframe.targetId} did loaded sources appear, proving that process-tree discovery and debugger attachment are separate.`,
 		);
 	} finally {
 		if (serviceStarted) {
@@ -315,6 +394,22 @@ class Transcript {
 		process.stdout.write(content);
 		assert.equal(result.code, 0, `${arguments_.join(" ")}\n${result.output}`);
 		return result.output;
+	}
+
+	async wait(explanation, durationMs) {
+		const startedAt = performance.now();
+		const gapMs = this.previousStepFinishedAt === undefined
+			? 0
+			: startedAt - this.previousStepFinishedAt;
+		await new Promise((resolvePromise) => setTimeout(resolvePromise, durationMs));
+		const finishedAt = performance.now();
+		this.previousStepFinishedAt = finishedAt;
+		this.stepNumber += 1;
+		const content =
+			`\n## Step ${this.stepNumber} — ${explanation}\n\n` +
+			`_Timing: ${formatDuration(gapMs)} passed since the previous step; the wait took ${formatDuration(finishedAt - startedAt)}; ${formatDuration(finishedAt - this.startedAt)} elapsed since the transcript started._\n`;
+		this.sections.push(content);
+		process.stdout.write(content);
 	}
 
 	async finish(summary) {
@@ -434,13 +529,15 @@ async function waitForComposedTargets(environment, pageUrl) {
 	);
 }
 
-async function waitForVscodeIframe(environment) {
+async function waitForVscodeIframe(environment, windowTitle) {
 	return pollTargets(
 		environment,
 		":vscode-iframe-demo",
 		(targets) => {
 			const renderer = targets.find(
-				(target) => target.selected && target.subtype === "electron-renderer",
+				(target) =>
+					target.subtype === "electron-renderer" &&
+					target.title === windowTitle,
 			);
 			return renderer !== undefined && targets.some(
 				(target) =>
@@ -450,6 +547,20 @@ async function waitForVscodeIframe(environment) {
 		},
 		60_000,
 	);
+}
+
+async function waitForLoadedSources(environment) {
+	const output = await pollUntil(async () => {
+		const result = await run(
+			cli,
+			["source", "tree", "loaded", "--all", "--context", ":vscode-iframe-demo"],
+			environment,
+			{ timeoutMs: 45_000 },
+		);
+		return result.code === 0 ? result.output : undefined;
+	}, (value) => !value.includes("No loaded sources are currently observed"), 30_000);
+	assert.ok(output, "the attached iframe did not contribute loaded sources");
+	return output;
 }
 
 async function pollTargets(environment, context, predicate, timeoutMs = 30_000) {
