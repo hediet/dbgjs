@@ -1681,6 +1681,7 @@ impl HumanOutput for TargetListOutput {
             print_target_tree(
                 self,
                 *root,
+                None,
                 "",
                 index + 1 == roots.len(),
                 &children,
@@ -1689,7 +1690,7 @@ impl HumanOutput for TargetListOutput {
         }
         for index in 0..self.targets.len() {
             if !visited.contains(&index) {
-                print_target_tree(self, index, "", true, &children, &mut visited);
+                print_target_tree(self, index, None, "", true, &children, &mut visited);
             }
         }
     }
@@ -1698,6 +1699,7 @@ impl HumanOutput for TargetListOutput {
 fn print_target_tree(
     output: &TargetListOutput,
     index: usize,
+    parent_index: Option<usize>,
     prefix: &str,
     last: bool,
     children: &BTreeMap<usize, Vec<usize>>,
@@ -1713,12 +1715,12 @@ fn print_target_tree(
     } else {
         &target.title
     };
+    let selector = target_tree_selector(entry, parent_index.map(|index| &output.targets[index]));
     println!(
-        "{prefix}{}{} {}/{}  [{}{}]  {:?}  {}",
+        "{prefix}{}{} {}  [{}{}]  {:?}  {}",
         if last { "└─" } else { "├─" },
         if entry.selected { "*" } else { "" },
-        terminal_text(&entry.connection_id),
-        terminal_text(&target.target_id),
+        terminal_text(&selector),
         terminal_text(&target.target_type),
         if target.attached { "; attached" } else { "" },
         title,
@@ -1730,12 +1732,35 @@ fn print_target_tree(
         print_target_tree(
             output,
             *child,
+            Some(index),
             &child_prefix,
             child_index + 1 == child_indices.len(),
             children,
             visited,
         );
     }
+}
+
+fn target_tree_selector(entry: &TargetListEntry, parent: Option<&TargetListEntry>) -> String {
+    let Some(parent) = parent else {
+        return format!("{}/{}", entry.connection_id, entry.target.target_id);
+    };
+    let target_id = entry.target.target_id.as_str();
+    let parent_id = parent.target.target_id.as_str();
+    if let Some(suffix) = target_id
+        .strip_prefix(parent_id)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+    {
+        return format!("./{suffix}");
+    }
+    let target_directory = target_id.rsplit_once('/').map(|(directory, _)| directory);
+    let parent_directory = parent_id.rsplit_once('/').map(|(directory, _)| directory);
+    if target_directory == parent_directory
+        && let Some((_, name)) = target_id.rsplit_once('/')
+    {
+        return format!("./{name}");
+    }
+    format!("./{target_id}")
 }
 
 impl HumanOutput for Vec<ProcessTreeSnapshot> {
@@ -3982,12 +4007,13 @@ fn print_target_breakpoint_explanation(
 mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
-        ProcessTreeOutputOptions, SourceTreeOutputOptions, aggregate_coverage_entries,
-        coverage_entries, effective_file_metrics, heap_path_lines, heap_show_lines,
-        looks_minified_identifier, page_logs, process_tree_lines, process_trees_json,
-        render_compacted_source_graph, render_evaluation, render_heap_classes_human,
-        render_uncompacted_source_graph, render_value_snapshot, source_tree_lines,
-        style_process_label, style_session_label, terminal_text,
+        ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
+        aggregate_coverage_entries, coverage_entries, effective_file_metrics, heap_path_lines,
+        heap_show_lines, looks_minified_identifier, page_logs, process_tree_lines,
+        process_trees_json, render_compacted_source_graph, render_evaluation,
+        render_heap_classes_human, render_uncompacted_source_graph, render_value_snapshot,
+        source_tree_lines, style_process_label, style_session_label, target_tree_selector,
+        terminal_text,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -3997,7 +4023,7 @@ mod tests {
         HeapInstanceSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot,
         HeapReferenceDirection, HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming,
         HeapTraversalDirection, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
-        SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
+        SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, TargetSnapshot,
         UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
         UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
         UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot, ValueSelector, ValueSnapshot,
@@ -4430,6 +4456,44 @@ mod tests {
                 .iter()
                 .all(|process| process["processId"] != serde_json::json!(5))
         );
+    }
+
+    #[test]
+    fn target_tree_uses_parent_relative_selectors() {
+        let entry = |target_id: &str| TargetListEntry {
+            connection_id: "tree".to_owned(),
+            connection_generation: 1,
+            selected: false,
+            parent_target_id: None,
+            target: TargetSnapshot {
+                target_id: target_id.to_owned(),
+                target_type: "page".to_owned(),
+                title: String::new(),
+                url: String::new(),
+                attached: false,
+                parent_id: None,
+                opener_id: None,
+                browser_context_id: None,
+                subtype: None,
+            },
+        };
+        let root = entry("$node-root:tree");
+        let browser = entry("cdp-browser-1");
+        let renderer = entry("renderer-1");
+        let renderer_iframe = entry("renderer-1/target/iframe");
+        let page = entry("cdp-browser-1/target/page");
+        let page_iframe = entry("cdp-browser-1/target/iframe");
+
+        assert_eq!(target_tree_selector(&root, None), "tree/$node-root:tree");
+        assert_eq!(
+            target_tree_selector(&browser, Some(&root)),
+            "./cdp-browser-1"
+        );
+        assert_eq!(
+            target_tree_selector(&renderer_iframe, Some(&renderer)),
+            "./target/iframe"
+        );
+        assert_eq!(target_tree_selector(&page_iframe, Some(&page)), "./iframe");
     }
 
     #[test]

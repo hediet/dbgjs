@@ -54,7 +54,13 @@ VS Code process tree 33508
 These references are examples. `p:<pid>` selects a process and
 `w:<vscode-main-pid>/<window-id>` selects a VS Code window. Raw PIDs remain
 accepted for compatibility. JSON output also includes the full discovery
-locator for each process.
+locator for each process. Full process and window locators are accepted by the
+same attach command:
+
+```powershell
+jsdbg process attach vscode://33508/process/43336 --set
+jsdbg process attach vscode://33508/window/7 --set
+```
 
 Use the role label, window grouping, and PID together:
 

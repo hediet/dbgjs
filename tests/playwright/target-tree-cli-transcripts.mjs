@@ -143,6 +143,8 @@ export async function generateVscodeIframeTranscript(options = {}) {
 	}
 
 	const tree = await selectCurrentVscodeTree();
+	const rendererProcess = selectCurrentRendererProcess(tree);
+	const connectionId = `process-tree-${tree.rootProcessId}`;
 	const root = resolve(".test-tmp", `vscode-iframe-${randomUUID()}`);
 	const stateFile = join(root, "service.json");
 	await mkdir(root, { recursive: true });
@@ -172,24 +174,24 @@ export async function generateVscodeIframeTranscript(options = {}) {
 		);
 		serviceStarted = true;
 		await transcript.runCli(
-			"Attach one process-tree connection to the VS Code main process. This enables event-driven WebContents discovery and renderer-local CDP target discovery.",
+			"Attach directly to the renderer's full VS Code process locator. This creates its process-tree connection, resolves the Electron WebContents by process identity, and enables renderer-local CDP target discovery.",
 			[
-				"connection",
-				"add",
-				"--process-tree",
-				String(tree.rootProcessId),
-				"--connection",
-				"vscode",
-				"--connect",
+				"process",
+				"attach",
+				`vscode://${tree.rootProcessId}/process/${rendererProcess.processId}`,
+				"--set",
 			],
 			environment,
 			{ timeoutMs: 60_000 },
 		);
 
 		const targets = await waitForVscodeIframe(environment);
-		const iframe = selectVscodeIframe(targets);
-		const renderer = findRendererAncestor(targets, iframe);
-		assert.ok(renderer, `iframe '${iframe.targetId}' has no renderer ancestor`);
+		const renderer = targets.find(
+			(target) => target.selected && target.subtype === "electron-renderer",
+		);
+		assert.ok(renderer, "process attach did not select an Electron renderer target");
+		const iframe = selectVscodeIframe(targets, renderer.targetId);
+		assert.ok(iframe, `renderer '${renderer.targetId}' has no iframe descendant`);
 
 		const targetTree = await transcript.runCli(
 			"Render the connected VS Code target inventory as a spanning tree. The selected WebContents renderer now owns the recursively discovered iframe.",
@@ -198,11 +200,15 @@ export async function generateVscodeIframeTranscript(options = {}) {
 			{ timeoutMs: 60_000 },
 		);
 		assert.ok(
-			targetTree.includes(`vscode/${renderer.targetId}`),
+			targetTree.includes(`${connectionId}/$node-root:${connectionId}`) &&
+				targetTree.includes(`./${renderer.targetId}`),
 			`target tree did not contain renderer '${renderer.targetId}'`,
 		);
+		const iframeRelativeId = iframe.targetId.startsWith(`${renderer.targetId}/`)
+			? iframe.targetId.slice(renderer.targetId.length + 1)
+			: iframe.targetId;
 		assert.ok(
-			targetTree.includes(`vscode/${iframe.targetId}`),
+			targetTree.includes(`./${iframeRelativeId}`),
 			`target tree did not contain iframe '${iframe.targetId}'`,
 		);
 		assert.doesNotMatch(targetTree, /parent=/);
@@ -213,8 +219,8 @@ export async function generateVscodeIframeTranscript(options = {}) {
 			environment,
 		);
 		await transcript.runCli(
-			"Attach directly to the discovered VS Code iframe.",
-			["target", "attach", "--target", iframe.targetId, "--set"],
+			"Transfer exclusive renderer ownership to the discovered VS Code iframe and select it.",
+			["target", "attach", "--target", iframe.targetId, "--set", "--force"],
 			environment,
 		);
 		await transcript.runCli(
@@ -228,7 +234,7 @@ export async function generateVscodeIframeTranscript(options = {}) {
 		);
 		await transcript.runCli(
 			"Disconnect the live VS Code process tree.",
-			["connection", "disconnect", "--connection", "vscode"],
+			["connection", "disconnect", "--connection", connectionId],
 			environment,
 		);
 		await transcript.runCli("Stop the isolated debugger service.", ["service", "stop"], environment);
@@ -330,6 +336,34 @@ async function selectCurrentVscodeTree() {
 	) ?? trees.toSorted((left, right) => right.processes.length - left.processes.length)[0];
 }
 
+function selectCurrentRendererProcess(tree) {
+	const processes = new Map(
+		tree.processes.map((candidate) => [candidate.processId, candidate]),
+	);
+	let current = processes.get(process.pid);
+	let windowId;
+	while (current !== undefined) {
+		if (Number.isSafeInteger(current.windowId)) {
+			windowId = current.windowId;
+			break;
+		}
+		current = processes.get(current.parentProcessId);
+	}
+	const workspaceName = process.cwd().split(/[\\/]/).at(-1)?.toLowerCase();
+	return tree.processes.find(
+		(candidate) =>
+			candidate.role === "renderer" &&
+			windowId !== undefined &&
+			candidate.windowId === windowId,
+	) ?? tree.processes.find(
+		(candidate) =>
+			candidate.role === "renderer" &&
+			workspaceName !== undefined &&
+			candidate.windowTitle?.toLowerCase().includes(workspaceName),
+	) ?? tree.processes.find((candidate) => candidate.role === "renderer") ??
+		assert.fail(`VS Code process tree ${tree.rootProcessId} has no renderer process`);
+}
+
 async function waitForReady(child) {
 	let stdout = "";
 	let stderr = "";
@@ -372,7 +406,16 @@ async function waitForVscodeIframe(environment) {
 	return pollTargets(
 		environment,
 		":vscode-iframe-demo",
-		(targets) => targets.some((target) => target.targetType === "iframe"),
+		(targets) => {
+			const renderer = targets.find(
+				(target) => target.selected && target.subtype === "electron-renderer",
+			);
+			return renderer !== undefined && targets.some(
+				(target) =>
+					target.targetType === "iframe" &&
+					findRendererAncestor(targets, target)?.targetId === renderer.targetId,
+			);
+		},
 		60_000,
 	);
 }
@@ -394,8 +437,12 @@ async function pollTargets(environment, context, predicate, timeoutMs = 30_000) 
 	return targets;
 }
 
-function selectVscodeIframe(targets) {
-	const iframes = targets.filter((target) => target.targetType === "iframe");
+function selectVscodeIframe(targets, rendererTargetId) {
+	const iframes = targets.filter(
+		(target) =>
+			target.targetType === "iframe" &&
+			findRendererAncestor(targets, target)?.targetId === rendererTargetId,
+	);
 	return iframes.find((target) =>
 		target.url.includes("extensionId=vscode.markdown-language-features")
 	) ?? iframes.find((target) => target.url.startsWith("vscode-webview://")) ?? iframes[0];

@@ -1089,8 +1089,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let discovered =
                 cdp_client::process_discovery::discover_vscode_process_trees(false).await?;
-            let process_id = match options.locator {
-                ProcessAttachLocator::Process(process_id) => process_id,
+            let (process_id, vscode_root_pid) = match options.locator {
+                ProcessAttachLocator::Process(process_id) => (process_id, None),
+                ProcessAttachLocator::VscodeProcess {
+                    root_pid,
+                    process_id,
+                } => {
+                    let process_id = discovered
+                        .iter()
+                        .find(|tree| tree.root_process_id == root_pid)
+                        .and_then(|tree| {
+                            tree.processes
+                                .iter()
+                                .find(|process| process.process_id == process_id)
+                        })
+                        .map(|process| process.process_id)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::NotFound,
+                                format!(
+                                    "VS Code process vscode://{root_pid}/process/{process_id} is no longer available"
+                                ),
+                            )
+                        })?;
+                    (process_id, Some(root_pid))
+                }
                 ProcessAttachLocator::VscodeWindow {
                     root_pid,
                     window_id,
@@ -1111,41 +1134,44 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 "VS Code window w:{root_pid}/{window_id} is no longer available"
                             ),
                         )
-                    })?,
-            };
-            let process_tree_target = discovered.into_iter().find_map(|tree| {
-                tree.processes
-                    .into_iter()
-                    .find(|process| {
-                        process.process_id == process_id
-                            && matches!(
-                                process.role,
-                                ProcessRole::VscodeMain | ProcessRole::Renderer
-                            )
                     })
-                    .map(|process| (tree.root_process_id, process.debug_target_id))
-            });
-            let (connection_id, configuration, target_id) =
-                if let Some((root_process_id, Some(target_id))) = process_tree_target {
+                    .map(|process_id| (process_id, Some(root_pid)))?,
+            };
+            let process_tree_target = discovered
+                .into_iter()
+                .filter(|tree| vscode_root_pid.is_none_or(|root| tree.root_process_id == root))
+                .find_map(|tree| {
+                    tree.processes
+                        .into_iter()
+                        .find(|process| {
+                            process.process_id == process_id
+                                && matches!(
+                                    process.role,
+                                    ProcessRole::VscodeMain | ProcessRole::Renderer
+                                )
+                        })
+                        .map(|process| {
+                            (tree.root_process_id, process.debug_target_id, process.role)
+                        })
+                });
+            let (connection_id, configuration, target_id, renderer_process_id) =
+                if let Some((root_process_id, Some(target_id), role)) = process_tree_target {
                     (
                         format!("process-tree-{root_process_id}"),
                         ConnectionConfiguration::ProcessTree {
                             root_pid: root_process_id,
                         },
                         target_id,
+                        (role == ProcessRole::Renderer).then_some(process_id),
                     )
                 } else {
                     (
                         format!("process-{process_id}"),
                         ConnectionConfiguration::Process { process_id },
                         "$node-root".to_owned(),
+                        None,
                     )
                 };
-            let target_id = if target_id == "$node-root" {
-                synthetic_node_target_id(&connection_id)
-            } else {
-                target_id
-            };
             let client = ensure_service(&state_file).await?;
             let context = rpc(client.get_context(context_id.clone()).await)?;
             let existing = context
@@ -1183,6 +1209,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .connect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
+            let target_id = if let Some(process_id) = renderer_process_id {
+                resolve_renderer_target_id(&client, &context_id, &connection_id, process_id).await?
+            } else if target_id == "$node-root" {
+                synthetic_node_target_id(&connection_id)
+            } else {
+                target_id
+            };
             if target_id != synthetic_node_target_id(&connection_id) {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
@@ -2331,6 +2364,35 @@ fn required_option<'a>(name: &str, value: Option<&'a String>) -> Result<&'a Stri
 }
 
 fn parse_process_attach_locator(value: &str) -> Result<ProcessAttachLocator, io::Error> {
+    if let Some(value) = value.strip_prefix("vscode://") {
+        let (root_pid, path) = value.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )
+        })?;
+        let root_pid = parse_u32("VS Code root process ID", root_pid)?;
+        let (kind, id) = path.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )
+        })?;
+        return match kind {
+            "process" if !id.contains('/') => Ok(ProcessAttachLocator::VscodeProcess {
+                root_pid,
+                process_id: parse_u32("process ID", id)?,
+            }),
+            "window" if !id.contains('/') => Ok(ProcessAttachLocator::VscodeWindow {
+                root_pid,
+                window_id: parse_u32("VS Code window ID", id)?,
+            }),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )),
+        };
+    }
     if let Some(value) = value.strip_prefix("w:") {
         let (root_pid, window_id) = value.split_once('/').ok_or_else(|| {
             io::Error::new(
@@ -2738,6 +2800,7 @@ struct ProcessAttachOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProcessAttachLocator {
     Process(u32),
+    VscodeProcess { root_pid: u32, process_id: u32 },
     VscodeWindow { root_pid: u32, window_id: u32 },
 }
 
@@ -5089,6 +5152,67 @@ async fn print_breakpoint_result(
     Ok(())
 }
 
+async fn resolve_renderer_target_id(
+    client: &DebuggerServiceApiClient,
+    context_id: &str,
+    connection_id: &str,
+    process_id: u32,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let graph = rpc(client.get_resource_graph(context_id.to_owned()).await)?;
+        let mut candidates = graph
+            .resources
+            .iter()
+            .filter(|resource| {
+                resource
+                    .attributes
+                    .get("connectionId")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(connection_id)
+                    && resource
+                        .attributes
+                        .get("processId")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(u64::from(process_id))
+                    && resource
+                        .attributes
+                        .get("subtype")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("electron-renderer")
+            })
+            .filter_map(|resource| {
+                resource
+                    .attributes
+                    .get("targetId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [target_id] => return Ok(target_id.clone()),
+            [] if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            [] => {
+                return Err(format!(
+                    "renderer process {process_id} has no live Electron webContents"
+                )
+                .into());
+            }
+            _ => {
+                return Err(format!(
+                    "renderer process {process_id} maps to multiple Electron webContents targets: {}; attach one with `jsdbg target attach --target <target-id>`",
+                    candidates.join(", ")
+                )
+                .into());
+            }
+        }
+    }
+}
+
 async fn add_connection(
     context_id: &str,
     connection_id: &str,
@@ -6397,6 +6521,24 @@ mod tests {
         );
         assert_eq!(
             parse_process_attach_options(&arguments(&["w:100/7"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::VscodeWindow {
+                root_pid: 100,
+                window_id: 7,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["vscode://100/process/15388"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::VscodeProcess {
+                root_pid: 100,
+                process_id: 15388,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["vscode://100/window/7"]))
                 .unwrap()
                 .locator,
             ProcessAttachLocator::VscodeWindow {
