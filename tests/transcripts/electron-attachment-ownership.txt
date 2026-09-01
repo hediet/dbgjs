@@ -8,3 +8,10 @@ reattach-after-release: created
 initialization: failed
 initialization-cleanup: attached=false
 retry-after-initialization-failure: created
+discovery-while-disabled: buffered=0
+discovery: targetCreated waiting=false attached=false
+discovery-update: targetInfoChanged
+wait-for-debugger: waiting=true resumed=0
+wait-for-debugger-attach: created extra-attach=1
+wait-for-debugger-resume: resumed=1 attached=false
+disarm-resumes-blocked: resumed=1 attached=false

@@ -5,7 +5,7 @@ async (token) => {
 	if (typeof electronRequire !== "function") {
 		throw new Error("renderer bridge requires the Electron main-process context");
 	}
-	const { webContents } = electronRequire("electron");
+	const { app, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
 	const registryKey = Symbol.for("hediet.jsdbg.rendererBridge");
 	const previous = globalThis[registryKey];
@@ -15,12 +15,21 @@ async (token) => {
 
 	const maxMessageBytes = 128 * 1024 * 1024;
 	const maxBufferedBytes = 128 * 1024 * 1024;
+	// A renderer that is genuinely blocked never answers `Page.waitForDebugger`; a renderer that
+	// cannot be blocked rejects it. Anything still pending after this window is really paused.
+	const waitForDebuggerGraceMs = 150;
+	// Safety net so an armed-but-never-attached renderer cannot stay frozen forever.
+	const waitForDebuggerReleaseMs = 30_000;
 	const rendererClients = new Map();
+	const startupBlocks = new Map();
+	const watched = new Set();
 	const pendingSockets = new Set();
 	const pendingAttachments = new Set();
 	let controlSocket;
 	let controlTimer;
 	let disposed = false;
+	let discovering = false;
+	let waitForDebuggerOnStart = false;
 	let server;
 	let bridge;
 
@@ -33,11 +42,42 @@ async (token) => {
 	};
 	const descriptor = (contents) => ({
 		webContentsId: contents.id,
-		processId: contents.getOSProcessId(),
+		processId: safeProcessId(contents),
 		type: contents.getType(),
-		title: contents.getTitle(),
-		url: contents.getURL(),
+		title: safeTitle(contents),
+		url: safeUrl(contents),
+		waitingForDebugger: startupBlocks.get(contents.id)?.blocked === true,
+		attached: isAttached(contents),
 	});
+	// A bridge-owned startup block is jsdbg's own pre-attachment, not a foreign debugger.
+	const isAttached = (contents) => {
+		try {
+			return contents.debugger.isAttached() && !startupBlocks.has(contents.id);
+		} catch {
+			return false;
+		}
+	};
+	const safeProcessId = (contents) => {
+		try {
+			return contents.getOSProcessId();
+		} catch {
+			return 0;
+		}
+	};
+	const safeTitle = (contents) => {
+		try {
+			return contents.getTitle();
+		} catch {
+			return "";
+		}
+	};
+	const safeUrl = (contents) => {
+		try {
+			return contents.getURL();
+		} catch {
+			return "";
+		}
+	};
 	const writeFrame = (socket, value) => {
 		if (socket.destroyed || socket.writableEnded) {
 			return false;
@@ -56,6 +96,142 @@ async (token) => {
 	const writeClosed = (socket, reason) => {
 		writeFrame(socket, { kind: "closed", reason });
 	};
+	// Control frames carry an id so the debugger service can wait until discovery or startup
+	// blocking is actually armed before it reports success.
+	const acknowledge = (socket, frame) => {
+		if (Number.isInteger(frame?.id)) {
+			writeFrame(socket, { kind: "ack", id: frame.id });
+		}
+	};
+	const publish = (kind, payload) => {
+		if (!discovering || !controlSocket || controlSocket.destroyed) {
+			return;
+		}
+		writeFrame(controlSocket, { kind, ...payload });
+	};
+	const publishTarget = (kind, contents) => {
+		publish(kind, { target: descriptor(contents) });
+	};
+	/// Renderer discovery is event driven: Electron reports every webContents through its own
+	/// lifecycle events, so the bridge never polls the operating system for renderer processes.
+	const watch = (contents) => {
+		if (watched.has(contents.id) || contents.isDestroyed()) {
+			return;
+		}
+		watched.add(contents.id);
+		const changed = () => publishTarget("targetInfoChanged", contents);
+		for (const event of ["did-navigate", "did-navigate-in-page", "did-finish-load", "did-stop-loading"]) {
+			contents.on(event, changed);
+		}
+		contents.on("page-title-updated", changed);
+		contents.once("destroyed", () => {
+			watched.delete(contents.id);
+			startupBlocks.delete(contents.id);
+			publish("targetDestroyed", { webContentsId: contents.id });
+		});
+	};
+	/// Blocks the very first script execution of a freshly created webContents. `Page.waitForDebugger`
+	/// only settles once the renderer is resumed, so a command that is still pending after the grace
+	/// window is proof that startup is genuinely paused.
+	const blockStartup = async (contents) => {
+		const entry = { contents, blocked: false, released: false, timer: undefined };
+		startupBlocks.set(contents.id, entry);
+		let attached = false;
+		try {
+			if (!contents.debugger.isAttached()) {
+				contents.debugger.attach("1.3");
+				attached = true;
+			}
+		} catch (error) {
+			startupBlocks.delete(contents.id);
+			return { blocked: false, reason: String(error?.message || error) };
+		}
+		entry.attachedByBridge = attached;
+		let settled;
+		const finish = (reason) => {
+			settled = { blocked: false, reason };
+			const wasBlocked = entry.blocked;
+			entry.blocked = false;
+			clearTimeout(entry.timer);
+			if (startupBlocks.get(contents.id) === entry) {
+				startupBlocks.delete(contents.id);
+			}
+			if (wasBlocked && !contents.isDestroyed()) {
+				publishTarget("targetInfoChanged", contents);
+			}
+			return settled;
+		};
+		const pending = contents.debugger.sendCommand("Page.waitForDebugger").then(
+			() => finish("resumed"),
+			(error) => finish(String(error?.message || error)),
+		);
+		const outcome = await Promise.race([
+			pending,
+			delay(waitForDebuggerGraceMs).then(() => undefined),
+		]);
+		if (outcome) {
+			if (entry.attachedByBridge && !rendererClients.has(contents.id)) {
+				detachQuietly(contents);
+			}
+			startupBlocks.delete(contents.id);
+			return outcome;
+		}
+		entry.blocked = true;
+		entry.timer = setTimeout(() => {
+			if (!rendererClients.has(contents.id)) {
+				void releaseStartup(contents.id, true);
+			}
+		}, waitForDebuggerReleaseMs);
+		entry.timer.unref?.();
+		return { blocked: true };
+	};
+	const releaseStartup = async (webContentsId, detach) => {
+		const entry = startupBlocks.get(webContentsId);
+		if (!entry || entry.released) {
+			return;
+		}
+		entry.released = true;
+		startupBlocks.delete(webContentsId);
+		clearTimeout(entry.timer);
+		if (entry.contents.isDestroyed()) {
+			return;
+		}
+		try {
+			await entry.contents.debugger.sendCommand("Runtime.runIfWaitingForDebugger");
+		} catch {
+			// The renderer already resumed or went away.
+		}
+		if (detach && entry.attachedByBridge) {
+			detachQuietly(entry.contents);
+		}
+		publishTarget("targetInfoChanged", entry.contents);
+	};
+	const detachQuietly = (contents) => {
+		try {
+			if (!contents.isDestroyed() && contents.debugger.isAttached()) {
+				contents.debugger.detach();
+			}
+		} catch {
+			// Detaching is best effort.
+		}
+	};
+	const onWebContentsCreated = (contents) => {
+		watch(contents);
+		if (!waitForDebuggerOnStart) {
+			publishTarget("targetCreated", contents);
+			return;
+		}
+		void blockStartup(contents)
+			.catch(() => undefined)
+			.then(() => publishTarget("targetCreated", contents));
+	};
+	const onAppWebContentsCreated = (_event, contents) => {
+		onWebContentsCreated(contents);
+	};
+	const delay = (milliseconds) => new Promise((resolve) => {
+		const timer = setTimeout(resolve, milliseconds);
+		timer.unref?.();
+	});
 	const removeDebuggerListeners = (entry) => {
 		entry.contents.debugger.off("message", entry.onMessage);
 		entry.contents.debugger.off("detach", entry.onDetach);
@@ -67,6 +243,7 @@ async (token) => {
 		entry.releasePromise = (async () => {
 			rendererClients.delete(entry.webContentsId);
 			removeDebuggerListeners(entry);
+			await releaseStartup(entry.webContentsId, false);
 			let cleanupError;
 			if (!entry.contents.isDestroyed() && entry.contents.debugger.isAttached()) {
 				try {
@@ -142,7 +319,8 @@ async (token) => {
 			stolen = true;
 		}
 		const contents = find(webContentsId);
-		const externalOwner = contents.debugger.isAttached();
+		const startup = startupBlocks.get(webContentsId);
+		const externalOwner = !startup && contents.debugger.isAttached();
 		if (externalOwner && !force) {
 			throw new Error(
 				`Electron webContents ${webContentsId} is already attached by another debugger`,
@@ -156,6 +334,7 @@ async (token) => {
 			webContentsId,
 			contents,
 			socket,
+			adoptedStartup: Boolean(startup),
 			releasePromise: undefined,
 			onMessage: undefined,
 			onDetach: undefined,
@@ -172,7 +351,9 @@ async (token) => {
 		contents.debugger.on("message", entry.onMessage);
 		contents.debugger.on("detach", entry.onDetach);
 		try {
-			contents.debugger.attach("1.3");
+			if (!entry.adoptedStartup) {
+				contents.debugger.attach("1.3");
+			}
 			rendererClients.set(webContentsId, entry);
 			if (disposed || socket.destroyed) {
 				await releaseRenderer(
@@ -187,7 +368,7 @@ async (token) => {
 			return { entry, stolen };
 		} catch (error) {
 			removeDebuggerListeners(entry);
-			if (!contents.isDestroyed() && contents.debugger.isAttached()) {
+			if (!entry.adoptedStartup && !contents.isDestroyed() && contents.debugger.isAttached()) {
 				contents.debugger.detach();
 			}
 			throw error;
@@ -282,6 +463,16 @@ async (token) => {
 					void bridge.dispose("disposed by debugger service", socket);
 					return;
 				}
+				if (frame?.kind === "setDiscovery") {
+					discovering = frame.enabled === true;
+					acknowledge(socket, frame);
+					return;
+				}
+				if (frame?.kind === "setWaitForDebuggerOnStart") {
+					bridge.setWaitForDebuggerOnStart(frame.enabled === true);
+					acknowledge(socket, frame);
+					return;
+				}
 				socket.destroy(new Error("invalid renderer bridge control frame"));
 				return;
 			}
@@ -332,24 +523,42 @@ async (token) => {
 		},
 		list() {
 			return webContents.getAllWebContents()
-				.filter((contents) => !contents.isDestroyed() && contents.getOSProcessId() > 0)
+				.filter((contents) => !contents.isDestroyed())
+				.filter((contents) => safeProcessId(contents) > 0 || startupBlocks.has(contents.id))
 				.map(descriptor);
+		},
+		setWaitForDebuggerOnStart(enabled) {
+			waitForDebuggerOnStart = enabled === true;
+			if (!waitForDebuggerOnStart) {
+				for (const webContentsId of [...startupBlocks.keys()]) {
+					if (!rendererClients.has(webContentsId)) {
+						void releaseStartup(webContentsId, true);
+					}
+				}
+			}
+			return { waitForDebuggerOnStart };
 		},
 		async dispose(reason = "renderer bridge disposed", acknowledgeSocket) {
 			if (disposed) {
 				return;
 			}
 			disposed = true;
+			waitForDebuggerOnStart = false;
+			app.off("web-contents-created", onAppWebContentsCreated);
 			clearTimeout(controlTimer);
 			const serverClosed = new Promise((resolve) => server.close(resolve));
 			const releases = Promise.all(
 				[...rendererClients.values()].map((entry) => releaseRenderer(entry, reason)),
+			);
+			const resumed = Promise.all(
+				[...startupBlocks.keys()].map((webContentsId) => releaseStartup(webContentsId, true)),
 			);
 			for (const socket of pendingSockets) {
 				socket.destroy();
 			}
 			await Promise.allSettled([...pendingAttachments]);
 			await releases;
+			await resumed;
 			if (acknowledgeSocket && !acknowledgeSocket.destroyed) {
 				writeFrame(acknowledgeSocket, { kind: "disposed" });
 				acknowledgeSocket.end();
@@ -363,6 +572,10 @@ async (token) => {
 			}
 		},
 	};
+	for (const contents of webContents.getAllWebContents()) {
+		watch(contents);
+	}
+	app.on("web-contents-created", onAppWebContentsCreated);
 	globalThis[registryKey] = { owner: "jsdbg", token, bridge };
 	controlTimer = setTimeout(() => {
 		if (!controlSocket) {

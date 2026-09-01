@@ -54,6 +54,51 @@ pub struct AgentSessionSnapshot {
     pub disconnected: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceGraphSnapshot {
+    pub revision: u64,
+    pub resources: Vec<ResourceSnapshot>,
+    pub relations: Vec<ResourceRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSnapshot {
+    pub id: String,
+    pub kinds: Vec<String>,
+    pub label: Option<String>,
+    pub attributes: BTreeMap<String, serde_json::Value>,
+    pub contributors: Vec<String>,
+    pub capabilities: Vec<ResourceCapabilitySnapshot>,
+    pub frontiers: Vec<ResourceFrontierSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceCapabilitySnapshot {
+    pub source: String,
+    pub kind: String,
+    pub title: String,
+    pub detail: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceFrontierSnapshot {
+    pub relation: String,
+    pub state: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRelationSnapshot {
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub contributors: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProcessRole {
@@ -1611,6 +1656,8 @@ pub trait DebuggerServiceApi {
 
     async fn get_context(context_id: String) -> Result<ContextSnapshot, JsonRpcError>;
 
+    async fn get_resource_graph(context_id: String) -> Result<ResourceGraphSnapshot, JsonRpcError>;
+
     async fn observe_context(
         context_id: String,
         cursor: ObservationCursor,
@@ -1637,6 +1684,12 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
     ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn set_pause_future_children(
+        context_id: String,
+        connection_id: String,
+        enabled: bool,
+    ) -> Result<bool, JsonRpcError>;
 
     async fn delete_connection(
         context_id: String,
@@ -1848,6 +1901,16 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
+        method: String,
+        params: serde_json::Value,
+        validate: bool,
+    ) -> Result<serde_json::Value, JsonRpcError>;
+
+    async fn raw_cdp_session_request(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        session_id: String,
         method: String,
         params: serde_json::Value,
         validate: bool,

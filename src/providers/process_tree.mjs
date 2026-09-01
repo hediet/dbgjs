@@ -12,7 +12,10 @@ const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
 let activationQueue = Promise.resolve();
+let scanQueue = Promise.resolve();
 let running = true;
+let discoveryEnabled = false;
+let wake = () => {};
 
 if (process.platform !== "win32") {
 	throw new Error("existing process-tree discovery is currently implemented only on Windows");
@@ -35,32 +38,105 @@ async function main() {
 	const rootEndpoint = await ensureInspector(rootPid, listeners);
 	process.stdout.write(`${JSON.stringify({ endpoint: rootEndpoint })}\n`);
 
-	process.stdin.once("end", () => {
-		running = false;
-	});
-	process.once("SIGINT", () => {
-		running = false;
-	});
-	process.once("SIGTERM", () => {
-		running = false;
-	});
-	process.stdin.resume();
+	readControlCommands();
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
 
 	if (processMode === "single") {
 		while (running) {
-			await delay(pollIntervalMs);
+			await idle();
 		}
 		return;
 	}
-	await reconcile(processes, listeners);
 	while (running) {
-		await delay(pollIntervalMs);
+		if (!discoveryEnabled) {
+			await idle();
+			continue;
+		}
+		await scan();
+		await idle(pollIntervalMs);
+	}
+}
+
+/// Descendant scanning is demand driven: the debugger service enables it while a CDP client
+/// requires target discovery and asks for one-shot scans otherwise.
+function readControlCommands() {
+	let buffer = "";
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk) => {
+		buffer += chunk;
+		for (;;) {
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) {
+				break;
+			}
+			const line = buffer.slice(0, newline).trim();
+			buffer = buffer.slice(newline + 1);
+			if (line) {
+				handleCommand(line);
+			}
+		}
+	});
+	process.stdin.once("end", stop);
+	process.stdin.resume();
+}
+
+function handleCommand(line) {
+	let command;
+	try {
+		command = JSON.parse(line);
+	} catch (error) {
+		console.error(`ignored invalid process-tree command: ${error?.message ?? error}`);
+		return;
+	}
+	if (command?.command === "setDiscovery") {
+		discoveryEnabled = command.enabled === true;
+		wake();
+		return;
+	}
+	if (command?.command === "scan") {
+		void scan().then(() => {
+			process.stdout.write(`${JSON.stringify({ kind: "scanComplete", id: command.id ?? null })}\n`);
+		});
+		return;
+	}
+	console.error(`ignored unknown process-tree command: ${line}`);
+}
+
+function scan() {
+	scanQueue = scanQueue.then(async () => {
+		if (processMode === "single") {
+			return;
+		}
 		try {
 			await reconcile();
 		} catch (error) {
 			console.error(`process-tree discovery failed: ${error?.stack ?? error}`);
 		}
-	}
+	});
+	return scanQueue;
+}
+
+function stop() {
+	running = false;
+	wake();
+}
+
+function idle(milliseconds) {
+	return new Promise((resolve) => {
+		const timer = milliseconds === undefined ? undefined : setTimeout(finish, milliseconds);
+		wake = finish;
+		function finish() {
+			wake = () => {};
+			if (timer) {
+				clearTimeout(timer);
+			}
+			resolve();
+		}
+		if (!running) {
+			finish();
+		}
+	});
 }
 
 async function reconcile(initialProcesses, initialListeners) {
@@ -73,33 +149,13 @@ async function reconcile(initialProcesses, initialListeners) {
 			.filter((candidate) => candidate.pid !== rootPid && isNodeProcess(candidate))
 			.map((candidate) => [candidate.pid, candidate]),
 	);
-	const rendererProcesses = new Map(
-		descendants
-			.filter((candidate) => candidate.pid !== rootPid && isRendererProcess(candidate))
-			.map((candidate) => [candidate.pid, candidate]),
-	);
 	const desired = new Map();
 	const discoveredProcesses = new Map(
-		[...nodeProcesses.values(), ...rendererProcesses.values()].map((candidate) => {
+		[...nodeProcesses.values()].map((candidate) => {
 			const targetId = `process-${candidate.pid}-${processInstanceId(candidate)}`;
 			return [candidate.pid, { candidate, targetId }];
 		}),
 	);
-
-	for (const candidate of rendererProcesses.values()) {
-		const { targetId } = discoveredProcesses.get(candidate.pid);
-		const target = {
-			kind: "rendererTarget",
-			targetId,
-			parentTargetId: nearestAttachableParent(candidate, processes, discoveredProcesses),
-			targetType: "page",
-			title: processTitle(candidate),
-			url: `process:${candidate.pid}`,
-			rendererProcessId: candidate.pid,
-		};
-		desired.set(targetId, target);
-		publishTarget(target);
-	}
 
 	for (const candidate of nodeProcesses.values()) {
 		const { targetId } = discoveredProcesses.get(candidate.pid);
@@ -110,6 +166,7 @@ async function reconcile(initialProcesses, initialListeners) {
 			targetType: "node",
 			title: processTitle(candidate),
 			url: `process:${candidate.pid}`,
+			processId: candidate.pid,
 		};
 		const knownEndpoint = knownEndpoints.get(candidate.pid);
 		if (knownEndpoint) {
@@ -119,7 +176,12 @@ async function reconcile(initialProcesses, initialListeners) {
 		publishTarget(target);
 	}
 
-	const chromiumTargets = discoverChromiumTargets(rootPid, listeners);
+	const chromiumTargets = discoverChromiumTargets(
+		descendants,
+		processes,
+		discoveredProcesses,
+		listeners,
+	);
 	await Promise.all([...nodeProcesses.values()].map(async (candidate) => {
 		const { targetId } = discoveredProcesses.get(candidate.pid);
 		try {
@@ -248,30 +310,31 @@ async function activateInspector(pid) {
 	return rotated.endpoint;
 }
 
-async function discoverChromiumTargets(pid, listeners) {
+async function discoverChromiumTargets(processesInScope, allProcesses, discoveredProcesses, listeners) {
 	const discoveries = await Promise.all(
-		listeners.filter((candidate) => candidate.pid === pid).map(async (listener) => {
-		const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
-		if (typeof version?.webSocketDebuggerUrl !== "string"
-			|| !version.webSocketDebuggerUrl.includes("/devtools/browser/")) {
-			return [];
-		}
-		const targets = await fetchJson(`http://127.0.0.1:${listener.port}/json/list`);
-		return (Array.isArray(targets) ? targets : []).flatMap((target) => {
-			if (typeof target.id !== "string" || typeof target.webSocketDebuggerUrl !== "string") {
-				return [];
-			}
-			return [{
-				kind: "nodeTarget",
-				targetId: `cdp-${target.id}`,
-				parentTargetId: "$node-root",
-				targetType: typeof target.type === "string" ? target.type : "page",
-				title: target.title || target.type || target.id,
-				url: target.url || "",
-				endpoint: target.webSocketDebuggerUrl,
-			}];
-		});
-	}));
+		processesInScope.flatMap((process) =>
+			listeners.filter((listener) => listener.pid === process.pid).map(async (listener) => {
+				const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
+				if (typeof version?.webSocketDebuggerUrl !== "string"
+					|| !version.webSocketDebuggerUrl.includes("/devtools/browser/")) {
+					return [];
+				}
+				return [{
+					kind: "nodeTarget",
+					targetId: `cdp-browser-${listener.pid}-${listener.port}`,
+					parentTargetId: nearestAttachableParent(
+						process,
+						allProcesses,
+						discoveredProcesses,
+					),
+					targetType: "browser",
+					title: typeof version.Browser === "string" ? version.Browser : `Browser ${listener.pid}`,
+					url: `http://127.0.0.1:${listener.port}`,
+					endpoint: version.webSocketDebuggerUrl,
+					processId: listener.pid,
+				}];
+			})),
+	);
 	return discoveries.flat();
 }
 
@@ -440,10 +503,6 @@ function isNodeProcess(candidate) {
 		|| command.includes("bootstrap-fork")
 		|| command.includes("tsserver.js")
 		|| command.includes("typingsinstaller.js"));
-}
-
-function isRendererProcess(candidate) {
-	return candidate.commandLine.toLowerCase().includes("--type=renderer");
 }
 
 function processTitle(candidate) {

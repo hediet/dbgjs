@@ -115,19 +115,25 @@ pub async fn discover_vscode_process_trees(
     if let Some(stats) = stats {
         apply_process_stats(&mut trees, stats);
     }
-    let diagnostics = join_all(trees.iter().map(query_vscode_main_diagnostics)).await;
-    for (tree, diagnostics) in trees.iter_mut().zip(diagnostics) {
-        if let Ok(diagnostics) = diagnostics {
+    for tree in &mut trees {
+        let snapshot = tree.clone();
+        if let Ok(Ok(diagnostics)) =
+            tokio::spawn(async move { query_vscode_main_diagnostics(&snapshot).await }).await
+        {
             apply_vscode_diagnostics(tree, diagnostics);
         }
     }
     let agent_sessions = join_all(
         trees
             .iter()
-            .filter_map(|tree| agent_session_query(tree, &process_metadata)),
+            .filter_map(|tree| agent_session_query(tree, &process_metadata))
+            .map(tokio::spawn),
     )
     .await;
-    for (root_process_id, sessions) in agent_sessions.into_iter().filter_map(Result::ok) {
+    for (root_process_id, sessions) in agent_sessions
+        .into_iter()
+        .filter_map(|result| result.ok()?.ok())
+    {
         if let Some(tree) = trees
             .iter_mut()
             .find(|tree| tree.root_process_id == root_process_id)
@@ -167,10 +173,34 @@ fn agent_session_query(
     let root_process_id = tree.root_process_id;
     let agent_host_pid = agent_host.process_id;
     Some(async move {
-        query_agent_sessions(executable, agent_host_pid, copilot_pids)
+        query_agent_sessions_on_large_stack(executable, agent_host_pid, copilot_pids)
             .await
             .map(|sessions| (root_process_id, sessions))
     })
+}
+
+async fn query_agent_sessions_on_large_stack(
+    executable: String,
+    agent_host_pid: u32,
+    copilot_pids: Vec<u32>,
+) -> Result<Vec<AgentSessionProcess>, ProcessDiscoveryError> {
+    let runtime = tokio::runtime::Handle::current();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("jsdbg-agent-session-discovery".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let result = runtime.block_on(query_agent_sessions(
+                executable,
+                agent_host_pid,
+                copilot_pids,
+            ));
+            let _ = sender.send(result);
+        })
+        .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
+    receiver
+        .await
+        .map_err(|_| ProcessDiscoveryError::Ipc("agent session query stopped".to_owned()))?
 }
 
 async fn query_agent_sessions(

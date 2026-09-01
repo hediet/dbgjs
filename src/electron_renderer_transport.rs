@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,14 +12,14 @@ use tokio::io::{
 };
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time::timeout;
 
+use crate::cdp::CdpClient;
 use crate::cdp::{
     RuntimeCallArgument, RuntimeCallFunctionOnParams, RuntimeEvaluateParams,
     RuntimeReleaseObjectGroupParams,
 };
-use crate::cdp_runtime::CdpConnection;
 use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::session_transport::CdpEnvelope;
 
@@ -25,6 +27,8 @@ const BRIDGE_SOURCE: &str = include_str!("providers/electron_renderer_bridge.js"
 const BRIDGE_OBJECT_GROUP: &str = "jsdbg-electron-renderer-bridge";
 const MAX_SOCKET_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+
+type PendingAcks = Arc<StdMutex<HashMap<u64, oneshot::Sender<()>>>>;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -35,10 +39,23 @@ pub struct ElectronRendererTarget {
     pub target_type: String,
     pub title: String,
     pub url: String,
+    #[serde(default)]
+    pub waiting_for_debugger: bool,
+    #[serde(default)]
+    pub attached: bool,
+}
+
+/// Lifecycle notifications pushed by the main-process bridge. Electron reports every
+/// webContents through its own events, so renderer discovery never polls the OS.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BridgeEvent {
+    TargetCreated(ElectronRendererTarget),
+    TargetInfoChanged(ElectronRendererTarget),
+    TargetDestroyed { web_contents_id: u64 },
 }
 
 pub struct ElectronRendererBridge {
-    client: Arc<CdpConnection>,
+    client: CdpClient<hubrpc::connection::channel::Channel>,
     object_id: String,
     port: u16,
     token: String,
@@ -47,7 +64,9 @@ pub struct ElectronRendererBridge {
 }
 
 impl ElectronRendererBridge {
-    pub async fn install(client: Arc<CdpConnection>) -> Result<Arc<Self>, TransportError> {
+    pub async fn install(
+        client: CdpClient<hubrpc::connection::channel::Channel>,
+    ) -> Result<Arc<Self>, TransportError> {
         let token = random_token()?;
         let token_json = serde_json::to_string(&token).map_err(|error| {
             transport_error(format!("failed to serialize bridge token: {error}"))
@@ -61,13 +80,9 @@ impl ElectronRendererBridge {
         params.generate_preview = Some(false);
         params.user_gesture = Some(false);
         params.await_promise = Some(true);
-        let response = client
-            .root()
-            .runtime_evaluate(params)
-            .await
-            .map_err(|error| {
-                transport_error(format!("failed to install renderer bridge: {error:?}"))
-            })?;
+        let response = client.runtime_evaluate(params).await.map_err(|error| {
+            transport_error(format!("failed to install renderer bridge: {error:?}"))
+        })?;
         if let Some(exception) = response.exception_details {
             return Err(transport_error(format!(
                 "failed to install renderer bridge: {}",
@@ -88,7 +103,6 @@ impl ElectronRendererBridge {
             Ok(control) => control,
             Err(error) => {
                 let _ = client
-                    .root()
                     .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
                         object_group: BRIDGE_OBJECT_GROUP.to_owned(),
                     })
@@ -109,6 +123,31 @@ impl ElectronRendererBridge {
     pub async fn list_targets(&self) -> Result<Vec<ElectronRendererTarget>, TransportError> {
         self.ensure_open().await?;
         self.call("function() { return this.list(); }").await
+    }
+
+    /// Enables or disables pushed renderer lifecycle events. Discovery is demand driven: the
+    /// bridge only reports webContents lifecycle while a CDP client requires target discovery.
+    pub async fn set_discovery(&self, enabled: bool) -> Result<(), TransportError> {
+        self.ensure_open().await?;
+        self.control
+            .send_awaiting_ack(|id| ControlClientFrame::SetDiscovery { id, enabled })
+            .await
+    }
+
+    /// Arms genuine startup blocking for webContents created from now on. Blocked renderers are
+    /// paused inside `Page.waitForDebugger` and continue on `Runtime.runIfWaitingForDebugger`.
+    pub async fn set_wait_for_debugger_on_start(
+        &self,
+        enabled: bool,
+    ) -> Result<(), TransportError> {
+        self.ensure_open().await?;
+        self.control
+            .send_awaiting_ack(|id| ControlClientFrame::SetWaitForDebuggerOnStart { id, enabled })
+            .await
+    }
+
+    pub async fn take_events(&self) -> Option<mpsc::UnboundedReceiver<BridgeEvent>> {
+        self.control.events.lock().await.take()
     }
 
     pub async fn target_for_process(
@@ -151,7 +190,6 @@ impl ElectronRendererBridge {
         self.control.dispose().await;
         let _ = self
             .client
-            .root()
             .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
                 object_group: BRIDGE_OBJECT_GROUP.to_owned(),
             })
@@ -177,7 +215,7 @@ impl ElectronRendererBridge {
 }
 
 async fn call_bridge_object<T: DeserializeOwned>(
-    client: &CdpConnection,
+    client: &CdpClient<hubrpc::connection::channel::Channel>,
     object_id: &str,
     function_declaration: &str,
 ) -> Result<T, TransportError> {
@@ -190,7 +228,6 @@ async fn call_bridge_object<T: DeserializeOwned>(
     params.user_gesture = Some(false);
     params.await_promise = Some(true);
     let response = client
-        .root()
         .runtime_call_function_on(params)
         .await
         .map_err(|error| transport_error(format!("renderer bridge call failed: {error:?}")))?;
@@ -216,6 +253,9 @@ struct BridgeEndpoint {
 struct BridgeControl {
     writer: Mutex<Option<OwnedWriteHalf>>,
     closed_tx: watch::Sender<Option<String>>,
+    events: Mutex<Option<mpsc::UnboundedReceiver<BridgeEvent>>>,
+    next_frame_id: AtomicU64,
+    pending: PendingAcks,
 }
 
 impl BridgeControl {
@@ -242,11 +282,21 @@ impl BridgeControl {
             })));
         }
         let (closed_tx, _) = watch::channel(None);
+        let (event_sender, event_receiver) = mpsc::unbounded_channel();
+        let pending: PendingAcks = Arc::new(StdMutex::new(HashMap::new()));
         let control = Arc::new(Self {
             writer: Mutex::new(Some(write_half)),
             closed_tx,
+            events: Mutex::new(Some(event_receiver)),
+            next_frame_id: AtomicU64::new(1),
+            pending: pending.clone(),
         });
-        tokio::spawn(supervise_control(reader, control.closed_tx.clone()));
+        tokio::spawn(supervise_control(
+            reader,
+            control.closed_tx.clone(),
+            event_sender,
+            pending,
+        ));
         Ok(control)
     }
 
@@ -254,12 +304,52 @@ impl BridgeControl {
         self.closed_tx.borrow().clone()
     }
 
+    async fn send(&self, frame: &ControlClientFrame) -> Result<(), TransportError> {
+        if let Some(reason) = self.close_reason() {
+            return Err(closed_transport_error(reason));
+        }
+        let mut writer = self.writer.lock().await;
+        let writer = writer
+            .as_mut()
+            .ok_or_else(|| closed_transport_error("renderer bridge control socket is closed"))?;
+        write_json_line(writer, frame).await
+    }
+
+    /// Sends a control frame and waits for the bridge to acknowledge it. Arming discovery or
+    /// startup blocking must not appear to succeed before the bridge actually applies it,
+    /// otherwise a webContents created right afterwards would silently escape.
+    async fn send_awaiting_ack(
+        &self,
+        build: impl FnOnce(u64) -> ControlClientFrame,
+    ) -> Result<(), TransportError> {
+        let id = self.next_frame_id.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id, sender);
+        if let Err(error) = self.send(&build(id)).await {
+            self.pending.lock().unwrap().remove(&id);
+            return Err(error);
+        }
+        match timeout(SOCKET_TIMEOUT, receiver).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(closed_transport_error(
+                self.close_reason()
+                    .unwrap_or_else(|| "renderer bridge control socket is closed".to_owned()),
+            )),
+            Err(_) => {
+                self.pending.lock().unwrap().remove(&id);
+                Err(transport_error(
+                    "renderer bridge did not acknowledge a control frame",
+                ))
+            }
+        }
+    }
+
     async fn dispose(&self) {
         if self.close_reason().is_none() {
             let write_result = {
                 let mut writer = self.writer.lock().await;
                 match writer.as_mut() {
-                    Some(writer) => write_json_line(writer, &ClientFrame::Dispose).await,
+                    Some(writer) => write_json_line(writer, &ControlClientFrame::Dispose).await,
                     None => Ok(()),
                 }
             };
@@ -291,11 +381,39 @@ impl BridgeControl {
 async fn supervise_control(
     mut reader: BufReader<OwnedReadHalf>,
     closed_tx: watch::Sender<Option<String>>,
+    events: mpsc::UnboundedSender<BridgeEvent>,
+    pending: PendingAcks,
 ) {
-    let reason = match read_json_line::<ControlServerFrame, _>(&mut reader).await {
-        Ok(ControlServerFrame::Disposed) => "renderer bridge disposed".to_owned(),
-        Err(error) => format!("renderer bridge control socket closed: {error}"),
+    let reason = loop {
+        match read_json_line::<ControlServerFrame, _>(&mut reader).await {
+            Ok(ControlServerFrame::Disposed) => break "renderer bridge disposed".to_owned(),
+            Ok(ControlServerFrame::Ack { id }) => {
+                if let Some(sender) = pending.lock().unwrap().remove(&id) {
+                    let _ = sender.send(());
+                }
+            }
+            Ok(ControlServerFrame::TargetCreated { target }) => {
+                if events.send(BridgeEvent::TargetCreated(target)).is_err() {
+                    break "renderer bridge event listener dropped".to_owned();
+                }
+            }
+            Ok(ControlServerFrame::TargetInfoChanged { target }) => {
+                if events.send(BridgeEvent::TargetInfoChanged(target)).is_err() {
+                    break "renderer bridge event listener dropped".to_owned();
+                }
+            }
+            Ok(ControlServerFrame::TargetDestroyed { web_contents_id }) => {
+                if events
+                    .send(BridgeEvent::TargetDestroyed { web_contents_id })
+                    .is_err()
+                {
+                    break "renderer bridge event listener dropped".to_owned();
+                }
+            }
+            Err(error) => break format!("renderer bridge control socket closed: {error}"),
+        }
     };
+    pending.lock().unwrap().clear();
     set_close_reason(&closed_tx, reason);
 }
 
@@ -520,7 +638,14 @@ struct HandshakeResponse {
 enum ClientFrame {
     Cdp { envelope: CdpEnvelope },
     Close,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum ControlClientFrame {
     Dispose,
+    SetDiscovery { id: u64, enabled: bool },
+    SetWaitForDebuggerOnStart { id: u64, enabled: bool },
 }
 
 #[derive(Deserialize)]
@@ -534,6 +659,19 @@ enum ServerFrame {
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum ControlServerFrame {
     Disposed,
+    Ack {
+        id: u64,
+    },
+    TargetCreated {
+        target: ElectronRendererTarget,
+    },
+    TargetInfoChanged {
+        target: ElectronRendererTarget,
+    },
+    #[serde(rename_all = "camelCase")]
+    TargetDestroyed {
+        web_contents_id: u64,
+    },
 }
 
 async fn connect_socket(address: impl ToSocketAddrs) -> Result<TcpStream, TransportError> {

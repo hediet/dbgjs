@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use async_trait::async_trait;
 use hubrpc::connection::channel::{Channel, RequestHandler};
 use hubrpc::prelude::{JsonRpcError, error_codes};
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, oneshot, watch};
@@ -24,15 +23,16 @@ use crate::cdp::{
     TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
     TargetDetachedFromTargetParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
     TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
-    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfo,
-    TargetTargetInfoChangedParams,
+    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
+use crate::cdp_runtime::CdpDebuggerSession;
 use crate::cdp_transport::ManagedCdpTransport;
 use crate::debugger_service::DebuggerService;
 use crate::relay_transport::{DEFAULT_ACCEPT_TIMEOUT, RelayListener, RelayServerTransport};
 use crate::service_api::TargetSnapshot;
 use crate::session_transport::CdpSessionMux;
 use crate::target_debugger::TargetDebuggerHandle;
+use crate::target_domain::{from_json, invalid_params, target_info_from_snapshot, to_json};
 
 /// A running relay's control handle. `websocket_url` is returned to the RPC caller; `cancel`
 /// lets the service force the relay closed (explicit `close_relay`, context deletion, service
@@ -52,7 +52,28 @@ pub async fn start_context_relay(
 ) -> Result<RelaySession, crate::relay_transport::RelayTransportError> {
     let listener = crate::relay_transport::bind("context", &token).await?;
     Ok(spawn(listener, move |transport, cancel| {
-        run_context_relay(service, context_id, transport, cancel)
+        run_context_relay(service, context_id, None, token, transport, cancel)
+    }))
+}
+
+/// Starts a virtual browser-root relay projected to one connection in a context. This is the
+/// graph-backed CDP facade used by clients that require browser-root semantics for one subtree.
+pub async fn start_connection_relay(
+    service: DebuggerService,
+    context_id: String,
+    connection_id: String,
+    token: String,
+) -> Result<RelaySession, crate::relay_transport::RelayTransportError> {
+    let listener = crate::relay_transport::bind("connection", &token).await?;
+    Ok(spawn(listener, move |transport, cancel| {
+        run_context_relay(
+            service,
+            context_id,
+            Some(connection_id),
+            token,
+            transport,
+            cancel,
+        )
     }))
 }
 
@@ -130,7 +151,7 @@ async fn run_target_relay(
         Box::new(TargetForwardingHandler {
             handle: handle.clone(),
             replay_channel: replay_channel.clone(),
-            replayed: AtomicBool::new(false),
+            replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
         }),
     );
     let _ = replay_channel.set(root_channel.clone());
@@ -169,6 +190,8 @@ async fn run_target_relay(
 async fn run_context_relay(
     service: DebuggerService,
     context_id: String,
+    connection_id: Option<String>,
+    owner_id: String,
     transport: Arc<RelayServerTransport>,
     mut cancel: watch::Receiver<bool>,
 ) {
@@ -176,7 +199,13 @@ async fn run_context_relay(
     let Ok(root_transport) = mux.open_root() else {
         return;
     };
-    let state = Arc::new(ContextRelayState::new(service, context_id, mux.clone()));
+    let state = Arc::new(ContextRelayState::new(
+        service,
+        context_id,
+        connection_id,
+        owner_id,
+        mux.clone(),
+    ));
     let root_channel = Channel::new(
         Box::new(root_transport),
         Box::new(RootHandler(state.clone())),
@@ -217,7 +246,9 @@ async fn run_context_relay(
 /// carries its opaque method/param traffic (torn down via `mux.retire_session`) plus the task
 /// mirroring its raw CDP events onto that session.
 struct RelayTargetSession {
+    connection_id: String,
     target_id: String,
+    handle: TargetDebuggerHandle,
     forward_task: JoinHandle<()>,
 }
 
@@ -226,9 +257,14 @@ struct RelayTargetSession {
 struct ContextRelayState {
     service: DebuggerService,
     context_id: String,
+    connection_id: Option<String>,
+    owner_id: String,
     mux: CdpSessionMux,
     root_channel: OnceLock<Channel>,
     sessions: Mutex<HashMap<String, RelayTargetSession>>,
+    browser_sessions: Mutex<HashMap<String, JoinHandle<()>>>,
+    nested_sessions: Mutex<HashMap<String, RelayNestedSession>>,
+    owned_attachments: Mutex<HashMap<(String, String), TargetDebuggerHandle>>,
     known_targets: Mutex<BTreeMap<String, (String, TargetSnapshot)>>,
     discover: AtomicBool,
     auto_attach: AtomicBool,
@@ -236,13 +272,24 @@ struct ContextRelayState {
 }
 
 impl ContextRelayState {
-    fn new(service: DebuggerService, context_id: String, mux: CdpSessionMux) -> Self {
+    fn new(
+        service: DebuggerService,
+        context_id: String,
+        connection_id: Option<String>,
+        owner_id: String,
+        mux: CdpSessionMux,
+    ) -> Self {
         Self {
             service,
             context_id,
+            connection_id,
+            owner_id,
             mux,
             root_channel: OnceLock::new(),
             sessions: Mutex::new(HashMap::new()),
+            browser_sessions: Mutex::new(HashMap::new()),
+            nested_sessions: Mutex::new(HashMap::new()),
+            owned_attachments: Mutex::new(HashMap::new()),
             known_targets: Mutex::new(BTreeMap::new()),
             discover: AtomicBool::new(false),
             auto_attach: AtomicBool::new(false),
@@ -260,25 +307,85 @@ impl ContextRelayState {
             .expect("root channel is set before the client can send any request")
     }
 
+    async fn targets(&self) -> Result<Vec<(String, TargetSnapshot)>, JsonRpcError> {
+        let mut targets = self.service.relay_targets(&self.context_id).await?;
+        if let Some(connection_id) = &self.connection_id {
+            targets.retain(|(candidate, _)| candidate == connection_id);
+        }
+        Ok(targets)
+    }
+
     /// Silently seeds the known-target baseline so the first revision-triggered diff after a
     /// client enables discovery does not treat every pre-existing target as newly created.
     async fn prime_known_targets(&self) {
-        if let Ok(targets) = self.service.relay_targets(&self.context_id).await {
+        if let Ok(targets) = self.targets().await {
             *self.known_targets.lock().await = index_targets(targets);
         }
     }
 
     async fn dispose(&self) {
         for (_, session) in std::mem::take(&mut *self.sessions.lock().await) {
+            stop_target_auto_attach(&session.handle).await;
             session.forward_task.abort();
         }
+        for ((connection_id, target_id), handle) in
+            std::mem::take(&mut *self.owned_attachments.lock().await)
+        {
+            self.service
+                .relay_release_attachment(
+                    &self.owner_id,
+                    &self.context_id,
+                    &connection_id,
+                    &target_id,
+                    &handle,
+                )
+                .await;
+        }
+        self.service
+            .relay_release_owned_attachments(&self.owner_id)
+            .await;
+        for (_, task) in std::mem::take(&mut *self.browser_sessions.lock().await) {
+            task.abort();
+        }
+        for (session_id, session) in std::mem::take(&mut *self.nested_sessions.lock().await) {
+            session.channel_task.abort();
+            session.forward_task.abort();
+            self.mux.retire_session(&session_id);
+        }
+    }
+
+    async fn open_browser_session(self: &Arc<Self>) -> Result<String, JsonRpcError> {
+        let session_id = format!(
+            "relay-browser-session-{}",
+            self.next_session_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let transport = self
+            .mux
+            .open_session(session_id.clone())
+            .map_err(|error| JsonRpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
+        let channel = Channel::new(Box::new(transport), Box::new(RootHandler(self.clone())));
+        let task = tokio::spawn(async move { channel.run().await });
+        self.browser_sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), task);
+        Ok(session_id)
+    }
+
+    async fn detach_browser_session(&self, session_id: &str) -> bool {
+        let Some(task) = self.browser_sessions.lock().await.remove(session_id) else {
+            return false;
+        };
+        task.abort();
+        self.mux.retire_session(session_id);
+        true
     }
 
     /// Re-reads the context's canonical target set and mirrors the delta as `Target.*`
     /// discovery events (gated by `discover`) and, for newly appeared targets, auto-attach
     /// (gated by `auto_attach`). Called each time the context-wide revision signal changes.
-    async fn sync_targets(&self) {
-        let Ok(current) = self.service.relay_targets(&self.context_id).await else {
+    async fn sync_targets(self: &Arc<Self>) {
+        let Ok(current) = self.targets().await else {
             return;
         };
         let current = index_targets(current);
@@ -334,8 +441,7 @@ impl ContextRelayState {
         if let Some(found) = self.known_targets.lock().await.get(target_id).cloned() {
             return Some(found);
         }
-        self.service
-            .relay_targets(&self.context_id)
+        self.targets()
             .await
             .ok()?
             .into_iter()
@@ -346,28 +452,40 @@ impl ContextRelayState {
     /// forwarding and raw event mirroring. Attachment failures are swallowed for the
     /// auto-attach path (best-effort for targets that momentarily disappear).
     async fn ensure_session(
-        &self,
+        self: &Arc<Self>,
         connection_id: &str,
         snapshot: &TargetSnapshot,
         waiting_for_debugger: bool,
     ) -> Option<String> {
-        let handle = self
+        let (handle, created) = self
             .service
-            .relay_ensure_attached(&self.context_id, connection_id, &snapshot.target_id)
+            .relay_ensure_attached(
+                &self.owner_id,
+                &self.context_id,
+                connection_id,
+                &snapshot.target_id,
+            )
             .await
             .ok()?;
+        if created {
+            self.owned_attachments.lock().await.insert(
+                (connection_id.to_owned(), snapshot.target_id.clone()),
+                handle.clone(),
+            );
+        }
         Some(
-            self.open_session(connection_id, snapshot, handle, waiting_for_debugger)
+            self.open_session(connection_id, snapshot, handle, waiting_for_debugger, true)
                 .await,
         )
     }
 
     async fn open_session(
-        &self,
+        self: &Arc<Self>,
         connection_id: &str,
         snapshot: &TargetSnapshot,
         handle: TargetDebuggerHandle,
         waiting_for_debugger: bool,
+        notify_attached: bool,
     ) -> String {
         let session_id = format!(
             "relay-session-{}",
@@ -380,7 +498,7 @@ impl ContextRelayState {
                 Box::new(TargetForwardingHandler {
                     handle: handle.clone(),
                     replay_channel: replay_channel.clone(),
-                    replayed: AtomicBool::new(false),
+                    replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
                 }),
             );
             let _ = replay_channel.set(session_channel.clone());
@@ -389,10 +507,25 @@ impl ContextRelayState {
 
             let mut raw_events = handle.subscribe_raw_events();
             let forward_channel = session_channel;
+            let state = self.clone();
+            let event_connection_id = connection_id.to_owned();
             let forward_task = tokio::spawn(async move {
                 loop {
                     match raw_events.recv().await {
                         Ok(event) => {
+                            if event.method == "Target.attachedToTarget"
+                                && let Some(session_id) =
+                                    event.params.get("sessionId").and_then(Value::as_str)
+                            {
+                                state
+                                    .ensure_nested_session(&event_connection_id, session_id)
+                                    .await;
+                            } else if event.method == "Target.detachedFromTarget"
+                                && let Some(session_id) =
+                                    event.params.get("sessionId").and_then(Value::as_str)
+                            {
+                                state.remove_nested_session(session_id).await;
+                            }
                             let _ = forward_channel.notify(&event.method, event.params).await;
                         }
                         Err(RecvError::Lagged(_)) => continue,
@@ -403,29 +536,112 @@ impl ContextRelayState {
             self.sessions.lock().await.insert(
                 session_id.clone(),
                 RelayTargetSession {
+                    connection_id: connection_id.to_owned(),
                     target_id: snapshot.target_id.clone(),
+                    handle,
                     forward_task,
                 },
             );
         }
-        let _ = connection_id;
-        let mut target_info = target_info_from_snapshot(snapshot);
-        target_info.attached = true;
-        let params = TargetAttachedToTargetParams {
-            session_id: session_id.clone(),
-            target_info,
-            waiting_for_debugger,
-        };
-        if let Ok(value) = serde_json::to_value(params) {
-            let _ = self
-                .root_channel()
-                .notify("Target.attachedToTarget", value)
-                .await;
+        if notify_attached {
+            let mut target_info = target_info_from_snapshot(snapshot);
+            target_info.attached = true;
+            let params = TargetAttachedToTargetParams {
+                session_id: session_id.clone(),
+                target_info,
+                waiting_for_debugger,
+            };
+            if let Ok(value) = serde_json::to_value(params) {
+                let _ = self
+                    .root_channel()
+                    .notify("Target.attachedToTarget", value)
+                    .await;
+            }
         }
         session_id
     }
 
-    async fn detach(&self, session_id: Option<&str>, target_id: Option<&str>) {
+    fn ensure_nested_session<'a>(
+        self: &'a Arc<Self>,
+        connection_id: &'a str,
+        session_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if self.nested_sessions.lock().await.contains_key(session_id) {
+                return;
+            }
+            let Ok(session) = self
+                .service
+                .relay_open_cdp_session(&self.context_id, connection_id, session_id)
+                .await
+            else {
+                return;
+            };
+            let Ok(transport) = self.mux.open_session(session_id.to_owned()) else {
+                return;
+            };
+            let mut raw_events = session.raw_events_sender().subscribe();
+            let session = Arc::new(Mutex::new(session));
+            let channel = Channel::new(
+                Box::new(transport),
+                Box::new(NestedSessionForwardingHandler {
+                    session: session.clone(),
+                }),
+            );
+            let run_channel = channel.clone();
+            let channel_task = tokio::spawn(async move { run_channel.run().await });
+            let forward_channel = channel;
+            let state = self.clone();
+            let event_connection_id = connection_id.to_owned();
+            let forward_task = tokio::spawn(async move {
+                loop {
+                    match raw_events.recv().await {
+                        Ok(event) => {
+                            if event.method == "Target.attachedToTarget"
+                                && let Some(session_id) =
+                                    event.params.get("sessionId").and_then(Value::as_str)
+                            {
+                                state
+                                    .ensure_nested_session(&event_connection_id, session_id)
+                                    .await;
+                            } else if event.method == "Target.detachedFromTarget"
+                                && let Some(session_id) =
+                                    event.params.get("sessionId").and_then(Value::as_str)
+                            {
+                                state.remove_nested_session(session_id).await;
+                            }
+                            let _ = forward_channel.notify(&event.method, event.params).await;
+                        }
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+            });
+            self.nested_sessions.lock().await.insert(
+                session_id.to_owned(),
+                RelayNestedSession {
+                    channel_task,
+                    forward_task,
+                },
+            );
+        })
+    }
+
+    async fn remove_nested_session(&self, session_id: &str) {
+        let Some(session) = self.nested_sessions.lock().await.remove(session_id) else {
+            return;
+        };
+        session.channel_task.abort();
+        session.forward_task.abort();
+        self.mux.retire_session(session_id);
+    }
+
+    async fn detach(
+        &self,
+        session_id: Option<&str>,
+        target_id: Option<&str>,
+        notify_detached: bool,
+    ) {
         let matching_id = if let Some(session_id) = session_id {
             Some(session_id.to_owned())
         } else if let Some(target_id) = target_id {
@@ -444,17 +660,40 @@ impl ContextRelayState {
         let Some(session) = self.sessions.lock().await.remove(&session_id) else {
             return;
         };
+        let has_other_sessions = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .any(|candidate| candidate.target_id == session.target_id);
+        if !has_other_sessions {
+            stop_target_auto_attach(&session.handle).await;
+            let attachment_key = (session.connection_id.clone(), session.target_id.clone());
+            if let Some(handle) = self.owned_attachments.lock().await.remove(&attachment_key) {
+                self.service
+                    .relay_release_attachment(
+                        &self.owner_id,
+                        &self.context_id,
+                        &session.connection_id,
+                        &session.target_id,
+                        &handle,
+                    )
+                    .await;
+            }
+        }
         session.forward_task.abort();
         self.mux.retire_session(&session_id);
-        let params = TargetDetachedFromTargetParams {
-            session_id: session_id.clone(),
-            target_id: Some(session.target_id),
-        };
-        if let Ok(value) = serde_json::to_value(params) {
-            let _ = self
-                .root_channel()
-                .notify("Target.detachedFromTarget", value)
-                .await;
+        if notify_detached {
+            let params = TargetDetachedFromTargetParams {
+                session_id: session_id.clone(),
+                target_id: Some(session.target_id),
+            };
+            if let Ok(value) = serde_json::to_value(params) {
+                let _ = self
+                    .root_channel()
+                    .notify("Target.detachedFromTarget", value)
+                    .await;
+            }
         }
     }
 
@@ -468,7 +707,7 @@ impl ContextRelayState {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for session_id in matching {
-            self.detach(Some(&session_id), None).await;
+            self.detach(Some(&session_id), None, true).await;
         }
     }
 
@@ -509,7 +748,7 @@ impl ContextRelayState {
     }
 
     async fn handle_root_request(
-        &self,
+        self: &Arc<Self>,
         method: String,
         params: Value,
     ) -> Result<Value, JsonRpcError> {
@@ -522,13 +761,31 @@ impl ContextRelayState {
                 js_version: String::new(),
             }),
             "Target.getTargets" => {
-                let targets = self.service.relay_targets(&self.context_id).await?;
+                let targets = self.targets().await?;
                 to_json(TargetGetTargetsResult {
                     target_infos: targets
                         .iter()
                         .map(|(_, snapshot)| target_info_from_snapshot(snapshot))
                         .collect(),
                 })
+            }
+            "Target.getTargetInfo" => {
+                let target_id = params
+                    .get("targetId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
+                let Some((_, snapshot)) = self.lookup_target(target_id).await else {
+                    return Err(invalid_params(format!(
+                        "no such target '{target_id}' in this relay's scope"
+                    )));
+                };
+                Ok(serde_json::json!({
+                    "targetInfo": target_info_from_snapshot(&snapshot)
+                }))
+            }
+            "Target.attachToBrowserTarget" => {
+                let session_id = self.open_browser_session().await?;
+                Ok(serde_json::json!({ "sessionId": session_id }))
             }
             "Target.setDiscoverTargets" => {
                 let request: TargetSetDiscoverTargetsParams = from_json(params)?;
@@ -572,6 +829,10 @@ impl ContextRelayState {
                 to_json(TargetSetAutoAttachResult::new())
             }
             "Target.attachToTarget" => {
+                let notify_attached = params
+                    .get("__jsdbgAutoAttach")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let request: TargetAttachToTargetParams = from_json(params)?;
                 let Some((connection_id, snapshot)) = self.lookup_target(&request.target_id).await
                 else {
@@ -580,19 +841,39 @@ impl ContextRelayState {
                         request.target_id
                     )));
                 };
-                let handle = self
+                let (handle, created) = self
                     .service
-                    .relay_ensure_attached(&self.context_id, &connection_id, &snapshot.target_id)
+                    .relay_ensure_attached(
+                        &self.owner_id,
+                        &self.context_id,
+                        &connection_id,
+                        &snapshot.target_id,
+                    )
                     .await?;
+                if created {
+                    self.owned_attachments.lock().await.insert(
+                        (connection_id.clone(), snapshot.target_id.clone()),
+                        handle.clone(),
+                    );
+                }
                 let session_id = self
-                    .open_session(&connection_id, &snapshot, handle, false)
+                    .open_session(&connection_id, &snapshot, handle, false, notify_attached)
                     .await;
                 to_json(TargetAttachToTargetResult { session_id })
             }
             "Target.detachFromTarget" => {
                 let request: TargetDetachFromTargetParams = from_json(params)?;
-                self.detach(request.session_id.as_deref(), request.target_id.as_deref())
-                    .await;
+                if let Some(session_id) = request.session_id.as_deref()
+                    && self.detach_browser_session(session_id).await
+                {
+                    return to_json(TargetDetachFromTargetResult::new());
+                }
+                self.detach(
+                    request.session_id.as_deref(),
+                    request.target_id.as_deref(),
+                    false,
+                )
+                .await;
                 to_json(TargetDetachFromTargetResult::new())
             }
             _ => Err(JsonRpcError::new(
@@ -605,6 +886,39 @@ impl ContextRelayState {
     }
 }
 
+async fn stop_target_auto_attach(handle: &TargetDebuggerHandle) {
+    let child_sessions = handle
+        .raw_event_history()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.method == "Target.attachedToTarget")
+        .filter_map(|event| event.params.get("sessionId").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    for session_id in child_sessions {
+        let _ = handle
+            .raw_cdp_request(
+                "Target.detachFromTarget".to_owned(),
+                serde_json::json!({ "sessionId": session_id }),
+            )
+            .await;
+    }
+    if let Err(error) = handle
+        .raw_cdp_request(
+            "Target.setAutoAttach".to_owned(),
+            serde_json::json!({
+                "autoAttach": false,
+                "waitForDebuggerOnStart": false,
+                "flatten": true
+            }),
+        )
+        .await
+    {
+        eprintln!("failed to disable target auto-attach while closing relay session: {error:?}");
+    }
+}
+
 fn index_targets(
     targets: Vec<(String, TargetSnapshot)>,
 ) -> BTreeMap<String, (String, TargetSnapshot)> {
@@ -612,35 +926,6 @@ fn index_targets(
         .into_iter()
         .map(|(connection_id, snapshot)| (snapshot.target_id.clone(), (connection_id, snapshot)))
         .collect()
-}
-
-fn target_info_from_snapshot(snapshot: &TargetSnapshot) -> TargetTargetInfo {
-    let mut info = TargetTargetInfo::new(
-        snapshot.target_id.clone(),
-        snapshot.target_type.clone(),
-        snapshot.title.clone(),
-        snapshot.url.clone(),
-        false,
-        false,
-    );
-    info.parent_id = snapshot.parent_id.clone();
-    info.opener_id = snapshot.opener_id.clone();
-    info.browser_context_id = snapshot.browser_context_id.clone();
-    info.subtype = snapshot.subtype.clone();
-    info
-}
-
-fn to_json(value: impl serde::Serialize) -> Result<Value, JsonRpcError> {
-    serde_json::to_value(value)
-        .map_err(|error| JsonRpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))
-}
-
-fn from_json<T: DeserializeOwned>(params: Value) -> Result<T, JsonRpcError> {
-    serde_json::from_value(params).map_err(|error| invalid_params(error.to_string()))
-}
-
-fn invalid_params(message: impl Into<String>) -> JsonRpcError {
-    JsonRpcError::new(error_codes::INVALID_PARAMS, message.into())
 }
 
 struct RootHandler(Arc<ContextRelayState>);
@@ -658,17 +943,44 @@ impl RequestHandler for RootHandler {
 struct TargetForwardingHandler {
     handle: TargetDebuggerHandle,
     replay_channel: Arc<OnceLock<Channel>>,
-    replayed: AtomicBool,
+    replayed_domains: std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+struct RelayNestedSession {
+    channel_task: JoinHandle<()>,
+    forward_task: JoinHandle<()>,
+}
+
+struct NestedSessionForwardingHandler {
+    session: Arc<Mutex<CdpDebuggerSession>>,
+}
+
+#[async_trait]
+impl RequestHandler for NestedSessionForwardingHandler {
+    async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        self.session.lock().await.raw_request(&method, params).await
+    }
 }
 
 #[async_trait]
 impl RequestHandler for TargetForwardingHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        let replay_domain = method.strip_suffix(".enable").map(str::to_owned);
+        let history_before_request = replay_domain.as_ref().map(|_| {
+            let history = self.handle.raw_event_history();
+            let length = history.lock().unwrap().len();
+            (history, length)
+        });
         let result = self.handle.raw_cdp_request(method.clone(), params).await?;
-        if method == "Debugger.enable" && !self.replayed.swap(true, Ordering::Relaxed) {
-            let events = self.handle.raw_event_history().lock().unwrap().clone();
+        if let (Some(domain), Some((history, length))) = (replay_domain, history_before_request)
+            && self.replayed_domains.lock().unwrap().insert(domain.clone())
+        {
+            let events = history.lock().unwrap()[..length].to_vec();
             if let Some(channel) = self.replay_channel.get() {
-                for event in events {
+                for event in events
+                    .into_iter()
+                    .filter(|event| event.method.starts_with(&format!("{domain}.")))
+                {
                     let _ = channel.notify(&event.method, event.params).await;
                 }
             }

@@ -43,15 +43,18 @@ A typical result contains:
 
 ```text
 VS Code process tree 33508
-`- 33508  Code - Insiders.exe  [vscode-main]
-   |- window 7  linkrpc
-   |  |- 43336  renderer  [renderer]
-   |  `- 15388  extension-host  [extension-host]
-   `- 24664  agent-host  [agent-host]
-      `- 41552  Code - Insiders.exe  [copilot]
+`- p:33508  Code - Insiders.exe  [vscode-main]
+   |- w:33508/7  window  linkrpc
+   |  |- p:43336  renderer  [renderer]
+   |  `- p:15388  extension-host  [extension-host]
+   `- p:24664  agent-host  [agent-host]
+      `- p:41552  Code - Insiders.exe  [copilot]
 ```
 
-These PIDs are examples. Always use the values from the current process list.
+These references are examples. `p:<pid>` selects a process and
+`w:<vscode-main-pid>/<window-id>` selects a VS Code window. Raw PIDs remain
+accepted for compatibility. JSON output also includes the full discovery
+locator for each process.
 
 Use the role label, window grouping, and PID together:
 
@@ -85,7 +88,7 @@ Create a context and attach the renderer PID:
 
 ```powershell
 jsdbg context create --context linkrpc-renderer "LinkRPC renderer" --set
-jsdbg process attach 43336 --set
+jsdbg process attach p:43336 --set
 ```
 
 Capture the current renderer viewport in the system temporary directory:
@@ -102,7 +105,7 @@ Use `--output <path>` to choose the destination.
 
 - Stop another active renderer debugger, such as
   `Developer: Debug Renderer in New Window`, and retry.
-- Or explicitly use `process attach <pid> --force`. Only this opt-in path calls
+- Or explicitly use `process attach p:<pid> --force`. Only this opt-in path calls
   Electron's debugger detach before jsdbg attaches.
 
 `renderer process ... has no live Electron webContents`
@@ -114,6 +117,51 @@ Use `--output <path>` to choose the destination.
 
 - jsdbg refuses to guess. Inspect the live `WebContents` set and select an
   explicit target when that workflow is available.
+
+### Inspect nested renderer targets
+
+While a process-tree connection is being observed, jsdbg subscribes to each
+renderer endpoint's `Target` domain. OOPIFs and workers therefore appear in the
+same target inventory instead of requiring a separate raw-CDP query:
+
+```powershell
+jsdbg target list --type iframe
+jsdbg target graph
+jsdbg target attach --target <printed-target-id> --set
+```
+
+Browser debug ports compose the same way: the browser endpoint is published
+once and its pages, OOPIFs, and workers are contributed as nested targets.
+
+### Pause a future renderer before startup
+
+Attach the VS Code main process through its process-tree connection, then hold
+the pause-on-start lease before opening the window that fails:
+
+```powershell
+jsdbg context create --context vscode-startup "VS Code startup" --set
+jsdbg process attach p:33508 --set
+jsdbg connection pause-future on
+```
+
+New Electron WebContents are discovered from the main process event stream and
+blocked in `Page.waitForDebugger` before page startup continues. After opening
+the Agents window, list processes again and attach its `p:` or `w:` reference:
+
+```powershell
+jsdbg process list --vscode --no-cmd-line
+jsdbg process attach w:33508/9 --set
+```
+
+Attaching adopts the reserved renderer transport. Disable the policy when no
+more future renderers should be blocked:
+
+```powershell
+jsdbg connection pause-future off
+```
+
+Disconnecting the process-tree connection or deleting its context also releases
+the lease automatically.
 
 ## 4. Debug an extension host
 
@@ -128,7 +176,7 @@ Create a context and attach:
 
 ```powershell
 jsdbg context create --context linkrpc-ext-host "LinkRPC extension host" --set
-jsdbg process attach 15388 --set
+jsdbg process attach p:15388 --set
 ```
 
 ## 5. Debug the agent host
@@ -143,7 +191,7 @@ Create a context and attach:
 
 ```powershell
 jsdbg context create --context vscode-agent-host "VS Code agent host" --set
-jsdbg process attach 24664 --set
+jsdbg process attach p:24664 --set
 ```
 
 ## 6. Inspect sources and set a breakpoint
@@ -253,3 +301,63 @@ jsdbg service stop
 Each renderer attachment is owned by a loopback socket. Normal shutdown waits
 for debugger cleanup before closing the socket; forced service termination also
 releases the attachment when the operating system closes the socket.
+
+## 9. How a process-tree connection works
+
+`jsdbg process attach <pid>` connects to a *virtual browser root*: a CDP
+endpoint jsdbg synthesizes for the process tree below `<pid>`. It speaks the
+same `Browser`/`Target` subset a real Chrome browser endpoint speaks, so nothing
+above the transport needs to know whether a connection is backed by Chrome, by
+an OS process tree, or by an Electron application:
+
+- `Browser.getVersion` reports `Process <pid>` as its product.
+- `Target.getTargets` enumerates the main Node target (`$node-root`), every
+  debuggable Node descendant, and — for Electron applications — every live
+  renderer.
+- `Target.setDiscoverTargets` streams `Target.targetCreated`,
+  `Target.targetInfoChanged`, and `Target.targetDestroyed`.
+- `Target.attachToTarget` returns a flattened session id; all target-scoped
+  traffic is then plain CDP.
+
+Chrome connections keep using Chrome's own browser endpoint; only hosts without
+one get a virtual root.
+
+### Demand-driven discovery
+
+Discovery costs real work (polling the OS for descendants, activating
+inspectors), so it only runs while a client asks for it:
+
+- `Target.getTargets` is one-shot. It scans once and leaves discovery off.
+- `Target.setDiscoverTargets(discover=true)` and
+  `Target.setAutoAttach(autoAttach=true)` each raise demand; descendant polling
+  starts when the first one does and stops when the last one drops.
+
+Note that the debugger service itself enables `Target.setDiscoverTargets` for
+the lifetime of a connection so that `jsdbg target list` stays live. A connected
+process tree therefore does poll continuously in practice — but the polling is
+now a consequence of an explicit CDP demand, and it stops as soon as discovery
+is turned off or the connection closes.
+
+Electron renderer discovery is never polled. The bridge jsdbg installs in the
+Electron main process subscribes to `app`'s `web-contents-created` and each
+`webContents`' own navigation, title, and `destroyed` events, and pushes them to
+the virtual root. Renderer target ids are `renderer-<webContentsId>`.
+
+### Waiting for the debugger
+
+`Target.setAutoAttach(waitForDebuggerOnStart=true)` arms genuine startup
+blocking for renderers created from that point on. The bridge attaches
+Electron's debugger from the `web-contents-created` event — before the page runs
+any script — and issues `Page.waitForDebugger`. Chromium only answers that
+command once the renderer is resumed, so a still-pending response is proof that
+startup is actually paused; `waitingForDebugger` is reported as `true` only in
+that case, and a command that is rejected instead reports `false`. Attaching a
+debugger session and then resuming, disarming the flag, or disposing the bridge
+all continue the renderer through `Runtime.runIfWaitingForDebugger`; a safety
+timer also releases renderers that nobody attached to.
+
+Limitations: blocking applies to renderers created after the flag is armed —
+existing renderers are already running — and Electron must reach the
+`web-contents-created` listener before the renderer's first script, which is
+guaranteed for webContents created by the application but not for a renderer
+that is already mid-navigation when the bridge is installed.

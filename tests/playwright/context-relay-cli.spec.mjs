@@ -267,7 +267,9 @@ function serviceEnvironment(stateFile) {
 
 async function launchBrowser(_root, name, origin) {
 	const port = await allocatePort();
+	const channel = process.env.PLAYWRIGHT_CHANNEL ?? "bundled";
 	const browserServer = await chromium.launchServer({
+		...(channel === "bundled" ? {} : { channel }),
 		headless: true,
 		args: [
 			`--remote-debugging-port=${port}`,
