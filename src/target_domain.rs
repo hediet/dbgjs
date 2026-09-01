@@ -25,6 +25,20 @@ pub fn target_info_from_snapshot(snapshot: &TargetSnapshot) -> TargetTargetInfo 
     info
 }
 
+pub fn target_snapshot_from_info(target: TargetTargetInfo) -> TargetSnapshot {
+    TargetSnapshot {
+        target_id: target.target_id,
+        target_type: target.r#type,
+        title: target.title,
+        url: target.url,
+        attached: target.attached,
+        parent_id: target.parent_id,
+        opener_id: target.opener_id,
+        browser_context_id: target.browser_context_id,
+        subtype: target.subtype,
+    }
+}
+
 pub fn to_json(value: impl serde::Serialize) -> Result<Value, JsonRpcError> {
     serde_json::to_value(value)
         .map_err(|error| JsonRpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))

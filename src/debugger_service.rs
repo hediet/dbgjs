@@ -20,7 +20,7 @@ use crate::capability::{
 };
 use crate::cdp::{
     BrowserGetVersionParams, TargetDetachFromTargetParams, TargetGetTargetsParams,
-    TargetSetDiscoverTargetsParams, TargetTargetInfo,
+    TargetSetDiscoverTargetsParams,
 };
 use crate::connection_provider::{ConnectionRuntime, validate_configuration};
 use crate::context_engine::{
@@ -72,6 +72,7 @@ use crate::source_view::appears_minified;
 use crate::target_debugger::{
     TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle, stored_heap_classes,
 };
+use crate::target_domain::target_snapshot_from_info;
 
 #[derive(Clone)]
 pub struct DebuggerService {
@@ -307,7 +308,7 @@ impl DebuggerService {
                             connection_id: connection_id.clone(),
                             attempt,
                             target: canonicalize_synthetic_target(
-                                target_snapshot(params.target_info),
+                                target_snapshot_from_info(params.target_info),
                                 &connection_id,
                             ),
                         }
@@ -317,7 +318,7 @@ impl DebuggerService {
                             connection_id: connection_id.clone(),
                             attempt,
                             target: canonicalize_synthetic_target(
-                                target_snapshot(params.target_info),
+                                target_snapshot_from_info(params.target_info),
                                 &connection_id,
                             ),
                         }
@@ -6257,23 +6258,11 @@ async fn connect_runtime(
         version.protocol_version,
         targets
             .into_iter()
-            .map(|target| canonicalize_synthetic_target(target_snapshot(target), connection_id))
+            .map(|target| {
+                canonicalize_synthetic_target(target_snapshot_from_info(target), connection_id)
+            })
             .collect(),
     ))
-}
-
-fn target_snapshot(target: TargetTargetInfo) -> TargetSnapshot {
-    TargetSnapshot {
-        target_id: target.target_id,
-        target_type: target.r#type,
-        title: target.title,
-        url: target.url,
-        attached: target.attached,
-        parent_id: target.parent_id,
-        opener_id: target.opener_id,
-        browser_context_id: target.browser_context_id,
-        subtype: target.subtype,
-    }
 }
 
 fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> ContextSnapshot {

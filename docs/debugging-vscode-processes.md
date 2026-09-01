@@ -36,8 +36,25 @@ under:
 ## 2. Discover the VS Code process tree
 
 ```powershell
-jsdbg process list --vscode --no-cmd-line --no-trim
+jsdbg process list --root vscode --no-cmd-line --no-trim
 ```
+
+`--root` recognizes `vscode`, `node`, `electron`, and `browser` roots and lists
+every matching subprocess tree. `--vscode` remains an alias for
+`--root vscode`.
+
+Root discovery is passive by default. Add `--full` to run the same process-tree
+target discovery used by a connection:
+
+```powershell
+jsdbg process list --root vscode --full --no-cmd-line
+```
+
+The full view temporarily enables demand-driven discovery and nests Electron
+WebContents, browser roots, pages, OOPIFs, and workers beneath their backing OS
+processes. When the command exits, it releases the temporary discovery demand.
+For Node and Electron roots, `--full` may activate the root inspector in the
+same way as a process-tree connection.
 
 A typical result contains:
 
@@ -46,6 +63,8 @@ VS Code process tree 33508
 `- p:33508  Code - Insiders.exe  [vscode-main]
    |- w:33508/7  window  linkrpc
    |  |- p:43336  renderer  [renderer]
+   |  |  `- renderer-3  [page]
+   |  |     `- ./target/57B3B333337F3E49DC315EEC50F11741  [iframe]
    |  `- p:15388  extension-host  [extension-host]
    `- p:24664  agent-host  [agent-host]
       `- p:41552  Code - Insiders.exe  [copilot]
@@ -60,6 +79,12 @@ same attach command:
 ```powershell
 jsdbg process attach vscode://33508/process/43336 --set
 jsdbg process attach vscode://33508/window/7 --set
+```
+
+Non-VS Code roots use the corresponding process-tree locator:
+
+```powershell
+jsdbg process attach process-tree://12496/process/12496 --set
 ```
 
 Use the role label, window grouping, and PID together:
@@ -155,7 +180,7 @@ blocked in `Page.waitForDebugger` before page startup continues. After opening
 the Agents window, list processes again and attach its `p:` or `w:` reference:
 
 ```powershell
-jsdbg process list --vscode --no-cmd-line
+jsdbg process list --root vscode --no-cmd-line
 jsdbg process attach w:33508/9 --set
 ```
 

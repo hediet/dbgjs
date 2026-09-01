@@ -8,7 +8,13 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Command;
 
-use crate::service_api::{AgentSessionSnapshot, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot};
+use crate::cdp::{TargetGetTargetsParams, TargetSetDiscoverTargetsParams};
+use crate::connection_provider::ConnectionRuntime;
+use crate::service_api::{
+    AgentSessionSnapshot, ConnectionConfiguration, ProcessRole, ProcessRootKind, ProcessSnapshot,
+    ProcessTargetSnapshot, ProcessTreeSnapshot,
+};
+use crate::target_domain::target_snapshot_from_info;
 
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -99,6 +105,13 @@ pub enum ProcessDiscoveryError {
 pub async fn discover_vscode_process_trees(
     include_stats: bool,
 ) -> Result<Vec<ProcessTreeSnapshot>, ProcessDiscoveryError> {
+    discover_process_trees(ProcessRootKind::Vscode, include_stats).await
+}
+
+pub async fn discover_process_trees(
+    root_kind: ProcessRootKind,
+    include_stats: bool,
+) -> Result<Vec<ProcessTreeSnapshot>, ProcessDiscoveryError> {
     let (processes, stats) = if include_stats {
         let (processes, stats) =
             tokio::try_join!(query_windows_processes(), query_windows_process_stats())?;
@@ -111,16 +124,18 @@ pub async fn discover_vscode_process_trees(
         .cloned()
         .map(|process| (process.process_id, process))
         .collect::<BTreeMap<_, _>>();
-    let mut trees = vscode_process_trees(processes);
+    let mut trees = process_trees(processes, root_kind);
     if let Some(stats) = stats {
         apply_process_stats(&mut trees, stats);
     }
-    for tree in &mut trees {
-        let snapshot = tree.clone();
-        if let Ok(Ok(diagnostics)) =
-            tokio::spawn(async move { query_vscode_main_diagnostics(&snapshot).await }).await
-        {
-            apply_vscode_diagnostics(tree, diagnostics);
+    if root_kind == ProcessRootKind::Vscode {
+        for tree in &mut trees {
+            let snapshot = tree.clone();
+            if let Ok(Ok(diagnostics)) =
+                tokio::spawn(async move { query_vscode_main_diagnostics(&snapshot).await }).await
+            {
+                apply_vscode_diagnostics(tree, diagnostics);
+            }
         }
     }
     let agent_sessions = join_all(
@@ -142,6 +157,107 @@ pub async fn discover_vscode_process_trees(
         }
     }
     Ok(trees)
+}
+
+pub async fn discover_recognized_process_trees()
+-> Result<Vec<ProcessTreeSnapshot>, ProcessDiscoveryError> {
+    let processes = query_windows_processes().await?;
+    let mut trees = Vec::new();
+    for kind in [
+        ProcessRootKind::Vscode,
+        ProcessRootKind::Electron,
+        ProcessRootKind::Browser,
+        ProcessRootKind::Node,
+    ] {
+        trees.extend(process_trees(processes.clone(), kind));
+    }
+    Ok(trees)
+}
+
+pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
+    for tree in trees {
+        match discover_process_tree_targets(tree.root_process_id).await {
+            Ok(targets) => tree.targets = targets,
+            Err(error) => tree.target_discovery_error = Some(error),
+        }
+    }
+}
+
+async fn discover_process_tree_targets(
+    root_process_id: u32,
+) -> Result<Vec<ProcessTargetSnapshot>, String> {
+    let runtime = ConnectionRuntime::connect(
+        &ConnectionConfiguration::ProcessTree {
+            root_pid: root_process_id,
+        },
+        1,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let result = async {
+        let mut targets = runtime
+            .root()
+            .target_get_targets(TargetGetTargetsParams::new())
+            .await
+            .map_err(|error| format!("initial Target.getTargets failed: {error:?}"))?
+            .target_infos;
+        runtime
+            .root()
+            .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+            .await
+            .map_err(|error| format!("Target.setDiscoverTargets failed: {error:?}"))?;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut signature = target_signature(&targets);
+        let mut stable_since = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let current = runtime
+                .root()
+                .target_get_targets(TargetGetTargetsParams::new())
+                .await
+                .map_err(|error| format!("Target.getTargets failed: {error:?}"))?
+                .target_infos;
+            let current_signature = target_signature(&current);
+            if current_signature != signature {
+                signature = current_signature;
+                stable_since = tokio::time::Instant::now();
+            }
+            targets = current;
+            if stable_since.elapsed() >= Duration::from_millis(500)
+                || tokio::time::Instant::now() >= deadline
+            {
+                break;
+            }
+        }
+
+        Ok(targets
+            .into_iter()
+            .map(|target| {
+                let process_id = runtime.target_process_id(&target.target_id);
+                ProcessTargetSnapshot {
+                    process_id,
+                    target: target_snapshot_from_info(target),
+                }
+            })
+            .collect())
+    }
+    .await;
+    let _ = runtime
+        .root()
+        .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
+        .await;
+    runtime.close().await;
+    result
+}
+
+fn target_signature(targets: &[crate::cdp::TargetTargetInfo]) -> Vec<(String, Option<String>)> {
+    let mut result = targets
+        .iter()
+        .map(|target| (target.target_id.clone(), target.parent_id.clone()))
+        .collect::<Vec<_>>();
+    result.sort();
+    result
 }
 
 fn agent_session_query(
@@ -671,7 +787,15 @@ fn parse_vscode_status_label(label: &str) -> (String, Option<u32>, Option<String
     (label.to_owned(), None, None)
 }
 
+#[cfg(test)]
 fn vscode_process_trees(processes: Vec<WindowsProcess>) -> Vec<ProcessTreeSnapshot> {
+    process_trees(processes, ProcessRootKind::Vscode)
+}
+
+fn process_trees(
+    processes: Vec<WindowsProcess>,
+    root_kind: ProcessRootKind,
+) -> Vec<ProcessTreeSnapshot> {
     let by_pid = processes
         .iter()
         .map(|process| (process.process_id, process))
@@ -689,7 +813,7 @@ fn vscode_process_trees(processes: Vec<WindowsProcess>) -> Vec<ProcessTreeSnapsh
 
     let candidates = processes
         .iter()
-        .filter(|process| is_vscode_main_candidate(process))
+        .filter(|process| process_root_kind(process, &by_pid, &children) == Some(root_kind))
         .map(|process| process.process_id)
         .collect::<BTreeSet<_>>();
     let mut roots = candidates.iter().copied().collect::<Vec<_>>();
@@ -703,6 +827,7 @@ fn vscode_process_trees(processes: Vec<WindowsProcess>) -> Vec<ProcessTreeSnapsh
                 root_pid,
                 root_pid,
                 None,
+                root_kind,
                 &by_pid,
                 &children,
                 &mut BTreeSet::new(),
@@ -710,8 +835,11 @@ fn vscode_process_trees(processes: Vec<WindowsProcess>) -> Vec<ProcessTreeSnapsh
             );
             ProcessTreeSnapshot {
                 root_process_id: root_pid,
+                root_kind,
                 processes: snapshots,
                 runtime_metadata_available: false,
+                targets: Vec::new(),
+                target_discovery_error: None,
             }
         })
         .collect()
@@ -721,6 +849,7 @@ fn append_process_tree(
     process_id: u32,
     root_process_id: u32,
     parent_process_id: Option<u32>,
+    root_kind: ProcessRootKind,
     processes: &BTreeMap<u32, &WindowsProcess>,
     children: &BTreeMap<u32, Vec<u32>>,
     visited: &mut BTreeSet<u32>,
@@ -732,7 +861,9 @@ fn append_process_tree(
     let Some(process) = processes.get(&process_id) else {
         return;
     };
-    if process_id != root_process_id && is_vscode_main_candidate(process) {
+    if process_id != root_process_id
+        && process_root_kind(process, processes, children) == Some(root_kind)
+    {
         return;
     }
     if process
@@ -742,7 +873,12 @@ fn append_process_tree(
     {
         return;
     }
-    let attachable = process_id == root_process_id || is_attachable_vscode_process(process);
+    let attachable = process_id == root_process_id
+        || is_node_process(process)
+        || matches!(
+            root_kind,
+            ProcessRootKind::Vscode | ProcessRootKind::Electron
+        ) && is_renderer_process(process);
     snapshots.push(ProcessSnapshot {
         process_id,
         parent_process_id,
@@ -761,7 +897,12 @@ fn append_process_tree(
         command_line: process.command_line.clone(),
         creation_date: process.creation_date.clone(),
         role: if process_id == root_process_id {
-            ProcessRole::VscodeMain
+            match root_kind {
+                ProcessRootKind::Vscode => ProcessRole::VscodeMain,
+                ProcessRootKind::Node => ProcessRole::Node,
+                ProcessRootKind::Electron => ProcessRole::ElectronMain,
+                ProcessRootKind::Browser => ProcessRole::BrowserMain,
+            }
         } else if attachable {
             process_role(process)
         } else {
@@ -780,6 +921,7 @@ fn append_process_tree(
             *child_id,
             root_process_id,
             next_parent,
+            root_kind,
             processes,
             children,
             visited,
@@ -879,18 +1021,87 @@ fn role_from_status_name(name: &str, fallback: ProcessRole) -> ProcessRole {
     }
 }
 
-fn is_attachable_vscode_process(process: &WindowsProcess) -> bool {
+fn process_root_kind(
+    process: &WindowsProcess,
+    processes: &BTreeMap<u32, &WindowsProcess>,
+    children: &BTreeMap<u32, Vec<u32>>,
+) -> Option<ProcessRootKind> {
+    if is_vscode_main_candidate(process) {
+        Some(ProcessRootKind::Vscode)
+    } else if is_browser_main_candidate(process) {
+        Some(ProcessRootKind::Browser)
+    } else if is_electron_main_candidate(process, processes, children) {
+        Some(ProcessRootKind::Electron)
+    } else if is_node_process(process) {
+        Some(ProcessRootKind::Node)
+    } else {
+        None
+    }
+}
+
+fn is_browser_main_candidate(process: &WindowsProcess) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let command = process.command_line.to_ascii_lowercase();
+    !command.contains("--type=")
+        && matches!(
+            name.as_str(),
+            "chrome.exe"
+                | "chrome-headless-shell.exe"
+                | "chromium.exe"
+                | "msedge.exe"
+                | "brave.exe"
+                | "brave-browser.exe"
+                | "opera.exe"
+        )
+}
+
+fn is_electron_main_candidate(
+    process: &WindowsProcess,
+    processes: &BTreeMap<u32, &WindowsProcess>,
+    children: &BTreeMap<u32, Vec<u32>>,
+) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let command = process.command_line.to_ascii_lowercase();
+    if command.contains("--type=") || command.contains("--ms-enable-electron-run-as-node") {
+        return false;
+    }
+    name == "electron.exe"
+        || children
+            .get(&process.process_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|child| processes.get(child))
+            .any(|child| {
+                child.name.eq_ignore_ascii_case(&process.name) && is_renderer_process(child)
+            })
+}
+
+fn is_renderer_process(process: &WindowsProcess) -> bool {
+    process
+        .command_line
+        .to_ascii_lowercase()
+        .contains("--type=renderer")
+}
+
+fn is_node_process(process: &WindowsProcess) -> bool {
     let name = process.name.to_ascii_lowercase();
     let command = process.command_line.to_ascii_lowercase();
     !command.contains("process._debugprocess(")
-        && (command.contains("--type=renderer")
-            || name == "node.exe"
-            || is_packaged_vscode_executable(&name) && command.contains("--stdio")
+        && (name == "node.exe"
             || command.contains("node.mojom.nodeservice")
             || command.contains("--node-ipc")
             || command.contains("bootstrap-fork")
             || command.contains("tsserver.js")
             || command.contains("typingsinstaller.js"))
+}
+
+fn is_attachable_vscode_process(process: &WindowsProcess) -> bool {
+    let command = process.command_line.to_ascii_lowercase();
+    !command.contains("process._debugprocess(")
+        && (is_renderer_process(process)
+            || is_node_process(process)
+            || is_packaged_vscode_executable(&process.name.to_ascii_lowercase())
+                && command.contains("--stdio"))
 }
 
 fn is_vscode_main_candidate(process: &WindowsProcess) -> bool {
@@ -1148,6 +1359,79 @@ mod tests {
         )]);
         assert_eq!(trees.len(), 1);
         assert_eq!(trees[0].root_process_id, 50);
+    }
+
+    #[test]
+    fn recognizes_node_electron_and_browser_roots() {
+        let processes = vec![
+            process(10, 1, "node.exe", r#""node.exe" app.js"#),
+            process(11, 10, "helper.exe", "helper.exe"),
+            process(20, 1, "electron.exe", r#""electron.exe" app.js"#),
+            process(21, 20, "electron.exe", r#""electron.exe" --type=renderer"#),
+            process(30, 1, "chrome.exe", r#""chrome.exe""#),
+            process(31, 30, "chrome.exe", r#""chrome.exe" --type=renderer"#),
+        ];
+
+        let node = process_trees(processes.clone(), ProcessRootKind::Node);
+        assert_eq!(node.len(), 1);
+        assert_eq!(node[0].root_process_id, 10);
+        assert_eq!(node[0].root_kind, ProcessRootKind::Node);
+        assert_eq!(
+            node[0]
+                .processes
+                .iter()
+                .map(|process| process.process_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+
+        let electron = process_trees(processes.clone(), ProcessRootKind::Electron);
+        assert_eq!(electron.len(), 1);
+        assert_eq!(electron[0].root_process_id, 20);
+        assert_eq!(electron[0].processes[0].role, ProcessRole::ElectronMain);
+        assert_eq!(electron[0].processes[1].role, ProcessRole::Renderer);
+
+        let browser = process_trees(processes, ProcessRootKind::Browser);
+        assert_eq!(browser.len(), 1);
+        assert_eq!(browser[0].root_process_id, 30);
+        assert_eq!(browser[0].processes[0].role, ProcessRole::BrowserMain);
+        assert!(!browser[0].processes[1].attachable);
+    }
+
+    #[test]
+    fn treats_each_nested_matching_runtime_as_a_separate_root() {
+        let trees = process_trees(
+            vec![
+                process(10, 1, "node.exe", r#""node.exe" parent.js"#),
+                process(11, 10, "node.exe", r#""node.exe" child.js"#),
+                process(12, 11, "helper.exe", "helper.exe"),
+            ],
+            ProcessRootKind::Node,
+        );
+
+        assert_eq!(
+            trees
+                .iter()
+                .map(|tree| tree.root_process_id)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
+        assert_eq!(
+            trees[0]
+                .processes
+                .iter()
+                .map(|process| process.process_id)
+                .collect::<Vec<_>>(),
+            vec![10]
+        );
+        assert_eq!(
+            trees[1]
+                .processes
+                .iter()
+                .map(|process| process.process_id)
+                .collect::<Vec<_>>(),
+            vec![11, 12]
+        );
     }
 
     fn process(

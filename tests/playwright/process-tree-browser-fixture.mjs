@@ -77,6 +77,7 @@ process.stdout.write(
 		kind: "ready",
 		url: pageUrl,
 		debuggingPort,
+		browserPid: browser.pid,
 	})}\n`,
 );
 

@@ -35,7 +35,7 @@ async function main() {
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
 	}
-	const rootEndpoint = await ensureInspector(rootPid, listeners);
+	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners);
 	process.stdout.write(`${JSON.stringify({ endpoint: rootEndpoint })}\n`);
 
 	readControlCommands();
@@ -336,6 +336,33 @@ async function discoverChromiumTargets(processesInScope, allProcesses, discovere
 			})),
 	);
 	return discoveries.flat();
+}
+
+async function ensureRootEndpoint(pid, listeners) {
+	const inspector = await inspectorForPid(pid, listeners);
+	if (inspector) {
+		knownEndpoints.set(pid, inspector);
+		return inspector;
+	}
+	const browser = await browserForPid(pid, listeners);
+	if (browser) {
+		knownEndpoints.set(pid, browser);
+		return browser;
+	}
+	return ensureInspector(pid, listeners);
+}
+
+async function browserForPid(pid, listeners) {
+	const endpoints = await Promise.all(
+		listeners.filter((candidate) => candidate.pid === pid).map(async (listener) => {
+			const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
+			return typeof version?.webSocketDebuggerUrl === "string"
+				&& version.webSocketDebuggerUrl.includes("/devtools/browser/")
+				? version.webSocketDebuggerUrl
+				: undefined;
+		}),
+	);
+	return endpoints.find(Boolean);
 }
 
 async function inspectorForPid(pid, listeners) {

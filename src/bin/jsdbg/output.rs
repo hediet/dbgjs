@@ -7,13 +7,14 @@ use cdp_client::service_api::{
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, ObservationResult,
-    PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, PromiseSelectionSnapshot,
-    PromiseSnapshot, ResourceGraphSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt,
-    SourceFormattingMode, SourceFormattingSettings, SourceGraphViewSnapshot, SourceLocation,
-    SourceMappingSnapshot, SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot,
-    TargetAttachmentOutcome, TargetAttachmentResult, TargetBreakpointStatus, TargetDebuggerPhase,
-    TargetDebuggerSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
+    PlaywrightChannel, ProcessRole, ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot,
+    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ResourceGraphSnapshot,
+    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceFormattingMode,
+    SourceFormattingSettings, SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot,
+    SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome,
+    TargetAttachmentResult, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetSnapshot, UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
+    UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
 use serde::Serialize;
@@ -58,6 +59,7 @@ pub struct CpuProfileOutputOptions<'a> {
 
 #[derive(Clone, Copy)]
 pub struct ProcessTreeOutputOptions<'a> {
+    pub root_kind: ProcessRootKind,
     pub command_line: bool,
     pub stats: bool,
     pub filter: Option<&'a str>,
@@ -67,6 +69,7 @@ pub struct ProcessTreeOutputOptions<'a> {
 impl Default for ProcessTreeOutputOptions<'_> {
     fn default() -> Self {
         Self {
+            root_kind: ProcessRootKind::Vscode,
             command_line: true,
             stats: false,
             filter: None,
@@ -1771,7 +1774,10 @@ impl HumanOutput for Vec<ProcessTreeSnapshot> {
 
 fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTreeOutputOptions<'_>) {
     if trees.is_empty() {
-        println!("No running VS Code process trees.");
+        println!(
+            "No running {} process trees.",
+            process_root_kind(options.root_kind)
+        );
         return;
     }
     let rendered = trees
@@ -1783,7 +1789,8 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         .collect::<Vec<_>>();
     if rendered.is_empty() {
         println!(
-            "No VS Code process tree paths matched {}.",
+            "No {} process tree paths matched {}.",
+            process_root_kind(options.root_kind),
             options.filter.unwrap_or_default()
         );
         return;
@@ -1792,21 +1799,30 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         if tree_index != 0 {
             println!();
         }
-        println!(
-            "VS Code process tree {}  ({} attachable targets{})",
-            tree.root_process_id,
+        let mut details = vec![format!(
+            "{} attachable processes",
             tree.processes
                 .iter()
                 .filter(|process| process.attachable)
-                .count(),
-            if tree.runtime_metadata_available {
-                "; window metadata available"
-            } else {
-                ""
-            }
+                .count()
+        )];
+        if !tree.targets.is_empty() {
+            details.push(format!("{} discovered targets", tree.targets.len()));
+        }
+        if tree.runtime_metadata_available {
+            details.push("window metadata available".to_owned());
+        }
+        println!(
+            "{} process tree {}  ({})",
+            process_root_kind(tree.root_kind),
+            tree.root_process_id,
+            details.join("; "),
         );
         for line in lines {
             println!("{line}");
+        }
+        if let Some(error) = &tree.target_discovery_error {
+            println!("  target discovery incomplete: {}", terminal_text(error));
         }
     }
 }
@@ -1814,6 +1830,7 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
 #[derive(Clone)]
 enum ProcessTreeLeaf<'a> {
     Process(&'a ProcessSnapshot),
+    Target(&'a ProcessTargetSnapshot),
     Window {
         root_pid: u32,
         id: u32,
@@ -1845,6 +1862,7 @@ impl TreeAggregate for ProcessOrder {
 }
 
 struct ProcessTreeStyle {
+    root_kind: ProcessRootKind,
     command_line: bool,
     stats: bool,
     colorize: bool,
@@ -1875,6 +1893,7 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                 let label = process_label(
                     process,
                     ProcessTreeOutputOptions {
+                        root_kind: self.root_kind,
                         command_line: self.command_line,
                         stats: self.stats,
                         filter: None,
@@ -1882,6 +1901,22 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                     },
                 );
                 style_process_label(label, process.attachable, self.colorize)
+            }
+            Some(ProcessTreeLeaf::Target(target)) => {
+                let target = &target.target;
+                let title = if target.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &target.title
+                };
+                format!(
+                    "{}  [{}{}]  {:?}  {}",
+                    terminal_text(label),
+                    terminal_text(&target.target_type),
+                    if target.attached { "; attached" } else { "" },
+                    title,
+                    terminal_text(&target.url),
+                )
             }
             Some(ProcessTreeLeaf::Window {
                 root_pid,
@@ -1972,6 +2007,7 @@ fn process_tree_lines(
     insert_process_render_node(&mut tree, &root, &mut Vec::new(), &mut order);
     tree.render_with_options(
         &ProcessTreeStyle {
+            root_kind: options.root_kind,
             command_line: options.command_line,
             stats: options.stats,
             colorize: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
@@ -1995,11 +2031,44 @@ fn process_render_tree(tree: &ProcessTreeSnapshot) -> Option<ProcessRenderNode<'
     else {
         return None;
     };
+    let targets_by_id = tree
+        .targets
+        .iter()
+        .map(|target| (target.target.target_id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+    let mut target_children = BTreeMap::<String, Vec<&ProcessTargetSnapshot>>::new();
+    let mut process_targets = BTreeMap::<u32, Vec<&ProcessTargetSnapshot>>::new();
+    for target in &tree.targets {
+        if target.target.target_id == "$node-root" {
+            continue;
+        }
+        let parent = target
+            .target
+            .parent_id
+            .as_deref()
+            .and_then(|parent| targets_by_id.get(parent).copied());
+        if let Some(parent) = parent
+            && parent.target.target_id != "$node-root"
+            && parent.process_id == target.process_id
+        {
+            target_children
+                .entry(parent.target.target_id.clone())
+                .or_default()
+                .push(target);
+        } else {
+            process_targets
+                .entry(target.process_id.unwrap_or(tree.root_process_id))
+                .or_default()
+                .push(target);
+        }
+    }
     Some(process_render_node(
         root,
         tree.root_process_id,
         root.window_id,
         &children,
+        &process_targets,
+        &target_children,
     ))
 }
 
@@ -2008,6 +2077,8 @@ fn process_render_node<'a>(
     root_pid: u32,
     active_window: Option<u32>,
     children: &BTreeMap<u32, Vec<&'a ProcessSnapshot>>,
+    process_targets: &BTreeMap<u32, Vec<&'a ProcessTargetSnapshot>>,
+    target_children: &BTreeMap<String, Vec<&'a ProcessTargetSnapshot>>,
 ) -> ProcessRenderNode<'a> {
     let mut rendered_children = process
         .agent_sessions
@@ -2047,7 +2118,14 @@ fn process_render_node<'a>(
                         .iter()
                         .filter(|candidate| candidate.window_id == Some(window_id))
                         .map(|window_child| {
-                            process_render_node(window_child, root_pid, Some(window_id), children)
+                            process_render_node(
+                                window_child,
+                                root_pid,
+                                Some(window_id),
+                                children,
+                                process_targets,
+                                target_children,
+                            )
                         })
                         .collect(),
                 });
@@ -2058,14 +2136,71 @@ fn process_render_node<'a>(
                 root_pid,
                 active_window,
                 children,
+                process_targets,
+                target_children,
             )),
         }
     }
+    rendered_children.extend(
+        process_targets
+            .get(&process.process_id)
+            .into_iter()
+            .flatten()
+            .map(|target| process_target_render_node(target, None, target_children)),
+    );
     ProcessRenderNode {
         path_segment: process_path_segment(process),
         leaf: ProcessTreeLeaf::Process(process),
         children: rendered_children,
     }
+}
+
+fn process_target_render_node<'a>(
+    target: &'a ProcessTargetSnapshot,
+    parent: Option<&ProcessTargetSnapshot>,
+    children: &BTreeMap<String, Vec<&'a ProcessTargetSnapshot>>,
+) -> ProcessRenderNode<'a> {
+    ProcessRenderNode {
+        path_segment: process_target_selector(target, parent),
+        leaf: ProcessTreeLeaf::Target(target),
+        children: children
+            .get(&target.target.target_id)
+            .into_iter()
+            .flatten()
+            .map(|child| process_target_render_node(child, Some(target), children))
+            .collect(),
+    }
+}
+
+fn process_target_selector(
+    target: &ProcessTargetSnapshot,
+    parent: Option<&ProcessTargetSnapshot>,
+) -> String {
+    let Some(parent) = parent else {
+        return target.target.target_id.clone();
+    };
+    target
+        .target
+        .target_id
+        .strip_prefix(&parent.target.target_id)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .map(|suffix| format!("./{suffix}"))
+        .or_else(|| {
+            let target_directory = target.target.target_id.rsplit_once('/')?.0;
+            let parent_directory = parent.target.target_id.rsplit_once('/')?.0;
+            (target_directory == parent_directory).then(|| {
+                format!(
+                    "./{}",
+                    target
+                        .target
+                        .target_id
+                        .rsplit_once('/')
+                        .expect("target directory was found")
+                        .1
+                )
+            })
+        })
+        .unwrap_or_else(|| format!("./{}", target.target.target_id))
 }
 
 fn process_path_segment(process: &ProcessSnapshot) -> String {
@@ -2161,12 +2296,28 @@ fn process_trees_json(
                     process.insert(
                         "locator".to_owned(),
                         serde_json::Value::String(format!(
-                            "vscode://{}/process/{process_id}",
-                            tree.root_process_id
+                            "{}://{}/process/{process_id}",
+                            match tree.root_kind {
+                                ProcessRootKind::Vscode => "vscode",
+                                _ => "process-tree",
+                            },
+                            tree.root_process_id,
                         )),
                     );
                 }
             }
+        }
+        if let Some(selected) = &selected
+            && let Some(targets) = value
+                .get_mut("targets")
+                .and_then(serde_json::Value::as_array_mut)
+        {
+            targets.retain(|target| {
+                target
+                    .get("processId")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none_or(|process_id| selected.contains(&(process_id as u32)))
+            });
         }
         result.push(value);
     }
@@ -2423,6 +2574,8 @@ fn breakpoint_status(status: &BreakpointStatus) -> String {
 fn process_role(role: &ProcessRole) -> &'static str {
     match role {
         ProcessRole::VscodeMain => "vscode-main",
+        ProcessRole::ElectronMain => "electron-main",
+        ProcessRole::BrowserMain => "browser-main",
         ProcessRole::Renderer => "renderer",
         ProcessRole::ExtensionHost => "extension-host",
         ProcessRole::NodeUtility => "node-utility",
@@ -2443,6 +2596,15 @@ fn process_role(role: &ProcessRole) -> &'static str {
         ProcessRole::Crashpad => "crashpad",
         ProcessRole::Utility => "utility",
         ProcessRole::Other => "other",
+    }
+}
+
+fn process_root_kind(kind: ProcessRootKind) -> &'static str {
+    match kind {
+        ProcessRootKind::Vscode => "VS Code",
+        ProcessRootKind::Node => "Node.js",
+        ProcessRootKind::Electron => "Electron",
+        ProcessRootKind::Browser => "Browser",
     }
 }
 
@@ -4022,11 +4184,12 @@ mod tests {
         HeapClassAnalysisSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapEdgePolicy,
         HeapInstanceSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot,
         HeapReferenceDirection, HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming,
-        HeapTraversalDirection, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
-        SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, TargetSnapshot,
-        UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
-        UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-        UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot, ValueSelector, ValueSnapshot,
+        HeapTraversalDirection, ProcessRole, ProcessRootKind, ProcessSnapshot,
+        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceSuffixRewriteSnapshot,
+        SourceTreeKind, SourceTreeSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
+        UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+        UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot,
+        ValueSelector, ValueSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -4383,7 +4546,10 @@ mod tests {
     fn process_tree_uses_virtual_window_nodes() {
         let tree = ProcessTreeSnapshot {
             root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
+            targets: Vec::new(),
+            target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(
@@ -4459,6 +4625,58 @@ mod tests {
     }
 
     #[test]
+    fn process_tree_nests_discovered_targets_under_their_os_process() {
+        let target = |process_id, target_id: &str, parent_id: Option<&str>, target_type: &str| {
+            ProcessTargetSnapshot {
+                process_id: Some(process_id),
+                target: TargetSnapshot {
+                    target_id: target_id.to_owned(),
+                    target_type: target_type.to_owned(),
+                    title: target_id.to_owned(),
+                    url: String::new(),
+                    attached: false,
+                    parent_id: parent_id.map(str::to_owned),
+                    opener_id: None,
+                    browser_context_id: None,
+                    subtype: None,
+                },
+            }
+        };
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            root_kind: ProcessRootKind::Electron,
+            runtime_metadata_available: false,
+            processes: vec![
+                process(
+                    1,
+                    None,
+                    "electron.exe",
+                    ProcessRole::ElectronMain,
+                    None,
+                    None,
+                ),
+                process(2, Some(1), "renderer", ProcessRole::Renderer, None, None),
+            ],
+            targets: vec![
+                target(1, "$node-root", None, "node"),
+                target(2, "renderer-3", Some("$node-root"), "page"),
+                target(2, "renderer-3/target/iframe", Some("renderer-3"), "iframe"),
+            ],
+            target_discovery_error: None,
+        };
+
+        assert_eq!(
+            process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
+            vec![
+                "└─ p:1  electron.exe  [electron-main]",
+                "   └─ p:2  renderer  [renderer]",
+                "      └─ renderer-3  [page]  \"renderer-3\"  ",
+                "         └─ ./target/iframe  [iframe]  \"renderer-3/target/iframe\"  ",
+            ]
+        );
+    }
+
+    #[test]
     fn target_tree_uses_parent_relative_selectors() {
         let entry = |target_id: &str| TargetListEntry {
             connection_id: "tree".to_owned(),
@@ -4508,7 +4726,10 @@ mod tests {
         }];
         let tree = ProcessTreeSnapshot {
             root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
+            targets: Vec::new(),
+            target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(2, Some(1), "agent-host", ProcessRole::AgentHost, None, None),

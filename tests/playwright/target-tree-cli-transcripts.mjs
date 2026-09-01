@@ -49,10 +49,29 @@ export async function generateProcessTreeBrowserTranscript(options = {}) {
 		const transcript = new Transcript(
 			processTreeTranscriptPath,
 			"Composing a browser root discovered inside a process tree",
-			"This is a generated live Windows E2E run. A Node root process owns a headless Chrome child with a DevTools port. `jsdbg` attaches once to the process tree, discovers the browser endpoint as a child capability, recursively publishes its page and OOPIF, and debugs the page through that composed route.",
+			"This is a generated live Windows E2E run. A Node root process owns a headless Chrome child with a DevTools port. Passive root recognition finds the browser process; `process list --full` then runs the same process-tree target discovery used by a durable connection and nests the browser page and OOPIF beneath their OS process.",
 			options.write !== false,
 		);
 
+		const fullProcessTree = await transcript.runCli(
+			"Recognize the browser root and actively expand it with the same process-tree target discovery used by connections.",
+			[
+				"process",
+				"list",
+				"--root",
+				"browser",
+				"--full",
+				"--no-cmd-line",
+				"--no-trim",
+				"--filter",
+				`p:${ready.browserPid}`,
+			],
+			environment,
+			{ timeoutMs: 60_000 },
+		);
+		assert.match(fullProcessTree, /browser-main/);
+		assert.match(fullProcessTree, /Process tree browser demo/);
+		assert.match(fullProcessTree, /\[iframe\]/);
 		await transcript.runCli(
 			"Create a context for the composed process tree.",
 			["context", "create", "--context", ":process-tree-demo", "Process tree browser demo", "--set"],
@@ -156,17 +175,30 @@ export async function generateVscodeIframeTranscript(options = {}) {
 	const transcript = new Transcript(
 		vscodeTranscriptPath,
 		"Discovering and debugging an iframe inside a live VS Code process tree",
-		"This transcript is generated from the VS Code instance that launched the generator. `process list --vscode` is an OS/window inventory: its renderer row exposes an actionable process target but cannot contain CDP iframe targets. Those descendants appear after the process-tree connection enables renderer-local target discovery.",
+		"This transcript is generated from the VS Code instance that launched the generator. Passive process listing recognizes VS Code roots. With `--full`, the command runs the same process-tree target discovery as a connection and nests Electron WebContents, iframe, and worker targets beneath their OS renderer process.",
 		options.write !== false,
 	);
 	let serviceStarted = false;
 
 	try {
-		await transcript.runCli(
-			"Show the current VS Code window's process inventory. Renderer rows have no iframe children because this command does not establish a CDP target-discovery connection.",
-			["process", "list", "--vscode", "--no-cmd-line", "--no-trim", "--filter", "renderer"],
+		const fullProcessTree = await transcript.runCli(
+			"Recognize the current VS Code root and actively expand the selected renderer through the shared process-tree target discovery.",
+			[
+				"process",
+				"list",
+				"--root",
+				"vscode",
+				"--full",
+				"--no-cmd-line",
+				"--no-trim",
+				"--filter",
+				`p:${rendererProcess.processId}`,
+			],
 			environment,
+			{ timeoutMs: 60_000 },
 		);
+		assert.match(fullProcessTree, /electron-renderer|renderer-\d+/);
+		assert.match(fullProcessTree, /\[iframe\]/);
 		await transcript.runCli(
 			"Create an isolated context for live VS Code discovery.",
 			["context", "create", "--context", ":vscode-iframe-demo", "VS Code iframe demo", "--set"],
@@ -308,7 +340,7 @@ async function buildBinaries() {
 async function selectCurrentVscodeTree() {
 	const result = await run(
 		cli,
-		["--json", "process", "list", "--vscode", "--no-cmd-line"],
+		["--json", "process", "list", "--root", "vscode", "--no-cmd-line"],
 		{},
 		{ timeoutMs: 45_000 },
 	);

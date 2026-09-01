@@ -104,10 +104,8 @@ impl ProcessTreeTargetSource {
                 source.supervise_bridge_events(&bridge).await;
                 *source.bridge.lock().await = Some(bridge);
             }
-            Err(error) => {
-                // A plain Node.js root process has no renderers; that is not an error.
-                eprintln!("Electron renderer bridge is unavailable: {error}");
-            }
+            // A plain Node.js or browser root has no Electron renderer bridge.
+            Err(_) => {}
         }
         Ok((source, receiver))
     }

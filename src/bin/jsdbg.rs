@@ -24,8 +24,8 @@ use cdp_client::service_api::{
     HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
     MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
-    PromiseState, SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions, SourceTreeKind,
-    SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
+    ProcessRootKind, PromiseState, SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions,
+    SourceTreeKind, SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
     TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus, TargetWaitPredicate,
     ValueInspectionOptions, ValueSelector,
 };
@@ -1071,11 +1071,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let trees =
-                cdp_client::process_discovery::discover_vscode_process_trees(options.stats).await?;
+            let mut trees = cdp_client::process_discovery::discover_process_trees(
+                options.root_kind,
+                options.stats,
+            )
+            .await?;
+            if options.full {
+                cdp_client::process_discovery::populate_process_tree_targets(&mut trees).await;
+            }
             output.print_process_trees(
                 &trees,
                 ProcessTreeOutputOptions {
+                    root_kind: options.root_kind,
                     command_line: options.command_line,
                     stats: options.stats,
                     filter: options.filter.as_deref(),
@@ -1087,10 +1094,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_process_attach_options(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let discovered =
-                cdp_client::process_discovery::discover_vscode_process_trees(false).await?;
-            let (process_id, vscode_root_pid) = match options.locator {
+            let discovered = if matches!(
+                options.locator,
+                ProcessAttachLocator::VscodeProcess { .. }
+                    | ProcessAttachLocator::VscodeWindow { .. }
+            ) {
+                cdp_client::process_discovery::discover_vscode_process_trees(false).await?
+            } else {
+                cdp_client::process_discovery::discover_recognized_process_trees().await?
+            };
+            let (process_id, process_tree_root_pid) = match options.locator {
                 ProcessAttachLocator::Process(process_id) => (process_id, None),
+                ProcessAttachLocator::ProcessTreeProcess {
+                    root_pid,
+                    process_id,
+                } => {
+                    let process_id = discovered
+                        .iter()
+                        .find(|tree| tree.root_process_id == root_pid)
+                        .and_then(|tree| {
+                            tree.processes
+                                .iter()
+                                .find(|process| process.process_id == process_id)
+                        })
+                        .map(|process| process.process_id)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::NotFound,
+                                format!(
+                                    "process process-tree://{root_pid}/process/{process_id} is no longer available"
+                                ),
+                            )
+                        })?;
+                    (process_id, Some(root_pid))
+                }
                 ProcessAttachLocator::VscodeProcess {
                     root_pid,
                     process_id,
@@ -1139,17 +1176,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let process_tree_target = discovered
                 .into_iter()
-                .filter(|tree| vscode_root_pid.is_none_or(|root| tree.root_process_id == root))
+                .filter(|tree| {
+                    process_tree_root_pid.is_none_or(|root| tree.root_process_id == root)
+                })
                 .find_map(|tree| {
                     tree.processes
                         .into_iter()
-                        .find(|process| {
-                            process.process_id == process_id
-                                && matches!(
-                                    process.role,
-                                    ProcessRole::VscodeMain | ProcessRole::Renderer
-                                )
-                        })
+                        .find(|process| process.process_id == process_id && process.attachable)
                         .map(|process| {
                             (tree.root_process_id, process.debug_target_id, process.role)
                         })
@@ -2364,6 +2397,30 @@ fn required_option<'a>(name: &str, value: Option<&'a String>) -> Result<&'a Stri
 }
 
 fn parse_process_attach_locator(value: &str) -> Result<ProcessAttachLocator, io::Error> {
+    if let Some(value) = value.strip_prefix("process-tree://") {
+        let (root_pid, path) = value.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            )
+        })?;
+        let (kind, process_id) = path.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            )
+        })?;
+        if kind != "process" || process_id.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            ));
+        }
+        return Ok(ProcessAttachLocator::ProcessTreeProcess {
+            root_pid: parse_u32("process tree root ID", root_pid)?,
+            process_id: parse_u32("process ID", process_id)?,
+        });
+    }
     if let Some(value) = value.strip_prefix("vscode://") {
         let (root_pid, path) = value.split_once('/').ok_or_else(|| {
             io::Error::new(
@@ -2800,6 +2857,7 @@ struct ProcessAttachOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProcessAttachLocator {
     Process(u32),
+    ProcessTreeProcess { root_pid: u32, process_id: u32 },
     VscodeProcess { root_pid: u32, process_id: u32 },
     VscodeWindow { root_pid: u32, window_id: u32 },
 }
@@ -5668,6 +5726,8 @@ async fn wait_target(
 }
 
 struct ProcessListOptions {
+    root_kind: ProcessRootKind,
+    full: bool,
     command_line: bool,
     stats: bool,
     filter: Option<String>,
@@ -5676,20 +5736,46 @@ struct ProcessListOptions {
 
 fn parse_process_list_options(arguments: &[String]) -> Result<ProcessListOptions, io::Error> {
     let mut result = ProcessListOptions {
+        root_kind: ProcessRootKind::Vscode,
+        full: false,
         command_line: true,
         stats: false,
         filter: None,
         trim_width: true,
     };
-    let mut vscode = false;
+    let mut root_kind = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
-            "--vscode" if !vscode => vscode = true,
+            "--vscode" if root_kind.is_none() => root_kind = Some(ProcessRootKind::Vscode),
             "--vscode" => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "--vscode may only be specified once",
+                    "--vscode conflicts with an existing process root selector",
+                ));
+            }
+            "--root" => {
+                if root_kind.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--root may only be specified once and conflicts with --vscode",
+                    ));
+                }
+                index += 1;
+                root_kind = Some(parse_process_root_kind(arguments.get(index).ok_or_else(
+                    || {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--root requires vscode, node, electron, or browser",
+                        )
+                    },
+                )?)?);
+            }
+            "--full" if !result.full => result.full = true,
+            "--full" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--full may only be specified once",
                 ));
             }
             "--no-cmd-line" => result.command_line = false,
@@ -5716,13 +5802,28 @@ fn parse_process_list_options(arguments: &[String]) -> Result<ProcessListOptions
         }
         index += 1;
     }
-    if !vscode {
-        return Err(io::Error::new(
+    result.root_kind = root_kind.ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
-            "process list requires --vscode",
-        ));
-    }
+            "process list requires --root vscode|node|electron|browser",
+        )
+    })?;
     Ok(result)
+}
+
+fn parse_process_root_kind(value: &str) -> Result<ProcessRootKind, io::Error> {
+    match value {
+        "vscode" => Ok(ProcessRootKind::Vscode),
+        "node" => Ok(ProcessRootKind::Node),
+        "electron" => Ok(ProcessRootKind::Electron),
+        "browser" => Ok(ProcessRootKind::Browser),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "unknown process root kind '{value}'; expected vscode, node, electron, or browser"
+            ),
+        )),
+    }
 }
 
 fn parse_u64(name: &str, value: &str) -> Result<u64, io::Error> {
@@ -6152,7 +6253,8 @@ fn usage() -> &'static str {
 commands:
   jsdbg daemon view [--context <id> | --all-contexts]
   jsdbg service status|stop
-  jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  jsdbg process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  jsdbg process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   jsdbg process attach <process-reference> [--context <id>] [--set] [--force]
   jsdbg context list
   jsdbg context create <path|:id> [display-name] [--set]
@@ -6282,7 +6384,8 @@ mod tests {
     use cdp_client::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
-        PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot, ValueSelector,
+        ProcessRootKind, PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
+        ValueSelector,
     };
     use std::fs;
 
@@ -6533,6 +6636,15 @@ mod tests {
                 .unwrap()
                 .locator,
             ProcessAttachLocator::VscodeProcess {
+                root_pid: 100,
+                process_id: 15388,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["process-tree://100/process/15388"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::ProcessTreeProcess {
                 root_pid: 100,
                 process_id: 15388,
             }
@@ -6846,10 +6958,19 @@ mod tests {
             "--no-trim",
         ]))
         .unwrap();
+        assert_eq!(options.root_kind, ProcessRootKind::Vscode);
+        assert!(!options.full);
         assert!(!options.command_line);
         assert!(options.stats);
         assert_eq!(options.filter.as_deref(), Some("window 3"));
         assert!(!options.trim_width);
+
+        let options =
+            parse_process_list_options(&arguments(&["--root", "browser", "--full"])).unwrap();
+        assert_eq!(options.root_kind, ProcessRootKind::Browser);
+        assert!(options.full);
+        assert!(parse_process_list_options(&arguments(&["--root", "unknown"])).is_err());
+        assert!(parse_process_list_options(&arguments(&["--vscode", "--root", "node"])).is_err());
     }
 
     #[test]

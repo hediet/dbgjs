@@ -16,8 +16,32 @@ pub struct ServiceInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ProcessTreeSnapshot {
     pub root_process_id: u32,
+    #[serde(default)]
+    pub root_kind: ProcessRootKind,
     pub processes: Vec<ProcessSnapshot>,
     pub runtime_metadata_available: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ProcessTargetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_discovery_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessRootKind {
+    #[default]
+    Vscode,
+    Node,
+    Electron,
+    Browser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTargetSnapshot {
+    pub process_id: Option<u32>,
+    #[serde(flatten)]
+    pub target: TargetSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -103,6 +127,8 @@ pub struct ResourceRelationSnapshot {
 #[serde(rename_all = "kebab-case")]
 pub enum ProcessRole {
     VscodeMain,
+    ElectronMain,
+    BrowserMain,
     Renderer,
     ExtensionHost,
     NodeUtility,
