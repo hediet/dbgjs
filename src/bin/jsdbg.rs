@@ -1289,6 +1289,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     target_id.clone(),
                     TargetAttachOptions {
                         force: options.force,
+                        expected_connection_generation: None,
                     },
                 )
                 .await)?;
@@ -1920,6 +1921,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                     TargetAttachOptions {
                         force: options.force,
+                        expected_connection_generation: None,
                     },
                 )
                 .await)?;
@@ -3637,6 +3639,8 @@ fn parse_source_tree_options(
     while index < values.len() {
         match values[index].as_str() {
             "loaded" if kind.is_none() => kind = Some(SourceTreeKind::Loaded),
+            "source-mapped" if kind.is_none() => kind = Some(SourceTreeKind::SourceMapped),
+            "formatted" if kind.is_none() => kind = Some(SourceTreeKind::Formatted),
             "resolved" if kind.is_none() => kind = Some(SourceTreeKind::Resolved),
             "--all" => all = true,
             "--no-trim" => trim_width = false,
@@ -3667,7 +3671,7 @@ fn parse_source_tree_options(
     let kind = kind.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "source tree requires <loaded|resolved>",
+            "source tree requires <loaded|source-mapped|formatted|resolved>",
         )
     })?;
     Ok((
@@ -6354,7 +6358,7 @@ commands:
   jsdbg source formatting rule remove <rule-id> [--context <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
-  jsdbg source tree <loaded|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
+  jsdbg source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   jsdbg source graph [--uncompacted] [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
@@ -6660,6 +6664,11 @@ mod tests {
         assert!(options.all);
         assert!(options.trim_width);
 
+        let (kind, _) = parse_source_tree_options(&arguments(&["source-mapped"])).unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::SourceMapped);
+        let (kind, _) = parse_source_tree_options(&arguments(&["formatted"])).unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Formatted);
+
         assert!(parse_source_tree_options(&arguments(&["loaded", "--max-lines", "0"])).is_err());
         assert!(parse_source_tree_options(&arguments(&["unknown"])).is_err());
         assert!(parse_source_tree_options(&[]).is_err());
@@ -6946,6 +6955,7 @@ mod tests {
             id: "ctx".to_owned(),
             display_name: "Context".to_owned(),
             revision: 1,
+            resource_revision: 1,
             connections: connections
                 .iter()
                 .map(|(connection_id, target_ids)| ConnectionSnapshot {

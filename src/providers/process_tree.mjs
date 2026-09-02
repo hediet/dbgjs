@@ -11,6 +11,7 @@ const processMode = process.env.JSDBG_PROCESS_MODE || "tree";
 const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
+const expandedProcessIds = new Set([rootPid]);
 let activationQueue = Promise.resolve();
 let scanQueue = Promise.resolve();
 let running = true;
@@ -100,7 +101,54 @@ function handleCommand(line) {
 		});
 		return;
 	}
+	if (command?.command === "activate") {
+		void activateTarget(command);
+		return;
+	}
+	if (command?.command === "setProcessDiscovery") {
+		const processId = Number(command.processId);
+		if (Number.isSafeInteger(processId) && processId > 0 && processId !== rootPid) {
+			if (command.enabled === true) {
+				expandedProcessIds.add(processId);
+			} else {
+				expandedProcessIds.delete(processId);
+			}
+			void scan();
+		}
+		return;
+	}
 	console.error(`ignored unknown process-tree command: ${line}`);
+}
+
+async function activateTarget(command) {
+	const id = command.id ?? null;
+	const targetId = typeof command.targetId === "string" ? command.targetId : "";
+	const pid = Number(command.processId);
+	if (!targetId || !Number.isSafeInteger(pid) || pid <= 0) {
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			error: "invalid target activation request",
+		})}\n`);
+		return;
+	}
+	try {
+		const endpoint = await ensureInspector(pid);
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			endpoint,
+		})}\n`);
+	} catch (error) {
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			error: error?.message ?? String(error),
+		})}\n`);
+	}
 }
 
 function scan() {
@@ -143,18 +191,48 @@ async function reconcile(initialProcesses, initialListeners) {
 	const [processes, listeners] = initialProcesses && initialListeners
 		? [initialProcesses, initialListeners]
 		: await Promise.all([listProcesses(), listListeners()]);
+	const liveProcessIds = new Set(processes.map((candidate) => candidate.pid));
+	for (const processId of expandedProcessIds) {
+		if (processId !== rootPid && !liveProcessIds.has(processId)) {
+			expandedProcessIds.delete(processId);
+		}
+	}
 	const descendants = processDescendants(processes, rootPid);
+	const allNodeProcesses = descendants.filter(
+		(candidate) => candidate.pid !== rootPid && isNodeProcess(candidate),
+	);
+	const nodeProcessIds = new Set(allNodeProcesses.map((candidate) => candidate.pid));
+	const allDiscoveredProcesses = new Map(
+		allNodeProcesses.map((candidate) => {
+			const targetId = `process-${candidate.pid}-${processInstanceId(candidate)}`;
+			return [candidate.pid, { candidate, targetId }];
+		}),
+	);
+	const allChromiumTargets = await discoverChromiumTargets(
+		descendants,
+		processes,
+		allDiscoveredProcesses,
+		listeners,
+	);
+	const attachableProcessIds = new Set([
+		...nodeProcessIds,
+		...allChromiumTargets.map((target) => target.processId),
+	]);
+	const processesInScope = descendants.filter((candidate) =>
+		isInsideExpandedProcessFrontier(candidate, processes, attachableProcessIds),
+	);
+	const processIdsInScope = new Set(processesInScope.map((candidate) => candidate.pid));
 	const nodeProcesses = new Map(
-		descendants
-			.filter((candidate) => candidate.pid !== rootPid && isNodeProcess(candidate))
+		processesInScope
+			.filter((candidate) => nodeProcessIds.has(candidate.pid))
 			.map((candidate) => [candidate.pid, candidate]),
 	);
 	const desired = new Map();
 	const discoveredProcesses = new Map(
-		[...nodeProcesses.values()].map((candidate) => {
-			const targetId = `process-${candidate.pid}-${processInstanceId(candidate)}`;
-			return [candidate.pid, { candidate, targetId }];
-		}),
+		[...nodeProcesses.keys()].map((pid) => [pid, allDiscoveredProcesses.get(pid)]),
+	);
+	const chromiumTargets = allChromiumTargets.filter((target) =>
+		processIdsInScope.has(target.processId),
 	);
 
 	for (const candidate of nodeProcesses.values()) {
@@ -168,33 +246,29 @@ async function reconcile(initialProcesses, initialListeners) {
 			url: `process:${candidate.pid}`,
 			processId: candidate.pid,
 		};
-		const knownEndpoint = knownEndpoints.get(candidate.pid);
-		if (knownEndpoint) {
-			target.endpoint = knownEndpoint;
-		}
 		desired.set(targetId, target);
-		publishTarget(target);
 	}
 
-	const chromiumTargets = discoverChromiumTargets(
-		descendants,
-		processes,
-		discoveredProcesses,
-		listeners,
-	);
 	await Promise.all([...nodeProcesses.values()].map(async (candidate) => {
 		const { targetId } = discoveredProcesses.get(candidate.pid);
-		try {
-			const endpoint = await ensureInspector(candidate.pid, listeners);
+		const cached = knownEndpoints.get(candidate.pid);
+		const endpoint = cached && await isInspectorEndpoint(cached)
+			? cached
+			: await inspectorForPid(candidate.pid, listeners);
+		if (endpoint) {
+			knownEndpoints.set(candidate.pid, endpoint);
 			const target = { ...desired.get(targetId), endpoint };
 			desired.set(targetId, target);
 			publishTarget(target);
-		} catch (error) {
-			console.error(`could not activate inspector for process ${candidate.pid}: ${error?.message ?? error}`);
+		} else {
+			knownEndpoints.delete(candidate.pid);
 		}
 	}));
+	for (const target of desired.values()) {
+		publishTarget(target);
+	}
 
-	for (const target of await chromiumTargets) {
+	for (const target of chromiumTargets) {
 		desired.set(target.targetId, target);
 		publishTarget(target);
 	}
@@ -205,6 +279,20 @@ async function reconcile(initialProcesses, initialListeners) {
 			process.stdout.write(`${JSON.stringify({ kind: "nodeTargetRemoved", targetId })}\n`);
 		}
 	}
+}
+
+function isInsideExpandedProcessFrontier(candidate, processes, attachableProcessIds) {
+	let parentPid = candidate.parentPid;
+	while (parentPid && parentPid !== rootPid) {
+		if (expandedProcessIds.has(parentPid)) {
+			return true;
+		}
+		if (attachableProcessIds.has(parentPid)) {
+			return false;
+		}
+		parentPid = processes.find((process) => process.pid === parentPid)?.parentPid;
+	}
+	return expandedProcessIds.has(rootPid);
 }
 
 function publishTarget(target) {

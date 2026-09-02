@@ -382,12 +382,24 @@ pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClien
 
     let startup_error = startup_error_file(state_file);
     let _ = fs::remove_file(&startup_error);
-    spawn_service(state_file)?;
+    let executable = spawn_service(state_file)?;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     let mut last_error = None;
     while Instant::now() < deadline {
         match connect_existing(state_file).await {
             Ok(client) => return Ok(client),
+            Err(LocalRpcError::InterfaceHashMismatch {
+                interface_id,
+                expected,
+                actual,
+            }) => {
+                return Err(LocalRpcError::SpawnedServiceInterfaceMismatch {
+                    executable: executable.display().to_string(),
+                    interface_id,
+                    expected,
+                    actual,
+                });
+            }
             Err(error) => last_error = Some(error),
         }
         if let Ok(message) = fs::read_to_string(&startup_error) {
@@ -498,7 +510,7 @@ fn remove_endpoint_if_owned(path: &Path, endpoint: &LocalServiceEndpoint) {
     }
 }
 
-fn spawn_service(state_file: &Path) -> Result<(), LocalRpcError> {
+fn spawn_service(state_file: &Path) -> Result<PathBuf, LocalRpcError> {
     let executable = match env::var_os("JSDBG_SERVICE_EXE") {
         Some(path) => PathBuf::from(path),
         None => {
@@ -518,8 +530,10 @@ fn spawn_service(state_file: &Path) -> Result<(), LocalRpcError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    spawn_detached(&mut command).map_err(|source| LocalRpcError::Spawn { executable, source })?;
-    Ok(())
+    if let Err(source) = spawn_detached(&mut command) {
+        return Err(LocalRpcError::Spawn { executable, source });
+    }
+    Ok(executable)
 }
 
 #[cfg(windows)]
@@ -578,6 +592,17 @@ pub enum LocalRpcError {
         expected: String,
         actual: String,
     },
+    #[error(
+        "spawned service {executable} exposes incompatible HubRPC interface '{interface_id}' \
+         (service has {actual}, client expects {expected}); rebuild it with \
+         `cargo build --bin jsdbg-service`"
+    )]
+    SpawnedServiceInterfaceMismatch {
+        executable: String,
+        interface_id: String,
+        expected: String,
+        actual: String,
+    },
     #[error("service endpoint changed owner from process {expected} to {actual}")]
     EndpointOwnerChanged { expected: u32, actual: u32 },
     #[error("failed to spawn {executable}: {source}")]
@@ -610,6 +635,21 @@ pub enum LocalRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawned_service_mismatch_reports_the_rebuild_command() {
+        let error = LocalRpcError::SpawnedServiceInterfaceMismatch {
+            executable: "target/debug/jsdbg-service".to_owned(),
+            interface_id: "debugger".to_owned(),
+            expected: "new".to_owned(),
+            actual: "old".to_owned(),
+        };
+
+        let message = error.to_string();
+        assert!(message.contains("target/debug/jsdbg-service"));
+        assert!(message.contains("service has old, client expects new"));
+        assert!(message.contains("cargo build --bin jsdbg-service"));
+    }
 
     #[tokio::test]
     async fn typed_context_state_round_trips_over_native_local_ipc() {

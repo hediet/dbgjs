@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cdp-protocol"]
+members = ["crates/cdp-protocol", "crates/cdp-tui"]
 resolver = "3"
 
 [package]

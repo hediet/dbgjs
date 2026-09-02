@@ -833,6 +833,8 @@ fn source_tree_lines(
             "No {} sources are currently observed.",
             match snapshot.kind {
                 cdp_client::service_api::SourceTreeKind::Loaded => "loaded",
+                cdp_client::service_api::SourceTreeKind::SourceMapped => "source-mapped",
+                cdp_client::service_api::SourceTreeKind::Formatted => "formatted",
                 cdp_client::service_api::SourceTreeKind::Resolved => "resolved",
             }
         )];

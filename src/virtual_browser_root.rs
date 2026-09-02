@@ -88,9 +88,12 @@ pub trait TargetSource: Send + Sync + 'static {
     /// One-shot enumeration. Must not enable continuous discovery.
     async fn list_targets(&self) -> Vec<HostTarget>;
 
-    /// Turns continuous discovery on or off. Called whenever the aggregate demand of
-    /// `Target.setDiscoverTargets` and `Target.setAutoAttach` changes.
+    /// Turns root-level metadata discovery on or off. This must not open target endpoints.
     async fn set_discovery(&self, enabled: bool);
+
+    /// Observes only the immediate children of one already-open target. Implementations must not
+    /// open the target or recursively observe returned children.
+    async fn set_child_discovery(&self, target_id: &str, enabled: bool);
 
     /// Arms or disarms genuine startup blocking for targets created from now on.
     async fn set_wait_for_debugger_on_start(&self, enabled: bool);
@@ -493,6 +496,16 @@ impl VirtualRootState {
         let required =
             self.discover.load(Ordering::Relaxed) || self.auto_attach.load(Ordering::Relaxed);
         self.source.set_discovery(required).await;
+        let attached_targets = self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|session| session.target_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for target_id in attached_targets {
+            self.source.set_child_discovery(&target_id, required).await;
+        }
     }
 
     async fn refresh_known(&self) -> Vec<HostTarget> {
@@ -650,6 +663,9 @@ impl VirtualRootState {
                 tasks,
             },
         );
+        if self.discover.load(Ordering::Relaxed) || self.auto_attach.load(Ordering::Relaxed) {
+            self.source.set_child_discovery(target_id, true).await;
+        }
         if let Some(known) = self.known.lock().unwrap().get_mut(target_id) {
             known.snapshot.attached = true;
         }
@@ -694,8 +710,21 @@ impl VirtualRootState {
             task.abort();
         }
         self.mux.retire_session(&session_id);
-        self.source.detach(&session.target_id).await;
-        if let Some(known) = self.known.lock().unwrap().get_mut(&session.target_id) {
+        let target_still_attached = self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .any(|candidate| candidate.target_id == session.target_id);
+        if !target_still_attached {
+            self.source
+                .set_child_discovery(&session.target_id, false)
+                .await;
+            self.source.detach(&session.target_id).await;
+        }
+        if !target_still_attached
+            && let Some(known) = self.known.lock().unwrap().get_mut(&session.target_id)
+        {
             known.snapshot.attached = false;
         }
         self.notify_root(
@@ -904,6 +933,7 @@ mod tests {
     #[derive(Default)]
     struct StubCalls {
         discovery: Vec<bool>,
+        child_discovery: Vec<(String, bool)>,
         wait_for_debugger_on_start: Vec<bool>,
         list_calls: usize,
         attached: Vec<String>,
@@ -941,6 +971,14 @@ mod tests {
 
         async fn set_discovery(&self, enabled: bool) {
             self.calls.lock().unwrap().discovery.push(enabled);
+        }
+
+        async fn set_child_discovery(&self, target_id: &str, enabled: bool) {
+            self.calls
+                .lock()
+                .unwrap()
+                .child_discovery
+                .push((target_id.to_owned(), enabled));
         }
 
         async fn set_wait_for_debugger_on_start(&self, enabled: bool) {
@@ -1180,6 +1218,41 @@ mod tests {
             harness.calls.lock().unwrap().discovery,
             vec![true, true, true, false],
             "discovery must stop once nothing demands it"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_discovery_follows_only_attached_targets() {
+        let harness = Harness::start(vec![
+            host_target("renderer-a", 10),
+            host_target("renderer-b", 20),
+        ]);
+        harness.call("Target.getTargets", json!({})).await;
+        harness
+            .call("Target.setDiscoverTargets", json!({ "discover": true }))
+            .await;
+        let attached = harness
+            .call("Target.attachToTarget", json!({ "targetId": "renderer-a" }))
+            .await;
+        let session_id = attached["sessionId"].as_str().unwrap();
+
+        assert_eq!(
+            harness.calls.lock().unwrap().child_discovery,
+            vec![("renderer-a".to_owned(), true)]
+        );
+
+        harness
+            .call(
+                "Target.detachFromTarget",
+                json!({ "sessionId": session_id }),
+            )
+            .await;
+        assert_eq!(
+            harness.calls.lock().unwrap().child_discovery,
+            vec![
+                ("renderer-a".to_owned(), true),
+                ("renderer-a".to_owned(), false),
+            ]
         );
     }
 

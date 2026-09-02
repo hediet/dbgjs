@@ -4,8 +4,10 @@
 //! performed by `providers/process_tree.mjs` (Node.js child processes and Chromium DevTools
 //! endpoints), the Electron main process itself, and - when the root process is an Electron app -
 //! the renderer targets reported by the main-process bridge. Browser roots and renderer endpoints
-//! recursively contribute their own `Target` inventory. Every Electron and WebContents detail
-//! stays inside this module and [`crate::electron_renderer_transport`].
+//! contribute their immediate `Target` inventory only while that specific parent is being
+//! observed. Recursive traversal is driven by [`crate::virtual_browser_root::VirtualBrowserRoot`].
+//! Every Electron and WebContents detail stays inside this module and
+//! [`crate::electron_renderer_transport`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -39,6 +41,7 @@ pub const ROOT_TARGET_ID: &str = "$node-root";
 
 const RENDERER_TARGET_PREFIX: &str = "renderer-";
 
+#[derive(Clone)]
 struct NodeRecord {
     target: HostTarget,
     endpoint: Option<String>,
@@ -63,9 +66,11 @@ pub struct ProcessTreeTargetSource {
     native_target_aliases: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
     nested_targets: Arc<std::sync::Mutex<BTreeMap<String, NestedTargetRecord>>>,
     supervised_targets: Arc<std::sync::Mutex<BTreeSet<String>>>,
+    debugger_targets: std::sync::Mutex<BTreeSet<String>>,
     attachments: Mutex<BTreeMap<String, Arc<TargetEndpoint>>>,
     next_scan_id: AtomicU64,
     scans: std::sync::Mutex<BTreeMap<u64, oneshot::Sender<()>>>,
+    activations: std::sync::Mutex<BTreeMap<u64, oneshot::Sender<Result<String, String>>>>,
     discovering: AtomicBool,
     discovery_change: Mutex<()>,
     tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
@@ -99,9 +104,11 @@ impl ProcessTreeTargetSource {
             native_target_aliases: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             nested_targets: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             supervised_targets: Arc::new(std::sync::Mutex::new(BTreeSet::new())),
+            debugger_targets: std::sync::Mutex::new(BTreeSet::new()),
             attachments: Mutex::new(BTreeMap::new()),
             next_scan_id: AtomicU64::new(1),
             scans: std::sync::Mutex::new(BTreeMap::new()),
+            activations: std::sync::Mutex::new(BTreeMap::new()),
             discovering: AtomicBool::new(false),
             discovery_change: Mutex::new(()),
             tasks: std::sync::Mutex::new(Vec::new()),
@@ -160,8 +167,6 @@ impl ProcessTreeTargetSource {
                         endpoint,
                         process_id,
                     } => {
-                        let discovers_children =
-                            target_type.as_deref() == Some("browser") && endpoint.is_some();
                         let target = HostTarget {
                             snapshot: node_target_snapshot(
                                 target_id.clone(),
@@ -181,19 +186,12 @@ impl ProcessTreeTargetSource {
                             },
                         );
                         let _ = source.events.send(TargetSourceEvent::Upserted(target));
-                        if discovers_children && source.discovering.load(Ordering::Relaxed) {
-                            let nested_source = source.clone();
-                            source.track(tokio::spawn(async move {
-                                nested_source
-                                    .start_nested_discovery_if_enabled(&target_id)
-                                    .await;
-                            }));
-                        }
                     }
                     ProviderEvent::NodeTargetRemoved { target_id } => {
                         source.nodes.lock().unwrap().remove(&target_id);
                         source.remove_nested_targets(&target_id);
                         source.supervised_targets.lock().unwrap().remove(&target_id);
+                        source.debugger_targets.lock().unwrap().remove(&target_id);
                         if let Some(endpoint) = source.attachments.lock().await.remove(&target_id) {
                             endpoint.close().await;
                         }
@@ -204,6 +202,30 @@ impl ProcessTreeTargetSource {
                             id.and_then(|id| source.scans.lock().unwrap().remove(&id))
                         {
                             let _ = waiter.send(());
+                        }
+                    }
+                    ProviderEvent::ActivationComplete {
+                        id,
+                        target_id,
+                        endpoint,
+                        error,
+                    } => {
+                        let result = match (endpoint, error) {
+                            (Some(endpoint), None) => {
+                                if let Some(record) =
+                                    source.nodes.lock().unwrap().get_mut(&target_id)
+                                {
+                                    record.endpoint = Some(endpoint.clone());
+                                }
+                                Ok(endpoint)
+                            }
+                            (_, Some(error)) => Err(error),
+                            _ => Err("process activation returned no endpoint".to_owned()),
+                        };
+                        if let Some(waiter) =
+                            id.and_then(|id| source.activations.lock().unwrap().remove(&id))
+                        {
+                            let _ = waiter.send(result);
                         }
                     }
                 }
@@ -231,14 +253,6 @@ impl ProcessTreeTargetSource {
                             .unwrap()
                             .insert(target_id.clone(), target);
                         let _ = source.events.send(TargetSourceEvent::Upserted(host));
-                        if source.discovering.load(Ordering::Relaxed) {
-                            let nested_source = source.clone();
-                            source.track(tokio::spawn(async move {
-                                nested_source
-                                    .correlate_renderer_if_enabled(&target_id)
-                                    .await;
-                            }));
-                        }
                     }
                     BridgeEvent::TargetDestroyed { web_contents_id } => {
                         let target_id = renderer_target_id(web_contents_id);
@@ -255,6 +269,7 @@ impl ProcessTreeTargetSource {
                             .retain(|_, alias| alias != &target_id);
                         source.remove_nested_targets(&target_id);
                         source.supervised_targets.lock().unwrap().remove(&target_id);
+                        source.debugger_targets.lock().unwrap().remove(&target_id);
                         if let Some(endpoint) = source.attachments.lock().await.remove(&target_id) {
                             endpoint.close().await;
                         }
@@ -279,19 +294,14 @@ impl ProcessTreeTargetSource {
             }
             return;
         }
-        let already_attached = self.attachments.lock().await.contains_key(renderer_id);
-        let attachment = match self.attach(renderer_id, false).await {
-            Ok(attachment) => attachment,
-            Err(_) => {
-                self.renderer_correlations
-                    .lock()
-                    .unwrap()
-                    .remove(renderer_id);
-                return;
-            }
+        let Some(endpoint) = self.attachments.lock().await.get(renderer_id).cloned() else {
+            self.renderer_correlations
+                .lock()
+                .unwrap()
+                .remove(renderer_id);
+            return;
         };
-        let result = attachment
-            .endpoint
+        let result = endpoint
             .client()
             .target_get_target_info(TargetGetTargetInfoParams::new())
             .await;
@@ -322,11 +332,10 @@ impl ProcessTreeTargetSource {
                 .unwrap()
                 .remove(renderer_id);
         }
-        let mut notifications = attachment.endpoint.subscribe();
+        let mut notifications = endpoint.subscribe();
         let mut auto_attach = TargetSetAutoAttachParams::new(true, false);
         auto_attach.flatten = Some(true);
-        if attachment
-            .endpoint
+        if endpoint
             .client()
             .target_set_auto_attach(auto_attach)
             .await
@@ -405,19 +414,6 @@ impl ProcessTreeTargetSource {
             .lock()
             .unwrap()
             .remove(renderer_id);
-        if !already_attached {
-            let endpoint = self.attachments.lock().await.remove(renderer_id);
-            if let Some(endpoint) = endpoint {
-                endpoint.close().await;
-            }
-        }
-    }
-
-    async fn correlate_renderer_if_enabled(&self, renderer_id: &str) {
-        let _discovery_change = self.discovery_change.lock().await;
-        if self.discovering.load(Ordering::Relaxed) {
-            self.correlate_renderer(renderer_id).await;
-        }
     }
 
     async fn start_nested_discovery(&self, parent_target_id: &str) {
@@ -436,18 +432,13 @@ impl ProcessTreeTargetSource {
 
             return;
         }
-        let attachment = match self.attach(parent_target_id, false).await {
-            Ok(attachment) => attachment,
-            Err(error) => {
-                self.supervised_targets
-                    .lock()
-                    .unwrap()
-                    .remove(parent_target_id);
-                eprintln!("nested target discovery is unavailable for {parent_target_id}: {error}");
-                return;
-            }
+        let Some(endpoint) = self.attachments.lock().await.get(parent_target_id).cloned() else {
+            self.supervised_targets
+                .lock()
+                .unwrap()
+                .remove(parent_target_id);
+            return;
         };
-        let endpoint = attachment.endpoint;
         let process_id = self
             .renderers
             .lock()
@@ -551,13 +542,6 @@ impl ProcessTreeTargetSource {
         }
     }
 
-    async fn start_nested_discovery_if_enabled(&self, parent_target_id: &str) {
-        let _discovery_change = self.discovery_change.lock().await;
-        if self.discovering.load(Ordering::Relaxed) {
-            self.start_nested_discovery(parent_target_id).await;
-        }
-    }
-
     fn remove_nested_targets(&self, parent_target_id: &str) {
         let removed = {
             let mut nested = self.nested_targets.lock().unwrap();
@@ -603,6 +587,36 @@ impl ProcessTreeTargetSource {
             .is_err()
         {
             self.scans.lock().unwrap().remove(&id);
+        }
+    }
+
+    async fn activate_node_endpoint(
+        &self,
+        target_id: &str,
+        process_id: u32,
+    ) -> Result<String, String> {
+        if self.control.lock().await.is_none() {
+            return Err("process-tree provider is closed".to_owned());
+        }
+        let id = self.next_scan_id.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        self.activations.lock().unwrap().insert(id, sender);
+        self.send_command(serde_json::json!({
+            "command": "activate",
+            "id": id,
+            "targetId": target_id,
+            "processId": process_id,
+        }))
+        .await;
+        match tokio::time::timeout(std::time::Duration::from_secs(30), receiver).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("process-tree provider closed during activation".to_owned()),
+            Err(_) => {
+                self.activations.lock().unwrap().remove(&id);
+                Err(format!(
+                    "timed out while activating the inspector for process {process_id}"
+                ))
+            }
         }
     }
 
@@ -664,51 +678,59 @@ impl TargetSource for ProcessTreeTargetSource {
         }
         if enabled {
             self.refresh_renderers().await;
-            let renderer_ids = self
-                .renderers
-                .lock()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
-            for renderer_id in renderer_ids {
-                self.correlate_renderer(&renderer_id).await;
-            }
-            let browser_ids = self
+        }
+    }
+
+    async fn set_child_discovery(&self, target_id: &str, enabled: bool) {
+        let _discovery_change = self.discovery_change.lock().await;
+        let process_id = self
+            .nodes
+            .lock()
+            .unwrap()
+            .get(target_id)
+            .and_then(|record| record.target.process_id);
+        if let Some(process_id) = process_id {
+            self.send_command(serde_json::json!({
+                "command": "setProcessDiscovery",
+                "processId": process_id,
+                "enabled": enabled,
+            }))
+            .await;
+        }
+        if enabled {
+            if self.renderers.lock().unwrap().contains_key(target_id) {
+                self.correlate_renderer(target_id).await;
+            } else if self
                 .nodes
                 .lock()
                 .unwrap()
-                .iter()
-                .filter(|(_, record)| {
-                    record.endpoint.is_some() && record.target.snapshot.target_type == "browser"
-                })
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>();
-            for browser_id in browser_ids {
-                self.start_nested_discovery(&browser_id).await;
+                .get(target_id)
+                .is_some_and(|record| record.target.snapshot.target_type == "browser")
+            {
+                self.start_nested_discovery(target_id).await;
             }
-        } else {
-            let renderer_ids = self
-                .supervised_targets
-                .lock()
-                .unwrap()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
-            for renderer_id in renderer_ids {
-                if let Some(endpoint) = self.attachments.lock().await.get(&renderer_id).cloned() {
-                    if self.renderers.lock().unwrap().contains_key(&renderer_id) {
-                        let mut params = TargetSetAutoAttachParams::new(false, false);
-                        params.flatten = Some(true);
-                        let _ = endpoint.client().target_set_auto_attach(params).await;
-                    } else {
-                        let _ = endpoint
-                            .client()
-                            .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
-                            .await;
-                    }
-                }
+            return;
+        }
+
+        if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned() {
+            if self.renderers.lock().unwrap().contains_key(target_id) {
+                let mut params = TargetSetAutoAttachParams::new(false, false);
+                params.flatten = Some(true);
+                let _ = endpoint.client().target_set_auto_attach(params).await;
+            } else {
+                let _ = endpoint
+                    .client()
+                    .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
+                    .await;
             }
+        }
+        self.supervised_targets.lock().unwrap().remove(target_id);
+        self.renderer_correlations.lock().unwrap().remove(target_id);
+        self.remove_nested_targets(target_id);
+        if !self.debugger_targets.lock().unwrap().contains(target_id)
+            && let Some(endpoint) = self.attachments.lock().await.remove(target_id)
+        {
+            endpoint.close().await;
         }
     }
 
@@ -726,6 +748,10 @@ impl TargetSource for ProcessTreeTargetSource {
             });
         }
         if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned() {
+            self.debugger_targets
+                .lock()
+                .unwrap()
+                .insert(target_id.to_owned());
             return Ok(TargetAttachment {
                 endpoint,
                 stole_external_owner: false,
@@ -750,18 +776,26 @@ impl TargetSource for ProcessTreeTargetSource {
                 .lock()
                 .await
                 .insert(target_id.to_owned(), endpoint.clone());
+            self.debugger_targets
+                .lock()
+                .unwrap()
+                .insert(target_id.to_owned());
             return Ok(TargetAttachment {
                 endpoint,
                 stole_external_owner: false,
             });
         }
-        let node_endpoint = self
-            .nodes
-            .lock()
-            .unwrap()
-            .get(target_id)
-            .and_then(|record| record.endpoint.clone());
-        let (endpoint, stole_external_owner) = if let Some(url) = node_endpoint {
+        let node = self.nodes.lock().unwrap().get(target_id).cloned();
+        let (endpoint, stole_external_owner) = if let Some(node) = node {
+            let url = match node.endpoint {
+                Some(endpoint) => endpoint,
+                None => {
+                    let process_id = node.target.process_id.ok_or_else(|| {
+                        format!("target '{target_id}' has no process to activate")
+                    })?;
+                    self.activate_node_endpoint(target_id, process_id).await?
+                }
+            };
             let transport = Arc::new(
                 CdpWebSocketTransport::connect(&url)
                     .await
@@ -791,6 +825,10 @@ impl TargetSource for ProcessTreeTargetSource {
             .lock()
             .await
             .insert(target_id.to_owned(), endpoint.clone());
+        self.debugger_targets
+            .lock()
+            .unwrap()
+            .insert(target_id.to_owned());
         Ok(TargetAttachment {
             endpoint,
             stole_external_owner,
@@ -802,9 +840,15 @@ impl TargetSource for ProcessTreeTargetSource {
             // The main process endpoint is shared with the renderer bridge and outlives sessions.
             return;
         }
-        if self.supervised_targets.lock().unwrap().contains(target_id) {
+        self.debugger_targets.lock().unwrap().remove(target_id);
+        if self.discovering.load(Ordering::Relaxed)
+            && self.supervised_targets.lock().unwrap().contains(target_id)
+        {
             return;
         }
+        self.supervised_targets.lock().unwrap().remove(target_id);
+        self.renderer_correlations.lock().unwrap().remove(target_id);
+        self.remove_nested_targets(target_id);
         let endpoint = self.attachments.lock().await.remove(target_id);
         if let Some(endpoint) = endpoint {
             endpoint.close().await;

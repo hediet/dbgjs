@@ -172,6 +172,8 @@ pub struct ContextSnapshot {
     pub id: String,
     pub display_name: String,
     pub revision: u64,
+    #[serde(default)]
+    pub resource_revision: u64,
     pub connections: Vec<ConnectionSnapshot>,
     pub target_forest: Vec<TargetNodeSnapshot>,
     pub breakpoints: Vec<BreakpointSnapshot>,
@@ -396,12 +398,22 @@ pub struct TargetNodeSnapshot {
     pub connection_generation: u64,
     pub target: TargetSnapshot,
     pub parent_target_id: Option<String>,
+    pub attachment: TargetAttachmentState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetAttachmentState {
+    Detached,
+    External,
+    Debugger,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CanonicalTargetSnapshot {
     pub context_id: String,
+    pub resource_id: String,
     pub target_id: String,
     pub connection_id: String,
     pub connection_generation: u64,
@@ -507,6 +519,11 @@ impl ConnectionSnapshot {
             connection_generation: self.generation,
             target: (*target).clone(),
             parent_target_id: parent_target_id.map(str::to_owned),
+            attachment: if target.attached {
+                TargetAttachmentState::External
+            } else {
+                TargetAttachmentState::Detached
+            },
         });
         for child in children.get(target_id).into_iter().flatten() {
             self.append_target_node(child, Some(target_id), targets, children, visited, forest);
@@ -791,6 +808,8 @@ pub enum UncompactedProjectionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub enum SourceTreeKind {
     Loaded,
+    SourceMapped,
+    Formatted,
     Resolved,
 }
 
@@ -840,6 +859,8 @@ pub enum TargetAttachmentOutcome {
 pub struct TargetAttachOptions {
     #[serde(default)]
     pub force: bool,
+    #[serde(default)]
+    pub expected_connection_generation: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1882,6 +1903,13 @@ pub trait DebuggerServiceApi {
         target_id: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
 
+    async fn detach_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        expected_connection_generation: Option<u64>,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
     async fn resume_target(
         context_id: String,
         connection_id: String,
@@ -2194,8 +2222,9 @@ pub trait DebuggerServiceApi {
 mod tests {
     use super::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, PromiseClassification,
-        PromiseOrigin, PromiseSnapshot, PromiseState, TargetSnapshot, TargetWaitPredicate,
-        ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector, ValueSnapshot,
+        PromiseOrigin, PromiseSnapshot, PromiseState, TargetAttachmentState, TargetSnapshot,
+        TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector,
+        ValueSnapshot,
     };
 
     #[test]
@@ -2298,6 +2327,7 @@ mod tests {
             .unwrap();
         assert_eq!(z_root.connection_id, "connection");
         assert_eq!(z_root.connection_generation, 7);
+        assert_eq!(z_root.attachment, TargetAttachmentState::External);
         assert_eq!(
             forest
                 .iter()

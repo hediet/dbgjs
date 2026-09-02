@@ -403,6 +403,10 @@ impl CdpDebuggerSession {
         Ok(())
     }
 
+    pub async fn finish_heap_snapshot_bytes(&self) -> std::io::Result<u64> {
+        Ok(self.finish_heap_snapshot().await?.bytes_written)
+    }
+
     pub(crate) async fn finish_heap_snapshot(&self) -> std::io::Result<HeapSnapshotWriteResult> {
         let Some(mut snapshot) = self.heap_snapshot.lock().await.take() else {
             return Err(std::io::Error::new(

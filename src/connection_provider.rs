@@ -917,6 +917,7 @@ impl ConnectionRuntime {
                             .send(ProviderTargetEvent::Removed(target_id));
                     }
                     ProviderEvent::ScanComplete { .. } => {}
+                    ProviderEvent::ActivationComplete { .. } => {}
                 }
             }
         });
@@ -1406,6 +1407,12 @@ pub(crate) enum ProviderEvent {
     },
     ScanComplete {
         id: Option<u64>,
+    },
+    ActivationComplete {
+        id: Option<u64>,
+        target_id: String,
+        endpoint: Option<String>,
+        error: Option<String>,
     },
 }
 
