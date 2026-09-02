@@ -12,6 +12,8 @@
     "test:e2e:bounded-evaluation": "playwright test tests/playwright/bounded-evaluation.spec.mjs",
     "test:e2e:minified-node": "playwright test tests/playwright/minified-node-cli.spec.mjs",
     "test:e2e:context-relay": "playwright test tests/playwright/context-relay-cli.spec.mjs",
+    "test:e2e:process-tree-browser": "playwright test tests/playwright/process-tree-browser-cli.spec.mjs",
+    "generate:target-tree-transcripts": "node tests/playwright/target-tree-cli-transcripts.mjs",
     "test:e2e:cli": "playwright test tests/playwright/cli-service.spec.mjs",
     "test:e2e:playwright-page": "playwright test tests/playwright/playwright-page-cli.spec.mjs",
     "test:e2e:typescript": "playwright test tests/playwright/typescript-cli.spec.mjs",

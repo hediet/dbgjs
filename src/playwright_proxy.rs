@@ -51,7 +51,7 @@ pub async fn start(
     let (completion_sender, completion) = oneshot::channel();
     let capability_deadline = Instant::now() + SESSION_TIMEOUT;
     tokio::spawn(async move {
-        let _ = run(
+        if let Err(error) = run(
             listener,
             source,
             page,
@@ -59,7 +59,10 @@ pub async fn start(
             cancel_receiver,
             capability_deadline,
         )
-        .await;
+        .await
+        {
+            eprintln!("Playwright CDP proxy failed: {error}");
+        }
         let _ = completion_sender.send(());
     });
     Ok(PlaywrightProxy {
@@ -210,7 +213,19 @@ async fn bridge(
             _ = cancel.changed() => return Ok(()),
             message = client_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
-                match client_request(message?, &scope, &mut pending, &internal)? {
+                let message = message?;
+                if let Message::Close(frame) = message {
+                    let close = Message::Close(frame);
+                    upstream_sender.send(close.clone()).await?;
+                    client_sender.send(close).await?;
+                    return Ok(());
+                }
+                let summary = cdp_message_summary(&message);
+                let action = client_request(message, &scope, &mut pending, &internal)
+                    .inspect_err(|error| eprintln!(
+                        "Playwright CDP proxy rejected client message ({summary}): {error}"
+                    ))?;
+                match action {
                     ClientAction::Forward(message) => upstream_sender.send(message).await?,
                     ClientAction::Reply(message) => client_sender.send(message).await?,
                     ClientAction::AttachSelected(request_id) => {
@@ -229,7 +244,8 @@ async fn bridge(
                             "method": "Target.attachToTarget",
                             "params": {
                                 "targetId": scope.page.target_id,
-                                "flatten": true
+                                "flatten": true,
+                                "__jsdbgAutoAttach": true
                             }
                         }))?).await?;
                     }
@@ -238,12 +254,22 @@ async fn bridge(
             }
             message = upstream_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
-                match upstream_message(
-                    message?,
+                let message = message?;
+                if let Message::Close(frame) = message {
+                    client_sender.send(Message::Close(frame)).await?;
+                    return Ok(());
+                }
+                let summary = cdp_message_summary(&message);
+                let action = upstream_message(
+                    message,
                     &mut scope,
                     &mut pending,
                     &mut internal,
-                )? {
+                )
+                .inspect_err(|error| eprintln!(
+                    "Playwright CDP proxy rejected upstream message ({summary}): {error}"
+                ))?;
+                match action {
                     UpstreamAction::Forward(message) => client_sender.send(message).await?,
                     UpstreamAction::ForwardAndClose(message) => {
                         client_sender.send(message).await?;
@@ -269,9 +295,38 @@ async fn bridge(
                         }))?).await?;
                     }
                 }
+
             }
         }
     }
+}
+
+fn cdp_message_summary(message: &Message) -> String {
+    let bytes = match message {
+        Message::Text(text) => text.as_bytes(),
+        Message::Binary(bytes) => bytes.as_ref(),
+        Message::Close(_) => return "close".to_owned(),
+        Message::Ping(_) => return "ping".to_owned(),
+        Message::Pong(_) => return "pong".to_owned(),
+        Message::Frame(_) => return "frame".to_owned(),
+    };
+    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
+        return "invalid JSON".to_owned();
+    };
+    let field = |name: &str| {
+        value
+            .get(name)
+            .map(Value::to_string)
+            .unwrap_or_else(|| "-".to_owned())
+    };
+    format!(
+        "id={}, method={}, sessionId={}, hasResult={}, hasError={}",
+        field("id"),
+        field("method"),
+        field("sessionId"),
+        value.get("result").is_some(),
+        value.get("error").is_some()
+    )
 }
 
 fn allocate_internal_request_id(

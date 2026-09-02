@@ -7,8 +7,9 @@ use cdp_client::service_api::{
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, ObservationResult,
-    PlaywrightChannel, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, PromiseSelectionSnapshot,
-    PromiseSnapshot, ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceFormattingMode,
+    PlaywrightChannel, ProcessRole, ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot,
+    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ResourceGraphSnapshot,
+    ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceFormattingMode,
     SourceFormattingSettings, SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot,
     SourceSearchSnapshot, SourceSnapshotInfo, SourceTreeSnapshot, TargetAttachmentOutcome,
     TargetAttachmentResult, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
@@ -58,6 +59,7 @@ pub struct CpuProfileOutputOptions<'a> {
 
 #[derive(Clone, Copy)]
 pub struct ProcessTreeOutputOptions<'a> {
+    pub root_kind: ProcessRootKind,
     pub command_line: bool,
     pub stats: bool,
     pub filter: Option<&'a str>,
@@ -67,6 +69,7 @@ pub struct ProcessTreeOutputOptions<'a> {
 impl Default for ProcessTreeOutputOptions<'_> {
     fn default() -> Self {
         Self {
+            root_kind: ProcessRootKind::Vscode,
             command_line: true,
             stats: false,
             filter: None,
@@ -539,6 +542,41 @@ impl HumanOutput for ServiceInfo {
     }
 }
 
+impl HumanOutput for ResourceGraphSnapshot {
+    fn print_human(&self) {
+        println!(
+            "Resource graph revision {} ({} resources, {} relations)",
+            self.revision,
+            self.resources.len(),
+            self.relations.len()
+        );
+        for resource in &self.resources {
+            let kinds = resource.kinds.join(",");
+            let capabilities = resource
+                .capabilities
+                .iter()
+                .map(|capability| capability.kind.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let label = resource.label.as_deref().unwrap_or("");
+            println!(
+                "  {}  [{}] {}{}",
+                resource.id,
+                kinds,
+                label,
+                if capabilities.is_empty() {
+                    String::new()
+                } else {
+                    format!("  <{capabilities}>")
+                }
+            );
+        }
+        for relation in &self.relations {
+            println!("  {} -{}-> {}", relation.from, relation.kind, relation.to);
+        }
+    }
+}
+
 impl HumanOutput for bool {
     fn print_human(&self) {
         println!(
@@ -795,6 +833,8 @@ fn source_tree_lines(
             "No {} sources are currently observed.",
             match snapshot.kind {
                 cdp_client::service_api::SourceTreeKind::Loaded => "loaded",
+                cdp_client::service_api::SourceTreeKind::SourceMapped => "source-mapped",
+                cdp_client::service_api::SourceTreeKind::Formatted => "formatted",
                 cdp_client::service_api::SourceTreeKind::Resolved => "resolved",
             }
         )];
@@ -1617,30 +1657,115 @@ impl HumanOutput for TargetListOutput {
             "Targets in context {} (rev {}):",
             self.context_id, self.revision
         );
-        for entry in &self.targets {
-            let target = &entry.target;
-            let title = if target.title.is_empty() {
-                "(untitled)"
-            } else {
-                &target.title
-            };
-            println!(
-                "{} {}/{}  [{}{}]  {:?}  {}{}",
-                if entry.selected { "*" } else { " " },
-                terminal_text(&entry.connection_id),
-                terminal_text(&target.target_id),
-                terminal_text(&target.target_type),
-                if target.attached { "; attached" } else { "" },
-                title,
-                terminal_text(&target.url),
-                entry
-                    .parent_target_id
-                    .as_deref()
-                    .map(|parent| format!("  parent={}", terminal_text(parent)))
-                    .unwrap_or_default(),
+        let entries_by_id = self
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                (
+                    (entry.connection_id.clone(), entry.target.target_id.clone()),
+                    index,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut children = BTreeMap::<usize, Vec<usize>>::new();
+        let mut roots = Vec::new();
+        for (index, entry) in self.targets.iter().enumerate() {
+            let parent = entry.parent_target_id.as_ref().and_then(|parent_id| {
+                entries_by_id
+                    .get(&(entry.connection_id.clone(), parent_id.clone()))
+                    .copied()
+            });
+            match parent {
+                Some(parent) if parent != index => children.entry(parent).or_default().push(index),
+                _ => roots.push(index),
+            }
+        }
+        let mut visited = BTreeSet::new();
+        for (index, root) in roots.iter().enumerate() {
+            print_target_tree(
+                self,
+                *root,
+                None,
+                "",
+                index + 1 == roots.len(),
+                &children,
+                &mut visited,
             );
         }
+        for index in 0..self.targets.len() {
+            if !visited.contains(&index) {
+                print_target_tree(self, index, None, "", true, &children, &mut visited);
+            }
+        }
     }
+}
+
+fn print_target_tree(
+    output: &TargetListOutput,
+    index: usize,
+    parent_index: Option<usize>,
+    prefix: &str,
+    last: bool,
+    children: &BTreeMap<usize, Vec<usize>>,
+    visited: &mut BTreeSet<usize>,
+) {
+    if !visited.insert(index) {
+        return;
+    }
+    let entry = &output.targets[index];
+    let target = &entry.target;
+    let title = if target.title.is_empty() {
+        "(untitled)"
+    } else {
+        &target.title
+    };
+    let selector = target_tree_selector(entry, parent_index.map(|index| &output.targets[index]));
+    println!(
+        "{prefix}{}{} {}  [{}{}]  {:?}  {}",
+        if last { "└─" } else { "├─" },
+        if entry.selected { "*" } else { "" },
+        terminal_text(&selector),
+        terminal_text(&target.target_type),
+        if target.attached { "; attached" } else { "" },
+        title,
+        terminal_text(&target.url),
+    );
+    let child_prefix = format!("{prefix}{}", if last { "  " } else { "│ " });
+    let child_indices = children.get(&index).map(Vec::as_slice).unwrap_or_default();
+    for (child_index, child) in child_indices.iter().enumerate() {
+        print_target_tree(
+            output,
+            *child,
+            Some(index),
+            &child_prefix,
+            child_index + 1 == child_indices.len(),
+            children,
+            visited,
+        );
+    }
+}
+
+fn target_tree_selector(entry: &TargetListEntry, parent: Option<&TargetListEntry>) -> String {
+    let Some(parent) = parent else {
+        return format!("{}/{}", entry.connection_id, entry.target.target_id);
+    };
+    let target_id = entry.target.target_id.as_str();
+    let parent_id = parent.target.target_id.as_str();
+    if let Some(suffix) = target_id
+        .strip_prefix(parent_id)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+    {
+        return format!("./{suffix}");
+    }
+    let target_directory = target_id.rsplit_once('/').map(|(directory, _)| directory);
+    let parent_directory = parent_id.rsplit_once('/').map(|(directory, _)| directory);
+    if target_directory == parent_directory
+        && let Some((_, name)) = target_id.rsplit_once('/')
+    {
+        return format!("./{name}");
+    }
+    format!("./{target_id}")
 }
 
 impl HumanOutput for Vec<ProcessTreeSnapshot> {
@@ -1651,7 +1776,10 @@ impl HumanOutput for Vec<ProcessTreeSnapshot> {
 
 fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTreeOutputOptions<'_>) {
     if trees.is_empty() {
-        println!("No running VS Code process trees.");
+        println!(
+            "No running {} process trees.",
+            process_root_kind(options.root_kind)
+        );
         return;
     }
     let rendered = trees
@@ -1663,7 +1791,8 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         .collect::<Vec<_>>();
     if rendered.is_empty() {
         println!(
-            "No VS Code process tree paths matched {}.",
+            "No {} process tree paths matched {}.",
+            process_root_kind(options.root_kind),
             options.filter.unwrap_or_default()
         );
         return;
@@ -1672,21 +1801,30 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         if tree_index != 0 {
             println!();
         }
-        println!(
-            "VS Code process tree {}  ({} attachable targets{})",
-            tree.root_process_id,
+        let mut details = vec![format!(
+            "{} attachable processes",
             tree.processes
                 .iter()
                 .filter(|process| process.attachable)
-                .count(),
-            if tree.runtime_metadata_available {
-                "; window metadata available"
-            } else {
-                ""
-            }
+                .count()
+        )];
+        if !tree.targets.is_empty() {
+            details.push(format!("{} discovered targets", tree.targets.len()));
+        }
+        if tree.runtime_metadata_available {
+            details.push("window metadata available".to_owned());
+        }
+        println!(
+            "{} process tree {}  ({})",
+            process_root_kind(tree.root_kind),
+            tree.root_process_id,
+            details.join("; "),
         );
         for line in lines {
             println!("{line}");
+        }
+        if let Some(error) = &tree.target_discovery_error {
+            println!("  target discovery incomplete: {}", terminal_text(error));
         }
     }
 }
@@ -1694,7 +1832,12 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
 #[derive(Clone)]
 enum ProcessTreeLeaf<'a> {
     Process(&'a ProcessSnapshot),
-    Window { id: u32, title: Option<&'a str> },
+    Target(&'a ProcessTargetSnapshot),
+    Window {
+        root_pid: u32,
+        id: u32,
+        title: Option<&'a str>,
+    },
     Session(&'a AgentSessionSnapshot),
 }
 
@@ -1721,6 +1864,7 @@ impl TreeAggregate for ProcessOrder {
 }
 
 struct ProcessTreeStyle {
+    root_kind: ProcessRootKind,
     command_line: bool,
     stats: bool,
     colorize: bool,
@@ -1751,6 +1895,7 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                 let label = process_label(
                     process,
                     ProcessTreeOutputOptions {
+                        root_kind: self.root_kind,
                         command_line: self.command_line,
                         stats: self.stats,
                         filter: None,
@@ -1759,8 +1904,28 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                 );
                 style_process_label(label, process.attachable, self.colorize)
             }
-            Some(ProcessTreeLeaf::Window { id, title }) => format!(
-                "window {id}{}",
+            Some(ProcessTreeLeaf::Target(target)) => {
+                let target = &target.target;
+                let title = if target.title.is_empty() {
+                    "(untitled)"
+                } else {
+                    &target.title
+                };
+                format!(
+                    "{}  [{}{}]  {:?}  {}",
+                    terminal_text(label),
+                    terminal_text(&target.target_type),
+                    if target.attached { "; attached" } else { "" },
+                    title,
+                    terminal_text(&target.url),
+                )
+            }
+            Some(ProcessTreeLeaf::Window {
+                root_pid,
+                id,
+                title,
+            }) => format!(
+                "w:{root_pid}/{id}  window{}",
                 title.map(|title| format!("  {title}")).unwrap_or_default()
             ),
             Some(ProcessTreeLeaf::Session(session)) => style_session_label(
@@ -1844,6 +2009,7 @@ fn process_tree_lines(
     insert_process_render_node(&mut tree, &root, &mut Vec::new(), &mut order);
     tree.render_with_options(
         &ProcessTreeStyle {
+            root_kind: options.root_kind,
             command_line: options.command_line,
             stats: options.stats,
             colorize: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
@@ -1867,13 +2033,54 @@ fn process_render_tree(tree: &ProcessTreeSnapshot) -> Option<ProcessRenderNode<'
     else {
         return None;
     };
-    Some(process_render_node(root, root.window_id, &children))
+    let targets_by_id = tree
+        .targets
+        .iter()
+        .map(|target| (target.target.target_id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+    let mut target_children = BTreeMap::<String, Vec<&ProcessTargetSnapshot>>::new();
+    let mut process_targets = BTreeMap::<u32, Vec<&ProcessTargetSnapshot>>::new();
+    for target in &tree.targets {
+        if target.target.target_id == "$node-root" {
+            continue;
+        }
+        let parent = target
+            .target
+            .parent_id
+            .as_deref()
+            .or(target.target.opener_id.as_deref())
+            .and_then(|parent| targets_by_id.get(parent).copied());
+        if let Some(parent) = parent
+            && parent.target.target_id != "$node-root"
+        {
+            target_children
+                .entry(parent.target.target_id.clone())
+                .or_default()
+                .push(target);
+        } else {
+            process_targets
+                .entry(target.process_id.unwrap_or(tree.root_process_id))
+                .or_default()
+                .push(target);
+        }
+    }
+    Some(process_render_node(
+        root,
+        tree.root_process_id,
+        root.window_id,
+        &children,
+        &process_targets,
+        &target_children,
+    ))
 }
 
 fn process_render_node<'a>(
     process: &'a ProcessSnapshot,
+    root_pid: u32,
     active_window: Option<u32>,
     children: &BTreeMap<u32, Vec<&'a ProcessSnapshot>>,
+    process_targets: &BTreeMap<u32, Vec<&'a ProcessTargetSnapshot>>,
+    target_children: &BTreeMap<String, Vec<&'a ProcessTargetSnapshot>>,
 ) -> ProcessRenderNode<'a> {
     let mut rendered_children = process
         .agent_sessions
@@ -1905,6 +2112,7 @@ fn process_render_node<'a>(
                 rendered_children.push(ProcessRenderNode {
                     path_segment: format!("window {window_id}"),
                     leaf: ProcessTreeLeaf::Window {
+                        root_pid,
                         id: window_id,
                         title,
                     },
@@ -1912,15 +2120,36 @@ fn process_render_node<'a>(
                         .iter()
                         .filter(|candidate| candidate.window_id == Some(window_id))
                         .map(|window_child| {
-                            process_render_node(window_child, Some(window_id), children)
+                            process_render_node(
+                                window_child,
+                                root_pid,
+                                Some(window_id),
+                                children,
+                                process_targets,
+                                target_children,
+                            )
                         })
                         .collect(),
                 });
             }
             Some(_) => {}
-            None => rendered_children.push(process_render_node(child, active_window, children)),
+            None => rendered_children.push(process_render_node(
+                child,
+                root_pid,
+                active_window,
+                children,
+                process_targets,
+                target_children,
+            )),
         }
     }
+    rendered_children.extend(
+        process_targets
+            .get(&process.process_id)
+            .into_iter()
+            .flatten()
+            .map(|target| process_target_render_node(target, None, target_children)),
+    );
     ProcessRenderNode {
         path_segment: process_path_segment(process),
         leaf: ProcessTreeLeaf::Process(process),
@@ -1928,9 +2157,57 @@ fn process_render_node<'a>(
     }
 }
 
+fn process_target_render_node<'a>(
+    target: &'a ProcessTargetSnapshot,
+    parent: Option<&ProcessTargetSnapshot>,
+    children: &BTreeMap<String, Vec<&'a ProcessTargetSnapshot>>,
+) -> ProcessRenderNode<'a> {
+    ProcessRenderNode {
+        path_segment: process_target_selector(target, parent),
+        leaf: ProcessTreeLeaf::Target(target),
+        children: children
+            .get(&target.target.target_id)
+            .into_iter()
+            .flatten()
+            .map(|child| process_target_render_node(child, Some(target), children))
+            .collect(),
+    }
+}
+
+fn process_target_selector(
+    target: &ProcessTargetSnapshot,
+    parent: Option<&ProcessTargetSnapshot>,
+) -> String {
+    let Some(parent) = parent else {
+        return target.target.target_id.clone();
+    };
+    target
+        .target
+        .target_id
+        .strip_prefix(&parent.target.target_id)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .map(|suffix| format!("./{suffix}"))
+        .or_else(|| {
+            let target_directory = target.target.target_id.rsplit_once('/')?.0;
+            let parent_directory = parent.target.target_id.rsplit_once('/')?.0;
+            (target_directory == parent_directory).then(|| {
+                format!(
+                    "./{}",
+                    target
+                        .target
+                        .target_id
+                        .rsplit_once('/')
+                        .expect("target directory was found")
+                        .1
+                )
+            })
+        })
+        .unwrap_or_else(|| format!("./{}", target.target.target_id))
+}
+
 fn process_path_segment(process: &ProcessSnapshot) -> String {
     let label = process.display_name.as_deref().unwrap_or(&process.name);
-    format!("{} {label}", process.process_id)
+    format!("p:{} {label}", process.process_id)
 }
 
 fn filter_process_render_node<'a>(
@@ -2003,12 +2280,46 @@ fn process_trees_json(
                 });
             }
             if !options.command_line {
-                for process in processes {
+                for process in processes.iter_mut() {
                     if let Some(process) = process.as_object_mut() {
                         process.remove("commandLine");
                     }
                 }
             }
+            for process in processes.iter_mut() {
+                if let Some(process) = process.as_object_mut()
+                    && let Some(process_id) =
+                        process.get("processId").and_then(serde_json::Value::as_u64)
+                {
+                    process.insert(
+                        "reference".to_owned(),
+                        serde_json::Value::String(format!("p:{process_id}")),
+                    );
+                    process.insert(
+                        "locator".to_owned(),
+                        serde_json::Value::String(format!(
+                            "{}://{}/process/{process_id}",
+                            match tree.root_kind {
+                                ProcessRootKind::Vscode => "vscode",
+                                _ => "process-tree",
+                            },
+                            tree.root_process_id,
+                        )),
+                    );
+                }
+            }
+        }
+        if let Some(selected) = &selected
+            && let Some(targets) = value
+                .get_mut("targets")
+                .and_then(serde_json::Value::as_array_mut)
+        {
+            targets.retain(|target| {
+                target
+                    .get("processId")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none_or(|process_id| selected.contains(&(process_id as u32)))
+            });
         }
         result.push(value);
     }
@@ -2063,15 +2374,10 @@ fn process_label(process: &ProcessSnapshot, options: ProcessTreeOutputOptions<'_
         .then(|| process_command_summary(process))
         .flatten();
     format!(
-        "{}  {}  [{}]{}{}{}",
+        "p:{}  {}  [{}]{}{}",
         process.process_id,
         label,
         process_role(&process.role),
-        process
-            .debug_target_id
-            .as_deref()
-            .map(|target_id| format!("  target {target_id}"))
-            .unwrap_or_default(),
         stats.unwrap_or_default(),
         command
             .as_deref()
@@ -2270,6 +2576,8 @@ fn breakpoint_status(status: &BreakpointStatus) -> String {
 fn process_role(role: &ProcessRole) -> &'static str {
     match role {
         ProcessRole::VscodeMain => "vscode-main",
+        ProcessRole::ElectronMain => "electron-main",
+        ProcessRole::BrowserMain => "browser-main",
         ProcessRole::Renderer => "renderer",
         ProcessRole::ExtensionHost => "extension-host",
         ProcessRole::NodeUtility => "node-utility",
@@ -2290,6 +2598,15 @@ fn process_role(role: &ProcessRole) -> &'static str {
         ProcessRole::Crashpad => "crashpad",
         ProcessRole::Utility => "utility",
         ProcessRole::Other => "other",
+    }
+}
+
+fn process_root_kind(kind: ProcessRootKind) -> &'static str {
+    match kind {
+        ProcessRootKind::Vscode => "VS Code",
+        ProcessRootKind::Node => "Node.js",
+        ProcessRootKind::Electron => "Electron",
+        ProcessRootKind::Browser => "Browser",
     }
 }
 
@@ -3854,12 +4171,13 @@ fn print_target_breakpoint_explanation(
 mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
-        ProcessTreeOutputOptions, SourceTreeOutputOptions, aggregate_coverage_entries,
-        coverage_entries, effective_file_metrics, heap_path_lines, heap_show_lines,
-        looks_minified_identifier, page_logs, process_tree_lines, process_trees_json,
-        render_compacted_source_graph, render_evaluation, render_heap_classes_human,
-        render_uncompacted_source_graph, render_value_snapshot, source_tree_lines,
-        style_process_label, style_session_label, terminal_text,
+        ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
+        aggregate_coverage_entries, coverage_entries, effective_file_metrics, heap_path_lines,
+        heap_show_lines, looks_minified_identifier, page_logs, process_tree_lines,
+        process_trees_json, render_compacted_source_graph, render_evaluation,
+        render_heap_classes_human, render_uncompacted_source_graph, render_value_snapshot,
+        source_tree_lines, style_process_label, style_session_label, target_tree_selector,
+        terminal_text,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -3868,11 +4186,12 @@ mod tests {
         HeapClassAnalysisSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapEdgePolicy,
         HeapInstanceSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot,
         HeapReferenceDirection, HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming,
-        HeapTraversalDirection, ProcessRole, ProcessSnapshot, ProcessTreeSnapshot, SourceLocation,
-        SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
-        UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot,
-        UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-        UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot, ValueSelector, ValueSnapshot,
+        HeapTraversalDirection, ProcessRole, ProcessRootKind, ProcessSnapshot,
+        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceSuffixRewriteSnapshot,
+        SourceTreeKind, SourceTreeSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
+        UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+        UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot,
+        ValueSelector, ValueSnapshot,
     };
     use std::collections::BTreeMap;
 
@@ -4229,7 +4548,10 @@ mod tests {
     fn process_tree_uses_virtual_window_nodes() {
         let tree = ProcessTreeSnapshot {
             root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
+            targets: Vec::new(),
+            target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(
@@ -4263,12 +4585,12 @@ mod tests {
         assert_eq!(
             process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
             vec![
-                "└─ 1  Code.exe  [vscode-main]",
-                "   ├─ window 3  project",
-                "   │  ├─ 2  renderer  [renderer]",
-                "   │  └─ 3  extension-host  [extension-host]",
-                "   │     └─ 4  server  [node]",
-                "   └─ 5  agent-host  [agent-host]",
+                "└─ p:1  Code.exe  [vscode-main]",
+                "   ├─ w:1/3  window  project",
+                "   │  ├─ p:2  renderer  [renderer]",
+                "   │  └─ p:3  extension-host  [extension-host]",
+                "   │     └─ p:4  server  [node]",
+                "   └─ p:5  agent-host  [agent-host]",
             ]
         );
         let filtered = process_tree_lines(
@@ -4278,7 +4600,7 @@ mod tests {
                 ..ProcessTreeOutputOptions::default()
             },
         );
-        assert!(filtered.iter().any(|line| line.contains("window 3")));
+        assert!(filtered.iter().any(|line| line.contains("w:1/3")));
         assert!(filtered.iter().all(|line| !line.contains("agent-host")));
 
         let json = process_trees_json(
@@ -4305,6 +4627,96 @@ mod tests {
     }
 
     #[test]
+    fn process_tree_nests_discovered_targets_under_their_os_process() {
+        let target = |process_id, target_id: &str, parent_id: Option<&str>, target_type: &str| {
+            ProcessTargetSnapshot {
+                process_id: Some(process_id),
+                target: TargetSnapshot {
+                    target_id: target_id.to_owned(),
+                    target_type: target_type.to_owned(),
+                    title: target_id.to_owned(),
+                    url: String::new(),
+                    attached: false,
+                    parent_id: parent_id.map(str::to_owned),
+                    opener_id: None,
+                    browser_context_id: None,
+                    subtype: None,
+                },
+            }
+        };
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            root_kind: ProcessRootKind::Electron,
+            runtime_metadata_available: false,
+            processes: vec![
+                process(
+                    1,
+                    None,
+                    "electron.exe",
+                    ProcessRole::ElectronMain,
+                    None,
+                    None,
+                ),
+                process(2, Some(1), "renderer", ProcessRole::Renderer, None, None),
+            ],
+            targets: vec![
+                target(1, "$node-root", None, "node"),
+                target(2, "renderer-3", Some("$node-root"), "page"),
+                target(2, "renderer-3/target/iframe", Some("renderer-3"), "iframe"),
+            ],
+            target_discovery_error: None,
+        };
+
+        assert_eq!(
+            process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
+            vec![
+                "└─ p:1  electron.exe  [electron-main]",
+                "   └─ p:2  renderer  [renderer]",
+                "      └─ renderer-3  [page]  \"renderer-3\"  ",
+                "         └─ ./target/iframe  [iframe]  \"renderer-3/target/iframe\"  ",
+            ]
+        );
+    }
+
+    #[test]
+    fn target_tree_uses_parent_relative_selectors() {
+        let entry = |target_id: &str| TargetListEntry {
+            connection_id: "tree".to_owned(),
+            connection_generation: 1,
+            selected: false,
+            parent_target_id: None,
+            target: TargetSnapshot {
+                target_id: target_id.to_owned(),
+                target_type: "page".to_owned(),
+                title: String::new(),
+                url: String::new(),
+                attached: false,
+                parent_id: None,
+                opener_id: None,
+                browser_context_id: None,
+                subtype: None,
+            },
+        };
+        let root = entry("$node-root:tree");
+        let browser = entry("cdp-browser-1");
+        let renderer = entry("renderer-1");
+        let renderer_iframe = entry("renderer-1/target/iframe");
+        let page = entry("cdp-browser-1/target/page");
+        let page_iframe = entry("cdp-browser-1/target/iframe");
+
+        assert_eq!(target_tree_selector(&root, None), "tree/$node-root:tree");
+        assert_eq!(
+            target_tree_selector(&browser, Some(&root)),
+            "./cdp-browser-1"
+        );
+        assert_eq!(
+            target_tree_selector(&renderer_iframe, Some(&renderer)),
+            "./target/iframe"
+        );
+        assert_eq!(target_tree_selector(&page_iframe, Some(&page)), "./iframe");
+    }
+
+    #[test]
     fn process_tree_renders_multiplexed_agent_sessions_as_virtual_children() {
         let mut copilot = process(3, Some(2), "copilot", ProcessRole::Copilot, None, None);
         copilot.agent_sessions = vec![AgentSessionSnapshot {
@@ -4316,7 +4728,10 @@ mod tests {
         }];
         let tree = ProcessTreeSnapshot {
             root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
+            targets: Vec::new(),
+            target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(2, Some(1), "agent-host", ProcessRole::AgentHost, None, None),
@@ -4327,11 +4742,11 @@ mod tests {
         assert_eq!(
             process_tree_lines(&tree, ProcessTreeOutputOptions::default()),
             vec![
-                "└─ 1  Code.exe  [vscode-main]",
-                "   └─ 2  agent-host  [agent-host]",
-                "      └─ 3  copilot  [copilot]",
+                "└─ p:1  Code.exe  [vscode-main]",
+                "   └─ p:2  agent-host  [agent-host]",
+                "      └─ p:3  copilot  [copilot]",
                 "         ├─ session Add extension launch config  [internal-1]",
-                "         └─ 4  cmd.exe  [other]",
+                "         └─ p:4  cmd.exe  [other]",
             ]
         );
     }

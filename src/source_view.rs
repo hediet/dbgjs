@@ -950,16 +950,16 @@ fn indexed_depth(value: &serde_json::Value) -> usize {
 fn format_minified(url: &str, source: &str) -> Result<(String, FormatProjection), SourceViewError> {
     let allocator = Allocator::default();
     let source_path = url.split(['?', '#']).next().unwrap_or(url);
-    let source_type = SourceType::from_path(source_path).unwrap_or_else(|_| SourceType::script());
+    let source_type = SourceType::from_path(source_path).unwrap_or_else(|_| SourceType::cjs());
     let parsed = Parser::new(&allocator, source, source_type).parse();
-    let parsed = if parsed.panicked || !parsed.diagnostics.is_empty() {
+    let parsed = if parsed.panicked || !parsed.errors.is_empty() {
         Parser::new(&allocator, source, source_type.with_script(true)).parse()
     } else {
         parsed
     };
-    if parsed.panicked || !parsed.diagnostics.is_empty() {
+    if parsed.panicked || !parsed.errors.is_empty() {
         let message = parsed
-            .diagnostics
+            .errors
             .first()
             .map_or_else(|| "parser panicked".to_owned(), ToString::to_string);
         return Err(SourceViewError::FormattingFailed(message));

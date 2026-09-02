@@ -9,7 +9,7 @@ use cdp_client::cdp::{
     TargetCreateTargetParams,
 };
 use cdp_client::cdp_runtime::CdpConnection;
-use cdp_client::content_store::ContentStore;
+use cdp_client::context_source_model::ContextSourceModel;
 use cdp_client::debugger_driver::{DebuggerDriver, DebuggerRecording};
 use cdp_client::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptSourceState,
@@ -83,7 +83,8 @@ async fn run_breakpoint_scenario() {
         .expect("child session opens");
     let sources = SourceEffectInterpreter::new(
         SourceEffectOptions::default(),
-        Arc::new(ContentStore::default()),
+        Arc::new(ContextSourceModel::new()),
+        "live-breakpoint",
     );
     let mut driver = DebuggerDriver::new(Arc::new(DebuggerState::default()), session, sources);
     driver
@@ -270,7 +271,7 @@ async fn run_heap_snapshot_scenario() {
         .await
         .expect("HeapProfiler.takeHeapSnapshot failed");
     let bytes_written = session
-        .finish_heap_snapshot()
+        .finish_heap_snapshot_bytes()
         .await
         .expect("heap snapshot finalizes");
 
@@ -323,9 +324,10 @@ async fn run_vscode_dev_scenario() {
     let session = connection
         .open_session(session_key.clone())
         .expect("vscode.dev child session opens");
-    let content_store = Arc::new(ContentStore::default());
+    let source_model = Arc::new(ContextSourceModel::new());
+    let content_store = source_model.content_store().clone();
     let sources =
-        SourceEffectInterpreter::new(SourceEffectOptions::default(), content_store.clone());
+        SourceEffectInterpreter::new(SourceEffectOptions::default(), source_model, "live-vscode");
     let mut driver = DebuggerDriver::new(Arc::new(DebuggerState::default()), session, sources);
     driver
         .apply(Input::Connected)

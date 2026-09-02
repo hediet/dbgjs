@@ -16,8 +16,32 @@ pub struct ServiceInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ProcessTreeSnapshot {
     pub root_process_id: u32,
+    #[serde(default)]
+    pub root_kind: ProcessRootKind,
     pub processes: Vec<ProcessSnapshot>,
     pub runtime_metadata_available: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ProcessTargetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_discovery_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessRootKind {
+    #[default]
+    Vscode,
+    Node,
+    Electron,
+    Browser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTargetSnapshot {
+    pub process_id: Option<u32>,
+    #[serde(flatten)]
+    pub target: TargetSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -54,10 +78,57 @@ pub struct AgentSessionSnapshot {
     pub disconnected: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceGraphSnapshot {
+    pub revision: u64,
+    pub resources: Vec<ResourceSnapshot>,
+    pub relations: Vec<ResourceRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSnapshot {
+    pub id: String,
+    pub kinds: Vec<String>,
+    pub label: Option<String>,
+    pub attributes: BTreeMap<String, serde_json::Value>,
+    pub contributors: Vec<String>,
+    pub capabilities: Vec<ResourceCapabilitySnapshot>,
+    pub frontiers: Vec<ResourceFrontierSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceCapabilitySnapshot {
+    pub source: String,
+    pub kind: String,
+    pub title: String,
+    pub detail: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceFrontierSnapshot {
+    pub relation: String,
+    pub state: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRelationSnapshot {
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub contributors: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProcessRole {
     VscodeMain,
+    ElectronMain,
+    BrowserMain,
     Renderer,
     ExtensionHost,
     NodeUtility,
@@ -101,6 +172,8 @@ pub struct ContextSnapshot {
     pub id: String,
     pub display_name: String,
     pub revision: u64,
+    #[serde(default)]
+    pub resource_revision: u64,
     pub connections: Vec<ConnectionSnapshot>,
     pub target_forest: Vec<TargetNodeSnapshot>,
     pub breakpoints: Vec<BreakpointSnapshot>,
@@ -325,12 +398,22 @@ pub struct TargetNodeSnapshot {
     pub connection_generation: u64,
     pub target: TargetSnapshot,
     pub parent_target_id: Option<String>,
+    pub attachment: TargetAttachmentState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetAttachmentState {
+    Detached,
+    External,
+    Debugger,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CanonicalTargetSnapshot {
     pub context_id: String,
+    pub resource_id: String,
     pub target_id: String,
     pub connection_id: String,
     pub connection_generation: u64,
@@ -436,6 +519,11 @@ impl ConnectionSnapshot {
             connection_generation: self.generation,
             target: (*target).clone(),
             parent_target_id: parent_target_id.map(str::to_owned),
+            attachment: if target.attached {
+                TargetAttachmentState::External
+            } else {
+                TargetAttachmentState::Detached
+            },
         });
         for child in children.get(target_id).into_iter().flatten() {
             self.append_target_node(child, Some(target_id), targets, children, visited, forest);
@@ -720,6 +808,8 @@ pub enum UncompactedProjectionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub enum SourceTreeKind {
     Loaded,
+    SourceMapped,
+    Formatted,
     Resolved,
 }
 
@@ -769,6 +859,8 @@ pub enum TargetAttachmentOutcome {
 pub struct TargetAttachOptions {
     #[serde(default)]
     pub force: bool,
+    #[serde(default)]
+    pub expected_connection_generation: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1611,6 +1703,8 @@ pub trait DebuggerServiceApi {
 
     async fn get_context(context_id: String) -> Result<ContextSnapshot, JsonRpcError>;
 
+    async fn get_resource_graph(context_id: String) -> Result<ResourceGraphSnapshot, JsonRpcError>;
+
     async fn observe_context(
         context_id: String,
         cursor: ObservationCursor,
@@ -1637,6 +1731,12 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
     ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn set_pause_future_children(
+        context_id: String,
+        connection_id: String,
+        enabled: bool,
+    ) -> Result<bool, JsonRpcError>;
 
     async fn delete_connection(
         context_id: String,
@@ -1803,6 +1903,13 @@ pub trait DebuggerServiceApi {
         target_id: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
 
+    async fn detach_target(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        expected_connection_generation: Option<u64>,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
     async fn resume_target(
         context_id: String,
         connection_id: String,
@@ -1848,6 +1955,16 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
+        method: String,
+        params: serde_json::Value,
+        validate: bool,
+    ) -> Result<serde_json::Value, JsonRpcError>;
+
+    async fn raw_cdp_session_request(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        session_id: String,
         method: String,
         params: serde_json::Value,
         validate: bool,
@@ -2105,8 +2222,9 @@ pub trait DebuggerServiceApi {
 mod tests {
     use super::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, PromiseClassification,
-        PromiseOrigin, PromiseSnapshot, PromiseState, TargetSnapshot, TargetWaitPredicate,
-        ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector, ValueSnapshot,
+        PromiseOrigin, PromiseSnapshot, PromiseState, TargetAttachmentState, TargetSnapshot,
+        TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector,
+        ValueSnapshot,
     };
 
     #[test]
@@ -2209,6 +2327,7 @@ mod tests {
             .unwrap();
         assert_eq!(z_root.connection_id, "connection");
         assert_eq!(z_root.connection_generation, 7);
+        assert_eq!(z_root.attachment, TargetAttachmentState::External);
         assert_eq!(
             forest
                 .iter()

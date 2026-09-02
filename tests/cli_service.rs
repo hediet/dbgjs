@@ -449,28 +449,14 @@ fn context_relay_exposes_virtual_browser_root_and_enforces_exclusivity() {
         "params": { "targetId": canonical_target_id, "flatten": true },
     }));
 
-    // `Target.attachToTarget` returns its `sessionId` directly *and* emits `attachedToTarget`;
-    // read messages until both have been observed since their relative order is not fixed.
-    let mut session_id = None;
-    let mut saw_attached_event = false;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while (session_id.is_none() || !saw_attached_event) && Instant::now() < deadline {
-        let message = relay.recv_line(Duration::from_secs(10));
-        if message["id"] == 3 {
-            session_id = Some(message["result"]["sessionId"].as_str().unwrap().to_owned());
-        } else if message["method"] == "Target.attachedToTarget" {
-            assert_eq!(
-                message["params"]["targetInfo"]["targetId"],
-                canonical_target_id
-            );
-            saw_attached_event = true;
-        }
-    }
-    let session_id = session_id.expect("Target.attachToTarget must return a sessionId");
-    assert!(
-        saw_attached_event,
-        "attaching must emit Target.attachedToTarget"
-    );
+    // Explicit attachment returns its session directly. `Target.attachedToTarget` is reserved for
+    // auto-attach discovery; emitting it here would make browser clients register the page twice.
+    let attached = relay.recv_line(Duration::from_secs(10));
+    assert_eq!(attached["id"], 3);
+    let session_id = attached["result"]["sessionId"]
+        .as_str()
+        .expect("Target.attachToTarget must return a sessionId")
+        .to_owned();
 
     // Session-scoped messages carry the relay's own sessionId and forward opaquely to the
     // attached target, with the external request id preserved on the response. The response

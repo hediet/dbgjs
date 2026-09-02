@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::service_api::{
     ConnectionConfiguration, ConnectionStatus, SourceFormattingMode, SourceFormattingRule,
-    SourceFormattingSettings, TargetSnapshot,
+    SourceFormattingSettings,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +38,6 @@ pub struct ConnectionState {
     pub configuration_version: u64,
     pub generation: u64,
     pub status: ConnectionStatus,
-    pub targets: Arc<BTreeMap<String, TargetSnapshot>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,19 +119,22 @@ pub enum RuntimeObservation {
         attempt: ConnectionAttempt,
         reason: String,
     },
-    TargetUpserted {
+    TargetGraphChanged {
         connection_id: String,
         attempt: ConnectionAttempt,
-        target: TargetSnapshot,
-    },
-    TargetRemoved {
-        connection_id: String,
-        attempt: ConnectionAttempt,
-        target_id: String,
+        change: TargetGraphChange,
     },
     BreakpointApplicationsChanged {
         breakpoint_id: String,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetGraphChange {
+    Created { target_id: String },
+    Changed { target_id: String },
+    Removed { target_id: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,7 +145,6 @@ pub enum EffectCompletion {
         attempt: ConnectionAttempt,
         product: String,
         protocol_version: String,
-        targets: BTreeMap<String, TargetSnapshot>,
     },
     ConnectionOpenFailed {
         connection_id: String,
@@ -268,14 +269,6 @@ pub enum ContextTransitionError {
     ActiveConnectionCannotBeRemoved,
     #[error("connection '{connection_id}' changed while the operation was pending")]
     StaleEffectCompletion { connection_id: String },
-    #[error(
-        "canonical target ID '{target_id}' from connection '{incoming_connection_id}' collides with connection '{existing_connection_id}'"
-    )]
-    TargetIdentityCollision {
-        target_id: String,
-        existing_connection_id: String,
-        incoming_connection_id: String,
-    },
 }
 
 pub fn reduce_context(
@@ -337,7 +330,6 @@ fn reduce_user_command(
                     configuration_version,
                     generation,
                     status: ConnectionStatus::Disconnected,
-                    targets: Arc::new(BTreeMap::new()),
                 }),
             );
             Ok(changed(
@@ -387,7 +379,6 @@ fn reduce_user_command(
             );
             connection.generation = attempt.generation;
             connection.status = ConnectionStatus::Connecting;
-            connection.targets = Arc::new(BTreeMap::new());
             Ok(changed(
                 state,
                 ContextChange::RuntimeOnly,
@@ -547,7 +538,6 @@ fn reduce_runtime_observation(
             connection.status = ConnectionStatus::Failed {
                 message: reason.clone(),
             };
-            connection.targets = Arc::new(BTreeMap::new());
             Ok(changed(
                 state,
                 ContextChange::RuntimeOnly,
@@ -559,10 +549,10 @@ fn reduce_runtime_observation(
                 },
             ))
         }
-        RuntimeObservation::TargetUpserted {
+        RuntimeObservation::TargetGraphChanged {
             connection_id,
             attempt: observed_attempt,
-            target,
+            change,
         } => {
             let Some(connection) = previous.connections.get(&connection_id) else {
                 return Ok(ContextTransition::unchanged(previous));
@@ -572,54 +562,25 @@ fn reduce_runtime_observation(
             {
                 return Ok(ContextTransition::unchanged(previous));
             }
-            reject_target_collisions(previous, &connection_id, std::iter::once(&target))?;
-            let target_id = target.target_id.clone();
-            let event = if connection.targets.contains_key(&target_id) {
-                ContextEvent::TargetChanged {
+            let event = match change {
+                TargetGraphChange::Created { target_id } => ContextEvent::TargetCreated {
                     connection_id: connection_id.clone(),
                     target_id,
-                }
-            } else {
-                ContextEvent::TargetCreated {
+                },
+                TargetGraphChange::Changed { target_id } => ContextEvent::TargetChanged {
                     connection_id: connection_id.clone(),
                     target_id,
-                }
+                },
+                TargetGraphChange::Removed { target_id } => ContextEvent::TargetDestroyed {
+                    connection_id: connection_id.clone(),
+                    target_id,
+                },
             };
-            let mut state = (**previous).clone();
-            Arc::make_mut(&mut mutable_connection(&mut state, &connection_id).targets)
-                .insert(target.target_id.clone(), target);
             Ok(changed(
-                state,
+                (**previous).clone(),
                 ContextChange::RuntimeOnly,
                 Vec::new(),
                 event,
-            ))
-        }
-        RuntimeObservation::TargetRemoved {
-            connection_id,
-            attempt: observed_attempt,
-            target_id,
-        } => {
-            let Some(connection) = previous.connections.get(&connection_id) else {
-                return Ok(ContextTransition::unchanged(previous));
-            };
-            if attempt(connection) != observed_attempt
-                || !matches!(connection.status, ConnectionStatus::Connected { .. })
-                || !connection.targets.contains_key(&target_id)
-            {
-                return Ok(ContextTransition::unchanged(previous));
-            }
-            let mut state = (**previous).clone();
-            Arc::make_mut(&mut mutable_connection(&mut state, &connection_id).targets)
-                .remove(&target_id);
-            Ok(changed(
-                state,
-                ContextChange::RuntimeOnly,
-                Vec::new(),
-                ContextEvent::TargetDestroyed {
-                    connection_id,
-                    target_id,
-                },
             ))
         }
         RuntimeObservation::BreakpointApplicationsChanged { breakpoint_id } => {
@@ -650,7 +611,6 @@ fn reduce_effect_completion(
             attempt: completed_attempt,
             product,
             protocol_version,
-            targets,
         } => {
             require_pending_status(
                 previous,
@@ -658,14 +618,12 @@ fn reduce_effect_completion(
                 completed_attempt,
                 &ConnectionStatus::Connecting,
             )?;
-            reject_target_collisions(previous, &connection_id, targets.values())?;
             let mut state = (**previous).clone();
             let connection = mutable_connection(&mut state, &connection_id);
             connection.status = ConnectionStatus::Connected {
                 product,
                 protocol_version,
             };
-            connection.targets = Arc::new(targets);
             Ok(changed(
                 state,
                 ContextChange::RuntimeOnly,
@@ -693,7 +651,6 @@ fn reduce_effect_completion(
             connection.status = ConnectionStatus::Failed {
                 message: message.clone(),
             };
-            connection.targets = Arc::new(BTreeMap::new());
             Ok(changed(
                 state,
                 ContextChange::RuntimeOnly,
@@ -718,7 +675,6 @@ fn reduce_effect_completion(
             let mut state = (**previous).clone();
             let connection = mutable_connection(&mut state, &connection_id);
             connection.status = ConnectionStatus::Disconnected;
-            connection.targets = Arc::new(BTreeMap::new());
             Ok(changed(
                 state,
                 ContextChange::RuntimeOnly,
@@ -730,28 +686,6 @@ fn reduce_effect_completion(
             ))
         }
     }
-}
-
-fn reject_target_collisions<'a>(
-    context: &ContextState,
-    incoming_connection_id: &str,
-    targets: impl IntoIterator<Item = &'a TargetSnapshot>,
-) -> Result<(), ContextTransitionError> {
-    for target in targets {
-        if let Some((existing_connection_id, _)) =
-            context.connections.iter().find(|(id, connection)| {
-                id.as_str() != incoming_connection_id
-                    && connection.targets.contains_key(&target.target_id)
-            })
-        {
-            return Err(ContextTransitionError::TargetIdentityCollision {
-                target_id: target.target_id.clone(),
-                existing_connection_id: existing_connection_id.clone(),
-                incoming_connection_id: incoming_connection_id.to_owned(),
-            });
-        }
-    }
-    Ok(())
 }
 
 fn changed(
@@ -853,25 +787,10 @@ mod tests {
                 attempt,
                 product: "Chrome".into(),
                 protocol_version: "1.3".into(),
-                targets: BTreeMap::new(),
             }),
         )
         .unwrap();
         (connected.state, attempt)
-    }
-
-    fn page_target(target_id: &str) -> TargetSnapshot {
-        TargetSnapshot {
-            target_id: target_id.into(),
-            target_type: "page".into(),
-            title: "Page".into(),
-            url: "https://example.test".into(),
-            attached: false,
-            parent_id: None,
-            opener_id: None,
-            browser_context_id: None,
-            subtype: None,
-        }
     }
 
     #[test]
@@ -909,7 +828,6 @@ mod tests {
                 attempt,
                 product: "Chrome".into(),
                 protocol_version: "1.3".into(),
-                targets: BTreeMap::new(),
             }),
         )
         .unwrap_err();
@@ -947,23 +865,23 @@ mod tests {
     }
 
     #[test]
-    fn target_lifecycle_updates_only_the_current_connection_generation() {
+    fn target_graph_changes_publish_only_for_the_current_connection_generation() {
         let (connected, attempt) = connected_context();
-        let target = page_target("page");
         let created = reduce_context(
             &connected,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                 connection_id: "browser".into(),
                 attempt,
-                target,
+                change: TargetGraphChange::Created {
+                    target_id: "page".into(),
+                },
             }),
         )
         .unwrap();
-        assert!(
-            created.state.connections["browser"]
-                .targets
-                .contains_key("page")
-        );
+        assert!(Arc::ptr_eq(
+            &created.state.connections,
+            &connected.connections
+        ));
         assert!(matches!(
             created.events[0].event,
             ContextEvent::TargetCreated { .. }
@@ -971,13 +889,15 @@ mod tests {
 
         let stale = reduce_context(
             &created.state,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetRemoved {
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                 connection_id: "browser".into(),
                 attempt: ConnectionAttempt {
                     generation: attempt.generation + 1,
                     ..attempt
                 },
-                target_id: "page".into(),
+                change: TargetGraphChange::Removed {
+                    target_id: "page".into(),
+                },
             }),
         )
         .unwrap();
@@ -985,14 +905,19 @@ mod tests {
 
         let removed = reduce_context(
             &created.state,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetRemoved {
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                 connection_id: "browser".into(),
                 attempt,
-                target_id: "page".into(),
+                change: TargetGraphChange::Removed {
+                    target_id: "page".into(),
+                },
             }),
         )
         .unwrap();
-        assert!(removed.state.connections["browser"].targets.is_empty());
+        assert!(Arc::ptr_eq(
+            &removed.state.connections,
+            &created.state.connections
+        ));
         assert!(matches!(
             removed.events[0].event,
             ContextEvent::TargetDestroyed { .. }
@@ -1000,114 +925,29 @@ mod tests {
     }
 
     #[test]
-    fn runtime_target_identity_collision_is_rejected() {
+    fn target_graph_change_publishes_without_mutating_connection_state() {
         let (connected, attempt) = connected_context();
-        let first = reduce_context(
+        let changed = reduce_context(
             &connected,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                 connection_id: "browser".into(),
                 attempt,
-                target: page_target("canonical-id"),
-            }),
-        )
-        .unwrap();
-        let configured = command(
-            &first.state,
-            UserCommand::PutConnection {
-                connection_id: "other".into(),
-                configuration: "ws://other".into(),
-            },
-        );
-        let connecting = command(
-            &configured.state,
-            UserCommand::ConnectConnection {
-                connection_id: "other".into(),
-            },
-        );
-        let other_attempt = match &connecting.effects[0] {
-            ContextEffect::Connect { attempt, .. } => *attempt,
-            effect => panic!("unexpected effect: {effect:?}"),
-        };
-        let opened = reduce_context(
-            &connecting.state,
-            ContextInput::EffectCompletion(EffectCompletion::ConnectionOpened {
-                connection_id: "other".into(),
-                attempt: other_attempt,
-                product: "Chrome".into(),
-                protocol_version: "1.3".into(),
-                targets: BTreeMap::new(),
+                change: TargetGraphChange::Changed {
+                    target_id: "page".into(),
+                },
             }),
         )
         .unwrap();
 
-        assert_eq!(
-            reduce_context(
-                &opened.state,
-                ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
-                    connection_id: "other".into(),
-                    attempt: other_attempt,
-                    target: page_target("canonical-id"),
-                }),
-            )
-            .unwrap_err(),
-            ContextTransitionError::TargetIdentityCollision {
-                target_id: "canonical-id".into(),
-                existing_connection_id: "browser".into(),
-                incoming_connection_id: "other".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn discovered_target_identity_collision_is_rejected() {
-        let (connected, attempt) = connected_context();
-        let first = reduce_context(
-            &connected,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
-                connection_id: "browser".into(),
-                attempt,
-                target: page_target("canonical-id"),
-            }),
-        )
-        .unwrap();
-        let configured = command(
-            &first.state,
-            UserCommand::PutConnection {
-                connection_id: "other".into(),
-                configuration: "ws://other".into(),
-            },
-        );
-        let connecting = command(
-            &configured.state,
-            UserCommand::ConnectConnection {
-                connection_id: "other".into(),
-            },
-        );
-        let other_attempt = match &connecting.effects[0] {
-            ContextEffect::Connect { attempt, .. } => *attempt,
-            effect => panic!("unexpected effect: {effect:?}"),
-        };
-
-        assert_eq!(
-            reduce_context(
-                &connecting.state,
-                ContextInput::EffectCompletion(EffectCompletion::ConnectionOpened {
-                    connection_id: "other".into(),
-                    attempt: other_attempt,
-                    product: "Chrome".into(),
-                    protocol_version: "1.3".into(),
-                    targets: BTreeMap::from([
-                        ("canonical-id".into(), page_target("canonical-id"),)
-                    ]),
-                }),
-            )
-            .unwrap_err(),
-            ContextTransitionError::TargetIdentityCollision {
-                target_id: "canonical-id".into(),
-                existing_connection_id: "browser".into(),
-                incoming_connection_id: "other".into(),
-            }
-        );
+        assert_eq!(changed.change, ContextChange::RuntimeOnly);
+        assert!(Arc::ptr_eq(
+            &changed.state.connections,
+            &connected.connections
+        ));
+        assert!(matches!(
+            changed.events[0].event,
+            ContextEvent::TargetChanged { .. }
+        ));
     }
 
     #[test]

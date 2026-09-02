@@ -15,14 +15,18 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, watch};
 use tokio::time::{Instant, timeout_at};
 
+use crate::capability::{
+    CapabilityKind, CapabilityObject, DebugCapability, DebugOpenRequest, DebugSessionHandle,
+};
 use crate::cdp::{
-    BrowserGetVersionParams, TargetAttachToTargetParams, TargetDetachFromTargetParams,
-    TargetGetTargetsParams, TargetSetDiscoverTargetsParams, TargetTargetInfo,
+    BrowserGetVersionParams, TargetDetachFromTargetParams, TargetGetTargetsParams,
+    TargetSetDiscoverTargetsParams,
 };
 use crate::connection_provider::{ConnectionRuntime, validate_configuration};
 use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
-    ContextTransitionError, EffectCompletion, RuntimeObservation, UserCommand, reduce_context,
+    ContextTransitionError, EffectCompletion, RuntimeObservation, TargetGraphChange, UserCommand,
+    reduce_context,
 };
 use crate::context_identity::{
     ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
@@ -32,6 +36,11 @@ use crate::context_source_model::{
     CompactedProjectionKind, ContextSourceGraphSnapshot, ContextSourceModel,
 };
 use crate::debugger_engine::{SessionKey, StepKind};
+use crate::discovery::{DiscoveryState, PauseChildrenLease};
+use crate::resource_graph::{
+    GraphDelta, GraphSink, RelationKind, ResourceFacts, ResourceGraph, ResourceId, ResourceKind,
+    ResourceUpsert, SharedResourceGraph, SourceId,
+};
 use crate::service_api::{
     BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
     CanonicalTargetSnapshot, CaptureKind, CaptureSnapshot, CompactedSourceEdgeSnapshot,
@@ -43,12 +52,14 @@ use crate::service_api::{
     HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
     HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
     LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
-    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseState, RelayEndpoint, ScreenshotSnapshot,
-    ServiceInfo, SourceContentSnapshot, SourceDisplayOptions, SourceFormattingMode,
-    SourceFormattingRule, SourceFormattingSettings, SourceGraphViewSnapshot, SourceMappingSnapshot,
-    SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
-    SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, SourceViewPreference,
-    StepKind as ApiStepKind, TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult,
+    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseState, RelayEndpoint,
+    ResourceCapabilitySnapshot, ResourceFrontierSnapshot, ResourceGraphSnapshot,
+    ResourceRelationSnapshot, ResourceSnapshot, ScreenshotSnapshot, ServiceInfo,
+    SourceContentSnapshot, SourceDisplayOptions, SourceFormattingMode, SourceFormattingRule,
+    SourceFormattingSettings, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
+    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
+    SourceTreeKind, SourceTreeSnapshot, SourceViewPreference, StepKind as ApiStepKind,
+    TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult, TargetAttachmentState,
     TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
     UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
@@ -62,12 +73,16 @@ use crate::source_view::appears_minified;
 use crate::target_debugger::{
     TargetBreakpointSpec, TargetDebuggerError, TargetDebuggerHandle, stored_heap_classes,
 };
+use crate::target_domain::target_snapshot_from_info;
 
 #[derive(Clone)]
 pub struct DebuggerService {
     agent_instance_id: String,
     state: Arc<Mutex<ServiceState>>,
     attachment_lock: Arc<Mutex<()>>,
+    relay_lifecycle_lock: Arc<Mutex<()>>,
+    relay_attachment_lock: Arc<Mutex<()>>,
+    relay_attachments: Arc<Mutex<BTreeMap<(String, String, String, String), RelayDebugAttachment>>>,
     persistence_path: PathBuf,
     shutdown: watch::Sender<bool>,
     revision_signal: watch::Sender<u64>,
@@ -99,10 +114,10 @@ impl CaptureStorage {
                 "injected capture storage sync failure",
             ));
         }
-        fs::File::open(path)?.sync_all()
+        fs::OpenOptions::new().write(true).open(path)?.sync_all()
     }
 
-    fn sync_parent(&self, path: &Path) -> std::io::Result<()> {
+    fn sync_parent(&self, _path: &Path) -> std::io::Result<()> {
         #[cfg(test)]
         if self
             .hooks
@@ -115,7 +130,7 @@ impl CaptureStorage {
             ));
         }
         #[cfg(unix)]
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = _path.parent() {
             fs::File::open(parent)?.sync_all()?;
         }
         Ok(())
@@ -177,6 +192,9 @@ impl DebuggerService {
             agent_instance_id: random_instance_id()?,
             state: Arc::new(Mutex::new(state)),
             attachment_lock: Arc::new(Mutex::new(())),
+            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            relay_attachment_lock: Arc::new(Mutex::new(())),
+            relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path,
             shutdown,
             revision_signal,
@@ -223,22 +241,27 @@ impl DebuggerService {
                 .is_some_and(|current| Arc::ptr_eq(current, &runtime));
             if is_current_runtime {
                 state.runtimes.remove(&runtime_key);
+                retract_connection_resource_graph(
+                    &mut state,
+                    &context_id,
+                    &connection_id,
+                    generation,
+                );
                 cancel_playwright_proxies(
                     &mut state,
                     &context_id,
                     &connection_id,
                     Some(generation),
                 );
+                remove_connection_debugger_registrations(&mut state, &context_id, &connection_id);
                 state
-                    .target_debuggers
-                    .retain(|(candidate_context, candidate_connection, _), _| {
-                        candidate_context != &context_id || candidate_connection != &connection_id
-                    });
+                    .pause_children_leases
+                    .remove(&(context_id.clone(), connection_id.clone()));
                 if let Some(context) = state.contexts.get(&context_id).cloned() {
                     let transition = reduce_context(
                         &context,
                         ContextInput::RuntimeObservation(RuntimeObservation::ConnectionClosed {
-                            connection_id,
+                            connection_id: connection_id.clone(),
                             attempt: ConnectionAttempt {
                                 configuration_version,
                                 generation,
@@ -251,6 +274,11 @@ impl DebuggerService {
                 }
             }
             drop(state);
+            if is_current_runtime {
+                service
+                    .release_relay_attachments_for_connection(&context_id, &connection_id)
+                    .await;
+            }
             runtime.close().await;
         });
     }
@@ -273,27 +301,24 @@ impl DebuggerService {
                 generation,
             };
             while let Some(event) = events.recv().await {
-                let observation = match event {
+                let update = match event {
                     Ok(crate::cdp_runtime::RootCdpEvent::TargetCreated(params)) => {
-                        RuntimeObservation::TargetUpserted {
-                            connection_id: connection_id.clone(),
-                            attempt,
-                            target: target_snapshot(params.target_info),
-                        }
+                        ConnectionTargetUpdate::Upsert(canonicalize_synthetic_target(
+                            target_snapshot_from_info(params.target_info),
+                            &connection_id,
+                        ))
                     }
                     Ok(crate::cdp_runtime::RootCdpEvent::TargetChanged(params)) => {
-                        RuntimeObservation::TargetUpserted {
-                            connection_id: connection_id.clone(),
-                            attempt,
-                            target: target_snapshot(params.target_info),
-                        }
+                        ConnectionTargetUpdate::Upsert(canonicalize_synthetic_target(
+                            target_snapshot_from_info(params.target_info),
+                            &connection_id,
+                        ))
                     }
                     Ok(crate::cdp_runtime::RootCdpEvent::TargetDestroyed(params)) => {
-                        RuntimeObservation::TargetRemoved {
-                            connection_id: connection_id.clone(),
-                            attempt,
-                            target_id: params.target_id,
-                        }
+                        ConnectionTargetUpdate::Remove(canonicalize_synthetic_target_id(
+                            &params.target_id,
+                            &connection_id,
+                        ))
                     }
                     Err(error) => {
                         eprintln!("failed to decode root CDP event: {error}");
@@ -311,47 +336,83 @@ impl DebuggerService {
                 if !runtime_is_current {
                     break;
                 }
-                let transition =
-                    match reduce_context(&context, ContextInput::RuntimeObservation(observation)) {
-                        Ok(transition) => transition,
-                        Err(error @ ContextTransitionError::TargetIdentityCollision { .. }) => {
-                            eprintln!("rejecting target discovery: {error}");
-                            drop(state);
-                            runtime.close().await;
-                            break;
-                        }
-                        Err(error) => {
-                            eprintln!("rejecting target discovery: {error}");
-                            continue;
-                        }
-                    };
+                let Some((targets, change)) = prepare_connection_target_update(
+                    &state,
+                    &context_id,
+                    &connection_id,
+                    generation,
+                    update,
+                ) else {
+                    continue;
+                };
+                let transition = reduce_context(
+                    &context,
+                    ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
+                        connection_id: connection_id.clone(),
+                        attempt,
+                        change: change.clone(),
+                    }),
+                )
+                .expect("target graph observations do not fail");
                 if transition.change == crate::context_engine::ContextChange::None {
                     continue;
                 }
-                let removed_target =
-                    transition
-                        .events
-                        .iter()
-                        .find_map(|event| match &event.event {
-                            crate::context_engine::ContextEvent::TargetDestroyed {
-                                target_id,
-                                ..
-                            } => Some(target_id.clone()),
-                            _ => None,
-                        });
+                let retracted_sessions = match &change {
+                    TargetGraphChange::Removed { target_id } => debug_session_sources_for_target(
+                        &state,
+                        &context_id,
+                        &connection_id,
+                        generation,
+                        target_id,
+                    ),
+                    TargetGraphChange::Created { .. } | TargetGraphChange::Changed { .. } => {
+                        Vec::new()
+                    }
+                };
+                if let Err(error) = stage_connection_resource_graph(
+                    &mut state,
+                    &context_id,
+                    &connection_id,
+                    &transition.state,
+                    &targets,
+                    &runtime,
+                    &retracted_sessions,
+                ) {
+                    eprintln!("rejecting target discovery graph update: {error}");
+                    drop(state);
+                    runtime.close().await;
+                    break;
+                }
+                let removed_target = match change {
+                    TargetGraphChange::Removed { target_id } => Some(target_id),
+                    TargetGraphChange::Created { .. } | TargetGraphChange::Changed { .. } => None,
+                };
                 service.commit_context(&mut state, &context_id, transition);
-                if let Some(target_id) = removed_target {
+                if let Some(target_id) = removed_target.as_deref() {
                     cancel_playwright_proxies_for_target(
                         &mut state,
                         &context_id,
                         &connection_id,
-                        &target_id,
-                    );
-                    state.target_debuggers.remove(&(
-                        context_id.clone(),
-                        connection_id.clone(),
                         target_id,
-                    ));
+                    );
+                    remove_debugger_registration(
+                        &mut state,
+                        &(
+                            context_id.clone(),
+                            connection_id.clone(),
+                            target_id.to_owned(),
+                        ),
+                    );
+                }
+                drop(state);
+                if let Some(target_id) = removed_target {
+                    service
+                        .release_relay_attachments_for_target(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                        )
+                        .await;
                 }
             }
         });
@@ -375,26 +436,21 @@ impl DebuggerService {
                 generation,
             };
             while let Some(event) = events.recv().await {
-                let (observation, target_to_attach, target_to_remove) = match event {
+                let (update, target_to_attach, target_to_remove) = match event {
                     crate::connection_provider::ProviderTargetEvent::Upsert(target) => {
                         let target = canonicalize_synthetic_target(target, &connection_id);
                         let target_id = target.target_id.clone();
                         (
-                            RuntimeObservation::TargetUpserted {
-                                connection_id: connection_id.clone(),
-                                attempt,
-                                target,
-                            },
+                            ConnectionTargetUpdate::Upsert(target),
                             Some(target_id),
                             None,
                         )
                     }
                     crate::connection_provider::ProviderTargetEvent::Removed(target_id) => (
-                        RuntimeObservation::TargetRemoved {
-                            connection_id: connection_id.clone(),
-                            attempt,
-                            target_id: canonicalize_synthetic_target_id(&target_id, &connection_id),
-                        },
+                        ConnectionTargetUpdate::Remove(canonicalize_synthetic_target_id(
+                            &target_id,
+                            &connection_id,
+                        )),
                         None,
                         Some(canonicalize_synthetic_target_id(&target_id, &connection_id)),
                     ),
@@ -410,56 +466,88 @@ impl DebuggerService {
                 if !runtime_is_current {
                     break;
                 }
-                let transition =
-                    match reduce_context(&context, ContextInput::RuntimeObservation(observation)) {
-                        Ok(transition) => transition,
-                        Err(error @ ContextTransitionError::TargetIdentityCollision { .. }) => {
-                            eprintln!("rejecting provider target discovery: {error}");
-                            drop(state);
-                            runtime.close().await;
-                            break;
-                        }
-                        Err(error) => {
-                            eprintln!("rejecting provider target discovery: {error}");
-                            continue;
-                        }
-                    };
+                let Some((targets, change)) = prepare_connection_target_update(
+                    &state,
+                    &context_id,
+                    &connection_id,
+                    generation,
+                    update,
+                ) else {
+                    continue;
+                };
+                let transition = reduce_context(
+                    &context,
+                    ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
+                        connection_id: connection_id.clone(),
+                        attempt,
+                        change,
+                    }),
+                )
+                .expect("provider target graph observations do not fail");
+                let retracted_sessions = target_to_remove
+                    .as_deref()
+                    .map(|target_id| {
+                        debug_session_sources_for_target(
+                            &state,
+                            &context_id,
+                            &connection_id,
+                            generation,
+                            target_id,
+                        )
+                    })
+                    .unwrap_or_default();
+                if let Err(error) = stage_connection_resource_graph(
+                    &mut state,
+                    &context_id,
+                    &connection_id,
+                    &transition.state,
+                    &targets,
+                    &runtime,
+                    &retracted_sessions,
+                ) {
+                    eprintln!("rejecting provider target graph update: {error}");
+                    drop(state);
+                    runtime.close().await;
+                    break;
+                }
                 service.commit_context(&mut state, &context_id, transition);
-                if let Some(target_id) = target_to_remove {
+                if let Some(target_id) = target_to_remove.as_deref() {
                     cancel_playwright_proxies_for_target(
                         &mut state,
                         &context_id,
                         &connection_id,
-                        &target_id,
-                    );
-                    state.target_debuggers.remove(&(
-                        context_id.clone(),
-                        connection_id.clone(),
                         target_id,
-                    ));
+                    );
+                    remove_debugger_registration(
+                        &mut state,
+                        &(
+                            context_id.clone(),
+                            connection_id.clone(),
+                            target_id.to_owned(),
+                        ),
+                    );
                 }
                 drop(state);
+                if let Some(target_id) = target_to_remove {
+                    service
+                        .release_relay_attachments_for_target(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                        )
+                        .await;
+                }
 
                 if !runtime.is_direct_debugger()
                     && let Some(target_id) = target_to_attach
-                    && service
+                {
+                    let _ = service
                         .attach_target_internal(
                             &CallCtx::default(),
                             context_id.clone(),
                             connection_id.clone(),
-                            target_id.clone(),
-                            TargetAttachOptions::default(),
-                        )
-                        .await
-                        .is_ok()
-                {
-                    service
-                        .mark_target_attached(
-                            &context_id,
-                            &connection_id,
                             target_id,
-                            attempt,
-                            &runtime,
+                            TargetAttachOptions::default(),
                         )
                         .await;
                 }
@@ -467,44 +555,30 @@ impl DebuggerService {
         });
     }
 
-    async fn mark_target_attached(
+    async fn publish_target_attachment_change(
         &self,
-        context_id: &str,
-        connection_id: &str,
-        target_id: String,
+        key: &(String, String, String),
         attempt: ConnectionAttempt,
-        runtime: &Arc<ConnectionRuntime>,
     ) {
         let mut state = self.state.lock().await;
-        if !state
-            .runtimes
-            .get(&(context_id.to_owned(), connection_id.to_owned()))
-            .is_some_and(|current| Arc::ptr_eq(current, runtime))
-        {
-            return;
-        }
-        let Some(context) = state.contexts.get(context_id).cloned() else {
+        let Some(context) = state.contexts.get(&key.0).cloned() else {
             return;
         };
-        let Some(mut target) = context
-            .connections
-            .get(connection_id)
-            .and_then(|connection| connection.targets.get(&target_id))
-            .cloned()
-        else {
-            return;
-        };
-        target.attached = true;
         let transition = reduce_context(
             &context,
-            ContextInput::RuntimeObservation(RuntimeObservation::TargetUpserted {
-                connection_id: connection_id.to_owned(),
+            ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
+                connection_id: key.1.clone(),
                 attempt,
-                target,
+                change: TargetGraphChange::Changed {
+                    target_id: key.2.clone(),
+                },
             }),
         )
-        .expect("provider target attachment observations do not fail");
-        self.commit_context(&mut state, context_id, transition);
+        .expect("target attachment observations do not fail");
+        if transition.change == crate::context_engine::ContextChange::None {
+            return;
+        }
+        self.commit_context(&mut state, &key.0, transition);
     }
 
     fn commit_context(
@@ -651,10 +725,13 @@ fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> Conte
 #[derive(Clone, Default)]
 struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
+    resource_graphs: BTreeMap<String, SharedResourceGraph>,
     source_models: BTreeMap<String, Arc<ContextSourceModel>>,
     context_kinds: BTreeMap<String, ContextKind>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
     target_debuggers: BTreeMap<(String, String, String), TargetDebuggerHandle>,
+    debug_attachments: BTreeMap<(String, String, String), DebugAttachment>,
+    pause_children_leases: BTreeMap<(String, String), PauseChildrenLease>,
     history: BTreeMap<String, VecDeque<ContextObservation>>,
     completed_requests: BTreeMap<(String, String), u64>,
     playwright_proxies: BTreeMap<String, PlaywrightProxyRegistration>,
@@ -766,6 +843,7 @@ struct PlaywrightProxyRegistration {
     target_id: String,
     generation: u64,
     cancel: watch::Sender<bool>,
+    closed: watch::Receiver<bool>,
 }
 
 /// Tracks one open `jsdbg context relay` or `jsdbg target relay`. Its mere presence for a
@@ -796,12 +874,26 @@ struct PhysicalAttachmentOwner {
     key: (String, String, String),
     debugger: TargetDebuggerHandle,
     runtime: Arc<ConnectionRuntime>,
+    attempt: ConnectionAttempt,
+    attachment: Option<DebugAttachment>,
+}
+
+#[derive(Clone)]
+struct DebugAttachment {
+    capability: Arc<dyn DebugCapability>,
+    handle: DebugSessionHandle,
+    graph_source: SourceId,
+}
+
+#[derive(Clone)]
+struct RelayDebugAttachment {
+    debugger: TargetDebuggerHandle,
+    attachment: DebugAttachment,
 }
 
 fn physical_target_key(
     state: &ServiceState,
     key: &(String, String, String),
-    runtime: &Arc<ConnectionRuntime>,
 ) -> Result<String, JsonRpcError> {
     let connection = state
         .contexts
@@ -810,35 +902,9 @@ fn physical_target_key(
         .connections
         .get(&key.1)
         .ok_or_else(|| not_found("connection", &key.1))?;
-    let target = connection
-        .targets
-        .get(&key.2)
+    let target = context_connection_target(state, &key.0, &key.1, connection.generation, &key.2)
         .ok_or_else(|| not_found("target", &key.2))?;
-    if let Some(process_id) = runtime.renderer_process_id(&key.2) {
-        return Ok(format!("process:{process_id}"));
-    }
-    Ok(match &connection.configuration {
-        ConnectionConfiguration::Process { process_id }
-            if key.2 == synthetic_node_target_id(&key.1) =>
-        {
-            format!("process:{process_id}")
-        }
-        ConnectionConfiguration::ProcessTree { root_pid }
-            if key.2 == synthetic_node_target_id(&key.1) =>
-        {
-            format!("process:{root_pid}")
-        }
-        ConnectionConfiguration::ProcessTree { .. } if target.url.starts_with("process:") => {
-            target.url.clone()
-        }
-        ConnectionConfiguration::NodeInspector { endpoint } => {
-            format!("node-inspector:{endpoint}")
-        }
-        ConnectionConfiguration::DirectCdp { endpoint } => {
-            format!("cdp:{endpoint}#{}", key.2)
-        }
-        _ => format!("runtime:{:p}#{}", Arc::as_ptr(runtime), key.2),
-    })
+    Ok(target.resource_id.to_string())
 }
 
 fn ownership_conflict(owner: &(String, String, String)) -> JsonRpcError {
@@ -1394,6 +1460,23 @@ impl DebuggerServiceApi for DebuggerService {
         )
     }
 
+    async fn get_resource_graph(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+    ) -> Result<ResourceGraphSnapshot, JsonRpcError> {
+        let state = self.state.lock().await;
+        if !state.contexts.contains_key(&context_id) {
+            return Err(not_found("context", &context_id));
+        }
+        let snapshot = state
+            .resource_graphs
+            .get(&context_id)
+            .map(GraphSink::snapshot)
+            .unwrap_or_else(|| ResourceGraph::default().snapshot());
+        Ok(resource_graph_api_snapshot(snapshot))
+    }
+
     async fn observe_context(
         &self,
         _ctx: &CallCtx,
@@ -1499,6 +1582,7 @@ impl DebuggerServiceApi for DebuggerService {
             if state.contexts.remove(&context_id).is_none() {
                 return Err(not_found("context", &context_id));
             }
+            state.resource_graphs.remove(&context_id);
             state.context_kinds.remove(&context_id);
             self.complete_request(&mut state, &context_id, &options, 0);
             state.history.remove(&context_id);
@@ -1506,6 +1590,12 @@ impl DebuggerServiceApi for DebuggerService {
             state
                 .target_debuggers
                 .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
+            state
+                .debug_attachments
+                .retain(|(candidate_context, _, _), _| candidate_context != &context_id);
+            state
+                .pause_children_leases
+                .retain(|(candidate_context, _), _| candidate_context != &context_id);
             let proxy_cancellations = state
                 .playwright_proxies
                 .values()
@@ -1633,19 +1723,19 @@ impl DebuggerServiceApi for DebuggerService {
             .cloned()
             .ok_or_else(|| not_found("context", &context_id))?;
         let runtime_key = (context_id.clone(), connection_id.clone());
-        let (completion, runtime) = match connected {
+        let (completion, runtime, targets) = match connected {
             Ok((runtime, product, protocol_version, targets)) => (
                 EffectCompletion::ConnectionOpened {
                     connection_id: connection_id.clone(),
                     attempt,
                     product,
                     protocol_version,
-                    targets: targets
-                        .into_iter()
-                        .map(|target| (target.target_id.clone(), target))
-                        .collect(),
                 },
                 Some(runtime),
+                targets
+                    .into_iter()
+                    .map(|target| (target.target_id.clone(), target))
+                    .collect::<BTreeMap<_, _>>(),
             ),
             Err(message) => (
                 EffectCompletion::ConnectionOpenFailed {
@@ -1654,27 +1744,13 @@ impl DebuggerServiceApi for DebuggerService {
                     message,
                 },
                 None,
+                BTreeMap::new(),
             ),
         };
         let transition = match reduce_context(&context, ContextInput::EffectCompletion(completion))
         {
             Ok(transition) => transition,
             Err(error) => {
-                if matches!(
-                    error,
-                    ContextTransitionError::TargetIdentityCollision { .. }
-                ) {
-                    let failed = reduce_context(
-                        &context,
-                        ContextInput::EffectCompletion(EffectCompletion::ConnectionOpenFailed {
-                            connection_id: connection_id.clone(),
-                            attempt,
-                            message: error.to_string(),
-                        }),
-                    )
-                    .expect("the current connecting attempt can be failed");
-                    self.commit_context(&mut state, &context_id, failed);
-                }
                 drop(state);
                 if let Some(runtime) = runtime {
                     runtime.close().await;
@@ -1682,28 +1758,47 @@ impl DebuggerServiceApi for DebuggerService {
                 return Err(transition_rpc_error(error));
             }
         };
-        let result = snapshot(&self.agent_instance_id, &context_id, &transition.state);
+        if let Some(runtime) = &runtime {
+            if let Err(error) = stage_connection_resource_graph(
+                &mut state,
+                &context_id,
+                &connection_id,
+                &transition.state,
+                &targets,
+                runtime,
+                &[],
+            ) {
+                let failure = reduce_context(
+                    &context,
+                    ContextInput::EffectCompletion(EffectCompletion::ConnectionOpenFailed {
+                        connection_id: connection_id.clone(),
+                        attempt,
+                        message: format!("failed to publish resource graph: {error}"),
+                    }),
+                )
+                .map_err(transition_rpc_error)?;
+                self.commit_context(&mut state, &context_id, failure);
+                let runtime = runtime.clone();
+                drop(state);
+                runtime.close().await;
+                return Err(internal_error(format!(
+                    "failed to publish resource graph: {error}"
+                )));
+            }
+        }
         let auto_attach_targets = if runtime
             .as_ref()
-            .is_some_and(|runtime| runtime.is_direct_debugger())
+            .is_some_and(|runtime| runtime.is_direct_debugger() || runtime.is_virtual_root())
         {
             Vec::new()
         } else {
-            transition
-                .state
-                .connections
-                .get(&connection_id)
-                .map(|connection| {
-                    connection
-                        .targets
-                        .values()
-                        .filter(|target| matches!(target.target_type.as_str(), "page" | "node"))
-                        .map(|target| target.target_id.clone())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
+            targets
+                .values()
+                .filter(|target| matches!(target.target_type.as_str(), "page" | "node"))
+                .map(|target| target.target_id.clone())
+                .collect::<Vec<_>>()
         };
-        self.commit_context(&mut state, &context_id, transition);
+        let result = self.commit_context(&mut state, &context_id, transition);
         if let Some(runtime) = runtime {
             state.runtimes.insert(runtime_key, runtime.clone());
             self.supervise_runtime(
@@ -1777,11 +1872,10 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(transition_rpc_error)?;
             let attempt = match transition.effects.as_slice() {
                 [] => {
-                    return Ok(snapshot(
-                        &self.agent_instance_id,
-                        &context_id,
-                        &transition.state,
-                    ));
+                    return Ok(
+                        service_snapshot(&state, &self.agent_instance_id, &context_id)
+                            .expect("context was checked above"),
+                    );
                 }
                 [ContextEffect::Disconnect { attempt, .. }] => *attempt,
                 effects => panic!("disconnect command emitted unexpected effects: {effects:?}"),
@@ -1790,11 +1884,16 @@ impl DebuggerServiceApi for DebuggerService {
             let runtime = state
                 .runtimes
                 .remove(&(context_id.clone(), connection_id.clone()));
+            retract_connection_resource_graph(
+                &mut state,
+                &context_id,
+                &connection_id,
+                attempt.generation,
+            );
+            remove_connection_debugger_registrations(&mut state, &context_id, &connection_id);
             state
-                .target_debuggers
-                .retain(|(candidate_context, candidate_connection, _), _| {
-                    candidate_context != &context_id || candidate_connection != &connection_id
-                });
+                .pause_children_leases
+                .remove(&(context_id.clone(), connection_id.clone()));
             cancel_playwright_proxies(
                 &mut state,
                 &context_id,
@@ -1804,6 +1903,8 @@ impl DebuggerServiceApi for DebuggerService {
             (runtime, attempt)
         };
 
+        self.release_relay_attachments_for_connection(&context_id, &connection_id)
+            .await;
         if let Some(runtime) = runtime {
             runtime.close().await;
         }
@@ -1824,6 +1925,73 @@ impl DebuggerServiceApi for DebuggerService {
         .map_err(transition_rpc_error)?;
         let result = self.commit_context(&mut state, &context_id, transition);
         Ok(result)
+    }
+
+    async fn set_pause_future_children(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        enabled: bool,
+    ) -> Result<bool, JsonRpcError> {
+        let key = (context_id.clone(), connection_id.clone());
+        if !enabled {
+            self.state.lock().await.pause_children_leases.remove(&key);
+            return Ok(false);
+        }
+        let (generation, capability) = {
+            let state = self.state.lock().await;
+            if state.pause_children_leases.contains_key(&key) {
+                return Ok(true);
+            }
+            let context = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let connection = context
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?;
+            let root = connection_root_resource_id(&connection_id, connection.generation);
+            let source = connection_source_id(&connection_id, connection.generation);
+            let capability = state
+                .resource_graphs
+                .get(&context_id)
+                .and_then(|graph| {
+                    graph.read(|graph| {
+                        graph.capability_from_source(
+                            &root,
+                            &source,
+                            &CapabilityKind::PauseFutureChildren,
+                        )
+                    })
+                })
+                .and_then(|capability| capability.as_pause_future_children())
+                .ok_or_else(|| {
+                    invalid_state(&format!(
+                        "connection '{connection_id}' cannot pause future child targets"
+                    ))
+                })?;
+            (connection.generation, capability)
+        };
+        let lease = capability
+            .arm()
+            .await
+            .map_err(|error| invalid_state(&error.to_string()))?;
+        let mut state = self.state.lock().await;
+        let still_current = state
+            .contexts
+            .get(&context_id)
+            .and_then(|context| context.connections.get(&connection_id))
+            .is_some_and(|connection| connection.generation == generation);
+        if !still_current {
+            drop(lease);
+            return Err(invalid_state(
+                "connection changed while pause-on-start was being armed",
+            ));
+        }
+        state.pause_children_leases.insert(key, lease);
+        Ok(true)
     }
 
     async fn delete_connection(
@@ -1852,11 +2020,10 @@ impl DebuggerServiceApi for DebuggerService {
         .map_err(transition_rpc_error)?;
         let result = self.commit_context(&mut state, &context_id, transition);
         self.complete_request(&mut state, &context_id, &options, result.revision);
+        remove_connection_debugger_registrations(&mut state, &context_id, &connection_id);
         state
-            .target_debuggers
-            .retain(|(candidate_context, candidate_connection, _), _| {
-                candidate_context != &context_id || candidate_connection != &connection_id
-            });
+            .pause_children_leases
+            .remove(&(context_id.clone(), connection_id.clone()));
         self.persist_or_restore(&mut state, previous)?;
         Ok(result)
     }
@@ -2387,6 +2554,8 @@ impl DebuggerServiceApi for DebuggerService {
         };
         let sources = model.map_or_else(Vec::new, |model| match kind {
             SourceTreeKind::Loaded => model.loaded_sources(),
+            SourceTreeKind::SourceMapped => model.source_mapped_loaded_sources(),
+            SourceTreeKind::Formatted => model.formatted_loaded_sources(),
             SourceTreeKind::Resolved => model.resolved_loaded_sources(),
         });
         Ok(SourceTreeSnapshot {
@@ -3161,6 +3330,7 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, JsonRpcError> {
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         self.attach_target_internal(ctx, context_id, connection_id, target_id, options)
             .await
@@ -3231,6 +3401,100 @@ impl DebuggerServiceApi for DebuggerService {
             .release_if_waiting()
             .await
             .map_err(target_debugger_rpc_error)
+    }
+
+    async fn detach_target(
+        &self,
+        ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        expected_connection_generation: Option<u64>,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
+        let _attachment_guard = self.attachment_lock.lock().await;
+        let target_id = self
+            .resolve_target_id(&context_id, &connection_id, &target_id)
+            .await?;
+        let key = (context_id.clone(), connection_id.clone(), target_id.clone());
+        let (debugger, runtime, attachment, attempt) = {
+            let state = self.state.lock().await;
+            let context = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?;
+            let connection = context
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?;
+            if expected_connection_generation
+                .is_some_and(|expected| expected != connection.generation)
+            {
+                return Err(invalid_state(
+                    "connection changed before the target could be detached",
+                ));
+            }
+            let debugger = state
+                .target_debuggers
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| not_found("attached target", &target_id))?;
+            let runtime = state
+                .runtimes
+                .get(&(context_id.clone(), connection_id.clone()))
+                .cloned()
+                .ok_or_else(|| invalid_state("connection is not connected"))?;
+            (
+                debugger,
+                runtime,
+                state.debug_attachments.get(&key).cloned(),
+                ConnectionAttempt {
+                    configuration_version: connection.configuration_version,
+                    generation: connection.generation,
+                },
+            )
+        };
+
+        if runtime.is_direct_debugger() {
+            return self
+                .disconnect_connection(ctx, context_id, connection_id)
+                .await;
+        }
+        let close_error = if let Some(attachment) = attachment {
+            attachment
+                .capability
+                .close(&attachment.handle)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        } else {
+            detach_session(&runtime, debugger.session_id()).await;
+            None
+        };
+
+        {
+            let mut state = self.state.lock().await;
+            if state
+                .target_debuggers
+                .get(&key)
+                .is_some_and(|current| current.same_instance(&debugger))
+            {
+                remove_debugger_registration(&mut state, &key);
+            } else if state.target_debuggers.contains_key(&key) {
+                return Err(invalid_state(
+                    "target attachment changed while detach was pending",
+                ));
+            }
+        }
+        self.publish_target_attachment_change(&key, attempt).await;
+
+        if let Some(error) = close_error {
+            return Err(internal_error(error));
+        }
+        let state = self.state.lock().await;
+        service_snapshot(&state, &self.agent_instance_id, &context_id)
+            .ok_or_else(|| not_found("context", &context_id))
     }
 
     async fn resume_target(
@@ -3366,6 +3630,61 @@ impl DebuggerServiceApi for DebuggerService {
         result
     }
 
+    async fn raw_cdp_session_request(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        session_id: String,
+        method: String,
+        params: serde_json::Value,
+        validate: bool,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        if validate {
+            validate_raw_cdp_params(&method, &params).map_err(|message| {
+                invalid_params(&format!(
+                    "invalid params for CDP method '{method}': {message}"
+                ))
+            })?;
+        }
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let identity = debugger.snapshot();
+        let runtime = self
+            .state
+            .lock()
+            .await
+            .runtimes
+            .get(&(context_id.clone(), connection_id.clone()))
+            .cloned()
+            .ok_or_else(|| invalid_state("connection is not connected"))?;
+        let session = runtime
+            .open_session(SessionKey {
+                connection_generation: identity.connection_generation,
+                session_id,
+            })
+            .map_err(|error| invalid_state(&error.to_string()))?;
+        let result = session.raw_request(&method, params).await;
+        let is_current = self
+            .state
+            .lock()
+            .await
+            .target_debuggers
+            .get(&(context_id, connection_id, target_id))
+            .is_some_and(|current| {
+                current.same_instance(&debugger)
+                    && current.snapshot().connection_generation == identity.connection_generation
+            });
+        if !is_current {
+            return Err(invalid_state(
+                "target connection changed while the CDP request was in flight",
+            ));
+        }
+        result
+    }
+
     async fn open_playwright_proxy(
         &self,
         _ctx: &CallCtx,
@@ -3377,7 +3696,7 @@ impl DebuggerServiceApi for DebuggerService {
         let target_id = self
             .resolve_target_id(&context_id, &connection_id, &target_id)
             .await?;
-        let (runtime, source, browser_context_id) = {
+        let (runtime, browser_context_id) = {
             let state = self.state.lock().await;
             let connection = state
                 .contexts
@@ -3391,14 +3710,18 @@ impl DebuggerServiceApi for DebuggerService {
                     "selected connection generation is stale; resolve the target again",
                 ));
             }
-            let target = connection
-                .targets
-                .get(&target_id)
-                .ok_or_else(|| not_found("target", &target_id))?;
-            if target.target_type != "page" {
+            let target = context_connection_target(
+                &state,
+                &context_id,
+                &connection_id,
+                connection.generation,
+                &target_id,
+            )
+            .ok_or_else(|| not_found("target", &target_id))?;
+            if target.target.target_type != "page" {
                 return Err(invalid_params(format!(
                     "Playwright requires a page target, but '{target_id}' has type '{}'",
-                    target.target_type
+                    target.target.target_type
                 )));
             }
             let runtime = state
@@ -3406,15 +3729,22 @@ impl DebuggerServiceApi for DebuggerService {
                 .get(&(context_id.clone(), connection_id.clone()))
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
-            let source = runtime
-                .playwright_cdp_source()
-                .map_err(|error| invalid_state(&error.to_string()))?;
-            (runtime, source, target.browser_context_id.clone())
+            (runtime, target.target.browser_context_id)
         };
 
         let id = random_instance_id().map_err(|error| internal_error(error.to_string()))?;
-        let proxy = crate::playwright_proxy::start(
-            source,
+        let relay = crate::context_relay::start_connection_relay(
+            self.clone(),
+            context_id.clone(),
+            connection_id.clone(),
+            format!("{id}-relay"),
+        )
+        .await
+        .map_err(|error| internal_error(error.to_string()))?;
+        let proxy = match crate::playwright_proxy::start(
+            crate::playwright_proxy::PlaywrightCdpSource::BrowserRoot {
+                endpoint: relay.websocket_url.clone(),
+            },
             crate::playwright_proxy::PlaywrightPageScope {
                 target_id: target_id.clone(),
                 browser_context_id,
@@ -3422,12 +3752,31 @@ impl DebuggerServiceApi for DebuggerService {
             id.clone(),
         )
         .await
-        .map_err(|error| internal_error(error.to_string()))?;
+        {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                relay.cancel.send_replace(true);
+                return Err(internal_error(error.to_string()));
+            }
+        };
+        let crate::context_relay::RelaySession {
+            cancel: relay_cancel,
+            completion: relay_completion,
+            ..
+        } = relay;
         let crate::playwright_proxy::PlaywrightProxy {
             websocket_url,
             cancel,
             completion,
         } = proxy;
+        let mut cancellation = cancel.subscribe();
+        let relay_cancellation = relay_cancel.clone();
+        tokio::spawn(async move {
+            if cancellation.changed().await.is_ok() && *cancellation.borrow() {
+                relay_cancellation.send_replace(true);
+            }
+        });
+        let (closed_sender, closed_receiver) = watch::channel(false);
         {
             let mut state = self.state.lock().await;
             let is_current = state
@@ -3438,10 +3787,15 @@ impl DebuggerServiceApi for DebuggerService {
                     .contexts
                     .get(&context_id)
                     .and_then(|context| context.connections.get(&connection_id))
-                    .is_some_and(|connection| {
-                        connection.generation == expected_generation
-                            && connection.targets.contains_key(&target_id)
-                    });
+                    .is_some_and(|connection| connection.generation == expected_generation)
+                && context_connection_target(
+                    &state,
+                    &context_id,
+                    &connection_id,
+                    expected_generation,
+                    &target_id,
+                )
+                .is_some();
             if !is_current {
                 cancel.send_replace(true);
                 return Err(invalid_state(
@@ -3456,6 +3810,7 @@ impl DebuggerServiceApi for DebuggerService {
                     target_id: target_id.clone(),
                     generation: expected_generation,
                     cancel: cancel.clone(),
+                    closed: closed_receiver,
                 },
             );
         }
@@ -3463,6 +3818,9 @@ impl DebuggerServiceApi for DebuggerService {
         let cleanup_id = id.clone();
         tokio::spawn(async move {
             let _ = completion.await;
+            relay_cancel.send_replace(true);
+            let _ = relay_completion.await;
+            closed_sender.send_replace(true);
             service
                 .state
                 .lock()
@@ -3483,8 +3841,13 @@ impl DebuggerServiceApi for DebuggerService {
         proxy_id: String,
     ) -> Result<bool, JsonRpcError> {
         let registration = self.state.lock().await.playwright_proxies.remove(&proxy_id);
-        if let Some(registration) = registration {
+        if let Some(mut registration) = registration {
             registration.cancel.send_replace(true);
+            while !*registration.closed.borrow_and_update() {
+                if registration.closed.changed().await.is_err() {
+                    break;
+                }
+            }
             Ok(true)
         } else {
             Ok(false)
@@ -3496,6 +3859,7 @@ impl DebuggerServiceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<RelayEndpoint, JsonRpcError> {
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
@@ -3508,7 +3872,8 @@ impl DebuggerServiceApi for DebuggerService {
             crate::context_relay::start_context_relay(self.clone(), context_id.clone(), id.clone())
                 .await
                 .map_err(|error| internal_error(error.to_string()))?;
-        self.register_relay(id, context_id, relay).await
+        self.register_relay(&relay_lifecycle_guard, id, context_id, relay)
+            .await
     }
 
     async fn open_target_relay(
@@ -3518,6 +3883,7 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
     ) -> Result<RelayEndpoint, JsonRpcError> {
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
@@ -3548,11 +3914,12 @@ impl DebuggerServiceApi for DebuggerService {
         )
         .await
         .map_err(|error| internal_error(error.to_string()))?;
-        self.register_relay(id, context_id, relay).await
+        self.register_relay(&relay_lifecycle_guard, id, context_id, relay)
+            .await
     }
 
     async fn close_relay(&self, _ctx: &CallCtx, relay_id: String) -> Result<bool, JsonRpcError> {
-        let registration = self.state.lock().await.relays.remove(&relay_id);
+        let registration = self.state.lock().await.relays.get(&relay_id).cloned();
         if let Some(registration) = registration {
             registration.cancel.send_replace(true);
             Ok(true)
@@ -3702,11 +4069,70 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
     ) -> Result<ScreenshotSnapshot, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .capture_screenshot()
-            .await
-            .map_err(target_debugger_rpc_error)
+        let target_id = self
+            .resolve_target_id(&context_id, &connection_id, &target_id)
+            .await?;
+        let selected = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let (target_type, parent_id) = {
+            let state = self.state.lock().await;
+            let connection = state
+                .contexts
+                .get(&context_id)
+                .ok_or_else(|| not_found("context", &context_id))?
+                .connections
+                .get(&connection_id)
+                .ok_or_else(|| not_found("connection", &connection_id))?;
+            let target = context_connection_target(
+                &state,
+                &context_id,
+                &connection_id,
+                connection.generation,
+                &target_id,
+            )
+            .ok_or_else(|| not_found("target", &target_id))?;
+            (target.target.target_type, target.target.parent_id)
+        };
+        if target_type != "iframe" {
+            return selected
+                .capture_screenshot()
+                .await
+                .map_err(target_debugger_rpc_error);
+        }
+        let parent_id = parent_id.ok_or_else(|| {
+            invalid_state("iframe screenshot requires a discovered embedding page")
+        })?;
+        let frame_id = target_id
+            .rsplit_once("/target/")
+            .map(|(_, frame_id)| frame_id)
+            .ok_or_else(|| invalid_state("iframe target has no native frame identifier"))?;
+        let owner_id = format!(
+            "screenshot-{}",
+            random_instance_id().map_err(|error| internal_error(error.to_string()))?
+        );
+        let service = self.clone();
+        let frame_id = frame_id.to_owned();
+        tokio::spawn(async move {
+            let (parent, created) = service
+                .relay_ensure_attached(&owner_id, &context_id, &connection_id, &parent_id)
+                .await?;
+            let result = capture_embedded_frame_screenshot(&parent, &frame_id).await;
+            if created {
+                service
+                    .relay_release_attachment(
+                        &owner_id,
+                        &context_id,
+                        &connection_id,
+                        &parent_id,
+                        &parent,
+                    )
+                    .await;
+            }
+            result
+        })
+        .await
+        .map_err(|error| internal_error(format!("iframe screenshot task failed: {error}")))?
     }
 
     async fn start_coverage(
@@ -4360,6 +4786,8 @@ impl DebuggerServiceApi for DebuggerService {
             let runtimes = {
                 let mut state = service.state.lock().await;
                 state.target_debuggers.clear();
+                state.debug_attachments.clear();
+                state.pause_children_leases.clear();
                 for registration in std::mem::take(&mut state.playwright_proxies).into_values() {
                     registration.cancel.send_replace(true);
                 }
@@ -4479,7 +4907,13 @@ impl DebuggerService {
             .and_then(|context| context.connections.get(connection_id))
             .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
         if connection.generation != connection_generation
-            || !connection.targets.contains_key(target_id)
+            || !context_connection_has_target(
+                &state,
+                context_id,
+                connection_id,
+                connection_generation,
+                target_id,
+            )
         {
             return Err(invalid_state(
                 "connection generation changed while the capture was being stored",
@@ -4544,7 +4978,13 @@ impl DebuggerService {
                 .and_then(|context| context.connections.get(&metadata.connection_id))
                 .ok_or_else(|| invalid_state("capture owner connection no longer exists"))?;
             if connection.generation != metadata.connection_generation
-                || !connection.targets.contains_key(&metadata.target_id)
+                || !context_connection_has_target(
+                    &state,
+                    &metadata.context_id,
+                    &metadata.connection_id,
+                    metadata.connection_generation,
+                    &metadata.target_id,
+                )
             {
                 return Err(invalid_state(
                     "connection generation changed while the capture was being stored",
@@ -4571,10 +5011,14 @@ impl DebuggerService {
             .contexts
             .get(&metadata.context_id)
             .and_then(|context| context.connections.get(&metadata.connection_id))
-            .is_some_and(|connection| {
-                connection.generation == metadata.connection_generation
-                    && connection.targets.contains_key(&metadata.target_id)
-            });
+            .is_some_and(|connection| connection.generation == metadata.connection_generation)
+            && context_connection_has_target(
+                &state,
+                &metadata.context_id,
+                &metadata.connection_id,
+                metadata.connection_generation,
+                &metadata.target_id,
+            );
         if current.is_none() || !valid_generation {
             drop(state);
             let _ = remove_capture_payload_file(Path::new(&completed.payload.path));
@@ -4717,55 +5161,60 @@ impl DebuggerService {
                 .connections
                 .get(&connection_id)
                 .ok_or_else(|| not_found("connection", &connection_id))?;
-            if !connection.targets.contains_key(&target_id) {
+            if options
+                .expected_connection_generation
+                .is_some_and(|expected| expected != connection.generation)
+            {
+                return Err(invalid_state(
+                    "connection changed before the target could be attached",
+                ));
+            }
+            if !context_connection_has_target(
+                &state,
+                &context_id,
+                &connection_id,
+                connection.generation,
+                &target_id,
+            ) {
                 return Err(not_found("target", &target_id));
             }
-            let runtime = state
+            if !state
                 .runtimes
-                .get(&(context_id.clone(), connection_id.clone()))
-                .cloned()
-                .ok_or_else(|| invalid_state("connection is not connected"))?;
-            let physical_key = physical_target_key(&state, &debugger_key, &runtime)?;
+                .contains_key(&(context_id.clone(), connection_id.clone()))
+            {
+                return Err(invalid_state("connection is not connected"));
+            }
+            let physical_key = physical_target_key(&state, &debugger_key)?;
             let prior_owner = state.target_debuggers.iter().find_map(|(key, debugger)| {
                 let owner_runtime = state.runtimes.get(&(key.0.clone(), key.1.clone()))?.clone();
-                (physical_target_key(&state, key, &owner_runtime)
-                    .ok()
-                    .as_ref()
-                    == Some(&physical_key))
-                .then(|| PhysicalAttachmentOwner {
-                    key: key.clone(),
-                    debugger: debugger.clone(),
-                    runtime: owner_runtime,
+                let connection = state.contexts.get(&key.0)?.connections.get(&key.1)?;
+                (physical_target_key(&state, key).ok().as_ref() == Some(&physical_key)).then(|| {
+                    PhysicalAttachmentOwner {
+                        key: key.clone(),
+                        debugger: debugger.clone(),
+                        runtime: owner_runtime,
+                        attempt: ConnectionAttempt {
+                            configuration_version: connection.configuration_version,
+                            generation: connection.generation,
+                        },
+                        attachment: state.debug_attachments.get(key).cloned(),
+                    }
                 })
             });
             if let Some(owner) = &prior_owner {
                 if !options.force {
                     return Err(ownership_conflict(&owner.key));
                 }
-                state.target_debuggers.remove(&owner.key);
-            } else if !runtime.is_direct_debugger()
-                && connection
-                    .targets
-                    .get(&target_id)
-                    .is_some_and(|target| target.attached)
-            {
-                let message = format!(
-                    "target ownership conflict: {connection_id}/{target_id} is already attached by an external debugger"
-                );
-                return Err(if options.force {
-                    invalid_state(&format!(
-                        "{message}; jsdbg cannot detach an unknown CDP session"
-                    ))
-                } else {
-                    invalid_state(&format!(
-                        "{message}; retry with --force to steal when supported"
-                    ))
-                });
+                remove_debugger_registration(&mut state, &owner.key);
             }
             prior_owner
         };
 
         let mut outcome = TargetAttachmentOutcome::Created;
+        if let Some(owner) = &prior_owner {
+            self.publish_target_attachment_change(&owner.key, owner.attempt)
+                .await;
+        }
         if let Some(owner) = prior_owner {
             outcome = TargetAttachmentOutcome::Stolen;
             let owner_is_requested = owner.key == debugger_key;
@@ -4782,6 +5231,12 @@ impl DebuggerService {
                         .await?;
                     debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
                 }
+            } else if let Some(attachment) = owner.attachment {
+                attachment
+                    .capability
+                    .close(&attachment.handle)
+                    .await
+                    .map_err(|error| internal_error(error.to_string()))?;
             } else if owner.runtime.is_direct_debugger() {
                 owner.runtime.close_direct_debugger(&owner.key.2).await;
             } else {
@@ -4789,7 +5244,7 @@ impl DebuggerService {
             }
         }
 
-        let (runtime, generation, waiting_for_debugger, source_model) = {
+        let (runtime, attempt, debug_capability, waiting_for_debugger, source_model) = {
             let mut state = self.state.lock().await;
             let context = state
                 .contexts
@@ -4799,67 +5254,79 @@ impl DebuggerService {
                 .connections
                 .get(&connection_id)
                 .ok_or_else(|| not_found("connection", &connection_id))?;
-            if !connection.targets.contains_key(&target_id) {
-                return Err(not_found("target", &target_id));
-            }
-            let generation = connection.generation;
-            let waiting_for_debugger = matches!(
-                &connection.configuration,
-                ConnectionConfiguration::Node { .. }
-            );
+            let target = context_connection_target(
+                &state,
+                &context_id,
+                &connection_id,
+                connection.generation,
+                &target_id,
+            )
+            .ok_or_else(|| not_found("target", &target_id))?;
+            let attempt = ConnectionAttempt {
+                configuration_version: connection.configuration_version,
+                generation: connection.generation,
+            };
             let runtime = state
                 .runtimes
                 .get(&(context_id.clone(), connection_id.clone()))
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
+            let source = connection_source_id(&connection_id, connection.generation);
+            let debug_capability = state
+                .resource_graphs
+                .get(&context_id)
+                .and_then(|graph| {
+                    graph.read(|graph| {
+                        graph.capability_from_source(
+                            &target.resource_id,
+                            &source,
+                            &CapabilityKind::Debug,
+                        )
+                    })
+                })
+                .and_then(|capability| capability.as_debug())
+                .ok_or_else(|| {
+                    invalid_state(&format!(
+                        "target '{target_id}' has no available debug capability"
+                    ))
+                })?;
+            let waiting_for_debugger = matches!(
+                &connection.configuration,
+                ConnectionConfiguration::Node { .. }
+            ) || debug_capability.waiting_for_debugger();
             let source_model = state
                 .source_models
                 .entry(context_id.clone())
                 .or_insert_with(|| Arc::new(ContextSourceModel::new()))
                 .clone();
-            (runtime, generation, waiting_for_debugger, source_model)
+            (
+                runtime,
+                attempt,
+                debug_capability,
+                waiting_for_debugger,
+                source_model,
+            )
         };
+        let generation = attempt.generation;
 
-        let direct_runtime_target_id = runtime.is_direct_debugger().then(|| {
-            if target_id == synthetic_node_target_id(&connection_id) {
-                "$node-root".to_owned()
-            } else {
-                target_id.clone()
+        let opened = debug_capability
+            .open(DebugOpenRequest {
+                pause_on_start: waiting_for_debugger,
+                steal_existing_owner: options.force,
+            })
+            .await
+            .map_err(|error| direct_attachment_error(error.to_string(), options.force))?;
+        if opened.stole_existing_owner {
+            outcome = TargetAttachmentOutcome::Stolen;
+        }
+        let session = match debug_capability.take_session(&opened) {
+            Ok(session) => session,
+            Err(error) => {
+                let _ = debug_capability.close(&opened).await;
+                return Err(internal_error(error.to_string()));
             }
-        });
-        let (session, session_key) =
-            if let Some(runtime_target_id) = direct_runtime_target_id.as_deref() {
-                let attachment = runtime
-                    .take_direct_debugger_session(runtime_target_id, options.force)
-                    .await
-                    .map_err(|error| direct_attachment_error(error.to_string(), options.force))?
-                    .ok_or_else(|| invalid_state("direct debugger target has no endpoint"))?;
-                if attachment.stole_external_owner {
-                    outcome = TargetAttachmentOutcome::Stolen;
-                }
-                let key = attachment.session.key().clone();
-                (attachment.session, key)
-            } else {
-                let mut attach = TargetAttachToTargetParams::new(target_id.clone());
-                attach.flatten = Some(true);
-                let attached = runtime
-                    .root()
-                    .target_attach_to_target(attach)
-                    .await
-                    .map_err(|error| cdp_rpc_error("Target.attachToTarget", error))?;
-                let session_key = SessionKey {
-                    connection_generation: generation,
-                    session_id: attached.session_id.clone(),
-                };
-                let session = match runtime.open_session(session_key.clone()) {
-                    Ok(session) => session,
-                    Err(error) => {
-                        detach_session(&runtime, &session_key.session_id).await;
-                        return Err(internal_error(error.to_string()));
-                    }
-                };
-                (session, session_key)
-            };
+        };
+        let session_key = session.key().clone();
         let debugger = match TargetDebuggerHandle::start(
             context_id.clone(),
             connection_id.clone(),
@@ -4874,12 +5341,7 @@ impl DebuggerService {
         {
             Ok(debugger) => debugger,
             Err(error) => {
-                discard_attached_session(
-                    &runtime,
-                    direct_runtime_target_id.as_deref(),
-                    &session_key.session_id,
-                )
-                .await;
+                let _ = debug_capability.close(&opened).await;
                 return Err(target_debugger_rpc_error(error));
             }
         };
@@ -4896,12 +5358,7 @@ impl DebuggerService {
             .is_some_and(|connection| connection.generation == generation);
         if !runtime_is_current || !generation_is_current {
             drop(state);
-            discard_attached_session(
-                &runtime,
-                direct_runtime_target_id.as_deref(),
-                &session_key.session_id,
-            )
-            .await;
+            let _ = debug_capability.close(&opened).await;
             return Err(invalid_state(
                 "connection changed while the target was being attached",
             ));
@@ -4909,21 +5366,42 @@ impl DebuggerService {
         if let Some(existing) = state.target_debuggers.get(&debugger_key) {
             let owner = existing.snapshot();
             drop(state);
-            discard_attached_session(
-                &runtime,
-                direct_runtime_target_id.as_deref(),
-                &session_key.session_id,
-            )
-            .await;
+            let _ = debug_capability.close(&opened).await;
             return Err(ownership_conflict(&(
                 owner.context_id,
                 owner.connection_id,
                 owner.target_id,
             )));
         }
+        let graph_source = match publish_debug_session_resource(
+            &state,
+            "debugger",
+            &context_id,
+            &connection_id,
+            generation,
+            &target_id,
+            &opened.session_id,
+        ) {
+            Ok(source) => source,
+            Err(error) => {
+                drop(state);
+                let _ = debug_capability.close(&opened).await;
+                return Err(internal_error(format!(
+                    "failed to publish debug session resource: {error}"
+                )));
+            }
+        };
         state
             .target_debuggers
             .insert(debugger_key.clone(), debugger.clone());
+        state.debug_attachments.insert(
+            debugger_key.clone(),
+            DebugAttachment {
+                capability: debug_capability.clone(),
+                handle: opened.clone(),
+                graph_source,
+            },
+        );
         let context = state
             .contexts
             .get(&context_id)
@@ -4961,15 +5439,10 @@ impl DebuggerService {
                     .get(&debugger_key)
                     .is_some_and(|current| current.same_instance(&debugger))
                 {
-                    state.target_debuggers.remove(&debugger_key);
+                    remove_debugger_registration(&mut state, &debugger_key);
                 }
                 drop(state);
-                discard_attached_session(
-                    &runtime,
-                    direct_runtime_target_id.as_deref(),
-                    &session_key.session_id,
-                )
-                .await;
+                let _ = debug_capability.close(&opened).await;
                 return Err(target_debugger_rpc_error(error));
             }
         }
@@ -4978,6 +5451,8 @@ impl DebuggerService {
             self.publish_breakpoint_application(&context_id, &breakpoint_id)
                 .await;
         }
+        self.publish_target_attachment_change(&debugger_key, attempt)
+            .await;
         Ok(TargetAttachmentResult {
             outcome,
             target: snapshot,
@@ -5020,12 +5495,6 @@ impl DebuggerService {
             .ok_or_else(|| not_found("attached target", &target_id))
     }
 
-    /// The context-wide revision signal, for a relay to notice target discovery changes across
-    /// every connection without polling the whole context on a timer.
-    pub(crate) fn relay_revision_signal(&self) -> watch::Receiver<u64> {
-        self.revision_signal.subscribe()
-    }
-
     /// Every canonical target currently known in `context_id`, paired with its owning
     /// connection id, for a relay's `Target.getTargets` and discovery diffing.
     pub(crate) async fn relay_targets(
@@ -5033,20 +5502,39 @@ impl DebuggerService {
         context_id: &str,
     ) -> Result<Vec<(String, TargetSnapshot)>, JsonRpcError> {
         let state = self.state.lock().await;
-        let context = state
-            .contexts
-            .get(context_id)
-            .ok_or_else(|| not_found("context", context_id))?;
-        Ok(context
-            .connections
-            .iter()
-            .flat_map(|(connection_id, connection)| {
-                connection
-                    .targets
-                    .values()
-                    .map(move |target| (connection_id.clone(), target.clone()))
-            })
-            .collect())
+        if !state.contexts.contains_key(context_id) {
+            return Err(not_found("context", context_id));
+        }
+        let Some(graph) = state.resource_graphs.get(context_id) else {
+            return Ok(Vec::new());
+        };
+        Ok(relay_targets_from_graph(graph.snapshot()))
+    }
+
+    /// Atomically seeds a relay's target inventory and subscribes it to every later graph revision.
+    pub(crate) async fn relay_target_observation(
+        &self,
+        context_id: &str,
+    ) -> Result<
+        (
+            Vec<(String, TargetSnapshot)>,
+            watch::Receiver<crate::resource_graph::GraphRevision>,
+        ),
+        JsonRpcError,
+    > {
+        let mut state = self.state.lock().await;
+        if !state.contexts.contains_key(context_id) {
+            return Err(not_found("context", context_id));
+        }
+        let observation = state
+            .resource_graphs
+            .entry(context_id.to_owned())
+            .or_default()
+            .observe();
+        Ok((
+            relay_targets_from_graph(observation.snapshot),
+            observation.revisions,
+        ))
     }
 
     /// Fetches an already-attached target's debugger handle for relay forwarding, bypassing the
@@ -5061,50 +5549,401 @@ impl DebuggerService {
             .await
     }
 
+    pub(crate) async fn relay_open_cdp_session(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        session_id: &str,
+    ) -> Result<crate::cdp_runtime::CdpDebuggerSession, JsonRpcError> {
+        let (runtime, generation) = {
+            let state = self.state.lock().await;
+            let generation = state
+                .contexts
+                .get(context_id)
+                .ok_or_else(|| not_found("context", context_id))?
+                .connections
+                .get(connection_id)
+                .ok_or_else(|| not_found("connection", connection_id))?
+                .generation;
+            let runtime = state
+                .runtimes
+                .get(&(context_id.to_owned(), connection_id.to_owned()))
+                .cloned()
+                .ok_or_else(|| invalid_state("connection is not connected"))?;
+            (runtime, generation)
+        };
+        runtime
+            .open_session(SessionKey {
+                connection_generation: generation,
+                session_id: session_id.to_owned(),
+            })
+            .map_err(|error| invalid_state(&error.to_string()))
+    }
+
     /// Returns the target's debugger handle, attaching it first (bypassing the exclusivity
     /// guard) if it is not already attached. Idempotent: safe to call repeatedly for the same
     /// target, unlike the public `attach_target` RPC which fails on an existing attachment.
     pub(crate) async fn relay_ensure_attached(
         &self,
+        owner_id: &str,
         context_id: &str,
         connection_id: &str,
         target_id: &str,
-    ) -> Result<TargetDebuggerHandle, JsonRpcError> {
+    ) -> Result<(TargetDebuggerHandle, bool), JsonRpcError> {
+        let service = self.clone();
+        let owner_id = owner_id.to_owned();
+        let context_id = context_id.to_owned();
+        let connection_id = connection_id.to_owned();
+        let target_id = target_id.to_owned();
+        tokio::spawn(async move {
+            service
+                .relay_ensure_attached_inner(&owner_id, &context_id, &connection_id, &target_id)
+                .await
+        })
+        .await
+        .map_err(|error| internal_error(format!("relay attachment task failed: {error}")))?
+    }
+
+    async fn relay_ensure_attached_inner(
+        &self,
+        owner_id: &str,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+    ) -> Result<(TargetDebuggerHandle, bool), JsonRpcError> {
+        let _relay_attachment_guard = self.relay_attachment_lock.lock().await;
         let resolved_target_id = self
             .resolve_target_id(context_id, connection_id, target_id)
             .await?;
         let key = (
+            owner_id.to_owned(),
             context_id.to_owned(),
             connection_id.to_owned(),
             resolved_target_id.clone(),
         );
-        if let Some(handle) = self.state.lock().await.target_debuggers.get(&key).cloned() {
-            return Ok(handle);
+        if let Some(attachment) = self.relay_attachments.lock().await.get(&key).cloned() {
+            return Ok((attachment.debugger, false));
         }
-        self.attach_target_internal(
-            &CallCtx::default(),
+        let ordinary_key = (
             context_id.to_owned(),
             connection_id.to_owned(),
-            resolved_target_id,
-            TargetAttachOptions { force: true },
-        )
-        .await?;
-        self.state
+            resolved_target_id.clone(),
+        );
+        if let Some(debugger) = self
+            .state
             .lock()
             .await
             .target_debuggers
-            .get(&key)
+            .get(&ordinary_key)
             .cloned()
-            .ok_or_else(|| internal_error("attach completed but no debugger handle was registered"))
+        {
+            return Ok((debugger, false));
+        }
+        let is_direct_debugger = self
+            .state
+            .lock()
+            .await
+            .runtimes
+            .get(&(context_id.to_owned(), connection_id.to_owned()))
+            .is_some_and(|runtime| runtime.is_direct_debugger());
+        if is_direct_debugger {
+            self.attach_target_internal(
+                &CallCtx::default(),
+                context_id.to_owned(),
+                connection_id.to_owned(),
+                resolved_target_id.clone(),
+                TargetAttachOptions::default(),
+            )
+            .await?;
+            let debugger = self
+                .state
+                .lock()
+                .await
+                .target_debuggers
+                .get(&ordinary_key)
+                .cloned()
+                .ok_or_else(|| {
+                    internal_error("direct relay attachment did not register a debugger")
+                })?;
+            return Ok((debugger, false));
+        }
+        let (generation, debug_capability, waiting_for_debugger, source_model) = {
+            let mut state = self.state.lock().await;
+            let connection = state
+                .contexts
+                .get(context_id)
+                .ok_or_else(|| not_found("context", context_id))?
+                .connections
+                .get(connection_id)
+                .ok_or_else(|| not_found("connection", connection_id))?;
+            let target = context_connection_target(
+                &state,
+                context_id,
+                connection_id,
+                connection.generation,
+                &resolved_target_id,
+            )
+            .ok_or_else(|| not_found("target", &resolved_target_id))?;
+            if !state
+                .runtimes
+                .contains_key(&(context_id.to_owned(), connection_id.to_owned()))
+            {
+                return Err(invalid_state("connection is not connected"));
+            }
+            let source = connection_source_id(connection_id, connection.generation);
+            let debug_capability = state
+                .resource_graphs
+                .get(context_id)
+                .and_then(|graph| {
+                    graph.read(|graph| {
+                        graph.capability_from_source(
+                            &target.resource_id,
+                            &source,
+                            &CapabilityKind::Debug,
+                        )
+                    })
+                })
+                .and_then(|capability| capability.as_debug())
+                .ok_or_else(|| {
+                    invalid_state(&format!(
+                        "target '{resolved_target_id}' has no available debug capability"
+                    ))
+                })?;
+            let waiting_for_debugger = debug_capability.waiting_for_debugger();
+            let generation = connection.generation;
+            let source_model = state
+                .source_models
+                .entry(context_id.to_owned())
+                .or_insert_with(|| Arc::new(ContextSourceModel::new()))
+                .clone();
+            (
+                generation,
+                debug_capability,
+                waiting_for_debugger,
+                source_model,
+            )
+        };
+        let opened = match debug_capability
+            .open(DebugOpenRequest {
+                pause_on_start: waiting_for_debugger,
+                steal_existing_owner: false,
+            })
+            .await
+        {
+            Ok(opened) => opened,
+            Err(error) => {
+                if let Some(debugger) = self
+                    .state
+                    .lock()
+                    .await
+                    .target_debuggers
+                    .get(&ordinary_key)
+                    .cloned()
+                {
+                    return Ok((debugger, false));
+                }
+                return Err(direct_attachment_error(error.to_string(), false));
+            }
+        };
+        let session = match debug_capability.take_session(&opened) {
+            Ok(session) => session,
+            Err(error) => {
+                let _ = debug_capability.close(&opened).await;
+                return Err(internal_error(error.to_string()));
+            }
+        };
+        let session_key = session.key().clone();
+        let debugger = match TargetDebuggerHandle::start(
+            context_id.to_owned(),
+            connection_id.to_owned(),
+            resolved_target_id.clone(),
+            generation,
+            session,
+            session_key,
+            waiting_for_debugger,
+            source_model,
+        )
+        .await
+        {
+            Ok(debugger) => debugger,
+            Err(error) => {
+                let _ = debug_capability.close(&opened).await;
+                return Err(target_debugger_rpc_error(error));
+            }
+        };
+        let graph_source = {
+            let state = self.state.lock().await;
+            let generation_is_current = state
+                .contexts
+                .get(context_id)
+                .and_then(|context| context.connections.get(connection_id))
+                .is_some_and(|connection| connection.generation == generation);
+            if !generation_is_current
+                || !context_connection_has_target(
+                    &state,
+                    context_id,
+                    connection_id,
+                    generation,
+                    &resolved_target_id,
+                )
+            {
+                drop(state);
+                let _ = debug_capability.close(&opened).await;
+                return Err(invalid_state(
+                    "connection changed while the relay target was being attached",
+                ));
+            }
+            match publish_debug_session_resource(
+                &state,
+                &format!("relay:{owner_id}"),
+                context_id,
+                connection_id,
+                generation,
+                &resolved_target_id,
+                &opened.session_id,
+            ) {
+                Ok(source) => source,
+                Err(error) => {
+                    drop(state);
+                    let _ = debug_capability.close(&opened).await;
+                    return Err(internal_error(format!(
+                        "failed to publish relay debug session resource: {error}"
+                    )));
+                }
+            }
+        };
+        self.relay_attachments.lock().await.insert(
+            key,
+            RelayDebugAttachment {
+                debugger: debugger.clone(),
+                attachment: DebugAttachment {
+                    capability: debug_capability,
+                    handle: opened,
+                    graph_source,
+                },
+            },
+        );
+        Ok((debugger, true))
     }
 
-    /// Finishes opening a relay: re-checks exclusivity (another `open_*_relay` call may have
-    /// raced while the listener was binding), registers it in `state.relays` so the guard takes
-    /// effect immediately, and arranges for that registration to be removed once the relay's
-    /// dispatch task completes, however it ends (explicit `close_relay`, client disconnect, or
-    /// accept timeout).
+    pub(crate) async fn relay_release_attachment(
+        &self,
+        owner_id: &str,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+        handle: &TargetDebuggerHandle,
+    ) {
+        let key = (
+            owner_id.to_owned(),
+            context_id.to_owned(),
+            connection_id.to_owned(),
+            target_id.to_owned(),
+        );
+        let attachment = {
+            let mut attachments = self.relay_attachments.lock().await;
+            if !attachments
+                .get(&key)
+                .is_some_and(|current| current.debugger.same_instance(handle))
+            {
+                return;
+            }
+            attachments.remove(&key).map(|entry| entry.attachment)
+        };
+        if let Some(attachment) = attachment {
+            {
+                let state = self.state.lock().await;
+                retract_debug_session_resource(&state, context_id, &attachment.graph_source);
+            }
+            if let Err(error) = attachment.capability.close(&attachment.handle).await {
+                eprintln!("failed to close relay-owned target attachment: {error}");
+            }
+        }
+    }
+
+    async fn release_relay_attachments_for_target(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+    ) {
+        let _relay_attachment_guard = self.relay_attachment_lock.lock().await;
+        let attachments = {
+            let mut current = self.relay_attachments.lock().await;
+            let keys = current
+                .keys()
+                .filter(|(_, context, connection, target)| {
+                    context == context_id && connection == connection_id && target == target_id
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| current.remove(&key).map(|entry| entry.attachment))
+                .collect::<Vec<_>>()
+        };
+        for attachment in attachments {
+            if let Err(error) = attachment.capability.close(&attachment.handle).await {
+                eprintln!("failed to close removed target's relay attachment: {error}");
+            }
+        }
+    }
+
+    async fn release_relay_attachments_for_connection(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+    ) {
+        let _relay_attachment_guard = self.relay_attachment_lock.lock().await;
+        let attachments = {
+            let mut current = self.relay_attachments.lock().await;
+            let keys = current
+                .keys()
+                .filter(|(_, context, connection, _)| {
+                    context == context_id && connection == connection_id
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| current.remove(&key).map(|entry| entry.attachment))
+                .collect::<Vec<_>>()
+        };
+        for attachment in attachments {
+            if let Err(error) = attachment.capability.close(&attachment.handle).await {
+                eprintln!("failed to close disconnected relay attachment: {error}");
+            }
+        }
+    }
+
+    pub(crate) async fn relay_release_owned_attachments(&self, owner_id: &str) {
+        let _relay_attachment_guard = self.relay_attachment_lock.lock().await;
+        let attachments = {
+            let mut current = self.relay_attachments.lock().await;
+            let keys = current
+                .keys()
+                .filter(|(owner, _, _, _)| owner == owner_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.into_iter()
+                .filter_map(|key| current.remove(&key).map(|entry| (key.1, entry.attachment)))
+                .collect::<Vec<_>>()
+        };
+        for (context_id, attachment) in attachments {
+            {
+                let state = self.state.lock().await;
+                retract_debug_session_resource(&state, &context_id, &attachment.graph_source);
+            }
+            if let Err(error) = attachment.capability.close(&attachment.handle).await {
+                eprintln!("failed to close relay-owned target attachment: {error}");
+            }
+        }
+    }
+
+    /// Finishes opening a relay while the caller holds `relay_lifecycle_lock`, registers it in
+    /// `state.relays` so the guard takes effect immediately, and arranges for that registration to
+    /// be removed once the relay's dispatch task completes, however it ends.
     async fn register_relay(
         &self,
+        _relay_lifecycle_guard: &tokio::sync::MutexGuard<'_, ()>,
         id: String,
         context_id: String,
         relay: crate::context_relay::RelaySession,
@@ -5150,35 +5989,37 @@ impl DebuggerService {
             .contexts
             .get(context_id)
             .ok_or_else(|| not_found("context", context_id))?;
-        let candidates = context
-            .connections
-            .iter()
-            .flat_map(|(connection_id, connection)| {
-                connection.targets.values().filter_map(move |target| {
-                    let exact = target.target_id == selector;
-                    let friendly = target.target_type.eq_ignore_ascii_case(selector)
-                        || target.title.eq_ignore_ascii_case(selector)
-                        || target.url == selector
-                        || target
-                            .title
-                            .to_lowercase()
-                            .contains(&selector.to_lowercase())
-                        || target.url.to_lowercase().contains(&selector.to_lowercase());
-                    (exact || friendly).then(|| {
-                        (
-                            exact,
-                            CanonicalTargetSnapshot {
-                                context_id: context_id.to_owned(),
-                                target_id: target.target_id.clone(),
-                                connection_id: connection_id.clone(),
-                                connection_generation: connection.generation,
-                                target: target.clone(),
-                            },
-                        )
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        for (connection_id, connection) in context.connections.iter() {
+            for target_resource in
+                context_connection_targets(state, context_id, connection_id, connection.generation)
+                    .into_values()
+            {
+                let target = target_resource.target;
+                let exact = target.target_id == selector;
+                let friendly = target.target_type.eq_ignore_ascii_case(selector)
+                    || target.title.eq_ignore_ascii_case(selector)
+                    || target.url == selector
+                    || target
+                        .title
+                        .to_lowercase()
+                        .contains(&selector.to_lowercase())
+                    || target.url.to_lowercase().contains(&selector.to_lowercase());
+                if exact || friendly {
+                    candidates.push((
+                        exact,
+                        CanonicalTargetSnapshot {
+                            context_id: context_id.to_owned(),
+                            resource_id: target_resource.resource_id.to_string(),
+                            target_id: target.target_id.clone(),
+                            connection_id: connection_id.clone(),
+                            connection_generation: connection.generation,
+                            target,
+                        },
+                    ));
+                }
+            }
+        }
         let exact = candidates
             .iter()
             .filter(|(exact, _)| *exact)
@@ -5232,12 +6073,14 @@ impl DebuggerService {
             .connections
             .get(connection_id)
             .ok_or_else(|| not_found("connection", connection_id))?;
-        if connection.targets.contains_key(selector) {
+        let targets =
+            context_connection_targets(&state, context_id, connection_id, connection.generation);
+        if targets.contains_key(selector) {
             return Ok(selector.to_owned());
         }
-        let matches = connection
-            .targets
+        let matches = targets
             .values()
+            .map(|target| &target.target)
             .filter(|target| {
                 target.target_type == selector || target.title == selector || target.url == selector
             })
@@ -5252,6 +6095,89 @@ impl DebuggerService {
             ))),
         }
     }
+}
+
+async fn capture_embedded_frame_screenshot(
+    parent: &TargetDebuggerHandle,
+    frame_id: &str,
+) -> Result<ScreenshotSnapshot, JsonRpcError> {
+    let owner = parent
+        .raw_cdp_request(
+            "DOM.getFrameOwner".to_owned(),
+            serde_json::json!({ "frameId": frame_id }),
+        )
+        .await?;
+    let backend_node_id = owner
+        .get("backendNodeId")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| invalid_state("embedding frame owner has no backend node identifier"))?;
+    let box_model = parent
+        .raw_cdp_request(
+            "DOM.getBoxModel".to_owned(),
+            serde_json::json!({ "backendNodeId": backend_node_id }),
+        )
+        .await?;
+    let content = box_model
+        .pointer("/model/content")
+        .and_then(serde_json::Value::as_array)
+        .filter(|quad| quad.len() == 8)
+        .ok_or_else(|| invalid_state("embedding frame has no valid content box"))?;
+    let coordinates = content
+        .iter()
+        .map(|coordinate| {
+            coordinate
+                .as_f64()
+                .filter(|coordinate| coordinate.is_finite())
+                .ok_or_else(|| invalid_state("embedding frame content box is not finite"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let xs = [
+        coordinates[0],
+        coordinates[2],
+        coordinates[4],
+        coordinates[6],
+    ];
+    let ys = [
+        coordinates[1],
+        coordinates[3],
+        coordinates[5],
+        coordinates[7],
+    ];
+    let x = xs.into_iter().fold(f64::INFINITY, f64::min);
+    let y = ys.into_iter().fold(f64::INFINITY, f64::min);
+    let width = xs.into_iter().fold(f64::NEG_INFINITY, f64::max) - x;
+    let height = ys.into_iter().fold(f64::NEG_INFINITY, f64::max) - y;
+    if width <= 0.0 || height <= 0.0 {
+        return Err(invalid_state(
+            "embedding frame content box has no visible area",
+        ));
+    }
+    let screenshot = parent
+        .raw_cdp_request(
+            "Page.captureScreenshot".to_owned(),
+            serde_json::json!({
+                "format": "png",
+                "fromSurface": true,
+                "captureBeyondViewport": true,
+                "clip": {
+                    "x": x,
+                    "y": y,
+                    "width": width,
+                    "height": height,
+                    "scale": 1
+                }
+            }),
+        )
+        .await?;
+    let data_base64 = screenshot
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| invalid_state("screenshot response contained no image data"))?
+        .to_owned();
+    Ok(ScreenshotSnapshot {
+        media_type: "image/png".to_owned(),
+        data_base64,
+    })
 }
 
 fn cancel_playwright_proxies(
@@ -5298,23 +6224,673 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
     let _ = runtime.root().target_detach_from_target(detach).await;
 }
 
-async fn discard_attached_session(
-    runtime: &ConnectionRuntime,
-    direct_target_id: Option<&str>,
-    session_id: &str,
-) {
-    if let Some(target_id) = direct_target_id {
-        runtime.close_direct_debugger(target_id).await;
-    } else {
-        detach_session(runtime, session_id).await;
-    }
-}
-
 fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> String {
     if target_id == "$node-root" {
         synthetic_node_target_id(connection_id)
     } else {
         target_id.to_owned()
+    }
+}
+
+/// Inverse of [`canonicalize_synthetic_target_id`]: maps the id jsdbg exposes back to the id the
+/// connection's `Target` domain uses.
+fn runtime_target_id(target_id: &str, connection_id: &str) -> String {
+    if target_id == synthetic_node_target_id(connection_id) {
+        "$node-root".to_owned()
+    } else {
+        target_id.to_owned()
+    }
+}
+
+fn connection_source_id(connection_id: &str, generation: u64) -> SourceId {
+    SourceId::new(format!("connection:{connection_id}:{generation}"))
+}
+
+fn connection_root_resource_id(connection_id: &str, generation: u64) -> ResourceId {
+    ResourceId::from_parts(
+        "connection",
+        [connection_id, generation.to_string().as_str()],
+    )
+    .expect("connection ids and generations are valid resource-id parts")
+}
+
+fn resource_id_for_target(
+    connection_id: &str,
+    connection: &ConnectionState,
+    runtime: &ConnectionRuntime,
+    target: &TargetSnapshot,
+) -> ResourceId {
+    let runtime_target_id = runtime_target_id(&target.target_id, connection_id);
+    if target.subtype.as_deref() == Some("electron-renderer") {
+        let root = match &connection.configuration {
+            ConnectionConfiguration::ProcessTree { root_pid } => root_pid.to_string(),
+            _ => connection_id.to_owned(),
+        };
+        return ResourceId::from_parts("electron-web-contents", [root, runtime_target_id])
+            .expect("Electron target identities are valid resource-id parts");
+    }
+    if let Some(endpoint) = match &connection.configuration {
+        ConnectionConfiguration::DirectCdp { endpoint }
+        | ConnectionConfiguration::NodeInspector { endpoint } => Some(endpoint),
+        _ => None,
+    } {
+        return ResourceId::from_parts(
+            "cdp-endpoint-target",
+            [endpoint.as_str(), runtime_target_id.as_str()],
+        )
+        .expect("CDP endpoint target identities are valid resource-id parts");
+    }
+    let process_id =
+        runtime
+            .target_process_id(&runtime_target_id)
+            .or_else(|| match &connection.configuration {
+                ConnectionConfiguration::Process { process_id }
+                    if target.target_id == synthetic_node_target_id(connection_id) =>
+                {
+                    Some(*process_id)
+                }
+                _ => None,
+            });
+    if let Some(process_id) = process_id
+        && matches!(target.target_type.as_str(), "node" | "process")
+    {
+        let process_identity = if target
+            .target_id
+            .starts_with(&format!("process-{process_id}-"))
+        {
+            target.target_id.clone()
+        } else {
+            format!("pid-{process_id}")
+        };
+        return ResourceId::from_parts("process", [process_identity])
+            .expect("process ids are valid resource-id parts");
+    }
+    ResourceId::from_parts(
+        "cdp-target",
+        [
+            connection_id,
+            connection.generation.to_string().as_str(),
+            runtime_target_id.as_str(),
+        ],
+    )
+    .expect("connection and target ids are valid resource-id parts")
+}
+
+fn sync_connection_resource_graph(
+    graph: &mut ResourceGraph,
+    connection_id: &str,
+    connection: &ConnectionState,
+    targets: &BTreeMap<String, TargetSnapshot>,
+    runtime: &Arc<ConnectionRuntime>,
+) -> Result<(), String> {
+    let source = connection_source_id(connection_id, connection.generation);
+    graph.retract_source(&source);
+
+    let root_id = connection_root_resource_id(connection_id, connection.generation);
+    let root_kind = match connection.configuration {
+        ConnectionConfiguration::DirectCdp { .. }
+        | ConnectionConfiguration::Chrome { .. }
+        | ConnectionConfiguration::Playwright { .. } => "browser",
+        ConnectionConfiguration::ProcessTree { .. } => "process-tree",
+        ConnectionConfiguration::NodeInspector { .. }
+        | ConnectionConfiguration::Process { .. }
+        | ConnectionConfiguration::Node { .. } => "runtime",
+        ConnectionConfiguration::Stdio { topology, .. } => match topology {
+            crate::service_api::CdpStdioTopology::Browser => "browser",
+            crate::service_api::CdpStdioTopology::Target => "runtime",
+        },
+    };
+    let resources = targets
+        .values()
+        .map(|target| {
+            (
+                target.target_id.clone(),
+                resource_id_for_target(connection_id, connection, runtime, target),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut root_upsert = ResourceUpsert::new(
+        root_id.clone(),
+        ResourceFacts::of_kind(ResourceKind::new(root_kind))
+            .with_label(connection_id)
+            .with_attribute(
+                "connectionId",
+                serde_json::Value::String(connection_id.to_owned()),
+            )
+            .with_attribute("generation", serde_json::Value::from(connection.generation)),
+    )
+    .with_frontier(RelationKind::Contains, DiscoveryState::Live);
+    if let Some(capability) = runtime.pause_future_children_capability(
+        root_id.clone(),
+        resources
+            .iter()
+            .map(|(target_id, resource)| {
+                (
+                    resource.clone(),
+                    runtime_target_id(target_id, connection_id),
+                )
+            })
+            .collect(),
+    ) {
+        root_upsert =
+            root_upsert.with_capability(CapabilityObject::PauseFutureChildren(capability));
+    }
+    let mut delta = GraphDelta::for_source(source.clone()).upsert(root_upsert);
+
+    for target in targets.values() {
+        let resource = resources
+            .get(&target.target_id)
+            .expect("resource ids were built from the same target map")
+            .clone();
+        let runtime_id = runtime_target_id(&target.target_id, connection_id);
+        let mut facts = ResourceFacts::of_kind(ResourceKind::new(&target.target_type))
+            .with_label(if target.title.is_empty() {
+                target.target_id.clone()
+            } else {
+                target.title.clone()
+            })
+            .with_attribute(
+                "targetId",
+                serde_json::Value::String(target.target_id.clone()),
+            )
+            .with_attribute(
+                "connectionId",
+                serde_json::Value::String(connection_id.to_owned()),
+            )
+            .with_attribute(
+                "targetType",
+                serde_json::Value::String(target.target_type.clone()),
+            )
+            .with_attribute("title", serde_json::Value::String(target.title.clone()))
+            .with_attribute("url", serde_json::Value::String(target.url.clone()))
+            .with_attribute("attached", serde_json::Value::from(target.attached));
+        if let Some(process_id) = runtime.target_process_id(&runtime_id) {
+            facts = facts.with_attribute("processId", serde_json::Value::from(process_id));
+        }
+        if let Some(subtype) = &target.subtype {
+            facts = facts.with_attribute("subtype", serde_json::Value::String(subtype.clone()));
+        }
+        if let Some(parent_id) = &target.parent_id {
+            facts = facts.with_attribute(
+                "parentTargetId",
+                serde_json::Value::String(parent_id.clone()),
+            );
+        }
+        if let Some(opener_id) = &target.opener_id {
+            facts = facts.with_attribute(
+                "openerTargetId",
+                serde_json::Value::String(opener_id.clone()),
+            );
+        }
+        if let Some(browser_context_id) = &target.browser_context_id {
+            facts = facts.with_attribute(
+                "browserContextId",
+                serde_json::Value::String(browser_context_id.clone()),
+            );
+        }
+        delta = delta.upsert(
+            ResourceUpsert::new(resource.clone(), facts)
+                .with_capability(CapabilityObject::Debug(
+                    runtime.debug_capability(resource.clone(), runtime_id),
+                ))
+                .with_frontier(RelationKind::Contains, DiscoveryState::Unobserved),
+        );
+
+        let parent = target
+            .parent_id
+            .as_ref()
+            .and_then(|parent| resources.get(parent))
+            .unwrap_or(&root_id);
+        if parent != &resource {
+            delta = delta.relate(RelationKind::Contains, parent.clone(), resource);
+        }
+    }
+    graph.apply(delta).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn stage_connection_resource_graph(
+    state: &mut ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    context: &ContextState,
+    targets: &BTreeMap<String, TargetSnapshot>,
+    runtime: &Arc<ConnectionRuntime>,
+    retracted_sources: &[SourceId],
+) -> Result<(), String> {
+    let connection = context
+        .connections
+        .get(connection_id)
+        .ok_or_else(|| format!("connection '{connection_id}' does not exist"))?;
+    let graph = state
+        .resource_graphs
+        .entry(context_id.to_owned())
+        .or_default()
+        .clone();
+    graph.try_update(|graph| {
+        for source in retracted_sources {
+            graph.retract_source(source);
+        }
+        sync_connection_resource_graph(graph, connection_id, connection, targets, runtime)
+    })?;
+    Ok(())
+}
+
+fn retract_connection_resource_graph(
+    state: &mut ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+) {
+    if let Some(graph) = state.resource_graphs.get(context_id) {
+        let connection_source = connection_source_id(connection_id, generation);
+        let _: Result<(), std::convert::Infallible> = graph.try_update(|graph| {
+            let snapshot = graph.snapshot();
+            let connection_resources = snapshot
+                .resources
+                .iter()
+                .filter(|(_, resource)| resource.facets.contains_key(&connection_source))
+                .map(|(resource_id, _)| resource_id)
+                .collect::<BTreeSet<_>>();
+            let session_sources = snapshot
+                .relations
+                .iter()
+                .filter(|relation| {
+                    relation.relation.kind == RelationKind::Debugs
+                        && connection_resources.contains(&relation.relation.to)
+                })
+                .flat_map(|relation| relation.contributors.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            for source in session_sources {
+                graph.retract_source(&source);
+            }
+            graph.retract_source(&connection_source);
+            Ok(())
+        });
+    }
+}
+
+#[derive(Clone)]
+struct ConnectionTargetResource {
+    resource_id: ResourceId,
+    target: TargetSnapshot,
+}
+
+enum ConnectionTargetUpdate {
+    Upsert(TargetSnapshot),
+    Remove(String),
+}
+
+fn target_snapshot_from_facts(facts: &ResourceFacts) -> Option<TargetSnapshot> {
+    let string = |name: &str| {
+        facts
+            .attributes
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    Some(TargetSnapshot {
+        target_id: string("targetId")?,
+        target_type: string("targetType").unwrap_or_else(|| "other".to_owned()),
+        title: string("title").unwrap_or_default(),
+        url: string("url").unwrap_or_default(),
+        attached: facts
+            .attributes
+            .get("attached")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        parent_id: string("parentTargetId"),
+        opener_id: string("openerTargetId"),
+        browser_context_id: string("browserContextId"),
+        subtype: string("subtype"),
+    })
+}
+
+fn connection_targets_from_graph(
+    snapshot: &crate::resource_graph::GraphSnapshot,
+    connection_id: &str,
+    generation: u64,
+) -> BTreeMap<String, ConnectionTargetResource> {
+    let source = connection_source_id(connection_id, generation);
+    snapshot
+        .resources
+        .iter()
+        .filter_map(|(resource_id, resource)| {
+            let facts = resource.facets.get(&source)?;
+            let target = target_snapshot_from_facts(facts)?;
+            Some((
+                target.target_id.clone(),
+                ConnectionTargetResource {
+                    resource_id: resource_id.clone(),
+                    target,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn context_connection_targets(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+) -> BTreeMap<String, ConnectionTargetResource> {
+    state
+        .resource_graphs
+        .get(context_id)
+        .map(GraphSink::snapshot)
+        .map(|snapshot| connection_targets_from_graph(&snapshot, connection_id, generation))
+        .unwrap_or_default()
+}
+
+fn context_connection_target(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    target_id: &str,
+) -> Option<ConnectionTargetResource> {
+    context_connection_targets(state, context_id, connection_id, generation).remove(target_id)
+}
+
+fn context_connection_has_target(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    target_id: &str,
+) -> bool {
+    context_connection_target(state, context_id, connection_id, generation, target_id).is_some()
+}
+
+fn prepare_connection_target_update(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    update: ConnectionTargetUpdate,
+) -> Option<(BTreeMap<String, TargetSnapshot>, TargetGraphChange)> {
+    let mut targets = context_connection_targets(state, context_id, connection_id, generation)
+        .into_iter()
+        .map(|(target_id, resource)| (target_id, resource.target))
+        .collect::<BTreeMap<_, _>>();
+    match update {
+        ConnectionTargetUpdate::Upsert(target) => {
+            let target_id = target.target_id.clone();
+            let change = match targets.insert(target_id.clone(), target) {
+                Some(previous) if previous == targets[&target_id] => return None,
+                Some(_) => TargetGraphChange::Changed { target_id },
+                None => TargetGraphChange::Created { target_id },
+            };
+            Some((targets, change))
+        }
+        ConnectionTargetUpdate::Remove(target_id) => {
+            targets.remove(&target_id)?;
+            Some((targets, TargetGraphChange::Removed { target_id }))
+        }
+    }
+}
+
+fn debugged_resources(snapshot: &crate::resource_graph::GraphSnapshot) -> BTreeSet<ResourceId> {
+    snapshot
+        .relations
+        .iter()
+        .filter(|relation| relation.relation.kind == RelationKind::Debugs)
+        .map(|relation| relation.relation.to.clone())
+        .collect()
+}
+
+fn debug_session_sources_for_target(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    target_id: &str,
+) -> Vec<SourceId> {
+    let Some(target) =
+        context_connection_target(state, context_id, connection_id, generation, target_id)
+    else {
+        return Vec::new();
+    };
+    state
+        .resource_graphs
+        .get(context_id)
+        .map(|graph| {
+            graph.read(|graph| {
+                graph
+                    .snapshot()
+                    .relations
+                    .into_iter()
+                    .filter(|relation| {
+                        relation.relation.kind == RelationKind::Debugs
+                            && relation.relation.to == target.resource_id
+                    })
+                    .flat_map(|relation| relation.contributors)
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn debug_session_source_id(
+    owner: &str,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    session_id: &str,
+) -> SourceId {
+    SourceId::new(format!(
+        "debug-session:{owner}:{context_id}:{connection_id}:{generation}:{session_id}"
+    ))
+}
+
+fn debug_session_resource_id(
+    owner: &str,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    session_id: &str,
+) -> ResourceId {
+    ResourceId::from_parts(
+        "debug-session",
+        [
+            owner,
+            context_id,
+            connection_id,
+            generation.to_string().as_str(),
+            session_id,
+        ],
+    )
+    .expect("debug session identity parts are non-empty")
+}
+
+fn publish_debug_session_resource(
+    state: &ServiceState,
+    owner: &str,
+    context_id: &str,
+    connection_id: &str,
+    generation: u64,
+    target_id: &str,
+    session_id: &str,
+) -> Result<SourceId, String> {
+    let target = context_connection_target(state, context_id, connection_id, generation, target_id)
+        .ok_or_else(|| format!("target '{target_id}' is not present in the resource graph"))?;
+    let graph = state
+        .resource_graphs
+        .get(context_id)
+        .ok_or_else(|| format!("context '{context_id}' has no resource graph"))?;
+    let source = debug_session_source_id(owner, context_id, connection_id, generation, session_id);
+    let session =
+        debug_session_resource_id(owner, context_id, connection_id, generation, session_id);
+    let facts = ResourceFacts::of_kind(ResourceKind::new("debug-session"))
+        .with_label(session_id)
+        .with_attribute(
+            "contextId",
+            serde_json::Value::String(context_id.to_owned()),
+        )
+        .with_attribute(
+            "connectionId",
+            serde_json::Value::String(connection_id.to_owned()),
+        )
+        .with_attribute("generation", serde_json::Value::from(generation))
+        .with_attribute("targetId", serde_json::Value::String(target_id.to_owned()))
+        .with_attribute(
+            "sessionId",
+            serde_json::Value::String(session_id.to_owned()),
+        )
+        .with_attribute("owner", serde_json::Value::String(owner.to_owned()));
+    graph
+        .apply(
+            GraphDelta::for_source(source.clone())
+                .upsert(ResourceUpsert::new(session.clone(), facts))
+                .relate(RelationKind::Debugs, session, target.resource_id),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(source)
+}
+
+fn retract_debug_session_resource(state: &ServiceState, context_id: &str, source: &SourceId) {
+    if let Some(graph) = state.resource_graphs.get(context_id) {
+        graph.retract_source(source);
+    }
+}
+
+fn remove_debugger_registration(
+    state: &mut ServiceState,
+    key: &(String, String, String),
+) -> Option<TargetDebuggerHandle> {
+    let debugger = state.target_debuggers.remove(key);
+    if let Some(attachment) = state.debug_attachments.remove(key) {
+        retract_debug_session_resource(state, &key.0, &attachment.graph_source);
+    }
+    debugger
+}
+
+fn remove_connection_debugger_registrations(
+    state: &mut ServiceState,
+    context_id: &str,
+    connection_id: &str,
+) {
+    let keys = state
+        .target_debuggers
+        .keys()
+        .filter(|(candidate_context, candidate_connection, _)| {
+            candidate_context == context_id && candidate_connection == connection_id
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in keys {
+        remove_debugger_registration(state, &key);
+    }
+}
+
+fn resource_graph_api_snapshot(
+    snapshot: crate::resource_graph::GraphSnapshot,
+) -> ResourceGraphSnapshot {
+    let resources = snapshot
+        .resources
+        .into_iter()
+        .map(|(id, resource)| ResourceSnapshot {
+            id: id.to_string(),
+            kinds: resource
+                .kinds
+                .into_iter()
+                .map(|kind| kind.to_string())
+                .collect(),
+            label: resource.label,
+            attributes: resource.attributes,
+            contributors: resource
+                .contributors
+                .into_iter()
+                .map(|source| source.to_string())
+                .collect(),
+            capabilities: resource
+                .capabilities
+                .into_iter()
+                .map(|capability| ResourceCapabilitySnapshot {
+                    source: capability.source.to_string(),
+                    kind: capability_kind_name(capability.kind).to_owned(),
+                    title: capability.summary.title,
+                    detail: capability.summary.detail,
+                })
+                .collect(),
+            frontiers: resource
+                .frontiers
+                .into_iter()
+                .map(|frontier| ResourceFrontierSnapshot {
+                    relation: relation_kind_name(&frontier.relation),
+                    state: serde_json::to_value(frontier.state)
+                        .expect("discovery states are serializable"),
+                })
+                .collect(),
+        })
+        .collect();
+    let relations = snapshot
+        .relations
+        .into_iter()
+        .map(|relation| ResourceRelationSnapshot {
+            kind: relation_kind_name(&relation.relation.kind),
+            from: relation.relation.from.to_string(),
+            to: relation.relation.to.to_string(),
+            contributors: relation
+                .contributors
+                .into_iter()
+                .map(|source| source.to_string())
+                .collect(),
+        })
+        .collect();
+    ResourceGraphSnapshot {
+        revision: snapshot.revision.0,
+        resources,
+        relations,
+    }
+}
+
+fn relay_targets_from_graph(
+    snapshot: crate::resource_graph::GraphSnapshot,
+) -> Vec<(String, TargetSnapshot)> {
+    let debugged = debugged_resources(&snapshot);
+    let mut targets = BTreeMap::new();
+    for (resource_id, resource) in &snapshot.resources {
+        for facts in resource.facets.values() {
+            let Some(connection_id) = facts
+                .attributes
+                .get("connectionId")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let Some(mut target) = target_snapshot_from_facts(facts) else {
+                continue;
+            };
+            target.attached |= debugged.contains(resource_id);
+            targets.insert(
+                (connection_id.to_owned(), target.target_id.clone()),
+                (connection_id.to_owned(), target),
+            );
+        }
+    }
+    targets.into_values().collect()
+}
+
+fn capability_kind_name(kind: CapabilityKind) -> &'static str {
+    match kind {
+        CapabilityKind::Explore => "explore",
+        CapabilityKind::Debug => "debug",
+        CapabilityKind::Process => "process",
+        CapabilityKind::Browser => "browser",
+        CapabilityKind::Frame => "frame",
+        CapabilityKind::PauseFutureChildren => "pauseFutureChildren",
+    }
+}
+
+fn relation_kind_name(kind: &RelationKind) -> String {
+    match kind {
+        RelationKind::Contains => "contains".to_owned(),
+        RelationKind::Spawned => "spawned".to_owned(),
+        RelationKind::Hosts => "hosts".to_owned(),
+        RelationKind::Debugs => "debugs".to_owned(),
+        RelationKind::Other(name) => name.clone(),
     }
 }
 
@@ -5345,9 +6921,6 @@ async fn connect_runtime(
             ConnectionConfiguration::Process { process_id } => {
                 format!("Process {process_id}")
             }
-            ConnectionConfiguration::ProcessTree { root_pid } => {
-                format!("Process {root_pid}")
-            }
             ConnectionConfiguration::Stdio { command, .. } => command.clone(),
             _ => "Node.js".to_owned(),
         };
@@ -5369,9 +6942,6 @@ async fn connect_runtime(
                     ConnectionConfiguration::NodeInspector { endpoint } => endpoint.clone(),
                     ConnectionConfiguration::Process { process_id } => {
                         format!("process:{process_id}")
-                    }
-                    ConnectionConfiguration::ProcessTree { root_pid } => {
-                        format!("process:{root_pid}")
                     }
                     ConnectionConfiguration::Stdio { command, .. } => {
                         format!("stdio:{command}")
@@ -5420,45 +6990,68 @@ async fn connect_runtime(
         connection,
         version.product,
         version.protocol_version,
-        targets.into_iter().map(target_snapshot).collect(),
+        targets
+            .into_iter()
+            .map(|target| {
+                canonicalize_synthetic_target(target_snapshot_from_info(target), connection_id)
+            })
+            .collect(),
     ))
 }
 
-fn target_snapshot(target: TargetTargetInfo) -> TargetSnapshot {
-    TargetSnapshot {
-        target_id: target.target_id,
-        target_type: target.r#type,
-        title: target.title,
-        url: target.url,
-        attached: target.attached,
-        parent_id: target.parent_id,
-        opener_id: target.opener_id,
-        browser_context_id: target.browser_context_id,
-        subtype: target.subtype,
-    }
-}
-
-fn snapshot(agent_instance_id: &str, id: &str, context: &ContextState) -> ContextSnapshot {
+fn snapshot(
+    agent_instance_id: &str,
+    id: &str,
+    context: &ContextState,
+    graph: Option<&crate::resource_graph::GraphSnapshot>,
+) -> ContextSnapshot {
+    let debugged = graph.map(debugged_resources).unwrap_or_default();
+    let mut target_resources = BTreeMap::new();
     let connections = context
         .connections
         .iter()
-        .map(|(id, connection)| ConnectionSnapshot {
-            id: id.clone(),
-            configuration: connection.configuration.clone(),
-            generation: connection.generation,
-            status: connection.status.clone(),
-            targets: connection.targets.values().cloned().collect(),
+        .map(|(connection_id, connection)| {
+            let targets = graph
+                .map(|graph| {
+                    connection_targets_from_graph(graph, connection_id, connection.generation)
+                })
+                .unwrap_or_default();
+            target_resources.extend(targets.iter().map(|(target_id, target)| {
+                (
+                    (connection_id.clone(), target_id.clone()),
+                    target.resource_id.clone(),
+                )
+            }));
+            ConnectionSnapshot {
+                id: connection_id.clone(),
+                configuration: connection.configuration.clone(),
+                generation: connection.generation,
+                status: connection.status.clone(),
+                targets: targets.into_values().map(|target| target.target).collect(),
+            }
         })
         .collect::<Vec<_>>();
-    let target_forest = connections
+    let mut target_forest = connections
         .iter()
         .flat_map(ConnectionSnapshot::target_forest)
-        .collect();
+        .collect::<Vec<_>>();
+    for target in &mut target_forest {
+        if target_resources
+            .get(&(
+                target.connection_id.clone(),
+                target.target.target_id.clone(),
+            ))
+            .is_some_and(|resource| debugged.contains(resource))
+        {
+            target.attachment = TargetAttachmentState::Debugger;
+        }
+    }
     ContextSnapshot {
         agent_instance_id: agent_instance_id.to_owned(),
         id: id.to_owned(),
         display_name: context.display_name.clone(),
         revision: context.revision,
+        resource_revision: graph.map_or(0, |graph| graph.revision.0),
         connections,
         target_forest,
         breakpoints: context
@@ -5494,7 +7087,8 @@ fn service_snapshot(
     id: &str,
 ) -> Option<ContextSnapshot> {
     let context = state.contexts.get(id)?;
-    let mut result = snapshot(agent_instance_id, id, context);
+    let graph = state.resource_graphs.get(id).map(GraphSink::snapshot);
+    let mut result = snapshot(agent_instance_id, id, context, graph.as_ref());
     for breakpoint in &mut result.breakpoints {
         let specification = context
             .breakpoints
@@ -5892,7 +7486,6 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                                             configuration_version: connection.configuration_version,
                                             generation: 0,
                                             status: ConnectionStatus::Disconnected,
-                                            targets: Arc::new(BTreeMap::new()),
                                         }),
                                     )
                                 })
@@ -5923,9 +7516,12 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             })
             .collect(),
         source_models: BTreeMap::new(),
+        resource_graphs: BTreeMap::new(),
         context_kinds,
         runtimes: BTreeMap::new(),
         target_debuggers: BTreeMap::new(),
+        debug_attachments: BTreeMap::new(),
+        pause_children_leases: BTreeMap::new(),
         history: BTreeMap::new(),
         completed_requests,
         playwright_proxies: BTreeMap::new(),
@@ -6501,10 +8097,6 @@ fn capture_payload_rpc_error(error: ServicePersistenceError) -> JsonRpcError {
     internal_error(format!("failed to access stored capture payload: {error}"))
 }
 
-fn cdp_rpc_error(operation: &str, error: JsonRpcError) -> JsonRpcError {
-    internal_error(format!("{operation} failed: {error:?}"))
-}
-
 fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(), String> {
     static INTERFACE: OnceLock<Result<hubrpc::prelude::HubRpcInterfaceSchema, String>> =
         OnceLock::new();
@@ -6604,8 +8196,7 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
         | ContextTransitionError::ActiveConnectionCannotBeReplaced
         | ContextTransitionError::ActiveConnectionCannotBeRemoved
         | ContextTransitionError::ConnectionAlreadyActive
-        | ContextTransitionError::ConnectionAlreadyDisconnecting
-        | ContextTransitionError::TargetIdentityCollision { .. } => error_codes::INVALID_PARAMS,
+        | ContextTransitionError::ConnectionAlreadyDisconnecting => error_codes::INVALID_PARAMS,
     };
     JsonRpcError::new(code, error.to_string())
 }
@@ -6637,7 +8228,7 @@ mod tests {
             connections: Arc::new(
                 connections
                     .into_iter()
-                    .map(|(connection_id, generation, targets)| {
+                    .map(|(connection_id, generation, _targets)| {
                         (
                             connection_id.into(),
                             Arc::new(crate::context_engine::ConnectionState {
@@ -6650,12 +8241,6 @@ mod tests {
                                     product: "Chrome".into(),
                                     protocol_version: "1.3".into(),
                                 },
-                                targets: Arc::new(
-                                    targets
-                                        .into_iter()
-                                        .map(|target| (target.target_id.clone(), target))
-                                        .collect(),
-                                ),
                             }),
                         )
                     })
@@ -6666,6 +8251,97 @@ mod tests {
         })
     }
 
+    fn insert_context_with_targets(
+        state: &mut ServiceState,
+        context_id: &str,
+        connections: impl IntoIterator<Item = (&'static str, u64, Vec<TargetSnapshot>)>,
+    ) {
+        let connections = connections.into_iter().collect::<Vec<_>>();
+        let context = context_with_targets(connections.clone());
+        let graph = SharedResourceGraph::new();
+        graph
+            .try_update(|graph| {
+                for (connection_id, generation, targets) in &connections {
+                    let source = connection_source_id(connection_id, *generation);
+                    let root = connection_root_resource_id(connection_id, *generation);
+                    let mut delta = GraphDelta::for_source(source).upsert(
+                        ResourceUpsert::new(
+                            root.clone(),
+                            ResourceFacts::of_kind(ResourceKind::new("browser"))
+                                .with_label(*connection_id)
+                                .with_attribute(
+                                    "connectionId",
+                                    serde_json::Value::String((*connection_id).to_owned()),
+                                )
+                                .with_attribute("generation", serde_json::Value::from(*generation)),
+                        )
+                        .with_frontier(RelationKind::Contains, DiscoveryState::Live),
+                    );
+                    for target in targets {
+                        let resource = ResourceId::from_parts(
+                            "cdp-target",
+                            [
+                                *connection_id,
+                                generation.to_string().as_str(),
+                                target.target_id.as_str(),
+                            ],
+                        )
+                        .unwrap();
+                        let mut facts =
+                            ResourceFacts::of_kind(ResourceKind::new(&target.target_type))
+                                .with_label(if target.title.is_empty() {
+                                    target.target_id.clone()
+                                } else {
+                                    target.title.clone()
+                                })
+                                .with_attribute(
+                                    "targetId",
+                                    serde_json::Value::String(target.target_id.clone()),
+                                )
+                                .with_attribute(
+                                    "connectionId",
+                                    serde_json::Value::String((*connection_id).to_owned()),
+                                )
+                                .with_attribute(
+                                    "targetType",
+                                    serde_json::Value::String(target.target_type.clone()),
+                                )
+                                .with_attribute(
+                                    "title",
+                                    serde_json::Value::String(target.title.clone()),
+                                )
+                                .with_attribute(
+                                    "url",
+                                    serde_json::Value::String(target.url.clone()),
+                                )
+                                .with_attribute(
+                                    "attached",
+                                    serde_json::Value::from(target.attached),
+                                );
+                        for (name, value) in [
+                            ("parentTargetId", target.parent_id.as_ref()),
+                            ("openerTargetId", target.opener_id.as_ref()),
+                            ("browserContextId", target.browser_context_id.as_ref()),
+                            ("subtype", target.subtype.as_ref()),
+                        ] {
+                            if let Some(value) = value {
+                                facts = facts
+                                    .with_attribute(name, serde_json::Value::String(value.clone()));
+                            }
+                        }
+                        delta = delta
+                            .upsert(ResourceUpsert::new(resource.clone(), facts))
+                            .relate(RelationKind::Contains, root.clone(), resource);
+                    }
+                    graph.apply(delta)?;
+                }
+                Ok::<_, crate::resource_graph::GraphError>(())
+            })
+            .unwrap();
+        state.contexts.insert(context_id.to_owned(), context);
+        state.resource_graphs.insert(context_id.to_owned(), graph);
+    }
+
     fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
         let (shutdown, _) = watch::channel(false);
         let (revision_signal, _) = watch::channel(0);
@@ -6673,6 +8349,9 @@ mod tests {
             agent_instance_id: "test-agent".into(),
             state: Arc::new(Mutex::new(state)),
             attachment_lock: Arc::new(Mutex::new(())),
+            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            relay_attachment_lock: Arc::new(Mutex::new(())),
+            relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path: path,
             shutdown,
             revision_signal,
@@ -6743,13 +8422,14 @@ mod tests {
         let blocker = root.join("service.json");
         fs::create_dir(&blocker).unwrap();
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let service = service_with_state(blocker.clone(), state);
         (root, blocker, service)
@@ -6761,12 +8441,15 @@ mod tests {
 
     #[tokio::test]
     async fn capture_name_reservation_is_atomic_across_targets() {
-        let context = context_with_targets([
-            ("first", 1, vec![target("target-a", "A", "https://a.test")]),
-            ("second", 1, vec![target("target-b", "B", "https://b.test")]),
-        ]);
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                ("first", 1, vec![target("target-a", "A", "https://a.test")]),
+                ("second", 1, vec![target("target-b", "B", "https://b.test")]),
+            ],
+        );
         let service = service_with_state(PathBuf::from("unused"), state);
 
         let (first, second) = tokio::join!(
@@ -6799,13 +8482,14 @@ mod tests {
     #[tokio::test]
     async fn capture_finalization_rechecks_connection_generation() {
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let service = service_with_state(PathBuf::from("unused"), state);
         let reservation = service
@@ -6819,14 +8503,18 @@ mod tests {
             )
             .await
             .unwrap();
-        service.state.lock().await.contexts.insert(
-            "test".into(),
-            context_with_targets([(
-                "runtime",
-                2,
-                vec![target("target-a", "A", "https://a.test")],
-            )]),
-        );
+        {
+            let mut state = service.state.lock().await;
+            insert_context_with_targets(
+                &mut state,
+                "test",
+                [(
+                    "runtime",
+                    2,
+                    vec![target("target-a", "A", "https://a.test")],
+                )],
+            );
+        }
 
         let error = service
             .finalize_capture(
@@ -6889,12 +8577,10 @@ mod tests {
             assert!(state.captures.is_empty());
         }
 
-        service
-            .state
-            .lock()
-            .await
-            .contexts
-            .insert("test".into(), context_with_targets([]));
+        {
+            let mut state = service.state.lock().await;
+            insert_context_with_targets(&mut state, "test", []);
+        }
         unblock_capture_persistence(&blocker);
         let retried = service
             .stop_cpu_profile(
@@ -6937,13 +8623,14 @@ mod tests {
             .join(format!("coverage-filter-{}", random_instance_id().unwrap()));
         let persistence_path = root.join("service.json");
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let source =
             |script_id: &str, generated_url: &str, associated_authored_source: Option<&str>| {
@@ -7131,13 +8818,14 @@ mod tests {
         let persistence_path = root.join("service.json");
         fs::create_dir(&persistence_path).unwrap();
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let service = service_with_state(persistence_path.clone(), state);
         let reservation = service
@@ -7210,13 +8898,14 @@ mod tests {
         let persistence_path = root.join("service.json");
         fs::create_dir(&persistence_path).unwrap();
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let service = service_with_state(persistence_path, state);
         let reservation = service
@@ -7411,13 +9100,14 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let persistence_path = root.join("service.json");
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         let service = service_with_state(persistence_path.clone(), state);
         let reservation = service
@@ -7498,13 +9188,16 @@ mod tests {
 
     #[tokio::test]
     async fn heap_storage_is_unique_and_cleanup_cannot_remove_another_reservation() {
-        let context = context_with_targets([(
-            "runtime",
-            1,
-            vec![target("target-a", "A", "https://a.test")],
-        )]);
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )],
+        );
         let root = std::env::current_dir()
             .unwrap()
             .join("target")
@@ -7559,13 +9252,16 @@ mod tests {
         let second_path = root.join("second.heapsnapshot");
         fs::write(&first_path, b"first").unwrap();
         fs::write(&second_path, b"second").unwrap();
-        let context = context_with_targets([(
-            "runtime",
-            1,
-            vec![target("target-a", "A", "https://a.test")],
-        )]);
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "runtime",
+                1,
+                vec![target("target-a", "A", "https://a.test")],
+            )],
+        );
         state
             .context_kinds
             .insert("test".into(), ContextKind::Named);
@@ -7747,13 +9443,14 @@ mod tests {
         let capture_path = root.join("kept.heapsnapshot");
         fs::write(&capture_path, b"kept").unwrap();
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "test".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
                 "runtime",
                 1,
                 vec![target("target-a", "A", "https://a.test")],
-            )]),
+            )],
         );
         state
             .context_kinds
@@ -7763,6 +9460,7 @@ mod tests {
             heap_capture("test", "kept", "target-a", "runtime", &capture_path),
         );
         let (cancel, cancelled) = watch::channel(false);
+        let (_, closed) = watch::channel(false);
         state.playwright_proxies.insert(
             "proxy".into(),
             PlaywrightProxyRegistration {
@@ -7771,6 +9469,7 @@ mod tests {
                 target_id: "target-a".into(),
                 generation: 1,
                 cancel,
+                closed,
             },
         );
         let service = service_with_state(blocker.join("service.json"), state);
@@ -7955,25 +9654,27 @@ mod tests {
 
     #[test]
     fn canonical_target_id_wins_over_friendly_matches_context_wide() {
-        let context = context_with_targets([
-            (
-                "first",
-                2,
-                vec![target("canonical", "Unrelated", "https://first.test")],
-            ),
-            (
-                "second",
-                7,
-                vec![target(
-                    "another-id",
-                    "canonical friendly title",
-                    "https://second.test/canonical",
-                )],
-            ),
-        ]);
-
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                (
+                    "first",
+                    2,
+                    vec![target("canonical", "Unrelated", "https://first.test")],
+                ),
+                (
+                    "second",
+                    7,
+                    vec![target(
+                        "another-id",
+                        "canonical friendly title",
+                        "https://second.test/canonical",
+                    )],
+                ),
+            ],
+        );
         let resolved =
             DebuggerService::resolve_canonical_target(&state, "test", "canonical").unwrap();
         assert_eq!(resolved.connection_id, "first");
@@ -7982,22 +9683,106 @@ mod tests {
     }
 
     #[test]
-    fn friendly_target_ambiguity_reports_qualified_candidates() {
-        let context = context_with_targets([
-            (
-                "browser-a",
-                3,
-                vec![target("target-a", "Dashboard", "https://a.test/app")],
-            ),
-            (
-                "browser-b",
-                8,
-                vec![target("target-b", "Dashboard", "https://b.test/app")],
-            ),
-        ]);
-
+    fn debug_session_resources_authoritatively_drive_attachment_projection() {
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "browser",
+                3,
+                vec![target("page", "Page", "https://example.test")],
+            )],
+        );
+        let source = publish_debug_session_resource(
+            &state,
+            "debugger",
+            "test",
+            "browser",
+            3,
+            "page",
+            "session-1",
+        )
+        .unwrap();
+        let graph = state.resource_graphs["test"].snapshot();
+        let projected = snapshot("agent", "test", &state.contexts["test"], Some(&graph));
+        assert_eq!(projected.resource_revision, graph.revision.0);
+        assert_eq!(
+            projected.target_forest[0].attachment,
+            TargetAttachmentState::Debugger
+        );
+        let session = debug_session_resource_id("debugger", "test", "browser", 3, "session-1");
+        assert!(graph.resources.contains_key(&session));
+        assert!(graph.relations.iter().any(|relation| {
+            relation.relation.kind == RelationKind::Debugs && relation.relation.from == session
+        }));
+
+        retract_debug_session_resource(&state, "test", &source);
+        let graph = state.resource_graphs["test"].snapshot();
+        let projected = snapshot("agent", "test", &state.contexts["test"], Some(&graph));
+        assert_eq!(
+            projected.target_forest[0].attachment,
+            TargetAttachmentState::Detached
+        );
+        assert!(!graph.resources.contains_key(&session));
+    }
+
+    #[test]
+    fn retracting_a_connection_atomically_removes_its_debug_sessions() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "browser",
+                3,
+                vec![target("page", "Page", "https://example.test")],
+            )],
+        );
+        publish_debug_session_resource(
+            &state, "debugger", "test", "browser", 3, "page", "ordinary",
+        )
+        .unwrap();
+        publish_debug_session_resource(
+            &state,
+            "relay:owner",
+            "test",
+            "browser",
+            3,
+            "page",
+            "relay",
+        )
+        .unwrap();
+
+        retract_connection_resource_graph(&mut state, "test", "browser", 3);
+
+        assert!(
+            state.resource_graphs["test"]
+                .snapshot()
+                .resources
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn friendly_target_ambiguity_reports_qualified_candidates() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                (
+                    "browser-a",
+                    3,
+                    vec![target("target-a", "Dashboard", "https://a.test/app")],
+                ),
+                (
+                    "browser-b",
+                    8,
+                    vec![target("target-b", "Dashboard", "https://b.test/app")],
+                ),
+            ],
+        );
         let error =
             DebuggerService::resolve_canonical_target(&state, "test", "Dashboard").unwrap_err();
         let error = error.message;
@@ -8019,12 +9804,15 @@ mod tests {
             "ws://runtime-b",
         );
         second.target_type = "node".into();
-        let context = context_with_targets([
-            ("runtime-a", 1, vec![first]),
-            ("runtime-b", 1, vec![second]),
-        ]);
         let mut state = ServiceState::default();
-        state.contexts.insert("test".into(), context);
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                ("runtime-a", 1, vec![first]),
+                ("runtime-b", 1, vec![second]),
+            ],
+        );
 
         let exact = DebuggerService::resolve_canonical_target(
             &state,
@@ -8355,13 +10143,14 @@ mod tests {
     async fn target_debugger_rejects_while_relayed_but_the_bypass_proceeds() {
         let (cancel, _) = watch::channel(false);
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "ctx".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "ctx",
+            [(
                 "conn",
                 1,
                 vec![target("page-1", "Page", "https://example.com")],
-            )]),
+            )],
         );
         state.relays.insert(
             "relay-1".into(),
@@ -8405,13 +10194,14 @@ mod tests {
     async fn attach_target_rejects_while_relayed_but_internal_proceeds() {
         let (cancel, _) = watch::channel(false);
         let mut state = ServiceState::default();
-        state.contexts.insert(
-            "ctx".into(),
-            context_with_targets([(
+        insert_context_with_targets(
+            &mut state,
+            "ctx",
+            [(
                 "conn",
                 1,
                 vec![target("page-1", "Page", "https://example.com")],
-            )]),
+            )],
         );
         state.relays.insert(
             "relay-1".into(),
@@ -8464,9 +10254,7 @@ mod tests {
         let persistence_path = root.join("service.json");
         let (cancel, mut cancelled) = watch::channel(false);
         let mut state = ServiceState::default();
-        state
-            .contexts
-            .insert("ctx".into(), context_with_targets([]));
+        insert_context_with_targets(&mut state, "ctx", []);
         state.relays.insert(
             "relay-1".into(),
             RelayRegistration {

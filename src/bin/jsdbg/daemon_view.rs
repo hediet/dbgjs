@@ -461,7 +461,7 @@ mod tests {
     use super::*;
     use cdp_client::service_api::{
         BreakpointSnapshot, ContextSnapshot, FrameSnapshot, PauseSnapshot, ScopeSnapshot,
-        SourceLocation, TargetBreakpointSnapshot, TargetNodeSnapshot,
+        SourceLocation, TargetAttachmentState, TargetBreakpointSnapshot, TargetNodeSnapshot,
     };
 
     #[test]
@@ -482,6 +482,7 @@ mod tests {
             id: "shop".to_owned(),
             display_name: "Shop".to_owned(),
             revision: 12,
+            resource_revision: 1,
             connections: vec![ConnectionSnapshot {
                 id: "browser".to_owned(),
                 configuration: ConnectionConfiguration::DirectCdp {
@@ -499,6 +500,7 @@ mod tests {
                 connection_generation: 7,
                 target,
                 parent_target_id: None,
+                attachment: TargetAttachmentState::Debugger,
             }],
             breakpoints: vec![],
             source_formatting: Default::default(),
@@ -610,6 +612,7 @@ mod tests {
             id: "workers\u{1b}[2J".to_owned(),
             display_name: "Workers\u{7}".to_owned(),
             revision: 4,
+            resource_revision: 1,
             connections: vec![ConnectionSnapshot {
                 id: "runtime\u{1b}".to_owned(),
                 configuration: ConnectionConfiguration::NodeInspector {
@@ -738,6 +741,7 @@ mod tests {
                 id: id.to_owned(),
                 display_name: id.to_owned(),
                 revision,
+                resource_revision: 0,
                 connections: vec![],
                 target_forest: vec![],
                 breakpoints: vec![],

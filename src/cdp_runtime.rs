@@ -403,6 +403,10 @@ impl CdpDebuggerSession {
         Ok(())
     }
 
+    pub async fn finish_heap_snapshot_bytes(&self) -> std::io::Result<u64> {
+        Ok(self.finish_heap_snapshot().await?.bytes_written)
+    }
+
     pub(crate) async fn finish_heap_snapshot(&self) -> std::io::Result<HeapSnapshotWriteResult> {
         let Some(mut snapshot) = self.heap_snapshot.lock().await.take() else {
             return Err(std::io::Error::new(
@@ -980,14 +984,29 @@ impl RequestHandler for CdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
-        if method == "Debugger.globalObjectCleared" {
-            self.raw_event_history.lock().unwrap().clear();
-        } else if method == "Debugger.scriptParsed" {
-            self.raw_event_history.lock().unwrap().push(RawCdpEvent {
-                session: self.session.clone(),
-                method: method.clone(),
-                params: params.clone(),
-            });
+        {
+            let mut history = self.raw_event_history.lock().unwrap();
+            match method.as_str() {
+                "Debugger.globalObjectCleared" => history.clear(),
+                "Debugger.scriptParsed" | "Runtime.executionContextCreated" => {
+                    history.push(RawCdpEvent {
+                        session: self.session.clone(),
+                        method: method.clone(),
+                        params: params.clone(),
+                    });
+                }
+                "Runtime.executionContextDestroyed" => {
+                    let destroyed_id = params.get("executionContextId");
+                    history.retain(|event| {
+                        event.method != "Runtime.executionContextCreated"
+                            || event.params.pointer("/context/id") != destroyed_id
+                    });
+                }
+                "Runtime.executionContextsCleared" => {
+                    history.retain(|event| event.method != "Runtime.executionContextCreated");
+                }
+                _ => {}
+            }
         }
         // Skip the clone entirely when nobody subscribes to raw events (the common case);
         // heap snapshot chunk notifications in particular can carry megabytes of JSON.

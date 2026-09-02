@@ -3,7 +3,10 @@
 ## Status
 
 This document describes the target semantic data model for the debugger agent.
-It is intentionally broader than the currently implemented Rust prototype.
+The resource graph, callable capabilities, demand-driven discovery, target
+projection, and shared source graph described here are implemented in the Rust
+prototype. Durable attachment rules and retained graph-delta history remain
+target-state concepts rather than complete CLI surfaces.
 For a shorter introduction, see
 [Debugger Data Model: Short Overview](./debugger-data-model-overview.md).
 
@@ -76,6 +79,11 @@ type ClientId = Brand<string, "ClientId">;
 
 type DebugContextId = Brand<string, "DebugContextId">;
 type ContextRevision = Brand<number, "ContextRevision">;
+type ResourceId = Brand<string, "ResourceId">;
+type ResourceGraphRevision = Brand<number, "ResourceGraphRevision">;
+type ContributionSourceId = Brand<string, "ContributionSourceId">;
+type CapabilityRouteId = Brand<string, "CapabilityRouteId">;
+type DiscoveryLeaseId = Brand<string, "DiscoveryLeaseId">;
 type ConnectionId = Brand<string, "ConnectionId">;
 type ConnectionGeneration = Brand<number, "ConnectionGeneration">;
 type TargetId = Brand<string, "TargetId">;
@@ -114,6 +122,18 @@ interface RuntimeRef {
 
 interface TargetRef extends RuntimeRef {
 	readonly targetId: TargetId;
+	/** Canonical physical identity shared by equivalent observations and routes. */
+	readonly resourceId: ResourceId;
+}
+
+interface ResourceRef {
+	readonly contextId: DebugContextId;
+	readonly resourceId: ResourceId;
+}
+
+interface CapabilityRouteRef extends RuntimeRef {
+	readonly resource: ResourceRef;
+	readonly routeId: CapabilityRouteId;
 }
 
 interface AttachmentRef extends RuntimeRef {
@@ -180,6 +200,7 @@ interface DebugContextState {
 
 	readonly configuration: DebugContextConfiguration;
 	readonly connections: ReadonlyMap<ConnectionId, DebugConnectionState>;
+	readonly resources: ResourceGraphState;
 
 	readonly attachmentRules: ReadonlyMap<
 		AttachmentRuleId,
@@ -264,7 +285,8 @@ interface ConnectedConnectionState {
 	readonly status: "connected";
 	readonly generation: ConnectionGeneration;
 	readonly endpointKind: "browser" | "direct-target";
-	readonly targets: TargetGraphState;
+	/** Facts and routes contributed by this connection live in the context graph. */
+	readonly contributionSource: ContributionSourceId;
 	readonly attachments: ReadonlyMap<AttachmentId, AttachmentState>;
 }
 
@@ -287,22 +309,117 @@ context-owned intent or retained graph data.
 All changes committed for one logical observation use one new context revision,
 even when reconciliation adds or removes applications on several connections.
 
-## 5. Target graph, attachment rules, and focus
+## 5. Resource graph, discovery, target projection, attachment rules, and focus
 
-CDP targets form a graph, not one universally correct tree.
+Processes, windows, WebContents, browser targets, frames, and workers form one
+context-owned graph, not one universally correct tree. Connections and
+providers contribute independently retractable facets to canonical resources.
+An access route is a callable capability of a resource, not a second resource
+and not evidence of containment.
 
-Each connected `DebugConnectionState` owns one `TargetGraphState`. The context
-may present their union, but target identity and every relation retain
-`connectionId` through `TargetRef`.
+```ts
+interface ResourceGraphState {
+	readonly revision: ResourceGraphRevision;
+	readonly resources: ReadonlyMap<ResourceId, ResourceState>;
+	readonly relations: readonly ResourceRelationState[];
+}
+
+interface ResourceState {
+	readonly ref: ResourceRef;
+	readonly kinds: ReadonlySet<
+		"process" | "window" | "browser" | "page" | "frame" | "worker" | string
+	>;
+	readonly label: string;
+	readonly attributes: ReadonlyMap<string, unknown>;
+	readonly contributors: ReadonlySet<ContributionSourceId>;
+	readonly capabilities: readonly ResourceCapabilityState[];
+	readonly discoveryFrontiers: readonly DiscoveryFrontierState[];
+}
+
+interface ResourceRelationState {
+	readonly kind:
+		| "spawned"
+		| "hosts"
+		| "contains"
+		| "opener"
+		| "debugs"
+		| string;
+	readonly from: ResourceRef;
+	readonly to: ResourceRef;
+	readonly contributors: ReadonlySet<ContributionSourceId>;
+}
+
+interface ResourceCapabilityState {
+	readonly route: CapabilityRouteRef;
+	readonly kind:
+		| "explore"
+		| "debug"
+		| "process"
+		| "browser"
+		| "frame"
+		| "pause-future-children";
+	readonly title: string;
+	readonly detail?: string;
+}
+
+type DiscoveryFrontierState =
+	| { readonly status: "unexplored" }
+	| { readonly status: "discovering"; readonly leases: number }
+	| { readonly status: "complete" }
+	| { readonly status: "failed"; readonly diagnostic: DiagnosticId };
+```
+
+Graph updates are atomic. Observation returns an immutable snapshot together
+with a revision receiver that starts at exactly that snapshot revision. A slow
+observer resnapshots the latest revision rather than applying an incomplete
+delta sequence:
+
+```ts
+interface ResourceGraphObservation {
+	readonly snapshot: ResourceGraphState;
+	readonly laterRevisions: AsyncIterable<ResourceGraphRevision>;
+}
+
+interface DiscoveryLease {
+	readonly id: DiscoveryLeaseId;
+	readonly scope: ResourceRef;
+	readonly relationKinds: readonly ResourceRelationState["kind"][];
+	close(): Promise<void>;
+}
+```
+
+Discovery is demand driven. A one-shot operation acquires a lease, refreshes,
+observes a stable snapshot, and releases the lease. A watch holds the same kind
+of lease and reprojects after graph revisions. Therefore:
+
+```text
+process list --full = refresh + temporary discovery lease + process projection
+process watch       = live discovery lease + graph observation + process projection
+target watch        = live discovery lease + graph observation + target projection
+Target.getTargets   = refresh + target projection
+Target.setDiscoverTargets = live discovery lease + graph revisions -> CDP events
+```
+
+These compositions do not introduce separate process-list, connection, and CDP
+inventories. Provider-local route supervision may use CDP
+`Target.setAutoAttach` to learn related OOPIFs or workers. Such a supervised
+transport is discovery mechanism state: it does not create an
+`AttachmentState`, enable the debugger engine, collect scripts, or change user
+focus. Only an explicit attachment or an enabled attachment rule does that.
+
+`TargetGraphState` is a typed projection of `ResourceGraphState` for debugger
+workflows. It is not separately authoritative:
 
 ```ts
 interface TargetGraphState {
+	readonly graphRevision: ResourceGraphRevision;
 	readonly targets: ReadonlyMap<TargetId, TargetState>;
 	readonly relations: readonly TargetRelation[];
 }
 
 interface TargetState {
 	readonly ref: TargetRef;
+	readonly resource: ResourceRef;
 	readonly type: string;
 	readonly title: string;
 	readonly url: string;
@@ -322,6 +439,18 @@ interface TargetRelation {
 	readonly to: TargetRef;
 	readonly runtimeSpecificKind?: string;
 }
+```
+
+Canonical identity and routes obey these laws:
+
+```text
+same physical resource observed through two routes => one ResourceId, two capabilities
+route reachability != containment
+OS process hosts WebContents; OS process != WebContents
+native CDP page correlated with Electron WebContents => one target resource
+unproven title/URL/PID similarity => distinct resources
+retract(source) => removes only that source's facets, relations, and routes
+render(graph) => presentation spanning tree; it does not alter graph meaning
 ```
 
 Selectors are durable descriptions, not live target handles:
@@ -428,6 +557,20 @@ interface ExecutionContextState {
 	readonly worldKind: "default" | "isolated" | "worker" | "other";
 }
 ```
+
+Connecting a process tree creates its provider contribution and discovery
+routes; it does not imply debugger attachment to every discovered target.
+Attaching one Node target, renderer, iframe, or worker creates one
+`AttachmentState` for that target. Other graph resources remain discoverable
+but contribute no loaded scripts. A user-facing attachment must also remain
+distinct from provider-internal supervision used to discover related targets.
+
+An operation may compose capabilities across related resources without changing
+that attachment model. For example, an OOPIF screenshot resolves the
+`frame-owner` relation, temporarily opens the embedding page's debug route,
+captures a clip matching the frame owner's content box, and closes that
+operation-scoped route. The selected iframe remains the only user attachment.
+This is capability composition, not implicit attachment of the process tree.
 
 An attachment disappearing invalidates all scripts, pauses, frames, scopes, and
 remote objects scoped to its incarnation.

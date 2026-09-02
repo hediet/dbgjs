@@ -11,8 +11,12 @@ const processMode = process.env.JSDBG_PROCESS_MODE || "tree";
 const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
+const expandedProcessIds = new Set([rootPid]);
 let activationQueue = Promise.resolve();
+let scanQueue = Promise.resolve();
 let running = true;
+let discoveryEnabled = false;
+let wake = () => {};
 
 if (process.platform !== "win32") {
 	throw new Error("existing process-tree discovery is currently implemented only on Windows");
@@ -32,74 +36,204 @@ async function main() {
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
 	}
-	const rootEndpoint = await ensureInspector(rootPid, listeners);
+	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners);
 	process.stdout.write(`${JSON.stringify({ endpoint: rootEndpoint })}\n`);
 
-	process.stdin.once("end", () => {
-		running = false;
-	});
-	process.once("SIGINT", () => {
-		running = false;
-	});
-	process.once("SIGTERM", () => {
-		running = false;
-	});
-	process.stdin.resume();
+	readControlCommands();
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
 
 	if (processMode === "single") {
 		while (running) {
-			await delay(pollIntervalMs);
+			await idle();
 		}
 		return;
 	}
-	await reconcile(processes, listeners);
 	while (running) {
-		await delay(pollIntervalMs);
+		if (!discoveryEnabled) {
+			await idle();
+			continue;
+		}
+		await scan();
+		await idle(pollIntervalMs);
+	}
+}
+
+/// Descendant scanning is demand driven: the debugger service enables it while a CDP client
+/// requires target discovery and asks for one-shot scans otherwise.
+function readControlCommands() {
+	let buffer = "";
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk) => {
+		buffer += chunk;
+		for (;;) {
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) {
+				break;
+			}
+			const line = buffer.slice(0, newline).trim();
+			buffer = buffer.slice(newline + 1);
+			if (line) {
+				handleCommand(line);
+			}
+		}
+	});
+	process.stdin.once("end", stop);
+	process.stdin.resume();
+}
+
+function handleCommand(line) {
+	let command;
+	try {
+		command = JSON.parse(line);
+	} catch (error) {
+		console.error(`ignored invalid process-tree command: ${error?.message ?? error}`);
+		return;
+	}
+	if (command?.command === "setDiscovery") {
+		discoveryEnabled = command.enabled === true;
+		wake();
+		return;
+	}
+	if (command?.command === "scan") {
+		void scan().then(() => {
+			process.stdout.write(`${JSON.stringify({ kind: "scanComplete", id: command.id ?? null })}\n`);
+		});
+		return;
+	}
+	if (command?.command === "activate") {
+		void activateTarget(command);
+		return;
+	}
+	if (command?.command === "setProcessDiscovery") {
+		const processId = Number(command.processId);
+		if (Number.isSafeInteger(processId) && processId > 0 && processId !== rootPid) {
+			if (command.enabled === true) {
+				expandedProcessIds.add(processId);
+			} else {
+				expandedProcessIds.delete(processId);
+			}
+			void scan();
+		}
+		return;
+	}
+	console.error(`ignored unknown process-tree command: ${line}`);
+}
+
+async function activateTarget(command) {
+	const id = command.id ?? null;
+	const targetId = typeof command.targetId === "string" ? command.targetId : "";
+	const pid = Number(command.processId);
+	if (!targetId || !Number.isSafeInteger(pid) || pid <= 0) {
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			error: "invalid target activation request",
+		})}\n`);
+		return;
+	}
+	try {
+		const endpoint = await ensureInspector(pid);
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			endpoint,
+		})}\n`);
+	} catch (error) {
+		process.stdout.write(`${JSON.stringify({
+			kind: "activationComplete",
+			id,
+			targetId,
+			error: error?.message ?? String(error),
+		})}\n`);
+	}
+}
+
+function scan() {
+	scanQueue = scanQueue.then(async () => {
+		if (processMode === "single") {
+			return;
+		}
 		try {
 			await reconcile();
 		} catch (error) {
 			console.error(`process-tree discovery failed: ${error?.stack ?? error}`);
 		}
-	}
+	});
+	return scanQueue;
+}
+
+function stop() {
+	running = false;
+	wake();
+}
+
+function idle(milliseconds) {
+	return new Promise((resolve) => {
+		const timer = milliseconds === undefined ? undefined : setTimeout(finish, milliseconds);
+		wake = finish;
+		function finish() {
+			wake = () => {};
+			if (timer) {
+				clearTimeout(timer);
+			}
+			resolve();
+		}
+		if (!running) {
+			finish();
+		}
+	});
 }
 
 async function reconcile(initialProcesses, initialListeners) {
 	const [processes, listeners] = initialProcesses && initialListeners
 		? [initialProcesses, initialListeners]
 		: await Promise.all([listProcesses(), listListeners()]);
+	const liveProcessIds = new Set(processes.map((candidate) => candidate.pid));
+	for (const processId of expandedProcessIds) {
+		if (processId !== rootPid && !liveProcessIds.has(processId)) {
+			expandedProcessIds.delete(processId);
+		}
+	}
 	const descendants = processDescendants(processes, rootPid);
-	const nodeProcesses = new Map(
-		descendants
-			.filter((candidate) => candidate.pid !== rootPid && isNodeProcess(candidate))
-			.map((candidate) => [candidate.pid, candidate]),
+	const allNodeProcesses = descendants.filter(
+		(candidate) => candidate.pid !== rootPid && isNodeProcess(candidate),
 	);
-	const rendererProcesses = new Map(
-		descendants
-			.filter((candidate) => candidate.pid !== rootPid && isRendererProcess(candidate))
-			.map((candidate) => [candidate.pid, candidate]),
-	);
-	const desired = new Map();
-	const discoveredProcesses = new Map(
-		[...nodeProcesses.values(), ...rendererProcesses.values()].map((candidate) => {
+	const nodeProcessIds = new Set(allNodeProcesses.map((candidate) => candidate.pid));
+	const allDiscoveredProcesses = new Map(
+		allNodeProcesses.map((candidate) => {
 			const targetId = `process-${candidate.pid}-${processInstanceId(candidate)}`;
 			return [candidate.pid, { candidate, targetId }];
 		}),
 	);
-
-	for (const candidate of rendererProcesses.values()) {
-		const { targetId } = discoveredProcesses.get(candidate.pid);
-		const target = {
-			kind: "rendererTarget",
-			targetId,
-			parentTargetId: nearestAttachableParent(candidate, processes, discoveredProcesses),
-			targetType: "page",
-			title: processTitle(candidate),
-			url: `process:${candidate.pid}`,
-			rendererProcessId: candidate.pid,
-		};
-		desired.set(targetId, target);
-		publishTarget(target);
-	}
+	const allChromiumTargets = await discoverChromiumTargets(
+		descendants,
+		processes,
+		allDiscoveredProcesses,
+		listeners,
+	);
+	const attachableProcessIds = new Set([
+		...nodeProcessIds,
+		...allChromiumTargets.map((target) => target.processId),
+	]);
+	const processesInScope = descendants.filter((candidate) =>
+		isInsideExpandedProcessFrontier(candidate, processes, attachableProcessIds),
+	);
+	const processIdsInScope = new Set(processesInScope.map((candidate) => candidate.pid));
+	const nodeProcesses = new Map(
+		processesInScope
+			.filter((candidate) => nodeProcessIds.has(candidate.pid))
+			.map((candidate) => [candidate.pid, candidate]),
+	);
+	const desired = new Map();
+	const discoveredProcesses = new Map(
+		[...nodeProcesses.keys()].map((pid) => [pid, allDiscoveredProcesses.get(pid)]),
+	);
+	const chromiumTargets = allChromiumTargets.filter((target) =>
+		processIdsInScope.has(target.processId),
+	);
 
 	for (const candidate of nodeProcesses.values()) {
 		const { targetId } = discoveredProcesses.get(candidate.pid);
@@ -110,29 +244,31 @@ async function reconcile(initialProcesses, initialListeners) {
 			targetType: "node",
 			title: processTitle(candidate),
 			url: `process:${candidate.pid}`,
+			processId: candidate.pid,
 		};
-		const knownEndpoint = knownEndpoints.get(candidate.pid);
-		if (knownEndpoint) {
-			target.endpoint = knownEndpoint;
-		}
 		desired.set(targetId, target);
-		publishTarget(target);
 	}
 
-	const chromiumTargets = discoverChromiumTargets(rootPid, listeners);
 	await Promise.all([...nodeProcesses.values()].map(async (candidate) => {
 		const { targetId } = discoveredProcesses.get(candidate.pid);
-		try {
-			const endpoint = await ensureInspector(candidate.pid, listeners);
+		const cached = knownEndpoints.get(candidate.pid);
+		const endpoint = cached && await isInspectorEndpoint(cached)
+			? cached
+			: await inspectorForPid(candidate.pid, listeners);
+		if (endpoint) {
+			knownEndpoints.set(candidate.pid, endpoint);
 			const target = { ...desired.get(targetId), endpoint };
 			desired.set(targetId, target);
 			publishTarget(target);
-		} catch (error) {
-			console.error(`could not activate inspector for process ${candidate.pid}: ${error?.message ?? error}`);
+		} else {
+			knownEndpoints.delete(candidate.pid);
 		}
 	}));
+	for (const target of desired.values()) {
+		publishTarget(target);
+	}
 
-	for (const target of await chromiumTargets) {
+	for (const target of chromiumTargets) {
 		desired.set(target.targetId, target);
 		publishTarget(target);
 	}
@@ -143,6 +279,20 @@ async function reconcile(initialProcesses, initialListeners) {
 			process.stdout.write(`${JSON.stringify({ kind: "nodeTargetRemoved", targetId })}\n`);
 		}
 	}
+}
+
+function isInsideExpandedProcessFrontier(candidate, processes, attachableProcessIds) {
+	let parentPid = candidate.parentPid;
+	while (parentPid && parentPid !== rootPid) {
+		if (expandedProcessIds.has(parentPid)) {
+			return true;
+		}
+		if (attachableProcessIds.has(parentPid)) {
+			return false;
+		}
+		parentPid = processes.find((process) => process.pid === parentPid)?.parentPid;
+	}
+	return expandedProcessIds.has(rootPid);
 }
 
 function publishTarget(target) {
@@ -248,31 +398,59 @@ async function activateInspector(pid) {
 	return rotated.endpoint;
 }
 
-async function discoverChromiumTargets(pid, listeners) {
+async function discoverChromiumTargets(processesInScope, allProcesses, discoveredProcesses, listeners) {
 	const discoveries = await Promise.all(
-		listeners.filter((candidate) => candidate.pid === pid).map(async (listener) => {
-		const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
-		if (typeof version?.webSocketDebuggerUrl !== "string"
-			|| !version.webSocketDebuggerUrl.includes("/devtools/browser/")) {
-			return [];
-		}
-		const targets = await fetchJson(`http://127.0.0.1:${listener.port}/json/list`);
-		return (Array.isArray(targets) ? targets : []).flatMap((target) => {
-			if (typeof target.id !== "string" || typeof target.webSocketDebuggerUrl !== "string") {
-				return [];
-			}
-			return [{
-				kind: "nodeTarget",
-				targetId: `cdp-${target.id}`,
-				parentTargetId: "$node-root",
-				targetType: typeof target.type === "string" ? target.type : "page",
-				title: target.title || target.type || target.id,
-				url: target.url || "",
-				endpoint: target.webSocketDebuggerUrl,
-			}];
-		});
-	}));
+		processesInScope.flatMap((process) =>
+			listeners.filter((listener) => listener.pid === process.pid).map(async (listener) => {
+				const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
+				if (typeof version?.webSocketDebuggerUrl !== "string"
+					|| !version.webSocketDebuggerUrl.includes("/devtools/browser/")) {
+					return [];
+				}
+				return [{
+					kind: "nodeTarget",
+					targetId: `cdp-browser-${listener.pid}-${listener.port}`,
+					parentTargetId: nearestAttachableParent(
+						process,
+						allProcesses,
+						discoveredProcesses,
+					),
+					targetType: "browser",
+					title: typeof version.Browser === "string" ? version.Browser : `Browser ${listener.pid}`,
+					url: `http://127.0.0.1:${listener.port}`,
+					endpoint: version.webSocketDebuggerUrl,
+					processId: listener.pid,
+				}];
+			})),
+	);
 	return discoveries.flat();
+}
+
+async function ensureRootEndpoint(pid, listeners) {
+	const inspector = await inspectorForPid(pid, listeners);
+	if (inspector) {
+		knownEndpoints.set(pid, inspector);
+		return inspector;
+	}
+	const browser = await browserForPid(pid, listeners);
+	if (browser) {
+		knownEndpoints.set(pid, browser);
+		return browser;
+	}
+	return ensureInspector(pid, listeners);
+}
+
+async function browserForPid(pid, listeners) {
+	const endpoints = await Promise.all(
+		listeners.filter((candidate) => candidate.pid === pid).map(async (listener) => {
+			const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
+			return typeof version?.webSocketDebuggerUrl === "string"
+				&& version.webSocketDebuggerUrl.includes("/devtools/browser/")
+				? version.webSocketDebuggerUrl
+				: undefined;
+		}),
+	);
+	return endpoints.find(Boolean);
 }
 
 async function inspectorForPid(pid, listeners) {
@@ -440,10 +618,6 @@ function isNodeProcess(candidate) {
 		|| command.includes("bootstrap-fork")
 		|| command.includes("tsserver.js")
 		|| command.includes("typingsinstaller.js"));
-}
-
-function isRendererProcess(candidate) {
-	return candidate.commandLine.toLowerCase().includes("--type=renderer");
 }
 
 function processTitle(candidate) {

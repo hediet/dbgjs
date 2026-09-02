@@ -281,6 +281,27 @@ impl ContextSourceModel {
         snapshots_by_id(&state, &resolved)
     }
 
+    pub fn source_mapped_loaded_sources(&self) -> Vec<SourceSnapshot> {
+        let state = self.state.lock().unwrap();
+        let loaded = contribution_snapshots_with_role(&state, SourceSnapshotRole::Loaded);
+        let projected = select_loaded_projection(&state.graph, &loaded, |source, projection| {
+            (projection.derived == source
+                && matches!(projection.kind, ProjectionKind::SourceMap { .. }))
+            .then_some(projection.basis)
+        });
+        snapshots_by_id(&state, &projected)
+    }
+
+    pub fn formatted_loaded_sources(&self) -> Vec<SourceSnapshot> {
+        let state = self.state.lock().unwrap();
+        let loaded = contribution_snapshots_with_role(&state, SourceSnapshotRole::Loaded);
+        let projected = select_loaded_projection(&state.graph, &loaded, |source, projection| {
+            (projection.basis == source && matches!(projection.kind, ProjectionKind::Format { .. }))
+                .then_some(projection.derived)
+        });
+        snapshots_by_id(&state, &projected)
+    }
+
     pub fn resolve_sources(&self, selector: &str) -> ContextSourceGraphSelection {
         let state = self.state.lock().unwrap();
         let roots = state
@@ -327,6 +348,27 @@ fn snapshots_by_id(
 ) -> Vec<SourceSnapshot> {
     ids.iter()
         .filter_map(|id| state.files.snapshot(*id).cloned())
+        .collect()
+}
+
+fn select_loaded_projection(
+    graph: &SourceGraph,
+    loaded: &BTreeSet<SourceSnapshotId>,
+    select: impl Fn(SourceSnapshotId, &SourceProjection) -> Option<SourceSnapshotId>,
+) -> BTreeSet<SourceSnapshotId> {
+    loaded
+        .iter()
+        .flat_map(|source| {
+            let projected = graph
+                .projections()
+                .filter_map(|projection| select(*source, projection))
+                .collect::<BTreeSet<_>>();
+            if projected.is_empty() {
+                BTreeSet::from([*source])
+            } else {
+                projected
+            }
+        })
         .collect()
 }
 
@@ -1531,5 +1573,62 @@ mod tests {
             source,
             "an unmapped runtime source is its own terminal resolution"
         );
+        assert_eq!(model.source_mapped_loaded_sources()[0].id, source);
+        assert_eq!(model.formatted_loaded_sources()[0].id, source);
+    }
+
+    #[test]
+    fn loaded_source_projection_modes_follow_only_the_selected_edge_kind() {
+        let model = ContextSourceModel::new();
+        let owner = SourceContributionId::new("target");
+        let generated = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("https://example.test/out/app.js").unwrap(),
+                model.content_store().intern("generated"),
+            )
+            .unwrap();
+        let authored = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("file:///workspace/src/app.ts").unwrap(),
+                model.content_store().intern("authored"),
+            )
+            .unwrap();
+        let formatted = model
+            .intern_content(
+                &owner,
+                SourceUri::parse("formatted://example.test/out/app.js").unwrap(),
+                model.content_store().intern("formatted"),
+            )
+            .unwrap();
+        model
+            .add_projection(
+                &owner,
+                generated,
+                authored,
+                ProjectionKind::SourceMap {
+                    map: model.content_store().intern("{}"),
+                    source_index: 0,
+                },
+            )
+            .unwrap();
+        model
+            .add_projection(
+                &owner,
+                formatted,
+                generated,
+                ProjectionKind::Format {
+                    formatter: "test".into(),
+                },
+            )
+            .unwrap();
+        model
+            .mark_snapshot_role(&owner, generated, SourceSnapshotRole::Loaded)
+            .unwrap();
+
+        assert_eq!(model.loaded_sources()[0].id, generated);
+        assert_eq!(model.source_mapped_loaded_sources()[0].id, authored);
+        assert_eq!(model.formatted_loaded_sources()[0].id, formatted);
     }
 }

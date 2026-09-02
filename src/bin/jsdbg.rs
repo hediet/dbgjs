@@ -24,8 +24,8 @@ use cdp_client::service_api::{
     HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
     MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
-    PromiseState, SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions, SourceTreeKind,
-    SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
+    ProcessRootKind, PromiseState, SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions,
+    SourceTreeKind, SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
     TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus, TargetWaitPredicate,
     ValueInspectionOptions, ValueSelector,
 };
@@ -54,10 +54,23 @@ const PLAYWRIGHT_ERROR_LIMIT: usize = 64 * 1024;
 const PLAYWRIGHT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.mjs");
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("jsdbg: {error}");
+fn main() {
+    let thread = std::thread::Builder::new()
+        .name("jsdbg-main".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create the jsdbg runtime");
+            if let Err(error) = runtime.block_on(run()) {
+                eprintln!("jsdbg: {error}");
+                std::process::exit(1);
+            }
+        })
+        .expect("failed to start the jsdbg main thread");
+    if thread.join().is_err() {
+        eprintln!("jsdbg: main thread panicked");
         std::process::exit(1);
     }
 }
@@ -65,6 +78,13 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1).collect::<Vec<_>>();
     let output = OutputFormat::from_arguments(&mut arguments);
+    if matches!(
+        arguments.as_slice(),
+        [argument] if matches!(argument.as_str(), "--help" | "-h" | "help")
+    ) {
+        println!("{}", usage());
+        return Ok(());
+    }
     let mut scope_options = extract_scope_options(&mut arguments)?;
     let state_file = default_state_file();
     let selection_file = state_file.with_extension("selection.json");
@@ -144,6 +164,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [target, graph] if target == "target" && graph == "graph" => {
+            let context_id =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.get_resource_graph(context_id).await)?)?;
         }
         [log, options @ ..] if log == "log" => {
             let client = ensure_service(&state_file).await?;
@@ -300,16 +326,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let result = rpc(client
-                .raw_cdp_request(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    method.clone(),
-                    options.params,
-                    options.validate,
-                )
-                .await)?;
+            let result = if let Some(session_id) = options.session_id {
+                rpc(client
+                    .raw_cdp_session_request(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        session_id,
+                        method.clone(),
+                        options.params,
+                        options.validate,
+                    )
+                    .await)?
+            } else {
+                rpc(client
+                    .raw_cdp_request(
+                        scope.context,
+                        scope.connection,
+                        scope.target,
+                        method.clone(),
+                        options.params,
+                        options.validate,
+                    )
+                    .await)?
+            };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         [target, relay, options @ ..] if target == "target" && relay == "relay" => {
@@ -473,23 +513,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .take_coverage(scope.context, scope.connection, scope.target, None, None)
                 .await)?)?;
         }
-        [coverage, capture, id, capture_id]
-            if coverage == "coverage" && capture == "capture" && id == "--id" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
-                .take_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    Some(capture_id.clone()),
-                    None,
-                )
-                .await)?;
-            output.print_coverage_capture(&snapshot, capture_id)?;
-        }
         [coverage, capture, exclude, capture_id]
             if coverage == "coverage" && capture == "capture" && exclude == "--exclude" =>
         {
@@ -513,6 +536,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     trim_width: true,
                 },
             )?;
+        }
+        [coverage, capture, options @ ..]
+            if coverage == "coverage" && capture == "capture" && !options.is_empty() =>
+        {
+            let options = parse_coverage_capture_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let snapshot = rpc(client
+                .take_coverage(
+                    scope.context,
+                    scope.connection,
+                    scope.target,
+                    options.capture_id.clone(),
+                    None,
+                )
+                .await)?;
+            if let Some(capture_id) = options.capture_id.as_deref()
+                && !options.render_requested
+            {
+                output.print_coverage_capture(&snapshot, capture_id)?;
+            } else {
+                output.print_coverage(
+                    &snapshot,
+                    CoverageOutputOptions {
+                        path: options.path.as_deref(),
+                        all: options.all,
+                        max_lines: options.max_lines,
+                        trim_width: options.trim_width,
+                    },
+                )?;
+            }
         }
         [coverage, stop] if coverage == "coverage" && stop == "stop" => {
             let client = ensure_service(&state_file).await?;
@@ -1031,11 +1086,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let trees =
-                cdp_client::process_discovery::discover_vscode_process_trees(options.stats).await?;
+            let mut trees = cdp_client::process_discovery::discover_process_trees(
+                options.root_kind,
+                options.stats,
+            )
+            .await?;
+            if options.full {
+                cdp_client::process_discovery::populate_process_tree_targets(&mut trees).await;
+            }
             output.print_process_trees(
                 &trees,
                 ProcessTreeOutputOptions {
+                    root_kind: options.root_kind,
                     command_line: options.command_line,
                     stats: options.stats,
                     filter: options.filter.as_deref(),
@@ -1047,40 +1109,117 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_process_attach_options(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let process_id = options.process_id;
-            let renderer = cdp_client::process_discovery::discover_vscode_process_trees(false)
-                .await?
+            let discovered = if matches!(
+                options.locator,
+                ProcessAttachLocator::VscodeProcess { .. }
+                    | ProcessAttachLocator::VscodeWindow { .. }
+            ) {
+                cdp_client::process_discovery::discover_vscode_process_trees(false).await?
+            } else {
+                cdp_client::process_discovery::discover_recognized_process_trees().await?
+            };
+            let (process_id, process_tree_root_pid) = match options.locator {
+                ProcessAttachLocator::Process(process_id) => (process_id, None),
+                ProcessAttachLocator::ProcessTreeProcess {
+                    root_pid,
+                    process_id,
+                } => {
+                    let process_id = discovered
+                        .iter()
+                        .find(|tree| tree.root_process_id == root_pid)
+                        .and_then(|tree| {
+                            tree.processes
+                                .iter()
+                                .find(|process| process.process_id == process_id)
+                        })
+                        .map(|process| process.process_id)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::NotFound,
+                                format!(
+                                    "process process-tree://{root_pid}/process/{process_id} is no longer available"
+                                ),
+                            )
+                        })?;
+                    (process_id, Some(root_pid))
+                }
+                ProcessAttachLocator::VscodeProcess {
+                    root_pid,
+                    process_id,
+                } => {
+                    let process_id = discovered
+                        .iter()
+                        .find(|tree| tree.root_process_id == root_pid)
+                        .and_then(|tree| {
+                            tree.processes
+                                .iter()
+                                .find(|process| process.process_id == process_id)
+                        })
+                        .map(|process| process.process_id)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::NotFound,
+                                format!(
+                                    "VS Code process vscode://{root_pid}/process/{process_id} is no longer available"
+                                ),
+                            )
+                        })?;
+                    (process_id, Some(root_pid))
+                }
+                ProcessAttachLocator::VscodeWindow {
+                    root_pid,
+                    window_id,
+                } => discovered
+                    .iter()
+                    .find(|tree| tree.root_process_id == root_pid)
+                    .and_then(|tree| {
+                        tree.processes.iter().find(|process| {
+                            process.role == ProcessRole::Renderer
+                                && process.window_id == Some(window_id)
+                        })
+                    })
+                    .map(|process| process.process_id)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!(
+                                "VS Code window w:{root_pid}/{window_id} is no longer available"
+                            ),
+                        )
+                    })
+                    .map(|process_id| (process_id, Some(root_pid)))?,
+            };
+            let process_tree_target = discovered
                 .into_iter()
+                .filter(|tree| {
+                    process_tree_root_pid.is_none_or(|root| tree.root_process_id == root)
+                })
                 .find_map(|tree| {
                     tree.processes
                         .into_iter()
-                        .find(|process| {
-                            process.process_id == process_id
-                                && process.role == ProcessRole::Renderer
+                        .find(|process| process.process_id == process_id && process.attachable)
+                        .map(|process| {
+                            (tree.root_process_id, process.debug_target_id, process.role)
                         })
-                        .map(|process| (tree.root_process_id, process.debug_target_id))
                 });
-            let (connection_id, configuration, target_id) =
-                if let Some((root_process_id, Some(target_id))) = renderer {
+            let (connection_id, configuration, target_id, renderer_process_id) =
+                if let Some((root_process_id, Some(target_id), role)) = process_tree_target {
                     (
                         format!("process-tree-{root_process_id}"),
                         ConnectionConfiguration::ProcessTree {
                             root_pid: root_process_id,
                         },
                         target_id,
+                        (role == ProcessRole::Renderer).then_some(process_id),
                     )
                 } else {
                     (
                         format!("process-{process_id}"),
                         ConnectionConfiguration::Process { process_id },
                         "$node-root".to_owned(),
+                        None,
                     )
                 };
-            let target_id = if target_id == "$node-root" {
-                synthetic_node_target_id(&connection_id)
-            } else {
-                target_id
-            };
             let client = ensure_service(&state_file).await?;
             let context = rpc(client.get_context(context_id.clone()).await)?;
             let existing = context
@@ -1118,6 +1257,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .connect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
+            let target_id = if let Some(process_id) = renderer_process_id {
+                resolve_renderer_target_id(&client, &context_id, &connection_id, process_id).await?
+            } else if target_id == "$node-root" {
+                synthetic_node_target_id(&connection_id)
+            } else {
+                target_id
+            };
             if target_id != synthetic_node_target_id(&connection_id) {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
@@ -1143,6 +1289,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     target_id.clone(),
                     TargetAttachOptions {
                         force: options.force,
+                        expected_connection_generation: None,
                     },
                 )
                 .await)?;
@@ -1488,6 +1635,35 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .disconnect_connection(context_id, connection_id)
                 .await)?)?;
         }
+        [connection, pause_future, mode]
+            if connection == "connection" && pause_future == "pause-future" =>
+        {
+            let enabled = match mode.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "connection pause-future requires 'on' or 'off'",
+                    )
+                    .into());
+                }
+            };
+            let (context_id, connection_id) =
+                selected_or_explicit_connection(&selection_file, &scope_options)?;
+            let client = ensure_service(&state_file).await?;
+            let enabled = rpc(client
+                .set_pause_future_children(context_id, connection_id, enabled)
+                .await)?;
+            if output.is_json() {
+                println!("{}", serde_json::to_string_pretty(&enabled)?);
+            } else {
+                println!(
+                    "Pause future child targets: {}",
+                    if enabled { "on" } else { "off" }
+                );
+            }
+        }
         [connection, delete, options @ ..] if connection == "connection" && delete == "delete" => {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
@@ -1745,6 +1921,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                     TargetAttachOptions {
                         force: options.force,
+                        expected_connection_generation: None,
                     },
                 )
                 .await)?;
@@ -2236,6 +2413,78 @@ fn required_option<'a>(name: &str, value: Option<&'a String>) -> Result<&'a Stri
     })
 }
 
+fn parse_process_attach_locator(value: &str) -> Result<ProcessAttachLocator, io::Error> {
+    if let Some(value) = value.strip_prefix("process-tree://") {
+        let (root_pid, path) = value.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            )
+        })?;
+        let (kind, process_id) = path.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            )
+        })?;
+        if kind != "process" || process_id.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "process-tree locators use process-tree://<root-pid>/process/<pid>",
+            ));
+        }
+        return Ok(ProcessAttachLocator::ProcessTreeProcess {
+            root_pid: parse_u32("process tree root ID", root_pid)?,
+            process_id: parse_u32("process ID", process_id)?,
+        });
+    }
+    if let Some(value) = value.strip_prefix("vscode://") {
+        let (root_pid, path) = value.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )
+        })?;
+        let root_pid = parse_u32("VS Code root process ID", root_pid)?;
+        let (kind, id) = path.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )
+        })?;
+        return match kind {
+            "process" if !id.contains('/') => Ok(ProcessAttachLocator::VscodeProcess {
+                root_pid,
+                process_id: parse_u32("process ID", id)?,
+            }),
+            "window" if !id.contains('/') => Ok(ProcessAttachLocator::VscodeWindow {
+                root_pid,
+                window_id: parse_u32("VS Code window ID", id)?,
+            }),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "VS Code locators use vscode://<root-pid>/process/<pid> or vscode://<root-pid>/window/<window-id>",
+            )),
+        };
+    }
+    if let Some(value) = value.strip_prefix("w:") {
+        let (root_pid, window_id) = value.split_once('/').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "window references use w:<root-pid>/<window-id>",
+            )
+        })?;
+        return Ok(ProcessAttachLocator::VscodeWindow {
+            root_pid: parse_u32("VS Code root process ID", root_pid)?,
+            window_id: parse_u32("VS Code window ID", window_id)?,
+        });
+    }
+    Ok(ProcessAttachLocator::Process(parse_u32(
+        "process ID",
+        value.strip_prefix("p:").unwrap_or(value),
+    )?))
+}
+
 fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
     let command = arguments.first().map(String::as_str);
     let operation = arguments.get(1).map(String::as_str);
@@ -2539,12 +2788,14 @@ struct ScreenshotCaptureOptions {
 struct RawCdpOptions {
     params: serde_json::Value,
     validate: bool,
+    session_id: Option<String>,
 }
 
 fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Error> {
     let mut params = serde_json::json!({});
     let mut has_params = false;
     let mut validate = true;
+    let mut session_id = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -2571,6 +2822,21 @@ fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Erro
                 validate = false;
                 index += 1;
             }
+            "--session-id" => {
+                if session_id.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--session-id may only be specified once",
+                    ));
+                }
+                session_id = Some(arguments.get(index + 1).cloned().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--session-id requires a flattened CDP session ID",
+                    )
+                })?);
+                index += 2;
+            }
             argument => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -2579,7 +2845,11 @@ fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Erro
             }
         }
     }
-    Ok(RawCdpOptions { params, validate })
+    Ok(RawCdpOptions {
+        params,
+        validate,
+        session_id,
+    })
 }
 
 /// `jsdbg context relay --stdio` and `jsdbg target relay --stdio` currently support only the
@@ -2596,9 +2866,17 @@ fn parse_relay_options(arguments: &[String]) -> Result<(), io::Error> {
 
 #[derive(Debug, PartialEq, Eq)]
 struct ProcessAttachOptions {
-    process_id: u32,
+    locator: ProcessAttachLocator,
     set_default: bool,
     force: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessAttachLocator {
+    Process(u32),
+    ProcessTreeProcess { root_pid: u32, process_id: u32 },
+    VscodeProcess { root_pid: u32, process_id: u32 },
+    VscodeWindow { root_pid: u32, window_id: u32 },
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -2720,7 +2998,7 @@ fn selected_or_explicit_connection(
 }
 
 fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOptions, io::Error> {
-    let mut process_id = None;
+    let mut locator = None;
     let mut set_default = false;
     let mut force = false;
     let mut index = 0;
@@ -2753,22 +3031,22 @@ fn parse_process_attach_options(arguments: &[String]) -> Result<ProcessAttachOpt
                 ));
             }
             argument => {
-                if process_id.is_some() {
+                if locator.is_some() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "process attach accepts exactly one process ID",
+                        "process attach accepts exactly one process reference",
                     ));
                 }
-                process_id = Some(parse_u32("process ID", argument)?);
+                locator = Some(parse_process_attach_locator(argument)?);
                 index += 1;
             }
         }
     }
     Ok(ProcessAttachOptions {
-        process_id: process_id.ok_or_else(|| {
+        locator: locator.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "process attach requires a process ID",
+                "process attach requires a process reference",
             )
         })?,
         set_default,
@@ -3297,6 +3575,15 @@ struct CoverageShowOptions {
     trim_width: bool,
 }
 
+struct CoverageCaptureOptions {
+    capture_id: Option<String>,
+    path: Option<String>,
+    all: bool,
+    max_lines: usize,
+    trim_width: bool,
+    render_requested: bool,
+}
+
 struct CpuProfileShowOptions {
     capture_id: String,
     path: Option<String>,
@@ -3352,6 +3639,8 @@ fn parse_source_tree_options(
     while index < values.len() {
         match values[index].as_str() {
             "loaded" if kind.is_none() => kind = Some(SourceTreeKind::Loaded),
+            "source-mapped" if kind.is_none() => kind = Some(SourceTreeKind::SourceMapped),
+            "formatted" if kind.is_none() => kind = Some(SourceTreeKind::Formatted),
             "resolved" if kind.is_none() => kind = Some(SourceTreeKind::Resolved),
             "--all" => all = true,
             "--no-trim" => trim_width = false,
@@ -3382,7 +3671,7 @@ fn parse_source_tree_options(
     let kind = kind.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "source tree requires <loaded|resolved>",
+            "source tree requires <loaded|source-mapped|formatted|resolved>",
         )
     })?;
     Ok((
@@ -4510,6 +4799,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
                         .clone(),
                 );
             }
+
             "--all" => all = true,
             "--no-cache" => no_cache = true,
             "--no-trim" => trim_width = false,
@@ -4560,6 +4850,48 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         max_lines,
         no_cache,
         trim_width,
+    })
+}
+
+fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOptions, io::Error> {
+    let mut capture_id = None;
+    let mut render_values = Vec::with_capacity(values.len());
+    let mut index = 0;
+    while index < values.len() {
+        if values[index] == "--id" {
+            let value = values.get(index + 1).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "--id requires a capture name")
+            })?;
+            if capture_id.replace(value.clone()).is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--id may only be specified once",
+                ));
+            }
+            index += 2;
+        } else {
+            render_values.push(values[index].clone());
+            index += 1;
+        }
+    }
+    let render_requested = !render_values.is_empty();
+    let mut show_values = Vec::with_capacity(render_values.len() + 1);
+    show_values.push(".".to_owned());
+    show_values.extend(render_values);
+    let options = parse_coverage_show_options(&show_values)?;
+    if options.no_cache {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--no-cache is only valid for stored coverage",
+        ));
+    }
+    Ok(CoverageCaptureOptions {
+        capture_id,
+        path: options.path,
+        all: options.all,
+        max_lines: options.max_lines,
+        trim_width: options.trim_width,
+        render_requested,
     })
 }
 
@@ -4949,6 +5281,67 @@ async fn print_breakpoint_result(
     Ok(())
 }
 
+async fn resolve_renderer_target_id(
+    client: &DebuggerServiceApiClient,
+    context_id: &str,
+    connection_id: &str,
+    process_id: u32,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let graph = rpc(client.get_resource_graph(context_id.to_owned()).await)?;
+        let mut candidates = graph
+            .resources
+            .iter()
+            .filter(|resource| {
+                resource
+                    .attributes
+                    .get("connectionId")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(connection_id)
+                    && resource
+                        .attributes
+                        .get("processId")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(u64::from(process_id))
+                    && resource
+                        .attributes
+                        .get("subtype")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("electron-renderer")
+            })
+            .filter_map(|resource| {
+                resource
+                    .attributes
+                    .get("targetId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [target_id] => return Ok(target_id.clone()),
+            [] if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            [] => {
+                return Err(format!(
+                    "renderer process {process_id} has no live Electron webContents"
+                )
+                .into());
+            }
+            _ => {
+                return Err(format!(
+                    "renderer process {process_id} maps to multiple Electron webContents targets: {}; attach one with `jsdbg target attach --target <target-id>`",
+                    candidates.join(", ")
+                )
+                .into());
+            }
+        }
+    }
+}
+
 async fn add_connection(
     context_id: &str,
     connection_id: &str,
@@ -4966,6 +5359,8 @@ async fn add_connection(
         )
         .into());
     }
+    let wait_for_initial_process_tree =
+        matches!(&configuration, ConnectionConfiguration::ProcessTree { .. });
     let client = ensure_service(state_file).await?;
     let configured = rpc(client
         .put_connection(
@@ -4978,6 +5373,38 @@ async fn add_connection(
         let mut connected = rpc(client
             .connect_connection(context_id.to_owned(), connection_id.to_owned())
             .await)?;
+        if wait_for_initial_process_tree {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut last_target_ids = Vec::new();
+            let mut stable_since = tokio::time::Instant::now();
+            loop {
+                let target_ids = connected
+                    .connections
+                    .iter()
+                    .find(|connection| connection.id == connection_id)
+                    .map(|connection| {
+                        connection
+                            .targets
+                            .iter()
+                            .map(|target| target.target_id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if target_ids != last_target_ids {
+                    last_target_ids = target_ids;
+                    stable_since = tokio::time::Instant::now();
+                }
+                if last_target_ids.len() > 1 && stable_since.elapsed() >= Duration::from_millis(500)
+                {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                connected = rpc(client.get_context(context_id.to_owned()).await)?;
+            }
+        }
         if set_default {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
             let target_id = loop {
@@ -5370,6 +5797,8 @@ async fn wait_target(
 }
 
 struct ProcessListOptions {
+    root_kind: ProcessRootKind,
+    full: bool,
     command_line: bool,
     stats: bool,
     filter: Option<String>,
@@ -5378,20 +5807,46 @@ struct ProcessListOptions {
 
 fn parse_process_list_options(arguments: &[String]) -> Result<ProcessListOptions, io::Error> {
     let mut result = ProcessListOptions {
+        root_kind: ProcessRootKind::Vscode,
+        full: false,
         command_line: true,
         stats: false,
         filter: None,
         trim_width: true,
     };
-    let mut vscode = false;
+    let mut root_kind = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
-            "--vscode" if !vscode => vscode = true,
+            "--vscode" if root_kind.is_none() => root_kind = Some(ProcessRootKind::Vscode),
             "--vscode" => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "--vscode may only be specified once",
+                    "--vscode conflicts with an existing process root selector",
+                ));
+            }
+            "--root" => {
+                if root_kind.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--root may only be specified once and conflicts with --vscode",
+                    ));
+                }
+                index += 1;
+                root_kind = Some(parse_process_root_kind(arguments.get(index).ok_or_else(
+                    || {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--root requires vscode, node, electron, or browser",
+                        )
+                    },
+                )?)?);
+            }
+            "--full" if !result.full => result.full = true,
+            "--full" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--full may only be specified once",
                 ));
             }
             "--no-cmd-line" => result.command_line = false,
@@ -5418,13 +5873,28 @@ fn parse_process_list_options(arguments: &[String]) -> Result<ProcessListOptions
         }
         index += 1;
     }
-    if !vscode {
-        return Err(io::Error::new(
+    result.root_kind = root_kind.ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::InvalidInput,
-            "process list requires --vscode",
-        ));
-    }
+            "process list requires --root vscode|node|electron|browser",
+        )
+    })?;
     Ok(result)
+}
+
+fn parse_process_root_kind(value: &str) -> Result<ProcessRootKind, io::Error> {
+    match value {
+        "vscode" => Ok(ProcessRootKind::Vscode),
+        "node" => Ok(ProcessRootKind::Node),
+        "electron" => Ok(ProcessRootKind::Electron),
+        "browser" => Ok(ProcessRootKind::Browser),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "unknown process root kind '{value}'; expected vscode, node, electron, or browser"
+            ),
+        )),
+    }
 }
 
 fn parse_u64(name: &str, value: &str) -> Result<u64, io::Error> {
@@ -5665,11 +6135,18 @@ async fn run_playwright_program(
         Completion::TimedOut => {
             let _ = child.start_kill();
             let _ = child.wait().await;
+            let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
+            let detail = String::from_utf8_lossy(&stderr);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "Playwright program exceeded the {}-second limit",
-                    PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs()
+                    "Playwright program exceeded the {}-second limit{}",
+                    PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs(),
+                    if detail.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; stderr: {detail}")
+                    }
                 ),
             )
             .into());
@@ -5847,8 +6324,9 @@ fn usage() -> &'static str {
 commands:
   jsdbg daemon view [--context <id> | --all-contexts]
   jsdbg service status|stop
-  jsdbg process list --vscode [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  jsdbg process attach <process-id> [--context <id>] [--set] [--force]
+  jsdbg process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  jsdbg process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  jsdbg process attach <process-reference> [--context <id>] [--set] [--force]
   jsdbg context list
   jsdbg context create <path|:id> [display-name] [--set]
   jsdbg context show [--context <path|:id>]
@@ -5869,6 +6347,7 @@ commands:
   jsdbg connection add --playwright <url> --connection <id> [--context <id>] [--channel <channel>] [--headed] [--ignore-https-errors] [--connect] [--set]
   jsdbg connection add --chrome <url> --connection <id> [--context <id>] --executable <path> [--headed] [--user-data-dir <path>] [--arg <value>]... [--connect] [--set]
   jsdbg connection connect|disconnect [--context <id>] [--connection <id>]
+  jsdbg connection pause-future on|off [--context <id>] [--connection <id>]
   jsdbg connection delete [--context <id>] [--connection <id>] [--expected-revision <revision>] [--request-id <id>]
   jsdbg breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
   jsdbg breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
@@ -5879,7 +6358,7 @@ commands:
   jsdbg source formatting rule remove <rule-id> [--context <id>]
   jsdbg source list [--path <substring>] [--context <id>]
   jsdbg source resolve|endpoints|explain <path> [--context <id>]
-  jsdbg source tree <loaded|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
+  jsdbg source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   jsdbg source graph [--uncompacted] [--context <id>]
   jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
   jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
@@ -5887,6 +6366,7 @@ commands:
   jsdbg source cache evict [--context <id>]
   jsdbg source export <destination> [--context <id>]
   jsdbg target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
+  jsdbg target graph [--context <id>]
   jsdbg target show [target scope]
   jsdbg target attach [target scope] [--set] [--force]
   jsdbg target release [target scope]
@@ -5899,7 +6379,7 @@ commands:
   jsdbg page playwright - [target scope]
   jsdbg page playwright --eval <program> [target scope]
   jsdbg target watch <expression> [target scope]
-  jsdbg target cdp <method> [--params <json>] [--no-validation] [target scope]
+  jsdbg target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   jsdbg target relay --stdio [target scope]
   jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
   jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
@@ -5911,7 +6391,7 @@ commands:
   jsdbg target type <text> [target scope]
   jsdbg screenshot capture [--output <path>] [target scope]
   jsdbg coverage start [target scope]
-  jsdbg coverage capture [--id <name>] [target scope]
+  jsdbg coverage capture [--id <name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
   jsdbg coverage stop [--exclude <name>] [target scope]
   jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
   jsdbg profile start [--sampling-interval <duration>] [target scope]
@@ -5941,6 +6421,7 @@ target scope:
 
 target cdp validates params against the generated CDP schema by default.
 Use --no-validation for vendor or newer protocol methods.
+Use --session-id to address a flattened session returned by Target.attachToTarget.
 
 context relay exposes every target in a context as one virtual browser-root CDP
 endpoint; target relay exposes exactly one target as a direct CDP root. Both
@@ -5954,27 +6435,28 @@ mod tests {
     use super::{
         AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
-        DEFAULT_VALUE_PROPERTY_LIMIT, ResolvedScope, ScopeOptions, SelectionStore,
-        TargetListOptions, activate_selection_scope, apply_scope_selection, connection_list_output,
-        extract_scope_options, load_selection_store, parse_attach_options, parse_chrome_options,
-        parse_connection_list_options, parse_context_create_options, parse_context_option,
-        parse_coverage_show_options, parse_cpu_profile_sampling_interval,
-        parse_cpu_profile_start_options, parse_heap_capture_options, parse_heap_class_options,
-        parse_heap_path_options, parse_heap_select_options, parse_heap_show_options,
-        parse_heap_string_options, parse_mutation_options, parse_node_options,
-        parse_process_attach_options, parse_process_list_options, parse_promise_list_options,
-        parse_raw_cdp_options, parse_screenshot_capture_options, parse_source_formatting_rule,
-        parse_source_grep_options, parse_source_map_arguments, parse_source_show_options,
-        parse_source_tree_options, parse_source_view, parse_stdio_options,
-        parse_target_list_options, parse_value_options, png_dimensions, read_eval_expression,
-        read_playwright_program, resolve_target_scope, select_implicit_context,
-        split_heap_reference_cli, target_list_output,
+        DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, ResolvedScope, ScopeOptions,
+        SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
+        connection_list_output, extract_scope_options, load_selection_store, parse_attach_options,
+        parse_chrome_options, parse_connection_list_options, parse_context_create_options,
+        parse_context_option, parse_coverage_capture_options, parse_coverage_show_options,
+        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
+        parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
+        parse_heap_select_options, parse_heap_show_options, parse_heap_string_options,
+        parse_mutation_options, parse_node_options, parse_process_attach_options,
+        parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
+        parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
+        parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
+        parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
+        png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
+        select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
     use cdp_client::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
-        PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot, ValueSelector,
+        ProcessRootKind, PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
+        ValueSelector,
     };
     use std::fs;
 
@@ -6040,11 +6522,14 @@ mod tests {
         let defaults = parse_raw_cdp_options(&[]).unwrap();
         assert_eq!(defaults.params, serde_json::json!({}));
         assert!(defaults.validate);
+        assert_eq!(defaults.session_id, None);
 
         let options = parse_raw_cdp_options(&arguments(&[
             "--params",
             r#"{"expression":"globalThis.location.href"}"#,
             "--no-validation",
+            "--session-id",
+            "nested-session",
         ]))
         .unwrap();
         assert_eq!(
@@ -6052,6 +6537,7 @@ mod tests {
             serde_json::json!({ "expression": "globalThis.location.href" })
         );
         assert!(!options.validate);
+        assert_eq!(options.session_id.as_deref(), Some("nested-session"));
     }
 
     #[test]
@@ -6178,6 +6664,11 @@ mod tests {
         assert!(options.all);
         assert!(options.trim_width);
 
+        let (kind, _) = parse_source_tree_options(&arguments(&["source-mapped"])).unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::SourceMapped);
+        let (kind, _) = parse_source_tree_options(&arguments(&["formatted"])).unwrap();
+        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Formatted);
+
         assert!(parse_source_tree_options(&arguments(&["loaded", "--max-lines", "0"])).is_err());
         assert!(parse_source_tree_options(&arguments(&["unknown"])).is_err());
         assert!(parse_source_tree_options(&[]).is_err());
@@ -6196,11 +6687,53 @@ mod tests {
         ]);
         let scope = extract_scope_options(&mut args).unwrap();
         let options = parse_process_attach_options(&args[2..]).unwrap();
-        assert_eq!(options.process_id, 15388);
+        assert_eq!(options.locator, ProcessAttachLocator::Process(15388));
         assert_eq!(scope.context.as_deref(), Some("linkrpc-ext-host"));
         assert!(options.set_default);
         assert!(options.force);
         assert!(parse_process_attach_options(&arguments(&["linkrpc-ext-host", "15388"])).is_err());
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["p:15388"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::Process(15388)
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["w:100/7"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::VscodeWindow {
+                root_pid: 100,
+                window_id: 7,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["vscode://100/process/15388"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::VscodeProcess {
+                root_pid: 100,
+                process_id: 15388,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["process-tree://100/process/15388"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::ProcessTreeProcess {
+                root_pid: 100,
+                process_id: 15388,
+            }
+        );
+        assert_eq!(
+            parse_process_attach_options(&arguments(&["vscode://100/window/7"]))
+                .unwrap()
+                .locator,
+            ProcessAttachLocator::VscodeWindow {
+                root_pid: 100,
+                window_id: 7,
+            }
+        );
     }
 
     #[test]
@@ -6422,6 +6955,7 @@ mod tests {
             id: "ctx".to_owned(),
             display_name: "Context".to_owned(),
             revision: 1,
+            resource_revision: 1,
             connections: connections
                 .iter()
                 .map(|(connection_id, target_ids)| ConnectionSnapshot {
@@ -6501,10 +7035,19 @@ mod tests {
             "--no-trim",
         ]))
         .unwrap();
+        assert_eq!(options.root_kind, ProcessRootKind::Vscode);
+        assert!(!options.full);
         assert!(!options.command_line);
         assert!(options.stats);
         assert_eq!(options.filter.as_deref(), Some("window 3"));
         assert!(!options.trim_width);
+
+        let options =
+            parse_process_list_options(&arguments(&["--root", "browser", "--full"])).unwrap();
+        assert_eq!(options.root_kind, ProcessRootKind::Browser);
+        assert!(options.full);
+        assert!(parse_process_list_options(&arguments(&["--root", "unknown"])).is_err());
+        assert!(parse_process_list_options(&arguments(&["--vscode", "--root", "node"])).is_err());
     }
 
     #[test]
@@ -6626,6 +7169,29 @@ mod tests {
     fn parses_coverage_no_trim_option() {
         let options = parse_coverage_show_options(&arguments(&["--no-trim"])).unwrap();
         assert!(!options.trim_width);
+    }
+
+    #[test]
+    fn parses_coverage_capture_rendering_options() {
+        let options = parse_coverage_capture_options(&arguments(&[
+            "--id",
+            "baseline",
+            "--path",
+            "src/vs",
+            "--max-lines",
+            "25",
+            "--no-trim",
+        ]))
+        .unwrap();
+        assert_eq!(options.capture_id.as_deref(), Some("baseline"));
+        assert_eq!(options.path.as_deref(), Some("src/vs"));
+        assert_eq!(options.max_lines, 25);
+        assert!(!options.trim_width);
+        assert!(parse_coverage_capture_options(&arguments(&["--no-cache"])).is_err());
+        assert!(parse_coverage_capture_options(&arguments(&["--id"])).is_err());
+        assert!(
+            parse_coverage_capture_options(&arguments(&["--id", "one", "--id", "two"])).is_err()
+        );
     }
 
     #[test]

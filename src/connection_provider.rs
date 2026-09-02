@@ -2,25 +2,35 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::timeout;
 use url::Url;
 
-use crate::cdp::CdpClient;
+use crate::capability::{
+    Capability, CapabilityError, CapabilityKind, CapabilitySummary, DebugCapability,
+    DebugOpenRequest, DebugSessionHandle, PauseFutureChildrenCapability,
+};
+use crate::cdp::{CdpClient, TargetAttachToTargetParams, TargetDetachFromTargetParams};
 use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, RootCdpEvent};
 use crate::debugger_engine::SessionKey;
-use crate::electron_renderer_transport::ElectronRendererBridge;
-use crate::playwright_proxy::PlaywrightCdpSource;
+use crate::discovery::{
+    LeaseObserver, PauseChildrenKey, PauseChildrenLease, PauseChildrenLeaseRegistry,
+};
+use crate::process_tree_source::ProcessTreeTargetSource;
+use crate::resource_graph::ResourceId;
 use crate::service_api::{
     CdpStdioTopology, ConnectionConfiguration, PlaywrightChannel, TargetSnapshot,
 };
 use crate::stdio_transport::CdpStdioTransport;
+use crate::virtual_browser_root::VirtualBrowserRoot;
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("providers/playwright.mjs");
@@ -34,13 +44,16 @@ pub struct ConnectionRuntime {
     direct_debugger: bool,
     connection_generation: u64,
     root_endpoint: String,
+    /// Present when this connection is a process tree fronted by a virtual browser root. The
+    /// runtime keeps it to answer the two questions CDP's `Target` domain cannot express:
+    /// which OS process backs a target, and whether it is genuinely paused at startup.
+    virtual_root: Option<Arc<VirtualBrowserRoot>>,
     direct_debuggers: std::sync::Mutex<BTreeMap<String, Arc<CdpConnection>>>,
     direct_debugger_endpoints: std::sync::Mutex<BTreeMap<String, String>>,
-    renderer_processes: std::sync::Mutex<BTreeMap<String, u32>>,
-    renderer_bridge: Option<Arc<ElectronRendererBridge>>,
     direct_debugger_attach_lock: Mutex<()>,
     provider_target_events: Mutex<Option<mpsc::UnboundedReceiver<ProviderTargetEvent>>>,
     provider_target_sender: mpsc::UnboundedSender<ProviderTargetEvent>,
+    pause_future_children: OnceLock<Arc<ConnectionPauseFutureChildrenCapability>>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +65,232 @@ pub enum ProviderTargetEvent {
 pub struct DirectDebuggerAttachment {
     pub session: CdpDebuggerSession,
     pub stole_external_owner: bool,
+}
+
+/// The session opened for one target, plus whether a debugger jsdbg does not own was evicted.
+pub struct TargetAttachment {
+    pub session_id: String,
+    pub stole_external_owner: bool,
+}
+
+struct PauseDemandObserver {
+    runtime: Weak<ConnectionRuntime>,
+}
+
+impl LeaseObserver<PauseChildrenKey> for PauseDemandObserver {
+    fn demand_changed(&self, _key: &PauseChildrenKey, demand: usize) {
+        if demand != 0 {
+            return;
+        }
+        let runtime = self.runtime.clone();
+        tokio::spawn(async move {
+            if let Some(runtime) = runtime.upgrade() {
+                runtime.set_wait_for_debugger_on_start(false).await;
+            }
+        });
+    }
+}
+
+struct ConnectionPauseFutureChildrenCapability {
+    runtime: Weak<ConnectionRuntime>,
+    root: ResourceId,
+    leases: PauseChildrenLeaseRegistry,
+    routes: std::sync::Mutex<BTreeMap<ResourceId, String>>,
+}
+
+impl Capability for ConnectionPauseFutureChildrenCapability {
+    fn kind(&self) -> CapabilityKind {
+        CapabilityKind::PauseFutureChildren
+    }
+
+    fn summary(&self) -> CapabilitySummary {
+        CapabilitySummary::new("Pause future child targets")
+    }
+}
+
+#[async_trait]
+impl PauseFutureChildrenCapability for ConnectionPauseFutureChildrenCapability {
+    async fn arm(&self) -> Result<PauseChildrenLease, CapabilityError> {
+        let runtime = self.runtime.upgrade().ok_or_else(|| {
+            CapabilityError::Unavailable("connection is no longer available".to_owned())
+        })?;
+        if runtime.virtual_root.is_none() {
+            return Err(CapabilityError::Unavailable(
+                "connection cannot pause future child targets".to_owned(),
+            ));
+        }
+        let key = PauseChildrenKey(self.root.clone());
+        let lease = self.leases.acquire(key);
+        if lease.demand() == 1 {
+            runtime.set_wait_for_debugger_on_start(true).await;
+        }
+        Ok(lease)
+    }
+
+    async fn resume(&self, resource: &ResourceId) -> Result<(), CapabilityError> {
+        let runtime_target_id = self
+            .routes
+            .lock()
+            .unwrap()
+            .get(resource)
+            .cloned()
+            .ok_or_else(|| {
+                CapabilityError::Unavailable(format!(
+                    "resource '{resource}' is not a child of this connection"
+                ))
+            })?;
+        let runtime = self.runtime.upgrade().ok_or_else(|| {
+            CapabilityError::Unavailable("connection is no longer available".to_owned())
+        })?;
+        let attached = runtime
+            .attach_to_target(&runtime_target_id, false)
+            .await
+            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+        let session = runtime
+            .open_session(SessionKey {
+                connection_generation: runtime.connection_generation,
+                session_id: attached.session_id.clone(),
+            })
+            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+        let result = session
+            .raw_request("Runtime.runIfWaitingForDebugger", serde_json::json!({}))
+            .await
+            .map_err(|error| CapabilityError::Failed(format!("{error:?}")));
+        let close_result = runtime
+            .close_attached_session(None, &attached.session_id)
+            .await;
+        match (result, close_result) {
+            (Ok(_), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(CapabilityError::Failed(error.to_string())),
+            (Err(operation), Err(close)) => Err(CapabilityError::Failed(format!(
+                "{operation}; additionally failed to close the debug session: {close}"
+            ))),
+        }
+    }
+}
+
+pub struct ConnectionTargetDebugCapability {
+    runtime: Weak<ConnectionRuntime>,
+    resource: ResourceId,
+    runtime_target_id: String,
+    direct: bool,
+    pending: std::sync::Mutex<BTreeMap<String, CdpDebuggerSession>>,
+}
+
+impl ConnectionTargetDebugCapability {
+    fn new(
+        runtime: &Arc<ConnectionRuntime>,
+        resource: ResourceId,
+        runtime_target_id: String,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            runtime: Arc::downgrade(runtime),
+            resource,
+            runtime_target_id,
+            direct: runtime.is_direct_debugger(),
+            pending: std::sync::Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    fn runtime(&self) -> Result<Arc<ConnectionRuntime>, CapabilityError> {
+        self.runtime
+            .upgrade()
+            .ok_or_else(|| CapabilityError::Unavailable("connection is closed".to_owned()))
+    }
+}
+
+impl Capability for ConnectionTargetDebugCapability {
+    fn kind(&self) -> CapabilityKind {
+        CapabilityKind::Debug
+    }
+
+    fn summary(&self) -> CapabilitySummary {
+        CapabilitySummary::new("CDP debugger")
+            .with_detail("targetId", Value::from(self.runtime_target_id.clone()))
+            .with_detail("direct", Value::from(self.direct))
+    }
+}
+
+#[async_trait]
+impl DebugCapability for ConnectionTargetDebugCapability {
+    async fn open(&self, request: DebugOpenRequest) -> Result<DebugSessionHandle, CapabilityError> {
+        let runtime = self.runtime()?;
+        let (session, stole_existing_owner) = if self.direct {
+            let attachment = runtime
+                .take_direct_debugger_session(&self.runtime_target_id)
+                .await
+                .map_err(|error| CapabilityError::Failed(error.to_string()))?
+                .ok_or_else(|| {
+                    CapabilityError::Unavailable(
+                        "direct debugger target has no endpoint".to_owned(),
+                    )
+                })?;
+            (attachment.session, attachment.stole_external_owner)
+        } else {
+            let attachment = runtime
+                .attach_to_target(&self.runtime_target_id, request.steal_existing_owner)
+                .await
+                .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+            let key = SessionKey {
+                connection_generation: runtime.connection_generation,
+                session_id: attachment.session_id.clone(),
+            };
+            let session = runtime
+                .open_session(key)
+                .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+            (session, attachment.stole_external_owner)
+        };
+        let session_id = session.key().session_id.clone();
+        self.pending
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), session);
+        Ok(DebugSessionHandle {
+            session_id,
+            resource: self.resource.clone(),
+            stole_existing_owner,
+        })
+    }
+
+    fn take_session(
+        &self,
+        handle: &DebugSessionHandle,
+    ) -> Result<CdpDebuggerSession, CapabilityError> {
+        if handle.resource != self.resource {
+            return Err(CapabilityError::Rejected(
+                "debug session belongs to another resource".to_owned(),
+            ));
+        }
+        self.pending
+            .lock()
+            .unwrap()
+            .remove(&handle.session_id)
+            .ok_or_else(|| {
+                CapabilityError::Unavailable(format!(
+                    "debug session {} was already consumed or closed",
+                    handle.session_id
+                ))
+            })
+    }
+
+    async fn close(&self, handle: &DebugSessionHandle) -> Result<(), CapabilityError> {
+        self.pending.lock().unwrap().remove(&handle.session_id);
+        self.runtime()?
+            .close_attached_session(
+                self.direct.then_some(self.runtime_target_id.as_str()),
+                &handle.session_id,
+            )
+            .await
+            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+        Ok(())
+    }
+
+    fn waiting_for_debugger(&self) -> bool {
+        self.runtime
+            .upgrade()
+            .is_some_and(|runtime| runtime.target_waiting_for_debugger(&self.runtime_target_id))
+    }
 }
 
 impl ConnectionRuntime {
@@ -70,145 +309,117 @@ impl ConnectionRuntime {
             return Self::connect_stdio(command, args, cwd, env, *topology, connection_generation)
                 .await;
         }
-        let (endpoint, provider, direct_debugger, provider_events, renderer_bridge) =
-            match configuration {
-                ConnectionConfiguration::DirectCdp { endpoint } => {
-                    (endpoint.clone(), None, false, None, false)
-                }
-                ConnectionConfiguration::NodeInspector { endpoint } => {
-                    (endpoint.clone(), None, true, None, false)
-                }
-                ConnectionConfiguration::Process { process_id } => {
-                    let launch = launch_provider(
-                        PROCESS_TREE_HELPER,
-                        "process",
-                        true,
-                        [
-                            ("JSDBG_PROCESS_ROOT_PID", process_id.to_string()),
-                            ("JSDBG_PROCESS_MODE", "single".to_owned()),
-                        ],
-                    )
-                    .await?;
-                    (
-                        launch.endpoint,
-                        Some(launch.child),
-                        true,
-                        launch.events,
-                        false,
-                    )
-                }
-                ConnectionConfiguration::ProcessTree { root_pid } => {
-                    let launch = launch_provider(
-                        PROCESS_TREE_HELPER,
-                        "process tree",
-                        true,
-                        [
-                            ("JSDBG_PROCESS_ROOT_PID", root_pid.to_string()),
-                            ("JSDBG_PROCESS_MODE", "tree".to_owned()),
-                        ],
-                    )
-                    .await?;
-                    (
-                        launch.endpoint,
-                        Some(launch.child),
-                        true,
-                        launch.events,
-                        true,
-                    )
-                }
-                ConnectionConfiguration::Playwright {
+        if let ConnectionConfiguration::ProcessTree { root_pid } = configuration {
+            return Self::connect_process_tree(*root_pid, connection_generation).await;
+        }
+        let (endpoint, provider, direct_debugger, provider_events) = match configuration {
+            ConnectionConfiguration::DirectCdp { endpoint } => {
+                (endpoint.clone(), None, false, None)
+            }
+            ConnectionConfiguration::NodeInspector { endpoint } => {
+                (endpoint.clone(), None, true, None)
+            }
+            ConnectionConfiguration::Process { process_id } => {
+                let launch = launch_provider(
+                    PROCESS_TREE_HELPER,
+                    "process",
+                    true,
+                    [
+                        ("JSDBG_PROCESS_ROOT_PID", process_id.to_string()),
+                        ("JSDBG_PROCESS_MODE", "single".to_owned()),
+                    ],
+                )
+                .await?;
+                (launch.endpoint, Some(launch.child), true, launch.events)
+            }
+            ConnectionConfiguration::Playwright {
+                url,
+                playwright_package,
+                channel,
+                headless,
+                ignore_https_errors,
+            } => {
+                let (endpoint, provider) = launch_playwright(
                     url,
-                    playwright_package,
+                    playwright_package.as_deref(),
                     channel,
-                    headless,
-                    ignore_https_errors,
-                } => {
-                    let (endpoint, provider) = launch_playwright(
-                        url,
-                        playwright_package.as_deref(),
-                        channel,
-                        *headless,
-                        *ignore_https_errors,
-                    )
-                    .await?;
-                    (endpoint, provider, false, None, false)
-                }
-                ConnectionConfiguration::Chrome {
-                    url,
-                    executable,
-                    headless,
-                    user_data_dir,
-                    args,
-                } => {
-                    let launch = launch_provider(
-                        CHROME_HELPER,
-                        "Chrome",
-                        false,
-                        [
-                            ("JSDBG_PROVIDER_URL", url.clone()),
-                            ("JSDBG_CHROME_EXECUTABLE", executable.clone()),
-                            (
-                                "JSDBG_PROVIDER_MODE",
-                                if *headless { "headless" } else { "headed" }.to_owned(),
-                            ),
-                            (
-                                "JSDBG_CHROME_USER_DATA_DIR",
-                                user_data_dir.clone().unwrap_or_default(),
-                            ),
-                            (
-                                "JSDBG_CHROME_ARGS",
-                                serde_json::to_string(args)
-                                    .expect("Chrome arguments always serialize"),
-                            ),
-                        ],
-                    )
-                    .await?;
-                    (launch.endpoint, Some(launch.child), false, None, false)
-                }
-                ConnectionConfiguration::Node {
-                    program,
-                    args,
-                    cwd,
-                    runtime_executable,
-                    runtime_args,
-                    env,
-                } => {
-                    let launch = launch_provider(
-                        NODE_HELPER,
-                        "Node.js",
-                        true,
-                        [
-                            ("JSDBG_NODE_PROGRAM", program.clone()),
-                            (
-                                "JSDBG_NODE_ARGS",
-                                serde_json::to_string(args)
-                                    .expect("Node.js arguments always serialize"),
-                            ),
-                            ("JSDBG_NODE_CWD", cwd.clone()),
-                            ("JSDBG_NODE_EXECUTABLE", runtime_executable.clone()),
-                            (
-                                "JSDBG_NODE_RUNTIME_ARGS",
-                                serde_json::to_string(runtime_args)
-                                    .expect("Node.js runtime arguments always serialize"),
-                            ),
-                            (
-                                "JSDBG_NODE_ENV",
-                                serde_json::to_string(env)
-                                    .expect("Node.js environment always serializes"),
-                            ),
-                        ],
-                    )
-                    .await?;
-                    (
-                        launch.endpoint,
-                        Some(launch.child),
-                        true,
-                        launch.events,
-                        false,
-                    )
-                }
-                ConnectionConfiguration::Stdio { .. } => unreachable!(),
-            };
+                    *headless,
+                    *ignore_https_errors,
+                )
+                .await?;
+                (endpoint, provider, false, None)
+            }
+            ConnectionConfiguration::Chrome {
+                url,
+                executable,
+                headless,
+                user_data_dir,
+                args,
+            } => {
+                let launch = launch_provider(
+                    CHROME_HELPER,
+                    "Chrome",
+                    false,
+                    [
+                        ("JSDBG_PROVIDER_URL", url.clone()),
+                        ("JSDBG_CHROME_EXECUTABLE", executable.clone()),
+                        (
+                            "JSDBG_PROVIDER_MODE",
+                            if *headless { "headless" } else { "headed" }.to_owned(),
+                        ),
+                        (
+                            "JSDBG_CHROME_USER_DATA_DIR",
+                            user_data_dir.clone().unwrap_or_default(),
+                        ),
+                        (
+                            "JSDBG_CHROME_ARGS",
+                            serde_json::to_string(args).expect("Chrome arguments always serialize"),
+                        ),
+                    ],
+                )
+                .await?;
+                (launch.endpoint, Some(launch.child), false, None)
+            }
+            ConnectionConfiguration::Node {
+                program,
+                args,
+                cwd,
+                runtime_executable,
+                runtime_args,
+                env,
+            } => {
+                let launch = launch_provider(
+                    NODE_HELPER,
+                    "Node.js",
+                    true,
+                    [
+                        ("JSDBG_NODE_PROGRAM", program.clone()),
+                        (
+                            "JSDBG_NODE_ARGS",
+                            serde_json::to_string(args)
+                                .expect("Node.js arguments always serialize"),
+                        ),
+                        ("JSDBG_NODE_CWD", cwd.clone()),
+                        ("JSDBG_NODE_EXECUTABLE", runtime_executable.clone()),
+                        (
+                            "JSDBG_NODE_RUNTIME_ARGS",
+                            serde_json::to_string(runtime_args)
+                                .expect("Node.js runtime arguments always serialize"),
+                        ),
+                        (
+                            "JSDBG_NODE_ENV",
+                            serde_json::to_string(env)
+                                .expect("Node.js environment always serializes"),
+                        ),
+                    ],
+                )
+                .await?;
+                (launch.endpoint, Some(launch.child), true, launch.events)
+            }
+            ConnectionConfiguration::ProcessTree { .. } | ConnectionConfiguration::Stdio { .. } => {
+                unreachable!()
+            }
+        };
         let cdp_result = if direct_debugger {
             CdpConnection::connect_root_debugger(
                 &endpoint,
@@ -228,36 +439,89 @@ impl ConnectionRuntime {
                 return Err(error.into());
             }
         };
-        let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
-        let renderer_bridge = if renderer_bridge {
-            match ElectronRendererBridge::install(cdp.clone()).await {
-                Ok(bridge) => Some(bridge),
-                Err(error) => {
-                    eprintln!("Electron renderer bridge is unavailable: {error}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let (provider_target_sender, provider_target_receiver) = mpsc::unbounded_channel();
         let runtime = Arc::new(Self {
             cdp,
             provider: provider.map(Mutex::new),
             direct_debugger,
             connection_generation,
             root_endpoint: endpoint,
+            virtual_root: None,
             direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
-            renderer_processes: std::sync::Mutex::new(BTreeMap::new()),
-            renderer_bridge,
             direct_debugger_attach_lock: Mutex::new(()),
-            provider_target_events: Mutex::new(Some(provider_target_events)),
+            provider_target_events: Mutex::new(Some(provider_target_receiver)),
             provider_target_sender,
+            pause_future_children: OnceLock::new(),
         });
         if let Some(events) = provider_events {
             runtime.supervise_provider_events(events, connection_generation);
         }
         Ok(runtime)
+    }
+
+    /// A process tree is exposed as a virtual browser root: the connection speaks the ordinary
+    /// CDP `Target` domain, and everything host specific (OS descendant scanning, Electron
+    /// renderer discovery) lives behind [`ProcessTreeTargetSource`].
+    async fn connect_process_tree(
+        root_pid: u32,
+        connection_generation: u64,
+    ) -> Result<Arc<Self>, ConnectionProviderError> {
+        let mut launch = launch_provider(
+            PROCESS_TREE_HELPER,
+            "process tree",
+            true,
+            [
+                ("JSDBG_PROCESS_ROOT_PID", root_pid.to_string()),
+                ("JSDBG_PROCESS_MODE", "tree".to_owned()),
+            ],
+        )
+        .await?;
+        let Some(control) = launch.child.stdin.take() else {
+            terminate_provider(&mut launch.child).await;
+            return Err(ConnectionProviderError::MissingStdioStdin);
+        };
+        let events = launch
+            .events
+            .expect("the process tree provider always captures events");
+        let started =
+            ProcessTreeTargetSource::start(root_pid, &launch.endpoint, control, events).await;
+        let (source, source_events) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                terminate_provider(&mut launch.child).await;
+                return Err(ConnectionProviderError::ProcessTree(error));
+            }
+        };
+        let virtual_root = match VirtualBrowserRoot::start(source, source_events) {
+            Ok(root) => root,
+            Err(error) => {
+                terminate_provider(&mut launch.child).await;
+                return Err(ConnectionProviderError::ProcessTree(error));
+            }
+        };
+        let cdp = match CdpConnection::connect_transport(virtual_root.clone()).await {
+            Ok(cdp) => Arc::new(cdp),
+            Err(error) => {
+                terminate_provider(&mut launch.child).await;
+                return Err(error.into());
+            }
+        };
+        let (provider_target_sender, provider_target_receiver) = mpsc::unbounded_channel();
+        Ok(Arc::new(Self {
+            cdp,
+            provider: Some(Mutex::new(launch.child)),
+            direct_debugger: false,
+            connection_generation,
+            root_endpoint: launch.endpoint,
+            virtual_root: Some(virtual_root),
+            direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debugger_attach_lock: Mutex::new(()),
+            provider_target_events: Mutex::new(Some(provider_target_receiver)),
+            provider_target_sender,
+            pause_future_children: OnceLock::new(),
+        }))
     }
 
     async fn connect_stdio(
@@ -294,13 +558,13 @@ impl ConnectionRuntime {
             direct_debugger,
             connection_generation,
             root_endpoint: format!("stdio:{command}"),
+            virtual_root: None,
             direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
-            renderer_processes: std::sync::Mutex::new(BTreeMap::new()),
-            renderer_bridge: None,
             direct_debugger_attach_lock: Mutex::new(()),
             provider_target_events: Mutex::new(Some(provider_target_events)),
             provider_target_sender,
+            pause_future_children: OnceLock::new(),
         }))
     }
 
@@ -312,10 +576,43 @@ impl ConnectionRuntime {
         self.cdp.open_session(session)
     }
 
+    pub fn debug_capability(
+        self: &Arc<Self>,
+        resource: ResourceId,
+        runtime_target_id: String,
+    ) -> Arc<dyn DebugCapability> {
+        ConnectionTargetDebugCapability::new(self, resource, runtime_target_id)
+    }
+
+    pub fn pause_future_children_capability(
+        self: &Arc<Self>,
+        root: ResourceId,
+        routes: BTreeMap<ResourceId, String>,
+    ) -> Option<Arc<dyn PauseFutureChildrenCapability>> {
+        self.virtual_root.as_ref()?;
+        let capability = self.pause_future_children.get_or_init(|| {
+            Arc::new(ConnectionPauseFutureChildrenCapability {
+                runtime: Arc::downgrade(self),
+                root,
+                leases: PauseChildrenLeaseRegistry::with_observer(Arc::new(PauseDemandObserver {
+                    runtime: Arc::downgrade(self),
+                })),
+                routes: std::sync::Mutex::new(BTreeMap::new()),
+            })
+        });
+        *capability.routes.lock().unwrap() = routes;
+        Some(capability.clone())
+    }
+
+    async fn set_wait_for_debugger_on_start(&self, enabled: bool) {
+        if let Some(root) = &self.virtual_root {
+            root.set_wait_for_debugger_on_start(enabled).await;
+        }
+    }
+
     pub async fn take_direct_debugger_session(
         self: &Arc<Self>,
         target_id: &str,
-        force: bool,
     ) -> Result<Option<DirectDebuggerAttachment>, CdpRuntimeError> {
         let _guard = self.direct_debugger_attach_lock.lock().await;
         if target_id == "$node-root"
@@ -349,48 +646,7 @@ impl ConnectionRuntime {
                 .cloned()
         };
         let Some(endpoint) = endpoint else {
-            let renderer_process_id = self
-                .renderer_processes
-                .lock()
-                .unwrap()
-                .get(target_id)
-                .copied();
-            let Some(renderer_process_id) = renderer_process_id else {
-                return Ok(None);
-            };
-            let bridge = self.renderer_bridge.as_ref().ok_or_else(|| {
-                CdpRuntimeError::Transport(
-                    "Electron renderer bridge is unavailable for this process tree".into(),
-                )
-            })?;
-            let target = bridge
-                .target_for_process(renderer_process_id)
-                .await
-                .map_err(CdpRuntimeError::Transport)?;
-            let (transport, stole_external_owner) = bridge
-                .attach(target_id.to_owned(), &target, force)
-                .await
-                .map_err(CdpRuntimeError::Transport)?;
-            let connection = Arc::new(
-                CdpConnection::connect_root_debugger_transport(
-                    transport,
-                    self.connection_generation,
-                    target_id.to_owned(),
-                )
-                .await?,
-            );
-            let session = connection
-                .take_root_debugger_session()
-                .expect("a new renderer debugger connection has a root session");
-            self.direct_debuggers
-                .lock()
-                .unwrap()
-                .insert(target_id.to_owned(), connection.clone());
-            supervise_direct_debugger(Arc::downgrade(self), target_id.to_owned(), connection);
-            return Ok(Some(DirectDebuggerAttachment {
-                session,
-                stole_external_owner,
-            }));
+            return Ok(None);
         };
         let connection = Arc::new(
             CdpConnection::connect_root_debugger(
@@ -424,28 +680,101 @@ impl ConnectionRuntime {
         }
     }
 
+    pub async fn close_attached_session(
+        &self,
+        direct_target_id: Option<&str>,
+        session_id: &str,
+    ) -> Result<(), CdpRuntimeError> {
+        if let Some(target_id) = direct_target_id {
+            self.close_direct_debugger(target_id).await;
+            return Ok(());
+        }
+        self.retire_session(session_id);
+        let mut detach = TargetDetachFromTargetParams::new();
+        detach.session_id = Some(session_id.to_owned());
+        self.root()
+            .target_detach_from_target(detach)
+            .await
+            .map_err(|error| {
+                CdpRuntimeError::Transport(format!("Target.detachFromTarget failed: {error:?}"))
+            })?;
+        Ok(())
+    }
+
     pub fn is_direct_debugger(&self) -> bool {
         self.direct_debugger
     }
 
-    pub fn playwright_cdp_source(&self) -> Result<PlaywrightCdpSource, ConnectionProviderError> {
-        if self.direct_debugger {
-            return Err(ConnectionProviderError::PlaywrightRequiresBrowserRoot);
-        }
-        if self.root_endpoint.starts_with("stdio:") {
-            return Err(ConnectionProviderError::PlaywrightRequiresWebSocketRoot);
-        }
-        Ok(PlaywrightCdpSource::BrowserRoot {
-            endpoint: self.root_endpoint.clone(),
-        })
+    /// True when the CDP root of this connection is jsdbg's own virtual browser root rather than
+    /// a real browser.
+    pub fn is_virtual_root(&self) -> bool {
+        self.virtual_root.is_some()
     }
 
-    pub fn renderer_process_id(&self, target_id: &str) -> Option<u32> {
-        self.renderer_processes
-            .lock()
-            .unwrap()
-            .get(target_id)
-            .copied()
+    /// The OS process behind a target, when the connection can tell. Real browsers do not expose
+    /// this through `Target`, so only the virtual root answers.
+    pub fn target_process_id(&self, target_id: &str) -> Option<u32> {
+        self.virtual_root
+            .as_ref()
+            .and_then(|root| root.target_process_id(target_id))
+    }
+
+    pub async fn refresh_targets(&self) -> Option<crate::virtual_browser_root::TargetObservation> {
+        Some(self.virtual_root.as_ref()?.refresh_targets().await)
+    }
+
+    pub fn observe_targets(&self) -> Option<crate::virtual_browser_root::TargetObservation> {
+        Some(self.virtual_root.as_ref()?.observe_targets())
+    }
+
+    pub async fn set_target_discovery(&self, enabled: bool) -> bool {
+        let Some(root) = &self.virtual_root else {
+            return false;
+        };
+        root.set_target_discovery(enabled).await;
+        true
+    }
+
+    /// True when the target is genuinely blocked waiting for a debugger to resume it.
+    pub fn target_waiting_for_debugger(&self, target_id: &str) -> bool {
+        self.virtual_root
+            .as_ref()
+            .is_some_and(|root| root.target_waiting_for_debugger(target_id))
+    }
+
+    /// Attaches to a target through the connection's `Target` domain. Virtual roots are called
+    /// in process because CDP has no way to express "evict the debugger that owns this target",
+    /// which jsdbg needs for `force`.
+    pub async fn attach_to_target(
+        &self,
+        target_id: &str,
+        force: bool,
+    ) -> Result<TargetAttachment, CdpRuntimeError> {
+        if let Some(root) = &self.virtual_root {
+            let attached = root
+                .attach_target(target_id, force)
+                .await
+                .map_err(|error| CdpRuntimeError::Transport(error.message))?;
+            return Ok(TargetAttachment {
+                session_id: attached.session_id,
+                stole_external_owner: attached.stole_external_owner,
+            });
+        }
+        let attached = self
+            .cdp
+            .root()
+            .target_attach_to_target(TargetAttachToTargetParams {
+                target_id: target_id.to_owned(),
+                flatten: Some(true),
+            })
+            .await
+            .map_err(|error| {
+                CdpRuntimeError::Transport(format!("Target.attachToTarget failed: {error:?}"))
+            })?;
+        Ok(TargetAttachment {
+            session_id: attached.session_id,
+            stole_external_owner: false,
+        })
     }
 
     pub fn retire_session(&self, session_id: &str) {
@@ -477,9 +806,6 @@ impl ConnectionRuntime {
         for connection in direct_debuggers.into_values() {
             connection.close().await;
         }
-        if let Some(bridge) = &self.renderer_bridge {
-            bridge.dispose().await;
-        }
         self.cdp.close().await;
         if let Some(provider) = &self.provider {
             let mut provider = provider.lock().await;
@@ -506,6 +832,7 @@ impl ConnectionRuntime {
                         title,
                         url,
                         endpoint,
+                        process_id: _,
                     } => {
                         let Some(endpoint) = endpoint else {
                             let _ =
@@ -580,11 +907,6 @@ impl ConnectionRuntime {
                             .lock()
                             .unwrap()
                             .remove(&target_id);
-                        runtime
-                            .renderer_processes
-                            .lock()
-                            .unwrap()
-                            .remove(&target_id);
                         let connection =
                             runtime.direct_debuggers.lock().unwrap().remove(&target_id);
                         if let Some(connection) = connection {
@@ -594,35 +916,8 @@ impl ConnectionRuntime {
                             .provider_target_sender
                             .send(ProviderTargetEvent::Removed(target_id));
                     }
-                    ProviderEvent::RendererTarget {
-                        target_id,
-                        parent_target_id,
-                        target_type,
-                        mut title,
-                        mut url,
-                        renderer_process_id,
-                    } => {
-                        runtime
-                            .renderer_processes
-                            .lock()
-                            .unwrap()
-                            .insert(target_id.clone(), renderer_process_id);
-                        if let Some(bridge) = &runtime.renderer_bridge
-                            && let Ok(target) = bridge.target_for_process(renderer_process_id).await
-                        {
-                            title = target.title;
-                            url = target.url;
-                        }
-                        let _ = runtime
-                            .provider_target_sender
-                            .send(ProviderTargetEvent::Upsert(node_target_snapshot(
-                                target_id,
-                                parent_target_id,
-                                target_type,
-                                title,
-                                url,
-                            )));
-                    }
+                    ProviderEvent::ScanComplete { .. } => {}
+                    ProviderEvent::ActivationComplete { .. } => {}
                 }
             }
         });
@@ -1085,10 +1380,10 @@ struct PlaywrightReady {
     error: Option<String>,
 }
 
-struct ProviderLaunch {
-    endpoint: String,
-    child: Child,
-    events: Option<mpsc::UnboundedReceiver<ProviderEvent>>,
+pub(crate) struct ProviderLaunch {
+    pub endpoint: String,
+    pub child: Child,
+    pub events: Option<mpsc::UnboundedReceiver<ProviderEvent>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1097,7 +1392,7 @@ struct ProviderLaunch {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-enum ProviderEvent {
+pub(crate) enum ProviderEvent {
     NodeTarget {
         target_id: String,
         parent_target_id: String,
@@ -1105,17 +1400,19 @@ enum ProviderEvent {
         title: String,
         url: String,
         endpoint: Option<String>,
+        process_id: Option<u32>,
     },
     NodeTargetRemoved {
         target_id: String,
     },
-    RendererTarget {
+    ScanComplete {
+        id: Option<u64>,
+    },
+    ActivationComplete {
+        id: Option<u64>,
         target_id: String,
-        parent_target_id: String,
-        target_type: Option<String>,
-        title: String,
-        url: String,
-        renderer_process_id: u32,
+        endpoint: Option<String>,
+        error: Option<String>,
     },
 }
 
@@ -1142,14 +1439,6 @@ pub enum ConnectionProviderError {
         "Playwright package entrypoint was not found at {0}; install dependencies or set JSDBG_PLAYWRIGHT_PACKAGE"
     )]
     PlaywrightPackageNotFound(PathBuf),
-    #[error(
-        "Playwright currently requires a browser-root CDP connection; direct Node and Electron renderer targets are not yet supported"
-    )]
-    PlaywrightRequiresBrowserRoot,
-    #[error(
-        "Playwright currently requires a WebSocket browser-root CDP connection; stdio browser connections are not yet supported"
-    )]
-    PlaywrightRequiresWebSocketRoot,
     #[error("Playwright provider did not expose stdout")]
     MissingProviderStdout,
     #[error("Playwright provider startup timed out")]
@@ -1182,6 +1471,8 @@ pub enum ConnectionProviderError {
     EmptyStdioCwd,
     #[error("stdio CDP process did not expose stdin")]
     MissingStdioStdin,
+    #[error("process tree connection failed: {0}")]
+    ProcessTree(String),
     #[error(transparent)]
     Cdp(#[from] CdpRuntimeError),
 }
