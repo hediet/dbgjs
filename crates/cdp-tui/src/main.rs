@@ -5,7 +5,7 @@ mod ui;
 use std::io::{self, stdout};
 use std::time::Duration;
 
-use app::{App, Tab};
+use app::{App, OutlineItem, Section, Tab};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -34,7 +34,7 @@ async fn run() -> Result<(), String> {
     let bootstrap = Bootstrap::connect(arguments.context.as_deref()).await?;
     let mut terminal = TerminalSession::open().map_err(|error| error.to_string())?;
     let (service_events, mut service_event_rx) = mpsc::channel(64);
-    let mut service = ServiceController::new(bootstrap.client, service_events);
+    let mut service = ServiceController::new(bootstrap.client, service_events, bootstrap.cwd);
     service.observe_context_after(bootstrap.context.id.clone(), bootstrap.context.revision);
     let mut app = App::new(
         bootstrap.contexts,
@@ -44,13 +44,14 @@ async fn run() -> Result<(), String> {
     let mut input = EventStream::new();
     let mut refresh = tokio::time::interval(Duration::from_secs(2));
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut observed_target = None;
+    let mut observed_targets = Vec::new();
+    let mut selected_source = None;
     request_active_data(&mut app, &mut service);
 
     loop {
         terminal
             .terminal
-            .draw(|frame| ui::render(frame, &app))
+            .draw(|frame| ui::render(frame, &mut app))
             .map_err(|error| error.to_string())?;
 
         tokio::select! {
@@ -74,10 +75,27 @@ async fn run() -> Result<(), String> {
             }
         }
 
-        let selected_target = app.selected_target();
-        if selected_target != observed_target {
-            observed_target = selected_target.clone();
-            service.set_target(selected_target);
+        let next_targets = app.observed_targets();
+        if next_targets != observed_targets {
+            observed_targets = next_targets.clone();
+            service.set_targets(next_targets);
+        }
+        let next_source = app.selected_source().map(|path| {
+            let revision = app.source_revision_token(&path);
+            (
+                app.context_id().to_owned(),
+                path,
+                app.source_kind(),
+                revision,
+            )
+        });
+        if next_source != selected_source {
+            selected_source = next_source.clone();
+            app.set_source_content(None);
+            service.set_source(
+                next_source
+                    .map(|(context_id, path, source_kind, _)| (context_id, path, source_kind)),
+            );
         }
     }
     Ok(())
@@ -85,28 +103,53 @@ async fn run() -> Result<(), String> {
 
 fn handle_key(key: KeyEvent, app: &mut App, service: &mut ServiceController) -> bool {
     match key.code {
+        KeyCode::Esc if app.document_focused() => app.leave_document(),
         KeyCode::Char('q') | KeyCode::Esc => return true,
         KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => app.next_tab(-1),
         KeyCode::Tab => app.next_tab(1),
         KeyCode::BackTab => app.next_tab(-1),
-        KeyCode::Char(character @ '1'..='6') => {
+        KeyCode::Char(character @ '1'..='2') => {
             app.set_tab(Tab::ALL[(character as u8 - b'1') as usize]);
         }
         KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
         KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
         KeyCode::Home | KeyCode::Char('g') => app.select_edge(false),
         KeyCode::End | KeyCode::Char('G') => app.select_edge(true),
-        KeyCode::Left | KeyCode::Char('h') => app.set_expanded(false),
-        KeyCode::Right | KeyCode::Char('l') => app.set_expanded(true),
-        KeyCode::Enter => app.toggle_expanded(),
-        KeyCode::Char(' ') => perform_selected(app, service, false),
-        KeyCode::Char('f') if app.tab() == Tab::Targets => {
-            perform_selected(app, service, true);
+        KeyCode::Left | KeyCode::Char('h') => app.navigate_left(),
+        KeyCode::Right | KeyCode::Char('l') => app.navigate_right(),
+        KeyCode::Enter => {
+            if let Some(context_id) = app.selected_context_id().map(str::to_owned)
+                && let Some(context_id) = app.select_context_id(&context_id)
+            {
+                service.switch_context(context_id);
+            } else {
+                app.open_selected();
+            }
         }
-        KeyCode::Char('d') | KeyCode::Delete if app.tab() == Tab::Connections => {
+        KeyCode::Char(' ')
+            if app.selected_section() == Section::Processes
+                && matches!(
+                    app.selected_row().map(|row| row.item),
+                    Some(OutlineItem::Process { .. } | OutlineItem::ProcessWindow { .. })
+                ) =>
+        {
+            perform_connection_configuration_toggle(app, service);
+        }
+        KeyCode::Char(' ') => app.toggle_expanded(),
+        KeyCode::Char('c') => perform_connect(app, service),
+        KeyCode::Char('a') if app.selected_section() == Section::Targets => {
+            perform_target_attachment(app, service, false);
+        }
+        KeyCode::Char('f') if app.selected_section() == Section::Targets => {
+            perform_target_attachment(app, service, true);
+        }
+        KeyCode::Char('d') | KeyCode::Delete if app.selected_section() == Section::Connections => {
             perform_delete_connection(app, service);
         }
-        KeyCode::Char('m') if app.tab() == Tab::Sources => app.toggle_source_kind(),
+        KeyCode::Char('m') if app.selected_section() == Section::Sources => {
+            app.toggle_source_kind()
+        }
+        KeyCode::Char('b') if app.document_focused() => perform_breakpoint_toggle(app, service),
         KeyCode::Char('[') => {
             let context_id = app.select_context(-1);
             service.switch_context(context_id);
@@ -115,15 +158,45 @@ fn handle_key(key: KeyEvent, app: &mut App, service: &mut ServiceController) -> 
             let context_id = app.select_context(1);
             service.switch_context(context_id);
         }
-        KeyCode::Char('r') => request_active_data(app, service),
+        KeyCode::Char('r') => app.refresh_active_data(),
         _ => {}
     }
     request_active_data(app, service);
     false
 }
 
-fn perform_selected(app: &mut App, service: &ServiceController, force: bool) {
-    match app.action_for_selected(force) {
+fn perform_target_attachment(app: &mut App, service: &ServiceController, force: bool) {
+    match app.target_action_for_selected(force) {
+        Ok(action) => {
+            app.begin_action(&action);
+            service.perform(action);
+        }
+        Err(error) => app.set_error(error),
+    }
+}
+
+fn perform_connect(app: &mut App, service: &ServiceController) {
+    match app.connect_action_for_selected() {
+        Ok(action) => {
+            app.begin_action(&action);
+            service.perform(action);
+        }
+        Err(error) => app.set_error(error),
+    }
+}
+
+fn perform_connection_configuration_toggle(app: &mut App, service: &ServiceController) {
+    match app.toggle_connection_configuration_action_for_selected() {
+        Ok(action) => {
+            app.begin_action(&action);
+            service.perform(action);
+        }
+        Err(error) => app.set_error(error),
+    }
+}
+
+fn perform_breakpoint_toggle(app: &mut App, service: &ServiceController) {
+    match app.breakpoint_action_for_source_line() {
         Ok(action) => {
             app.begin_action(&action);
             service.perform(action);
@@ -143,36 +216,90 @@ fn perform_delete_connection(app: &mut App, service: &ServiceController) {
 }
 
 fn request_active_data(app: &mut App, service: &mut ServiceController) {
-    let tab = app.tab();
-    if !matches!(tab, Tab::Processes | Tab::Sources | Tab::Captures) || !app.begin_loading(tab) {
-        return;
+    let mut sections = app
+        .sections()
+        .iter()
+        .copied()
+        .filter(|section| !app.is_section_collapsed(*section))
+        .collect::<Vec<_>>();
+    if app.tab() == Tab::Runtime
+        && !app.is_section_collapsed(Section::Connections)
+        && !sections.contains(&Section::Processes)
+    {
+        sections.push(Section::Processes);
     }
-    service.load(tab, app.context_id().to_owned(), app.source_kind());
+    for section in sections {
+        if !matches!(
+            section,
+            Section::Contexts
+                | Section::Processes
+                | Section::Connections
+                | Section::Sources
+                | Section::Captures
+        ) || !app.needs_load(section)
+            || !app.begin_loading(section)
+        {
+            continue;
+        }
+        service.load(
+            section,
+            app.context_id().to_owned(),
+            app.source_kind(),
+            app.demanded_process_roots(),
+        );
+    }
 }
 
 fn handle_service_event(event: ServiceEvent, app: &mut App, service: &ServiceController) {
     match event {
         ServiceEvent::Context(snapshot) => app.apply_context(snapshot),
         ServiceEvent::ContextError(error) => app.set_error(error),
-        ServiceEvent::TargetDetail { generation, detail } => {
+        ServiceEvent::TargetDetail {
+            generation,
+            target,
+            detail,
+        } => {
             if generation == service.target_generation() {
-                app.set_target_detail(detail);
+                if detail.is_some() {
+                    app.set_target_detail(detail);
+                } else {
+                    app.remove_target_detail(&target.connection_id, &target.target_id);
+                }
             }
         }
         ServiceEvent::DataLoaded {
-            tab,
+            section,
             context_id,
             generation,
             result,
         } => {
-            if context_id != app.context_id() || generation != service.load_generation(tab) {
+            if context_id != app.context_id() || generation != service.load_generation(section) {
                 return;
             }
-            app.finish_loading(tab);
+            app.finish_loading(section);
             match result {
+                Ok(Data::Contexts(contexts)) => app.set_contexts(contexts),
                 Ok(Data::Processes(processes)) => app.set_processes(processes),
+                Ok(Data::Resources(resources)) => app.set_resources(resources),
                 Ok(Data::Sources(sources)) => app.set_sources(sources),
                 Ok(Data::Captures(captures)) => app.set_captures(captures),
+                Err(error) => app.set_error(error),
+            }
+        }
+        ServiceEvent::SourceLoaded {
+            context_id,
+            path,
+            generation,
+            result,
+        } => {
+            if context_id != app.context_id()
+                || generation != service.source_generation()
+                || app.selected_source().as_deref() != Some(path.as_str())
+            {
+                return;
+            }
+            match result {
+                Ok(content) => app.set_source_content(Some(content)),
                 Err(error) => app.set_error(error),
             }
         }
@@ -243,14 +370,18 @@ fn usage() -> &'static str {
     "usage: jsdbg-tui [--context <path|:id>]
 
 keys:
-  Tab / Shift+Tab, 1-6  switch tabs
+  Tab / Shift+Tab, 1-2  switch Runtime / Debug
   j/k, Up/Down          move selection
-  h/l, Left/Right       collapse/expand
-  Space                 attach process or toggle connection/target
+  h/l, Left/Right       move to parent / remembered child
+  Space                 collapse/expand
+  c                     configure/connect/disconnect access path
+  a                     attach/detach target
   f                     force target attachment
   d / Delete            remove an inactive connection
   m                     cycle source maps/formatted/no projection
+  Enter                 expand/collapse or open a source
+  b                     toggle breakpoint at the selected source line
   [ / ]                 switch context
-  r                     refresh active view
+  r                     query visible TUI data again
   q                     quit"
 }

@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
-use futures_util::{StreamExt, stream};
+use futures_util::{StreamExt, future::join_all, stream};
 use globset::{Glob, GlobMatcher};
 use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
@@ -336,7 +336,7 @@ impl DebuggerService {
                 if !runtime_is_current {
                     break;
                 }
-                let Some((targets, change)) = prepare_connection_target_update(
+                let Some((targets, change, removed_targets)) = prepare_connection_target_update(
                     &state,
                     &context_id,
                     &connection_id,
@@ -357,18 +357,18 @@ impl DebuggerService {
                 if transition.change == crate::context_engine::ContextChange::None {
                     continue;
                 }
-                let retracted_sessions = match &change {
-                    TargetGraphChange::Removed { target_id } => debug_session_sources_for_target(
-                        &state,
-                        &context_id,
-                        &connection_id,
-                        generation,
-                        target_id,
-                    ),
-                    TargetGraphChange::Created { .. } | TargetGraphChange::Changed { .. } => {
-                        Vec::new()
-                    }
-                };
+                let retracted_sessions = removed_targets
+                    .iter()
+                    .flat_map(|target_id| {
+                        debug_session_sources_for_target(
+                            &state,
+                            &context_id,
+                            &connection_id,
+                            generation,
+                            target_id,
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 if let Err(error) = stage_connection_resource_graph(
                     &mut state,
                     &context_id,
@@ -383,12 +383,8 @@ impl DebuggerService {
                     runtime.close().await;
                     break;
                 }
-                let removed_target = match change {
-                    TargetGraphChange::Removed { target_id } => Some(target_id),
-                    TargetGraphChange::Created { .. } | TargetGraphChange::Changed { .. } => None,
-                };
                 service.commit_context(&mut state, &context_id, transition);
-                if let Some(target_id) = removed_target.as_deref() {
+                for target_id in &removed_targets {
                     cancel_playwright_proxies_for_target(
                         &mut state,
                         &context_id,
@@ -397,15 +393,11 @@ impl DebuggerService {
                     );
                     remove_debugger_registration(
                         &mut state,
-                        &(
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id.to_owned(),
-                        ),
+                        &(context_id.clone(), connection_id.clone(), target_id.clone()),
                     );
                 }
                 drop(state);
-                if let Some(target_id) = removed_target {
+                for target_id in removed_targets {
                     service
                         .release_relay_attachments_for_target(
                             &context_id,
@@ -436,15 +428,11 @@ impl DebuggerService {
                 generation,
             };
             while let Some(event) = events.recv().await {
-                let (update, target_to_attach, target_to_remove) = match event {
+                let (update, target_to_attach) = match event {
                     crate::connection_provider::ProviderTargetEvent::Upsert(target) => {
                         let target = canonicalize_synthetic_target(target, &connection_id);
                         let target_id = target.target_id.clone();
-                        (
-                            ConnectionTargetUpdate::Upsert(target),
-                            Some(target_id),
-                            None,
-                        )
+                        (ConnectionTargetUpdate::Upsert(target), Some(target_id))
                     }
                     crate::connection_provider::ProviderTargetEvent::Removed(target_id) => (
                         ConnectionTargetUpdate::Remove(canonicalize_synthetic_target_id(
@@ -452,7 +440,6 @@ impl DebuggerService {
                             &connection_id,
                         )),
                         None,
-                        Some(canonicalize_synthetic_target_id(&target_id, &connection_id)),
                     ),
                 };
                 let mut state = service.state.lock().await;
@@ -466,7 +453,7 @@ impl DebuggerService {
                 if !runtime_is_current {
                     break;
                 }
-                let Some((targets, change)) = prepare_connection_target_update(
+                let Some((targets, change, removed_targets)) = prepare_connection_target_update(
                     &state,
                     &context_id,
                     &connection_id,
@@ -484,9 +471,9 @@ impl DebuggerService {
                     }),
                 )
                 .expect("provider target graph observations do not fail");
-                let retracted_sessions = target_to_remove
-                    .as_deref()
-                    .map(|target_id| {
+                let retracted_sessions = removed_targets
+                    .iter()
+                    .flat_map(|target_id| {
                         debug_session_sources_for_target(
                             &state,
                             &context_id,
@@ -495,7 +482,7 @@ impl DebuggerService {
                             target_id,
                         )
                     })
-                    .unwrap_or_default();
+                    .collect::<Vec<_>>();
                 if let Err(error) = stage_connection_resource_graph(
                     &mut state,
                     &context_id,
@@ -511,7 +498,7 @@ impl DebuggerService {
                     break;
                 }
                 service.commit_context(&mut state, &context_id, transition);
-                if let Some(target_id) = target_to_remove.as_deref() {
+                for target_id in &removed_targets {
                     cancel_playwright_proxies_for_target(
                         &mut state,
                         &context_id,
@@ -520,15 +507,11 @@ impl DebuggerService {
                     );
                     remove_debugger_registration(
                         &mut state,
-                        &(
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id.to_owned(),
-                        ),
+                        &(context_id.clone(), connection_id.clone(), target_id.clone()),
                     );
                 }
                 drop(state);
-                if let Some(target_id) = target_to_remove {
+                for target_id in removed_targets {
                     service
                         .release_relay_attachments_for_target(
                             &context_id,
@@ -726,6 +709,7 @@ fn context_event_snapshot(event: &crate::context_engine::RevisionEvent) -> Conte
 struct ServiceState {
     contexts: BTreeMap<String, Arc<ContextState>>,
     resource_graphs: BTreeMap<String, SharedResourceGraph>,
+    process_projections: BTreeMap<String, Vec<ProcessTreeSnapshot>>,
     source_models: BTreeMap<String, Arc<ContextSourceModel>>,
     context_kinds: BTreeMap<String, ContextKind>,
     runtimes: BTreeMap<(String, String), Arc<ConnectionRuntime>>,
@@ -1364,6 +1348,44 @@ impl DebuggerServiceApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))
     }
 
+    async fn get_process_projection(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        expanded_root_process_ids: Vec<u32>,
+    ) -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError> {
+        let expanded = expanded_root_process_ids
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut trees = crate::process_discovery::discover_recognized_process_trees()
+            .await
+            .map_err(|error| internal_error(error.to_string()))?;
+        let mut covered_processes = BTreeSet::new();
+        trees.retain(|tree| {
+            if covered_processes.contains(&tree.root_process_id) {
+                return false;
+            }
+            covered_processes.extend(tree.processes.iter().map(|process| process.process_id));
+            true
+        });
+        for tree in &mut trees {
+            if expanded.contains(&tree.root_process_id) {
+                crate::process_discovery::populate_process_tree_targets(std::slice::from_mut(tree))
+                    .await;
+            }
+        }
+        let mut state = self.state.lock().await;
+        if !state.contexts.contains_key(&context_id) {
+            return Err(not_found("context", &context_id));
+        }
+        if state.process_projections.get(&context_id) != Some(&trees) {
+            stage_process_resource_graph(&mut state, &context_id, &trees)
+                .map_err(internal_error)?;
+            state.process_projections.insert(context_id, trees.clone());
+        }
+        Ok(trees)
+    }
+
     async fn list_contexts(
         &self,
         _ctx: &CallCtx,
@@ -1583,6 +1605,7 @@ impl DebuggerServiceApi for DebuggerService {
                 return Err(not_found("context", &context_id));
             }
             state.resource_graphs.remove(&context_id);
+            state.process_projections.remove(&context_id);
             state.context_kinds.remove(&context_id);
             self.complete_request(&mut state, &context_id, &options, 0);
             state.history.remove(&context_id);
@@ -1747,6 +1770,7 @@ impl DebuggerServiceApi for DebuggerService {
                 BTreeMap::new(),
             ),
         };
+        let targets = filter_target_snapshot_scope(Some(&configuration), targets);
         let transition = match reduce_context(&context, ContextInput::EffectCompletion(completion))
         {
             Ok(transition) => transition,
@@ -2545,13 +2569,40 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         kind: SourceTreeKind,
     ) -> Result<SourceTreeSnapshot, JsonRpcError> {
-        let model = {
+        let (model, debuggers) = {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
                 return Err(not_found("context", &context_id));
             }
-            state.source_models.get(&context_id).cloned()
+            (
+                state.source_models.get(&context_id).cloned(),
+                state
+                    .target_debuggers
+                    .iter()
+                    .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                    .map(|(_, debugger)| debugger.clone())
+                    .collect::<Vec<_>>(),
+            )
         };
+        if matches!(
+            kind,
+            SourceTreeKind::SourceMapped | SourceTreeKind::Formatted | SourceTreeKind::Resolved
+        ) {
+            let include_unmapped = kind != SourceTreeKind::SourceMapped;
+            for result in join_all(
+                debuggers
+                    .iter()
+                    .map(|debugger| debugger.hydrate_sources(include_unmapped)),
+            )
+            .await
+            {
+                if let Err(error) = result
+                    && !matches!(error, TargetDebuggerError::Stopped)
+                {
+                    return Err(target_debugger_rpc_error(error));
+                }
+            }
+        }
         let sources = model.map_or_else(Vec::new, |model| match kind {
             SourceTreeKind::Loaded => model.loaded_sources(),
             SourceTreeKind::SourceMapped => model.source_mapped_loaded_sources(),
@@ -6263,7 +6314,8 @@ fn resource_id_for_target(
     let runtime_target_id = runtime_target_id(&target.target_id, connection_id);
     if target.subtype.as_deref() == Some("electron-renderer") {
         let root = match &connection.configuration {
-            ConnectionConfiguration::ProcessTree { root_pid } => root_pid.to_string(),
+            ConnectionConfiguration::ProcessTree { root_pid }
+            | ConnectionConfiguration::ScopedProcessTree { root_pid, .. } => root_pid.to_string(),
             _ => connection_id.to_owned(),
         };
         return ResourceId::from_parts("electron-web-contents", [root, runtime_target_id])
@@ -6331,7 +6383,8 @@ fn sync_connection_resource_graph(
         ConnectionConfiguration::DirectCdp { .. }
         | ConnectionConfiguration::Chrome { .. }
         | ConnectionConfiguration::Playwright { .. } => "browser",
-        ConnectionConfiguration::ProcessTree { .. } => "process-tree",
+        ConnectionConfiguration::ProcessTree { .. }
+        | ConnectionConfiguration::ScopedProcessTree { .. } => "process-tree",
         ConnectionConfiguration::NodeInspector { .. }
         | ConnectionConfiguration::Process { .. }
         | ConnectionConfiguration::Node { .. } => "runtime",
@@ -6476,6 +6529,234 @@ fn stage_connection_resource_graph(
     Ok(())
 }
 
+fn stage_process_resource_graph(
+    state: &mut ServiceState,
+    context_id: &str,
+    trees: &[ProcessTreeSnapshot],
+) -> Result<(), String> {
+    let graph = state
+        .resource_graphs
+        .entry(context_id.to_owned())
+        .or_default()
+        .clone();
+    let source = SourceId::new("process-discovery");
+    graph.try_update(|graph| {
+        graph.retract_source(&source);
+        let mut delta = GraphDelta::for_source(source);
+        let mut upserts = BTreeMap::<ResourceId, ResourceUpsert>::new();
+        for tree in trees {
+            let process_ids = tree
+                .processes
+                .iter()
+                .map(|process| (process.process_id, process_resource_id(process.process_id)))
+                .collect::<BTreeMap<_, _>>();
+            for process in &tree.processes {
+                let process_id = process_ids[&process.process_id].clone();
+                let facts = ResourceFacts::of_kind(ResourceKind::process())
+                    .with_label(
+                        process
+                            .display_name
+                            .as_deref()
+                            .or(process.window_title.as_deref())
+                            .unwrap_or(&process.name),
+                    )
+                    .with_attribute("processId", serde_json::Value::from(process.process_id))
+                    .with_attribute(
+                        "rootProcessId",
+                        serde_json::Value::from(tree.root_process_id),
+                    )
+                    .with_attribute(
+                        "role",
+                        serde_json::to_value(&process.role)
+                            .expect("process roles are serializable"),
+                    )
+                    .with_attribute(
+                        "commandLine",
+                        serde_json::Value::String(process.command_line.clone()),
+                    )
+                    .with_attribute(
+                        "creationDate",
+                        serde_json::Value::String(process.creation_date.clone()),
+                    )
+                    .with_attribute("attachable", serde_json::Value::Bool(process.attachable));
+                upserts
+                    .entry(process_id.clone())
+                    .or_insert_with(|| ResourceUpsert::new(process_id.clone(), facts));
+                if let Some(parent_id) = process
+                    .parent_process_id
+                    .and_then(|parent_id| process_ids.get(&parent_id))
+                {
+                    delta =
+                        delta.relate(RelationKind::Spawned, parent_id.clone(), process_id.clone());
+                }
+                for session in &process.agent_sessions {
+                    let session_id =
+                        ResourceId::from_parts("agent-session", [session.internal_id.as_str()])
+                            .map_err(|error| error.to_string())?;
+                    let mut facts = ResourceFacts::of_kind(ResourceKind::new("agent-session"))
+                        .with_label(session.title.as_deref().unwrap_or(&session.internal_id))
+                        .with_attribute(
+                            "internalId",
+                            serde_json::Value::String(session.internal_id.clone()),
+                        )
+                        .with_attribute(
+                            "workingDirectories",
+                            serde_json::to_value(&session.working_directories)
+                                .expect("working directories are serializable"),
+                        );
+                    if let Some(chat_uri) = &session.chat_uri {
+                        facts = facts
+                            .with_attribute("chatUri", serde_json::Value::String(chat_uri.clone()));
+                    }
+                    if let Some(disconnected) = session.disconnected {
+                        facts = facts
+                            .with_attribute("disconnected", serde_json::Value::Bool(disconnected));
+                    }
+                    upserts
+                        .entry(session_id.clone())
+                        .or_insert_with(|| ResourceUpsert::new(session_id.clone(), facts));
+                    delta = delta.relate(RelationKind::Contains, process_id.clone(), session_id);
+                }
+            }
+
+            let windows = tree
+                .processes
+                .iter()
+                .filter_map(|process| {
+                    process
+                        .window_id
+                        .map(|window_id| (window_id, process.window_title.as_deref()))
+                })
+                .fold(
+                    BTreeMap::<u32, Option<&str>>::new(),
+                    |mut windows, (window_id, title)| {
+                        windows
+                            .entry(window_id)
+                            .and_modify(|current| {
+                                if current.is_none() {
+                                    *current = title;
+                                }
+                            })
+                            .or_insert(title);
+                        windows
+                    },
+                );
+            for (window_id, title) in windows {
+                let window = ResourceId::from_parts(
+                    "vscode-window",
+                    [tree.root_process_id.to_string(), window_id.to_string()],
+                )
+                .map_err(|error| error.to_string())?;
+                let facts = ResourceFacts::of_kind(ResourceKind::new("vscode-window"))
+                    .with_label(
+                        title
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("window {window_id}")),
+                    )
+                    .with_attribute("windowId", serde_json::Value::from(window_id))
+                    .with_attribute(
+                        "rootProcessId",
+                        serde_json::Value::from(tree.root_process_id),
+                    );
+                upserts
+                    .entry(window.clone())
+                    .or_insert_with(|| ResourceUpsert::new(window.clone(), facts));
+                if let Some(root) = process_ids.get(&tree.root_process_id) {
+                    delta = delta.relate(RelationKind::Contains, root.clone(), window.clone());
+                }
+                for process in tree
+                    .processes
+                    .iter()
+                    .filter(|process| process.window_id == Some(window_id))
+                {
+                    delta = delta.relate(
+                        RelationKind::Contains,
+                        window.clone(),
+                        process_ids[&process.process_id].clone(),
+                    );
+                }
+            }
+
+            let target_ids = tree
+                .targets
+                .iter()
+                .map(|target| {
+                    let id = if target.target.subtype.as_deref() == Some("electron-renderer") {
+                        ResourceId::from_parts(
+                            "electron-web-contents",
+                            [
+                                tree.root_process_id.to_string(),
+                                target.target.target_id.as_str().to_owned(),
+                            ],
+                        )
+                    } else {
+                        ResourceId::from_parts(
+                            "discovered-target",
+                            [
+                                tree.root_process_id.to_string(),
+                                target.target.target_id.as_str().to_owned(),
+                            ],
+                        )
+                    }
+                    .expect("process target identity parts are non-empty");
+                    (target.target.target_id.as_str(), id)
+                })
+                .collect::<BTreeMap<_, _>>();
+            for target in &tree.targets {
+                let target_id = target_ids[target.target.target_id.as_str()].clone();
+                let facts = ResourceFacts::of_kind(ResourceKind::new(&target.target.target_type))
+                    .with_label(if target.target.title.is_empty() {
+                        &target.target.target_id
+                    } else {
+                        &target.target.title
+                    })
+                    .with_attribute(
+                        "targetId",
+                        serde_json::Value::String(target.target.target_id.clone()),
+                    )
+                    .with_attribute(
+                        "rootProcessId",
+                        serde_json::Value::from(tree.root_process_id),
+                    );
+                let facts = if let Some(process_id) = target.process_id {
+                    facts.with_attribute("processId", serde_json::Value::from(process_id))
+                } else {
+                    facts
+                };
+                let facts = if let Some(subtype) = &target.target.subtype {
+                    facts.with_attribute("subtype", serde_json::Value::String(subtype.clone()))
+                } else {
+                    facts
+                };
+                upserts
+                    .entry(target_id.clone())
+                    .or_insert_with(|| ResourceUpsert::new(target_id.clone(), facts));
+                if let Some(parent) = target
+                    .target
+                    .parent_id
+                    .as_deref()
+                    .and_then(|parent| target_ids.get(parent))
+                {
+                    delta = delta.relate(RelationKind::Contains, parent.clone(), target_id.clone());
+                } else if let Some(process) = target
+                    .process_id
+                    .and_then(|process_id| process_ids.get(&process_id))
+                {
+                    delta = delta.relate(RelationKind::Hosts, process.clone(), target_id.clone());
+                }
+            }
+        }
+        delta.upserts.extend(upserts.into_values());
+        graph.apply(delta).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+}
+
+fn process_resource_id(process_id: u32) -> ResourceId {
+    ResourceId::from_parts("process", [format!("pid-{process_id}")])
+        .expect("process identities are non-empty")
+}
+
 fn retract_connection_resource_graph(
     state: &mut ServiceState,
     context_id: &str,
@@ -6575,12 +6856,18 @@ fn context_connection_targets(
     connection_id: &str,
     generation: u64,
 ) -> BTreeMap<String, ConnectionTargetResource> {
-    state
+    let targets = state
         .resource_graphs
         .get(context_id)
         .map(GraphSink::snapshot)
         .map(|snapshot| connection_targets_from_graph(&snapshot, connection_id, generation))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let configuration = state
+        .contexts
+        .get(context_id)
+        .and_then(|context| context.connections.get(connection_id))
+        .map(|connection| &connection.configuration);
+    filter_connection_scope(configuration, targets)
 }
 
 fn context_connection_target(
@@ -6609,26 +6896,53 @@ fn prepare_connection_target_update(
     connection_id: &str,
     generation: u64,
     update: ConnectionTargetUpdate,
-) -> Option<(BTreeMap<String, TargetSnapshot>, TargetGraphChange)> {
+) -> Option<(
+    BTreeMap<String, TargetSnapshot>,
+    TargetGraphChange,
+    Vec<String>,
+)> {
+    let configuration = state
+        .contexts
+        .get(context_id)
+        .and_then(|context| context.connections.get(connection_id))
+        .map(|connection| &connection.configuration);
     let mut targets = context_connection_targets(state, context_id, connection_id, generation)
         .into_iter()
         .map(|(target_id, resource)| (target_id, resource.target))
         .collect::<BTreeMap<_, _>>();
-    match update {
+    let previous_target_ids = targets.keys().cloned().collect::<BTreeSet<_>>();
+    let (targets, change) = match update {
         ConnectionTargetUpdate::Upsert(target) => {
             let target_id = target.target_id.clone();
             let change = match targets.insert(target_id.clone(), target) {
                 Some(previous) if previous == targets[&target_id] => return None,
-                Some(_) => TargetGraphChange::Changed { target_id },
-                None => TargetGraphChange::Created { target_id },
+                Some(_) => TargetGraphChange::Changed {
+                    target_id: target_id.clone(),
+                },
+                None => TargetGraphChange::Created {
+                    target_id: target_id.clone(),
+                },
             };
-            Some((targets, change))
+            let targets = filter_target_snapshot_scope(configuration, targets);
+            if !targets.contains_key(&target_id) {
+                return None;
+            }
+            (targets, change)
         }
         ConnectionTargetUpdate::Remove(target_id) => {
             targets.remove(&target_id)?;
-            Some((targets, TargetGraphChange::Removed { target_id }))
+            (
+                filter_target_snapshot_scope(configuration, targets),
+                TargetGraphChange::Removed { target_id },
+            )
         }
-    }
+    };
+    let target_ids = targets.keys().cloned().collect::<BTreeSet<_>>();
+    let removed_targets = previous_target_ids
+        .difference(&target_ids)
+        .cloned()
+        .collect();
+    Some((targets, change, removed_targets))
 }
 
 fn debugged_resources(snapshot: &crate::resource_graph::GraphSnapshot) -> BTreeSet<ResourceId> {
@@ -6638,6 +6952,67 @@ fn debugged_resources(snapshot: &crate::resource_graph::GraphSnapshot) -> BTreeS
         .filter(|relation| relation.relation.kind == RelationKind::Debugs)
         .map(|relation| relation.relation.to.clone())
         .collect()
+}
+
+fn filter_connection_scope(
+    configuration: Option<&ConnectionConfiguration>,
+    targets: BTreeMap<String, ConnectionTargetResource>,
+) -> BTreeMap<String, ConnectionTargetResource> {
+    let parents = targets
+        .iter()
+        .map(|(id, target)| (id.clone(), target.target.parent_id.clone()))
+        .collect();
+    let visible = target_ids_in_connection_scope(configuration, parents);
+    targets
+        .into_iter()
+        .filter(|(target_id, _)| visible.contains(target_id))
+        .collect()
+}
+
+fn filter_target_snapshot_scope(
+    configuration: Option<&ConnectionConfiguration>,
+    targets: BTreeMap<String, TargetSnapshot>,
+) -> BTreeMap<String, TargetSnapshot> {
+    let parents = targets
+        .iter()
+        .map(|(id, target)| (id.clone(), target.parent_id.clone()))
+        .collect();
+    let visible = target_ids_in_connection_scope(configuration, parents);
+    targets
+        .into_iter()
+        .filter(|(target_id, _)| visible.contains(target_id))
+        .collect()
+}
+
+fn target_ids_in_connection_scope(
+    configuration: Option<&ConnectionConfiguration>,
+    parents: BTreeMap<String, Option<String>>,
+) -> BTreeSet<String> {
+    let Some(ConnectionConfiguration::ScopedProcessTree { target_id, .. }) = configuration else {
+        return parents.into_keys().collect();
+    };
+    parents
+        .keys()
+        .filter(|candidate| target_is_within_scope(candidate, target_id, &parents))
+        .cloned()
+        .collect()
+}
+
+fn target_is_within_scope(
+    candidate: &str,
+    scope_root: &str,
+    parents: &BTreeMap<String, Option<String>>,
+) -> bool {
+    let mut current = Some(candidate);
+    let mut visited = BTreeSet::new();
+    while let Some(target_id) = current.filter(|target_id| visited.insert((*target_id).to_owned()))
+    {
+        if target_id == scope_root {
+            return true;
+        }
+        current = parents.get(target_id).and_then(Option::as_deref);
+    }
+    false
 }
 
 fn debug_session_sources_for_target(
@@ -6809,6 +7184,7 @@ fn resource_graph_api_snapshot(
                 .into_iter()
                 .map(|capability| ResourceCapabilitySnapshot {
                     source: capability.source.to_string(),
+                    handle: capability.handle.0,
                     kind: capability_kind_name(capability.kind).to_owned(),
                     title: capability.summary.title,
                     detail: capability.summary.detail,
@@ -7016,6 +7392,7 @@ fn snapshot(
                     connection_targets_from_graph(graph, connection_id, connection.generation)
                 })
                 .unwrap_or_default();
+            let targets = filter_connection_scope(Some(&connection.configuration), targets);
             target_resources.extend(targets.iter().map(|(target_id, target)| {
                 (
                     (connection_id.clone(), target_id.clone()),
@@ -7517,6 +7894,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             .collect(),
         source_models: BTreeMap::new(),
         resource_graphs: BTreeMap::new(),
+        process_projections: BTreeMap::new(),
         context_kinds,
         runtimes: BTreeMap::new(),
         target_debuggers: BTreeMap::new(),
@@ -8204,6 +8582,152 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_projection_contributes_windows_sessions_and_targets_to_the_resource_graph() {
+        let process = |process_id, parent_process_id, role, window_id, window_title| {
+            crate::service_api::ProcessSnapshot {
+                process_id,
+                parent_process_id,
+                attachable: true,
+                debug_target_id: Some(format!("process-{process_id}")),
+                name: format!("process-{process_id}.exe"),
+                command_line: String::new(),
+                creation_date: "1".to_owned(),
+                role,
+                display_name: None,
+                window_id,
+                window_title,
+                cpu_percent: None,
+                memory_bytes: None,
+                agent_sessions: Vec::new(),
+            }
+        };
+        let mut root = process(
+            100,
+            None,
+            crate::service_api::ProcessRole::VscodeMain,
+            None,
+            None,
+        );
+        root.agent_sessions
+            .push(crate::service_api::AgentSessionSnapshot {
+                internal_id: "session-1".to_owned(),
+                chat_uri: Some("agent-host-session://session-1".to_owned()),
+                title: Some("Session".to_owned()),
+                working_directories: vec!["D:\\work".to_owned()],
+                disconnected: Some(false),
+            });
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 100,
+            root_kind: crate::service_api::ProcessRootKind::Vscode,
+            processes: vec![
+                root,
+                process(
+                    200,
+                    Some(100),
+                    crate::service_api::ProcessRole::Renderer,
+                    Some(7),
+                    Some("Project".to_owned()),
+                ),
+            ],
+            runtime_metadata_available: true,
+            targets: vec![crate::service_api::ProcessTargetSnapshot {
+                process_id: Some(200),
+                target: TargetSnapshot {
+                    target_id: "renderer-7".to_owned(),
+                    target_type: "page".to_owned(),
+                    title: "Project".to_owned(),
+                    url: "vscode-file://workbench.html".to_owned(),
+                    attached: false,
+                    parent_id: None,
+                    opener_id: None,
+                    browser_context_id: None,
+                    subtype: Some("electron-renderer".to_owned()),
+                },
+            }],
+            targets_observed: true,
+            target_discovery_error: None,
+        };
+        let overlapping_tree = ProcessTreeSnapshot {
+            root_process_id: 200,
+            root_kind: crate::service_api::ProcessRootKind::Node,
+            processes: vec![process(
+                200,
+                None,
+                crate::service_api::ProcessRole::Node,
+                None,
+                None,
+            )],
+            runtime_metadata_available: false,
+            targets: Vec::new(),
+            targets_observed: false,
+            target_discovery_error: None,
+        };
+        let mut state = ServiceState::default();
+
+        stage_process_resource_graph(&mut state, "test", &[tree, overlapping_tree]).unwrap();
+
+        let snapshot = state.resource_graphs["test"].snapshot();
+        let ids = snapshot
+            .resources
+            .keys()
+            .map(ResourceId::as_str)
+            .collect::<BTreeSet<_>>();
+        assert!(ids.contains("process/pid-100"));
+        assert!(ids.contains("process/pid-200"));
+        assert!(ids.contains("vscode-window/100/7"));
+        assert!(ids.contains("agent-session/session-1"));
+        assert!(ids.contains("electron-web-contents/100/renderer-7"));
+        assert!(snapshot.relations.iter().any(|relation| {
+            relation.relation.kind == RelationKind::Contains
+                && relation.relation.from.as_str() == "vscode-window/100/7"
+                && relation.relation.to.as_str() == "process/pid-200"
+        }));
+        assert!(snapshot.relations.iter().any(|relation| {
+            relation.relation.kind == RelationKind::Contains
+                && relation.relation.from.as_str() == "process/pid-100"
+                && relation.relation.to.as_str() == "agent-session/session-1"
+        }));
+    }
+
+    #[test]
+    fn scoped_process_tree_exposes_only_the_selected_target_subtree() {
+        let target = |id: &str, parent_id: Option<&str>| ConnectionTargetResource {
+            resource_id: ResourceId::from_parts("target", [id]).unwrap(),
+            target: TargetSnapshot {
+                target_id: id.to_owned(),
+                target_type: "page".to_owned(),
+                title: id.to_owned(),
+                url: String::new(),
+                attached: false,
+                parent_id: parent_id.map(str::to_owned),
+                opener_id: None,
+                browser_context_id: None,
+                subtype: None,
+            },
+        };
+        let targets = BTreeMap::from([
+            ("main".to_owned(), target("main", None)),
+            ("renderer-a".to_owned(), target("renderer-a", Some("main"))),
+            ("page-a".to_owned(), target("page-a", Some("renderer-a"))),
+            ("renderer-b".to_owned(), target("renderer-b", Some("main"))),
+            ("page-b".to_owned(), target("page-b", Some("renderer-b"))),
+        ]);
+
+        let visible = filter_connection_scope(
+            Some(&ConnectionConfiguration::ScopedProcessTree {
+                root_pid: 100,
+                target_id: "renderer-a".to_owned(),
+            }),
+            targets,
+        );
+
+        assert_eq!(
+            visible.keys().cloned().collect::<Vec<_>>(),
+            vec!["page-a".to_owned(), "renderer-a".to_owned()]
+        );
+    }
 
     fn target(target_id: &str, title: &str, url: &str) -> TargetSnapshot {
         TargetSnapshot {

@@ -2372,7 +2372,8 @@ fn connection_configuration_matches(
             ConnectionConfiguration::Process { .. },
             ConnectionKindFilter::Process
         ) | (
-            ConnectionConfiguration::ProcessTree { .. },
+            ConnectionConfiguration::ProcessTree { .. }
+                | ConnectionConfiguration::ScopedProcessTree { .. },
             ConnectionKindFilter::ProcessTree
         ) | (
             ConnectionConfiguration::Playwright { .. },
@@ -5359,8 +5360,11 @@ async fn add_connection(
         )
         .into());
     }
-    let wait_for_initial_process_tree =
-        matches!(&configuration, ConnectionConfiguration::ProcessTree { .. });
+    let wait_for_initial_process_tree = matches!(
+        &configuration,
+        ConnectionConfiguration::ProcessTree { .. }
+            | ConnectionConfiguration::ScopedProcessTree { .. }
+    );
     let client = ensure_service(state_file).await?;
     let configured = rpc(client
         .put_connection(

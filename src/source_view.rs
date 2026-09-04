@@ -867,7 +867,7 @@ impl ResolvedSourceView {
     }
 }
 
-fn canonical_source_uri(source_map_url: Option<&str>, logical_url: &str) -> SourceUri {
+pub(crate) fn canonical_source_uri(source_map_url: Option<&str>, logical_url: &str) -> SourceUri {
     if let Ok(uri) = SourceUri::parse(logical_url) {
         return uri;
     }

@@ -309,7 +309,9 @@ impl ConnectionRuntime {
             return Self::connect_stdio(command, args, cwd, env, *topology, connection_generation)
                 .await;
         }
-        if let ConnectionConfiguration::ProcessTree { root_pid } = configuration {
+        if let ConnectionConfiguration::ProcessTree { root_pid }
+        | ConnectionConfiguration::ScopedProcessTree { root_pid, .. } = configuration
+        {
             return Self::connect_process_tree(*root_pid, connection_generation).await;
         }
         let (endpoint, provider, direct_debugger, provider_events) = match configuration {
@@ -416,7 +418,9 @@ impl ConnectionRuntime {
                 .await?;
                 (launch.endpoint, Some(launch.child), true, launch.events)
             }
-            ConnectionConfiguration::ProcessTree { .. } | ConnectionConfiguration::Stdio { .. } => {
+            ConnectionConfiguration::ProcessTree { .. }
+            | ConnectionConfiguration::ScopedProcessTree { .. }
+            | ConnectionConfiguration::Stdio { .. } => {
                 unreachable!()
             }
         };
@@ -998,6 +1002,17 @@ pub fn validate_configuration(
                 return Err(ConnectionProviderError::InvalidProcessId(*root_pid));
             }
         }
+        ConnectionConfiguration::ScopedProcessTree {
+            root_pid,
+            target_id,
+        } => {
+            if *root_pid == 0 {
+                return Err(ConnectionProviderError::InvalidProcessId(*root_pid));
+            }
+            if target_id.is_empty() {
+                return Err(ConnectionProviderError::EmptyProcessTreeTarget);
+            }
+        }
         ConnectionConfiguration::Playwright { url, .. }
         | ConnectionConfiguration::Chrome { url, .. } => {
             let parsed = Url::parse(url).map_err(|source| ConnectionProviderError::InvalidUrl {
@@ -1430,6 +1445,8 @@ pub enum ConnectionProviderError {
     UnsupportedPageScheme(String),
     #[error("process IDs must be greater than zero, got {0}")]
     InvalidProcessId(u32),
+    #[error("scoped process-tree target IDs must not be empty")]
+    EmptyProcessTreeTarget,
     #[error("failed to launch connection process with {executable}: {source}")]
     Spawn {
         executable: PathBuf,

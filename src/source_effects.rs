@@ -14,7 +14,7 @@ use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
 use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
     GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
-    ResolvedSourceView, SourceViewError, appears_minified,
+    ResolvedSourceView, SourceViewError, appears_minified, canonical_source_uri,
 };
 
 pub struct SourceEffectOptions {
@@ -36,6 +36,8 @@ impl Default for SourceEffectOptions {
 struct RetainedView {
     script: ScriptKey,
     generated_url: String,
+    logical_to_canonical: BTreeMap<String, String>,
+    canonical_to_logical: BTreeMap<String, String>,
     generated_content: Arc<str>,
     generated_index: GeneratedOffsetIndex,
     projection_cache: Mutex<BTreeMap<u32, Option<ProjectedOffset>>>,
@@ -215,11 +217,27 @@ impl SourceEffectInterpreter {
                     .iter()
                     .map(|(url, file)| (url.clone(), file.primary.clone()))
                     .collect();
+                let logical_to_canonical = view
+                    .files()
+                    .keys()
+                    .map(|path| {
+                        (
+                            path.clone(),
+                            canonical_source_uri(source_map_url.as_deref(), path).display(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let canonical_to_logical = logical_to_canonical
+                    .iter()
+                    .map(|(logical, canonical)| (canonical.clone(), logical.clone()))
+                    .collect();
                 self.views.insert(
                     *effect_id,
                     RetainedView {
                         script: script.clone(),
                         generated_url: generated_url.clone(),
+                        logical_to_canonical,
+                        canonical_to_logical,
                         generated_content: content.clone(),
                         generated_index: GeneratedOffsetIndex::new(content),
                         projection_cache: Mutex::new(BTreeMap::new()),
@@ -580,10 +598,13 @@ impl SourceEffectInterpreter {
             .scripts
             .get(script_key)
             .and_then(|script| match &script.source {
-                ScriptSourceState::Resolved(view) => view
-                    .logical_sources
-                    .get(source_url)
-                    .and_then(|candidate| self.store.get(candidate.content)),
+                ScriptSourceState::Resolved(view) => {
+                    let retained = self.views.get(&view.view_id)?;
+                    let logical_url = authored_lookup_path(retained, source_url)?;
+                    view.logical_sources
+                        .get(&logical_url)
+                        .and_then(|candidate| self.store.get(candidate.content))
+                }
                 _ => None,
             })
     }
@@ -612,14 +633,17 @@ impl SourceEffectInterpreter {
                     diagnostics: diagnostics.clone(),
                 });
             }
-            let Some(file) = retained.view.files().get(path) else {
+            let Some(logical_path) = authored_lookup_path(retained, path) else {
+                continue;
+            };
+            let Some(file) = retained.view.files().get(&logical_path) else {
                 continue;
             };
             explanations.push(SourceGraphViewSnapshot {
                 connection_id: String::new(),
                 target_id: String::new(),
                 generated_url: retained.generated_url.clone(),
-                source_path: file.logical_url.clone(),
+                source_path: canonical_authored_url(retained, &file.logical_url),
                 role: "authored".to_owned(),
                 kind: format!("{:?}", file.kind).to_ascii_lowercase(),
                 primary_provenance: provenance_label(&file.primary.provenance),
@@ -652,11 +676,59 @@ impl SourceEffectInterpreter {
                     .view
                     .files()
                     .keys()
-                    .cloned()
+                    .map(|path| canonical_authored_url(retained, path))
                     .map(|path| (path, "authored".to_owned())),
             );
         }
         paths.into_iter().collect()
+    }
+
+    pub fn authored_source_paths(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+    ) -> Vec<String> {
+        let Some(script) = state.scripts.get(script_key) else {
+            return Vec::new();
+        };
+        let ScriptSourceState::Resolved(view) = &script.source else {
+            return Vec::new();
+        };
+        let Some(retained) = self.views.get(&view.view_id) else {
+            return view.logical_sources.keys().cloned().collect();
+        };
+        view.logical_sources
+            .keys()
+            .map(|path| canonical_authored_url(retained, path))
+            .collect()
+    }
+
+    pub fn script_contains_authored_source(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        source_path: &str,
+    ) -> bool {
+        let Some(script) = state.scripts.get(script_key) else {
+            return false;
+        };
+        let ScriptSourceState::Resolved(view) = &script.source else {
+            return false;
+        };
+        let normalized = normalize_source_path(source_path);
+        let Some(retained) = self.views.get(&view.view_id) else {
+            return view
+                .logical_sources
+                .keys()
+                .any(|path| normalize_source_path(path).starts_with(normalized));
+        };
+        retained
+            .logical_to_canonical
+            .iter()
+            .any(|(logical, canonical)| {
+                normalize_source_path(logical).starts_with(normalized)
+                    || normalize_source_path(canonical).starts_with(normalized)
+            })
     }
 
     pub fn search_source_batch(
@@ -697,25 +769,32 @@ impl SourceEffectInterpreter {
             let ScriptSourceState::Resolved(view) = &script.source else {
                 continue;
             };
+            let retained = self.views.get(&view.view_id);
             for (logical_url, candidate) in view.logical_sources.iter() {
                 control.check()?;
-                if path_selector.is_some_and(|selector| !logical_url.contains(selector)) {
+                let source_url = retained.map_or_else(
+                    || logical_url.clone(),
+                    |retained| canonical_authored_url(retained, logical_url),
+                );
+                if path_selector.is_some_and(|selector| {
+                    !logical_url.contains(selector) && !source_url.contains(selector)
+                }) {
                     continue;
                 }
                 let provenance = provenance_label(&candidate.provenance);
                 let Some(content) = self.store.get(candidate.content) else {
-                    skipped.insert((logical_url.clone(), "authored".to_owned()));
+                    skipped.insert((source_url, "authored".to_owned()));
                     continue;
                 };
                 sources
                     .entry((
-                        logical_url.clone(),
+                        source_url.clone(),
                         "authored".to_owned(),
                         candidate.content,
                         provenance.clone(),
                     ))
                     .or_insert_with(|| HydratedSource {
-                        path: logical_url.clone(),
+                        path: source_url,
                         kind: "authored".to_owned(),
                         provenance,
                         content_hash: candidate.content,
@@ -745,7 +824,7 @@ impl SourceEffectInterpreter {
                 mappings.extend(retained.view.forward(path, position).into_iter().map(
                     |candidate| {
                         (
-                            candidate.source_url,
+                            canonical_authored_url(retained, &candidate.source_url),
                             candidate.position,
                             "generated-to-authored".to_owned(),
                             mapping_quality_label(candidate.quality).to_owned(),
@@ -753,17 +832,21 @@ impl SourceEffectInterpreter {
                     },
                 ));
             }
-            if retained.view.files().contains_key(path) {
-                mappings.extend(retained.view.reverse(path, position).into_iter().map(
-                    |candidate| {
-                        (
-                            candidate.source_url,
-                            candidate.position,
-                            "authored-to-generated".to_owned(),
-                            mapping_quality_label(candidate.quality).to_owned(),
-                        )
-                    },
-                ));
+            if let Some(logical_path) = authored_lookup_path(retained, path) {
+                mappings.extend(
+                    retained
+                        .view
+                        .reverse(&logical_path, position)
+                        .into_iter()
+                        .map(|candidate| {
+                            (
+                                candidate.source_url,
+                                candidate.position,
+                                "authored-to-generated".to_owned(),
+                                mapping_quality_label(candidate.quality).to_owned(),
+                            )
+                        }),
+                );
             }
         }
         mappings
@@ -859,6 +942,27 @@ fn provenance_label(provenance: &Provenance) -> String {
             format!("formatted fallback from {generated_url}")
         }
     }
+}
+
+fn authored_lookup_path(retained: &RetainedView, path: &str) -> Option<String> {
+    retained
+        .view
+        .files()
+        .contains_key(path)
+        .then(|| path.to_owned())
+        .or_else(|| retained.canonical_to_logical.get(path).cloned())
+}
+
+fn canonical_authored_url(retained: &RetainedView, path: &str) -> String {
+    retained
+        .logical_to_canonical
+        .get(path)
+        .cloned()
+        .unwrap_or_else(|| path.to_owned())
+}
+
+fn normalize_source_path(path: &str) -> &str {
+    path.trim_start_matches("../").trim_start_matches("./")
 }
 
 fn projection_step_label(step: &ProjectionStep) -> String {
@@ -1235,6 +1339,42 @@ mod tests {
         state = apply(&fetched.state, built_input, &mut revisions).state;
         interpreter.retain_for_state(&state);
         assert_eq!(interpreter.retained_view_count(), 1);
+        assert!(
+            interpreter
+                .resolved_source_paths()
+                .contains(&("file:///src/app.ts".into(), "authored".into()))
+        );
+        assert_eq!(
+            interpreter.authored_source_paths(&state, &script),
+            vec!["file:///src/app.ts"]
+        );
+        assert!(interpreter.script_contains_authored_source(&state, &script, "file:///src/app.ts"));
+        assert_eq!(
+            interpreter
+                .logical_source_content(&state, &script, "file:///src/app.ts")
+                .as_deref(),
+            Some("let answer: number = 42;")
+        );
+        assert!(
+            interpreter
+                .map_source_position(
+                    "file:///src/app.ts",
+                    Position {
+                        line: 0,
+                        column: 10,
+                    },
+                )
+                .iter()
+                .any(|(url, position, direction, _)| {
+                    url == "file:///bundle.js"
+                        && *position
+                            == Position {
+                                line: 0,
+                                column: 10,
+                            }
+                        && direction == "authored-to-generated"
+                })
+        );
 
         let breakpoint = BreakpointKey {
             client_id: "client-1".into(),

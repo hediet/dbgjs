@@ -16,7 +16,7 @@ use crate::service_api::{
 
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
-const AGENT_SESSION_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+const AGENT_SESSION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_SESSIONS_HELPER: &str = include_str!("providers/agent_sessions.mjs");
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -126,40 +126,18 @@ pub async fn discover_process_trees(
     if let Some(stats) = stats {
         apply_process_stats(&mut trees, stats);
     }
-    if root_kind == ProcessRootKind::Vscode {
-        for tree in &mut trees {
-            let snapshot = tree.clone();
-            if let Ok(Ok(diagnostics)) =
-                tokio::spawn(async move { query_vscode_main_diagnostics(&snapshot).await }).await
-            {
-                apply_vscode_diagnostics(tree, diagnostics);
-            }
-        }
-    }
-    let agent_sessions = join_all(
-        trees
-            .iter()
-            .filter_map(|tree| agent_session_query(tree, &process_metadata))
-            .map(tokio::spawn),
-    )
-    .await;
-    for (root_process_id, sessions) in agent_sessions
-        .into_iter()
-        .filter_map(|result| result.ok()?.ok())
-    {
-        if let Some(tree) = trees
-            .iter_mut()
-            .find(|tree| tree.root_process_id == root_process_id)
-        {
-            apply_agent_sessions(tree, sessions);
-        }
-    }
+    enrich_process_trees(&mut trees, &process_metadata).await;
     Ok(trees)
 }
 
 pub async fn discover_recognized_process_trees()
 -> Result<Vec<ProcessTreeSnapshot>, ProcessDiscoveryError> {
     let processes = query_windows_processes().await?;
+    let process_metadata = processes
+        .iter()
+        .cloned()
+        .map(|process| (process.process_id, process))
+        .collect::<BTreeMap<_, _>>();
     let mut trees = Vec::new();
     for kind in [
         ProcessRootKind::Vscode,
@@ -169,19 +147,82 @@ pub async fn discover_recognized_process_trees()
     ] {
         trees.extend(process_trees(processes.clone(), kind));
     }
+    enrich_process_trees(&mut trees, &process_metadata).await;
     Ok(trees)
 }
 
 pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
-    for tree in trees {
+    let observations = join_all(trees.iter().map(|tree| {
+        let root_process_id = tree.root_process_id;
         let process_ids = tree
             .processes
             .iter()
             .map(|process| process.process_id)
             .collect::<BTreeSet<_>>();
-        match discover_process_tree_targets(tree.root_process_id, &process_ids).await {
-            Ok(targets) => tree.targets = targets,
-            Err(error) => tree.target_discovery_error = Some(error),
+        async move {
+            (
+                root_process_id,
+                discover_process_tree_targets(root_process_id, &process_ids).await,
+            )
+        }
+    }))
+    .await
+    .into_iter()
+    .collect::<BTreeMap<_, _>>();
+    for tree in trees {
+        match observations
+            .get(&tree.root_process_id)
+            .expect("every requested process tree has an observation")
+        {
+            Ok(targets) => tree.targets = targets.clone(),
+            Err(error) => tree.target_discovery_error = Some(error.clone()),
+        }
+        tree.targets_observed = true;
+    }
+}
+
+async fn enrich_process_trees(
+    trees: &mut [ProcessTreeSnapshot],
+    process_metadata: &BTreeMap<u32, WindowsProcess>,
+) {
+    let diagnostics = join_all(
+        trees
+            .iter()
+            .filter(|tree| tree.root_kind == ProcessRootKind::Vscode)
+            .cloned()
+            .map(|tree| async move {
+                (
+                    tree.root_process_id,
+                    query_vscode_main_diagnostics(&tree).await,
+                )
+            }),
+    );
+    let agent_sessions = join_all(
+        trees
+            .iter()
+            .filter_map(|tree| agent_session_query(tree, process_metadata))
+            .map(tokio::spawn),
+    );
+    let (diagnostics, agent_sessions) = tokio::join!(diagnostics, agent_sessions);
+    for (root_process_id, diagnostics) in diagnostics {
+        if let Ok(diagnostics) = diagnostics
+            && let Some(tree) = trees
+                .iter_mut()
+                .find(|tree| tree.root_process_id == root_process_id)
+        {
+            apply_vscode_diagnostics(tree, diagnostics);
+        }
+    }
+
+    for (root_process_id, sessions) in agent_sessions
+        .into_iter()
+        .filter_map(|result| result.ok()?.ok())
+    {
+        if let Some(tree) = trees
+            .iter_mut()
+            .find(|tree| tree.root_process_id == root_process_id)
+        {
+            apply_agent_sessions(tree, sessions);
         }
     }
 }
@@ -842,6 +883,7 @@ fn process_trees(
                 processes: snapshots,
                 runtime_metadata_available: false,
                 targets: Vec::new(),
+                targets_observed: false,
                 target_discovery_error: None,
             }
         })
@@ -1000,18 +1042,36 @@ fn apply_vscode_diagnostics(tree: &mut ProcessTreeSnapshot, diagnostics: VscodeM
         .collect::<BTreeMap<_, _>>();
     for process in diagnostics.pid_to_names {
         let (display_name, window_id, window_title) = parse_vscode_status_label(&process.name);
-        status.insert(
-            process.pid,
-            VscodeStatusProcess {
-                display_name,
-                window_id,
-                window_title,
-            },
-        );
+        let incoming = VscodeStatusProcess {
+            display_name,
+            window_id,
+            window_title,
+        };
+        status
+            .entry(process.pid)
+            .and_modify(|current| {
+                current.display_name.clone_from(&incoming.display_name);
+                if incoming.window_id.is_some() {
+                    current.window_id = incoming.window_id;
+                }
+                if incoming.window_title.is_some() {
+                    current.window_title.clone_from(&incoming.window_title);
+                }
+            })
+            .or_insert(incoming);
     }
     let windows = status
         .values()
         .filter_map(|process| Some((process.window_id?, process.window_title.as_ref()?.clone())))
+        .collect::<BTreeMap<_, _>>();
+    let window_configs = tree
+        .processes
+        .iter()
+        .filter_map(|process| {
+            let window_id = status.get(&process.process_id)?.window_id?;
+            let config = command_argument(&process.command_line, "--vscode-window-config")?;
+            Some((config, window_id))
+        })
         .collect::<BTreeMap<_, _>>();
     let mut inherited_windows = BTreeMap::<u32, u32>::new();
     for process in &mut tree.processes {
@@ -1025,6 +1085,10 @@ fn apply_vscode_diagnostics(tree: &mut ProcessTreeSnapshot, diagnostics: VscodeM
         }
         let window_id = status_process
             .and_then(|process| process.window_id)
+            .or_else(|| {
+                command_argument(&process.command_line, "--vscode-window-config")
+                    .and_then(|config| window_configs.get(&config).copied())
+            })
             .or_else(|| {
                 process
                     .parent_process_id
@@ -1203,7 +1267,9 @@ fn process_role(process: &WindowsProcess) -> ProcessRole {
 fn non_javascript_process_role(process: &WindowsProcess) -> ProcessRole {
     let name = process.name.to_ascii_lowercase();
     let command = process.command_line.to_ascii_lowercase();
-    if name == "claude.exe" || command.contains("claude") {
+    if command.contains("copilot") {
+        ProcessRole::Copilot
+    } else if name == "claude.exe" || command.contains("claude") {
         ProcessRole::Claude
     } else if name == "codex.exe" || command.contains("codex") {
         ProcessRole::Codex
@@ -1319,6 +1385,89 @@ mod tests {
     }
 
     #[test]
+    fn preserves_renderer_window_when_pid_name_is_less_specific() {
+        let mut tree = vscode_process_trees(vec![
+            process(10, 1, "Code.exe", r#""Code.exe""#),
+            process(
+                11,
+                10,
+                "Code.exe",
+                r#""Code.exe" --type=renderer --renderer-client-id=1"#,
+            ),
+        ])
+        .remove(0);
+        apply_vscode_diagnostics(
+            &mut tree,
+            VscodeMainDiagnostics {
+                main_pid: 10,
+                windows: vec![VscodeWindowDiagnostics {
+                    id: 3,
+                    pid: 11,
+                    title: "Workbench".into(),
+                }],
+                pid_to_names: vec![VscodeNamedProcess {
+                    pid: 11,
+                    name: "renderer".into(),
+                }],
+            },
+        );
+
+        let renderer = tree
+            .processes
+            .iter()
+            .find(|process| process.process_id == 11)
+            .expect("renderer remains discoverable");
+        assert_eq!(renderer.display_name.as_deref(), Some("renderer"));
+        assert_eq!(renderer.window_id, Some(3));
+        assert_eq!(renderer.window_title.as_deref(), Some("Workbench"));
+    }
+
+    #[test]
+    fn associates_renderers_that_share_a_vscode_window_config() {
+        let mut tree = vscode_process_trees(vec![
+            process(10, 1, "Code.exe", r#""Code.exe""#),
+            process(
+                11,
+                10,
+                "Code.exe",
+                r#""Code.exe" --type=renderer --vscode-window-config=vscode:window-a"#,
+            ),
+            process(
+                12,
+                10,
+                "Code.exe",
+                r#""Code.exe" --type=renderer --vscode-window-config=vscode:window-a"#,
+            ),
+        ])
+        .remove(0);
+        apply_vscode_diagnostics(
+            &mut tree,
+            VscodeMainDiagnostics {
+                main_pid: 10,
+                windows: vec![VscodeWindowDiagnostics {
+                    id: 3,
+                    pid: 11,
+                    title: "Workbench".into(),
+                }],
+                pid_to_names: vec![VscodeNamedProcess {
+                    pid: 12,
+                    name: "window".into(),
+                }],
+            },
+        );
+
+        for process_id in [11, 12] {
+            let renderer = tree
+                .processes
+                .iter()
+                .find(|process| process.process_id == process_id)
+                .expect("renderer remains discoverable");
+            assert_eq!(renderer.window_id, Some(3));
+            assert_eq!(renderer.window_title.as_deref(), Some("Workbench"));
+        }
+    }
+
+    #[test]
     fn finds_top_level_vscode_roots_and_preserves_non_javascript_ancestry() {
         let trees = vscode_process_trees(vec![
             process(10, 1, "Code - Insiders.exe", r#""Code - Insiders.exe""#),
@@ -1371,6 +1520,18 @@ mod tests {
             vec![20, 21, 22]
         );
         assert_eq!(trees[1].processes[2].parent_process_id, Some(21));
+    }
+
+    #[test]
+    fn recognizes_non_attachable_copilot_processes() {
+        let process = process(
+            11,
+            10,
+            "Code - Insiders.exe",
+            r#""Code - Insiders.exe" "C:\resources\app\node_modules.asar.unpacked\@github\copilot-win32-x64\index.js" --headless --stdio"#,
+        );
+
+        assert_eq!(non_javascript_process_role(&process), ProcessRole::Copilot);
     }
 
     #[test]

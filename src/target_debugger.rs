@@ -380,6 +380,18 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn hydrate_sources(&self, include_unmapped: bool) -> Result<(), TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::HydrateSources {
+                include_unmapped,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub async fn source_search_batch(
         &self,
         path_selector: Option<String>,
@@ -998,6 +1010,10 @@ enum TargetCommand {
     ResolvedSourcePaths {
         response: oneshot::Sender<Result<Vec<(String, String)>, TargetDebuggerError>>,
     },
+    HydrateSources {
+        include_unmapped: bool,
+        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
+    },
     SourceSearchBatch {
         path_selector: Option<String>,
         control: SearchControl,
@@ -1327,9 +1343,21 @@ async fn run_target(
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::SourceContent { path, response })) => {
-                let result = driver.state().scripts.iter().find_map(|(key, script)| {
-                    if script.url == path {
-                        return driver.generated_source_content(key).map(|content| {
+                let result = async {
+                    hydrate_source_for_path(&mut driver, &path).await?;
+                    Ok(driver.state().scripts.iter().find_map(|(key, script)| {
+                        if script.url == path {
+                            return driver.generated_source_content(key).map(|content| {
+                                SourceContentSnapshot {
+                                    path: path.clone(),
+                                    content: content.to_string(),
+                                    start_line: 1,
+                                    end_line: content.lines().count() as u32,
+                                    total_lines: content.lines().count() as u32,
+                                }
+                            });
+                        }
+                        driver.logical_source_content(key, &path).map(|content| {
                             SourceContentSnapshot {
                                 path: path.clone(),
                                 content: content.to_string(),
@@ -1337,23 +1365,50 @@ async fn run_target(
                                 end_line: content.lines().count() as u32,
                                 total_lines: content.lines().count() as u32,
                             }
-                        });
-                    }
-                    driver
-                        .logical_source_content(key, &path)
-                        .map(|content| SourceContentSnapshot {
-                            path: path.clone(),
-                            content: content.to_string(),
-                            start_line: 1,
-                            end_line: content.lines().count() as u32,
-                            total_lines: content.lines().count() as u32,
                         })
-                });
-                let _ = response.send(Ok(result));
+                    }))
+                }
+                .await;
+                if result.is_ok() {
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
+                let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::ResolvedSourcePaths { response })) => {
                 let paths = driver.source_effects().resolved_source_paths();
                 let _ = response.send(Ok(paths));
+            }
+            Next::Command(Some(TargetCommand::HydrateSources {
+                include_unmapped,
+                response,
+            })) => {
+                let result = hydrate_sources(&mut driver, include_unmapped).await;
+                if result.is_ok() {
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
+                let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::SourceSearchBatch {
                 path_selector,
@@ -1378,27 +1433,45 @@ async fn run_target(
                 column,
                 response,
             })) => {
-                let position = Position {
-                    line: line.saturating_sub(1),
-                    column: column.saturating_sub(1),
-                };
-                let locations = driver
-                    .source_effects()
-                    .map_source_position(&path, position)
-                    .into_iter()
-                    .map(
-                        |(source_url, position, direction, quality)| SourceMappingSnapshot {
-                            connection_id: String::new(),
-                            target_id: String::new(),
-                            source_url,
-                            line: position.line + 1,
-                            column: position.column + 1,
-                            direction,
-                            quality,
-                        },
-                    )
-                    .collect();
-                let _ = response.send(Ok(locations));
+                let result = async {
+                    hydrate_source_for_path(&mut driver, &path).await?;
+                    let position = Position {
+                        line: line.saturating_sub(1),
+                        column: column.saturating_sub(1),
+                    };
+                    Ok(driver
+                        .source_effects()
+                        .map_source_position(&path, position)
+                        .into_iter()
+                        .map(
+                            |(source_url, position, direction, quality)| SourceMappingSnapshot {
+                                connection_id: String::new(),
+                                target_id: String::new(),
+                                source_url,
+                                line: position.line + 1,
+                                column: position.column + 1,
+                                direction,
+                                quality,
+                            },
+                        )
+                        .collect())
+                }
+                .await;
+                if result.is_ok() {
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
+                let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::EvictSourceCaches { response })) => {
                 driver.clear_source_caches();
@@ -3533,20 +3606,89 @@ async fn project_coverage(
 }
 
 fn script_contains_source(driver: &DebuggerDriver, script: &ScriptKey, source_path: &str) -> bool {
-    let source_path = normalize_source_path(source_path);
     driver
+        .source_effects()
+        .script_contains_authored_source(driver.state(), script, source_path)
+}
+
+async fn hydrate_source_for_path(
+    driver: &mut DebuggerDriver,
+    source_path: &str,
+) -> Result<(), TargetDebuggerError> {
+    let exact_scripts = driver
         .state()
         .scripts
-        .get(script)
-        .and_then(|state| match &state.source {
-            ScriptSourceState::Resolved(view) => Some(&view.logical_sources),
-            _ => None,
+        .iter()
+        .filter_map(|(key, script)| (script.url == source_path).then_some(key.clone()))
+        .collect::<Vec<_>>();
+    if !exact_scripts.is_empty() {
+        for script in exact_scripts {
+            if driver
+                .state()
+                .scripts
+                .get(&script)
+                .is_some_and(|script| matches!(script.source, ScriptSourceState::Unresolved))
+            {
+                driver
+                    .apply(Input::RequestScriptSource {
+                        script: script.clone(),
+                    })
+                    .await?;
+            }
+        }
+        return Ok(());
+    }
+
+    if driver
+        .state()
+        .scripts
+        .keys()
+        .any(|script| script_contains_source(driver, script, source_path))
+    {
+        return Ok(());
+    }
+
+    let candidates = driver
+        .state()
+        .scripts
+        .iter()
+        .filter_map(|(key, script)| {
+            (script.source_map_url.is_some()
+                && matches!(script.source, ScriptSourceState::Unresolved))
+            .then_some(key.clone())
         })
-        .is_some_and(|sources| {
-            sources
-                .keys()
-                .any(|source| normalize_source_path(source).starts_with(&source_path))
+        .collect::<Vec<_>>();
+    for script in candidates {
+        driver
+            .apply(Input::RequestScriptSource {
+                script: script.clone(),
+            })
+            .await?;
+        if script_contains_source(driver, &script, source_path) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn hydrate_sources(
+    driver: &mut DebuggerDriver,
+    include_unmapped: bool,
+) -> Result<(), TargetDebuggerError> {
+    let scripts = driver
+        .state()
+        .scripts
+        .iter()
+        .filter_map(|(key, script)| {
+            (matches!(script.source, ScriptSourceState::Unresolved)
+                && (include_unmapped || script.source_map_url.is_some()))
+            .then_some(key.clone())
         })
+        .collect::<Vec<_>>();
+    for script in scripts {
+        driver.apply(Input::RequestScriptSource { script }).await?;
+    }
+    Ok(())
 }
 
 fn normalize_source_path(path: &str) -> &str {
@@ -4928,6 +5070,21 @@ fn snapshot_from_driver(
         session_key,
         driver.state(),
     );
+    for (script_snapshot, (script_key, script)) in result.scripts.iter_mut().zip(
+        driver
+            .state()
+            .scripts
+            .iter()
+            .filter(|(script_key, _)| script_key.session == *session_key),
+    ) {
+        if matches!(script.source, ScriptSourceState::Resolved(_)) {
+            script_snapshot.status = TargetScriptStatus::Resolved {
+                authored_sources: driver
+                    .source_effects()
+                    .authored_source_paths(driver.state(), script_key),
+            };
+        }
+    }
     result.logs = driver
         .console_messages()
         .iter()

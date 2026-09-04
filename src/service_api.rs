@@ -22,6 +22,10 @@ pub struct ProcessTreeSnapshot {
     pub runtime_metadata_available: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<ProcessTargetSnapshot>,
+    /// Whether runtime children were queried for this root. An empty `targets` collection is only
+    /// authoritative when this is true.
+    #[serde(default)]
+    pub targets_observed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_discovery_error: Option<String>,
 }
@@ -102,6 +106,7 @@ pub struct ResourceSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ResourceCapabilitySnapshot {
     pub source: String,
+    pub handle: u64,
     pub kind: String,
     pub title: String,
     pub detail: BTreeMap<String, serde_json::Value>,
@@ -285,6 +290,12 @@ pub enum ConnectionConfiguration {
     },
     ProcessTree {
         root_pid: u32,
+    },
+    /// Uses the process tree rooted at `root_pid` as the access path while exposing only
+    /// `target_id` and its descendants as this connection's public target scope.
+    ScopedProcessTree {
+        root_pid: u32,
+        target_id: String,
     },
     Playwright {
         url: String,
@@ -1692,6 +1703,13 @@ pub trait DebuggerServiceApi {
     async fn service_info() -> Result<ServiceInfo, JsonRpcError>;
 
     async fn discover_vscode_process_trees() -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError>;
+
+    /// Returns a process-oriented resource projection. Runtime target discovery is performed only
+    /// for the roots named in `expanded_root_process_ids`.
+    async fn get_process_projection(
+        context_id: String,
+        expanded_root_process_ids: Vec<u32>,
+    ) -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError>;
 
     async fn list_contexts(cwd: Option<String>) -> Result<Vec<ContextSummary>, JsonRpcError>;
 

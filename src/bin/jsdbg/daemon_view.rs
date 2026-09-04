@@ -429,6 +429,7 @@ fn connection_kind(configuration: &ConnectionConfiguration) -> &'static str {
         ConnectionConfiguration::NodeInspector { .. } => "node-inspector",
         ConnectionConfiguration::Process { .. } => "process",
         ConnectionConfiguration::ProcessTree { .. } => "process-tree",
+        ConnectionConfiguration::ScopedProcessTree { .. } => "scoped-process-tree",
         ConnectionConfiguration::Playwright { .. } => "playwright",
         ConnectionConfiguration::Chrome { .. } => "chrome",
         ConnectionConfiguration::Node { .. } => "node",

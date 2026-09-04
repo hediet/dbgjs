@@ -1,24 +1,26 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cdp_client::context_identity::{
-    normalize_absolute_path, resolve_context_expression, synthetic_node_target_id,
+    normalize_absolute_path, path_and_parents, resolve_context_expression,
 };
 use cdp_client::local_rpc::{default_state_file, ensure_service};
 use cdp_client::service_api::{
-    ConnectionConfiguration, ConnectionStatus, ContextSnapshot, ContextSummary,
-    DebuggerServiceApiClient, MutationOptions, ObservationCursor, ObservationResult, ProcessRole,
-    ProcessTreeSnapshot, SourceTreeKind, SourceTreeSnapshot, TargetAttachOptions,
-    TargetAttachmentState, TargetDebuggerSnapshot,
+    ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApiClient, MutationOptions,
+    ObservationCursor, ObservationResult, ProcessTreeSnapshot, ResourceGraphSnapshot,
+    SourceContentSnapshot, SourceDisplayOptions, SourceTreeKind, SourceTreeSnapshot,
+    SourceViewPreference, TargetAttachOptions, TargetDebuggerSnapshot,
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::app::{ProcessRef, Tab, TargetRef, UiAction};
+use crate::app::{ConnectionPathRef, Section, TargetRef, UiAction, connection_path_spec};
 
 pub struct Bootstrap {
     pub client: Arc<DebuggerServiceApiClient>,
+    pub cwd: String,
     pub contexts: Vec<ContextSummary>,
     pub context_index: usize,
     pub context: ContextSnapshot,
@@ -26,15 +28,16 @@ pub struct Bootstrap {
 
 impl Bootstrap {
     pub async fn connect(context_expression: Option<&str>) -> Result<Self, String> {
+        let state_file = default_state_file();
         let client = Arc::new(
-            ensure_service(&default_state_file())
+            ensure_service(&state_file)
                 .await
                 .map_err(|error| error.to_string())?,
         );
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let normalized_cwd = normalize_absolute_path(&cwd).map_err(|error| error.to_string())?;
         let contexts = client
-            .list_contexts(Some(normalized_cwd))
+            .list_contexts(Some(normalized_cwd.clone()))
             .await
             .map_err(rpc_error)?;
         if contexts.is_empty() {
@@ -42,6 +45,14 @@ impl Bootstrap {
                 "no debugger contexts exist; create one with `jsdbg context create`".to_owned(),
             );
         }
+        let configured_context = if context_expression.is_none() {
+            configured_context_id(
+                &state_file.with_extension("selection.json"),
+                &normalized_cwd,
+            )?
+        } else {
+            None
+        };
         let context_index = if let Some(expression) = context_expression {
             let id = resolve_context_expression(expression, Path::new(&cwd))
                 .map_err(|error| error.to_string())?
@@ -50,6 +61,15 @@ impl Bootstrap {
                 .iter()
                 .position(|context| context.id == id)
                 .ok_or_else(|| format!("context '{id}' does not exist"))?
+        } else if let Some(context_id) = configured_context {
+            contexts
+                .iter()
+                .position(|context| context.id == context_id)
+                .ok_or_else(|| {
+                    format!(
+                        "configured context '{context_id}' does not exist; select another context with `jsdbg set context --context <expression>`"
+                    )
+                })?
         } else {
             contexts
                 .iter()
@@ -70,6 +90,7 @@ impl Bootstrap {
             .map_err(rpc_error)?;
         Ok(Self {
             client,
+            cwd: normalized_cwd,
             contexts,
             context_index,
             context,
@@ -78,7 +99,9 @@ impl Bootstrap {
 }
 
 pub enum Data {
+    Contexts(Vec<ContextSummary>),
     Processes(Vec<ProcessTreeSnapshot>),
+    Resources(ResourceGraphSnapshot),
     Sources(SourceTreeSnapshot),
     Captures(Vec<cdp_client::service_api::CaptureSnapshot>),
 }
@@ -88,13 +111,20 @@ pub enum ServiceEvent {
     ContextError(String),
     TargetDetail {
         generation: u64,
+        target: TargetRef,
         detail: Option<TargetDebuggerSnapshot>,
     },
     DataLoaded {
-        tab: Tab,
+        section: Section,
         context_id: String,
         generation: u64,
         result: Result<Data, String>,
+    },
+    SourceLoaded {
+        context_id: String,
+        path: String,
+        generation: u64,
+        result: Result<SourceContentSnapshot, String>,
     },
     ActionFinished(Result<(String, ContextSnapshot), String>),
 }
@@ -103,20 +133,30 @@ pub struct ServiceController {
     client: Arc<DebuggerServiceApiClient>,
     events: mpsc::Sender<ServiceEvent>,
     context_task: Option<JoinHandle<()>>,
-    target_task: Option<JoinHandle<()>>,
+    target_tasks: BTreeMap<(String, String), JoinHandle<()>>,
     target_generation: u64,
-    load_generations: [u64; 6],
+    source_task: Option<JoinHandle<()>>,
+    source_generation: u64,
+    load_generations: [u64; Section::COUNT],
+    cwd: String,
 }
 
 impl ServiceController {
-    pub fn new(client: Arc<DebuggerServiceApiClient>, events: mpsc::Sender<ServiceEvent>) -> Self {
+    pub fn new(
+        client: Arc<DebuggerServiceApiClient>,
+        events: mpsc::Sender<ServiceEvent>,
+        cwd: String,
+    ) -> Self {
         Self {
             client,
             events,
             context_task: None,
-            target_task: None,
+            target_tasks: BTreeMap::new(),
             target_generation: 0,
-            load_generations: [0; 6],
+            source_task: None,
+            source_generation: 0,
+            load_generations: [0; Section::COUNT],
+            cwd,
         }
     }
 
@@ -125,130 +165,161 @@ impl ServiceController {
     }
 
     pub fn switch_context(&mut self, context_id: String) {
-        self.set_target(None);
+        self.set_targets(Vec::new());
+        self.set_source(None);
         self.start_context_observer(context_id, ObservationCursor::Current);
     }
 
-    pub fn set_target(&mut self, target: Option<TargetRef>) {
-        if let Some(task) = self.target_task.take() {
+    pub fn set_targets(&mut self, targets: Vec<TargetRef>) {
+        for (_, task) in std::mem::take(&mut self.target_tasks) {
             task.abort();
         }
         self.target_generation = self.target_generation.wrapping_add(1);
         let generation = self.target_generation;
-        let Some(target) = target else {
+        for target in targets {
+            let client = self.client.clone();
             let events = self.events.clone();
-            tokio::spawn(async move {
-                let _ = events
-                    .send(ServiceEvent::TargetDetail {
-                        generation,
-                        detail: None,
-                    })
-                    .await;
-            });
-            return;
-        };
-        let client = self.client.clone();
-        let events = self.events.clone();
-        self.target_task = Some(tokio::spawn(async move {
-            let mut snapshot = match client
-                .get_target(
-                    target.context_id.clone(),
-                    target.connection_id.clone(),
-                    target.target_id.clone(),
-                )
-                .await
-            {
-                Ok(snapshot) => snapshot,
-                Err(_) => {
-                    let _ = events
-                        .send(ServiceEvent::TargetDetail {
-                            generation,
-                            detail: None,
-                        })
-                        .await;
-                    return;
-                }
-            };
-            if events
-                .send(ServiceEvent::TargetDetail {
-                    generation,
-                    detail: Some(snapshot.clone()),
-                })
-                .await
-                .is_err()
-            {
-                return;
-            }
-            loop {
-                match client
-                    .observe_target(
-                        target.context_id.clone(),
-                        target.connection_id.clone(),
-                        target.target_id.clone(),
-                        snapshot.revision,
-                        1_000,
+            let task_target = target.clone();
+            let task = tokio::spawn(async move {
+                let mut snapshot = match client
+                    .get_target(
+                        task_target.context_id.clone(),
+                        task_target.connection_id.clone(),
+                        task_target.target_id.clone(),
                     )
                     .await
                 {
-                    Ok(Some(next)) => {
-                        snapshot = next;
-                        if events
-                            .send(ServiceEvent::TargetDetail {
-                                generation,
-                                detail: Some(snapshot.clone()),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Ok(None) => {}
+                    Ok(snapshot) => snapshot,
                     Err(_) => {
                         let _ = events
                             .send(ServiceEvent::TargetDetail {
                                 generation,
+                                target: task_target,
                                 detail: None,
                             })
                             .await;
                         return;
                     }
+                };
+                if events
+                    .send(ServiceEvent::TargetDetail {
+                        generation,
+                        target: task_target.clone(),
+                        detail: Some(snapshot.clone()),
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
                 }
-            }
-        }));
+                loop {
+                    match client
+                        .observe_target(
+                            task_target.context_id.clone(),
+                            task_target.connection_id.clone(),
+                            task_target.target_id.clone(),
+                            snapshot.revision,
+                            1_000,
+                        )
+                        .await
+                    {
+                        Ok(Some(next)) => {
+                            snapshot = next;
+                            if events
+                                .send(ServiceEvent::TargetDetail {
+                                    generation,
+                                    target: task_target.clone(),
+                                    detail: Some(snapshot.clone()),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            let _ = events
+                                .send(ServiceEvent::TargetDetail {
+                                    generation,
+                                    target: task_target.clone(),
+                                    detail: None,
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+                }
+            });
+            self.target_tasks.insert(
+                (target.connection_id.clone(), target.target_id.clone()),
+                task,
+            );
+        }
     }
 
     pub fn target_generation(&self) -> u64 {
         self.target_generation
     }
 
-    pub fn load(&mut self, tab: Tab, context_id: String, source_kind: SourceTreeKind) {
-        let generation = self.load_generations[tab.index()].wrapping_add(1);
-        self.load_generations[tab.index()] = generation;
+    pub fn load(
+        &mut self,
+        section: Section,
+        context_id: String,
+        source_kind: SourceTreeKind,
+        expanded_process_roots: Vec<u32>,
+    ) {
+        let generation = self.load_generations[section.index()].wrapping_add(1);
+        self.load_generations[section.index()] = generation;
         let client = self.client.clone();
         let events = self.events.clone();
+        let cwd = self.cwd.clone();
         tokio::spawn(async move {
-            let result = match tab {
-                Tab::Processes => client
-                    .discover_vscode_process_trees()
-                    .await
-                    .map(Data::Processes)
-                    .map_err(rpc_error),
-                Tab::Sources => client
-                    .show_source_tree(context_id.clone(), source_kind)
-                    .await
-                    .map(Data::Sources)
-                    .map_err(rpc_error),
-                Tab::Captures => client
-                    .list_captures(context_id.clone())
-                    .await
-                    .map(Data::Captures)
-                    .map_err(rpc_error),
-                Tab::Connections | Tab::Targets | Tab::Breakpoints => return,
+            let load = async {
+                match section {
+                    Section::Contexts => client
+                        .list_contexts(Some(cwd))
+                        .await
+                        .map(Data::Contexts)
+                        .map_err(rpc_error),
+                    Section::Processes => client
+                        .get_process_projection(context_id.clone(), expanded_process_roots)
+                        .await
+                        .map(Data::Processes)
+                        .map_err(rpc_error),
+                    Section::Connections => client
+                        .get_resource_graph(context_id.clone())
+                        .await
+                        .map(Data::Resources)
+                        .map_err(rpc_error),
+                    Section::Sources => client
+                        .show_source_tree(context_id.clone(), source_kind)
+                        .await
+                        .map(Data::Sources)
+                        .map_err(rpc_error),
+                    Section::Captures => client
+                        .list_captures(context_id.clone())
+                        .await
+                        .map(Data::Captures)
+                        .map_err(rpc_error),
+                    Section::Targets
+                    | Section::Attention
+                    | Section::Breakpoints
+                    | Section::CallStacks => unreachable!("derived sections are not loaded"),
+                }
             };
+            let timeout_seconds = if section == Section::Sources { 30 } else { 15 };
+            let result =
+                match tokio::time::timeout(Duration::from_secs(timeout_seconds), load).await {
+                    Ok(result) => result,
+                    Err(_) => Err(format!(
+                        "{} query timed out after {timeout_seconds} seconds",
+                        section.title(),
+                    )),
+                };
             let _ = events
                 .send(ServiceEvent::DataLoaded {
-                    tab,
+                    section,
                     context_id,
                     generation,
                     result,
@@ -257,8 +328,60 @@ impl ServiceController {
         });
     }
 
-    pub fn load_generation(&self, tab: Tab) -> u64 {
-        self.load_generations[tab.index()]
+    pub fn load_generation(&self, section: Section) -> u64 {
+        self.load_generations[section.index()]
+    }
+
+    pub fn set_source(&mut self, source: Option<(String, String, SourceTreeKind)>) {
+        if let Some(task) = self.source_task.take() {
+            task.abort();
+        }
+        self.source_generation = self.source_generation.wrapping_add(1);
+        let generation = self.source_generation;
+        let Some((context_id, path, source_kind)) = source else {
+            return;
+        };
+        let view = match source_kind {
+            SourceTreeKind::Formatted if path.ends_with("?formatted") => {
+                SourceViewPreference::Formatted
+            }
+            SourceTreeKind::Formatted => SourceViewPreference::Original,
+            SourceTreeKind::Loaded | SourceTreeKind::SourceMapped => SourceViewPreference::Original,
+            SourceTreeKind::Resolved => SourceViewPreference::Policy,
+        };
+        let client = self.client.clone();
+        let events = self.events.clone();
+        self.source_task = Some(tokio::spawn(async move {
+            let result = match tokio::time::timeout(
+                Duration::from_secs(30),
+                client.show_source(
+                    context_id.clone(),
+                    path.clone(),
+                    SourceDisplayOptions {
+                        line: None,
+                        context_lines: 0,
+                        view,
+                    },
+                ),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(rpc_error),
+                Err(_) => Err("Source query timed out after 30 seconds".to_owned()),
+            };
+            let _ = events
+                .send(ServiceEvent::SourceLoaded {
+                    context_id,
+                    path,
+                    generation,
+                    result,
+                })
+                .await;
+        }));
+    }
+
+    pub fn source_generation(&self) -> u64 {
+        self.source_generation
     }
 
     pub fn perform(&self, action: UiAction) {
@@ -326,7 +449,10 @@ impl Drop for ServiceController {
         if let Some(task) = self.context_task.take() {
             task.abort();
         }
-        if let Some(task) = self.target_task.take() {
+        for (_, task) in std::mem::take(&mut self.target_tasks) {
+            task.abort();
+        }
+        if let Some(task) = self.source_task.take() {
             task.abort();
         }
     }
@@ -337,7 +463,10 @@ async fn perform_action(
     action: UiAction,
 ) -> Result<(String, ContextSnapshot), String> {
     match action {
-        UiAction::AttachProcess { process } => attach_process(client, process).await,
+        UiAction::ConfigureConnectionPath { path } => configure_connection_path(client, path).await,
+        UiAction::SetConnectionPathConfigured { path, configured } => {
+            set_connection_path_configured(client, path, configured).await
+        }
         UiAction::SetConnection {
             context_id,
             connection_id,
@@ -426,44 +555,62 @@ async fn perform_action(
                 snapshot,
             ))
         }
+        UiAction::PutBreakpoint {
+            context_id,
+            breakpoint_id,
+            source_path,
+            line,
+        } => {
+            let snapshot = client
+                .put_breakpoint(context_id, breakpoint_id.clone(), source_path, line, 1)
+                .await
+                .map_err(rpc_error)?;
+            Ok((format!("Breakpoint {breakpoint_id} set"), snapshot))
+        }
+        UiAction::DeleteBreakpoint {
+            context_id,
+            breakpoint_id,
+            expected_revision,
+        } => {
+            let snapshot = client
+                .delete_breakpoint(
+                    context_id,
+                    breakpoint_id.clone(),
+                    MutationOptions {
+                        expected_revision: Some(expected_revision),
+                        request_id: None,
+                    },
+                )
+                .await
+                .map_err(rpc_error)?;
+            Ok((format!("Breakpoint {breakpoint_id} removed"), snapshot))
+        }
     }
 }
 
-async fn attach_process(
+async fn configure_connection_path(
     client: &DebuggerServiceApiClient,
-    process: ProcessRef,
+    path: ConnectionPathRef,
 ) -> Result<(String, ContextSnapshot), String> {
-    let (connection_id, configuration, target_id, renderer_process_id) =
-        if let Some(target_id) = process.debug_target_id.clone() {
-            (
-                format!("process-tree-{}", process.root_process_id),
-                ConnectionConfiguration::ProcessTree {
-                    root_pid: process.root_process_id,
-                },
-                target_id,
-                (process.role == ProcessRole::Renderer).then_some(process.process_id),
-            )
-        } else {
-            let connection_id = format!("process-{}", process.process_id);
-            (
-                connection_id.clone(),
-                ConnectionConfiguration::Process {
-                    process_id: process.process_id,
-                },
-                synthetic_node_target_id(&connection_id),
-                None,
-            )
-        };
-
+    let (_, configuration) = connection_path_spec(
+        path.root_process_id,
+        path.process_id,
+        path.debug_target_id.as_deref(),
+    );
+    let connection_id = path.connection_id.clone();
     let context = client
-        .get_context(process.context_id.clone())
+        .get_context(path.context_id.clone())
         .await
         .map_err(rpc_error)?;
     let existing = context
         .connections
         .iter()
-        .find(|connection| connection.id == connection_id);
-    if let Some(connection) = existing {
+        .find(|connection| connection.id == connection_id)
+        .cloned();
+    let needs_configuration = existing
+        .as_ref()
+        .is_none_or(|connection| connection.configuration != configuration);
+    if let Some(connection) = &existing {
         if connection.status == ConnectionStatus::Disconnecting {
             return Err(format!(
                 "connection '{connection_id}' is still disconnecting; retry when it is disconnected"
@@ -482,219 +629,152 @@ async fn attach_process(
             ));
         }
     }
-    let needs_connection = existing.is_none_or(|connection| {
-        connection.configuration != configuration
-            || matches!(
-                connection.status,
-                ConnectionStatus::Disconnected | ConnectionStatus::Failed { .. }
-            )
-    });
-    if needs_connection {
+    if needs_configuration {
         client
             .put_connection(
-                process.context_id.clone(),
+                path.context_id.clone(),
                 connection_id.clone(),
-                configuration,
+                configuration.clone(),
             )
             .await
             .map_err(rpc_error)?;
-        client
-            .connect_connection(process.context_id.clone(), connection_id.clone())
-            .await
-            .map_err(rpc_error)?;
     }
-
-    let target_id = if let Some(process_id) = renderer_process_id {
-        resolve_renderer_target_id(client, &process.context_id, &connection_id, process_id).await?
-    } else if target_id == "$node-root" {
-        synthetic_node_target_id(&connection_id)
-    } else {
-        target_id
-    };
-    let (context, connection_generation, attachment) =
-        wait_for_target(client, &process.context_id, &connection_id, &target_id).await?;
-    if attachment == TargetAttachmentState::Debugger {
-        return Ok((
-            format!(
-                "Process {} is already attached as {connection_id}/{target_id}",
-                process.process_id
-            ),
-            context,
-        ));
-    }
-
-    let attach_result = client
-        .attach_target(
-            process.context_id.clone(),
-            connection_id.clone(),
-            target_id.clone(),
-            TargetAttachOptions {
-                force: false,
-                expected_connection_generation: Some(connection_generation),
-            },
-        )
-        .await;
-    if let Err(error) = attach_result {
-        let attach_error = rpc_error(error);
-        let current = client
-            .get_context(process.context_id.clone())
-            .await
-            .map_err(|verification_error| {
-                format!(
-                    "{}; attachment state could not be verified: {}",
-                    attach_error,
-                    rpc_error(verification_error)
-                )
-            })?;
-        let attached_concurrently = current.target_forest.iter().any(|target| {
-            target.connection_id == connection_id
-                && target.connection_generation == connection_generation
-                && target.target.target_id == target_id
-                && target.attachment == TargetAttachmentState::Debugger
-        });
-        if !attached_concurrently {
-            return Err(attach_error);
-        }
-    }
-    let context = client
-        .get_context(process.context_id)
+    let snapshot = client
+        .connect_connection(path.context_id, connection_id.clone())
         .await
         .map_err(rpc_error)?;
     Ok((
-        format!(
-            "Process {} attached as {connection_id}/{target_id}",
-            process.process_id
-        ),
-        context,
+        format!("Process {} connected as {connection_id}", path.process_id),
+        snapshot,
     ))
 }
 
-async fn resolve_renderer_target_id(
+async fn set_connection_path_configured(
     client: &DebuggerServiceApiClient,
-    context_id: &str,
-    connection_id: &str,
-    process_id: u32,
-) -> Result<String, String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let context = client
-            .get_context(context_id.to_owned())
+    path: ConnectionPathRef,
+    configured: bool,
+) -> Result<(String, ContextSnapshot), String> {
+    let (_, configuration) = connection_path_spec(
+        path.root_process_id,
+        path.process_id,
+        path.debug_target_id.as_deref(),
+    );
+    if configured {
+        let snapshot = client
+            .put_connection(path.context_id, path.connection_id.clone(), configuration)
             .await
             .map_err(rpc_error)?;
-        ensure_connection_can_publish_target(
-            &context,
-            connection_id,
-            &format!("renderer process {process_id}"),
-        )?;
-        let graph = client
-            .get_resource_graph(context_id.to_owned())
-            .await
-            .map_err(rpc_error)?;
-        let mut candidates = graph
-            .resources
-            .iter()
-            .filter(|resource| {
-                resource
-                    .attributes
-                    .get("connectionId")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(connection_id)
-                    && resource
-                        .attributes
-                        .get("processId")
-                        .and_then(serde_json::Value::as_u64)
-                        == Some(u64::from(process_id))
-                    && resource
-                        .attributes
-                        .get("subtype")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("electron-renderer")
-            })
-            .filter_map(|resource| {
-                resource
-                    .attributes
-                    .get("targetId")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect::<Vec<_>>();
-        candidates.sort();
-        candidates.dedup();
-        match candidates.as_slice() {
-            [target_id] => return Ok(target_id.clone()),
-            [] if tokio::time::Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            [] => {
-                return Err(format!(
-                    "renderer process {process_id} has no live Electron webContents"
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "renderer process {process_id} maps to multiple Electron webContents targets: {}",
-                    candidates.join(", ")
-                ));
-            }
-        }
+        return Ok((format!("Connection {} added", path.connection_id), snapshot));
     }
-}
 
-async fn wait_for_target(
-    client: &DebuggerServiceApiClient,
-    context_id: &str,
-    connection_id: &str,
-    target_id: &str,
-) -> Result<(ContextSnapshot, u64, TargetAttachmentState), String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let context = client
-            .get_context(context_id.to_owned())
-            .await
-            .map_err(rpc_error)?;
-        ensure_connection_can_publish_target(&context, connection_id, target_id)?;
-        if let Some(target) = context.target_forest.iter().find(|target| {
-            target.connection_id == connection_id && target.target.target_id == target_id
-        }) {
-            return Ok((
-                context.clone(),
-                target.connection_generation,
-                target.attachment,
-            ));
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "target {connection_id}/{target_id} was not published within 10 seconds"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-fn ensure_connection_can_publish_target(
-    context: &ContextSnapshot,
-    connection_id: &str,
-    target: &str,
-) -> Result<(), String> {
+    let context = client
+        .get_context(path.context_id.clone())
+        .await
+        .map_err(rpc_error)?;
     let connection = context
         .connections
         .iter()
-        .find(|connection| connection.id == connection_id)
-        .ok_or_else(|| format!("connection '{connection_id}' is no longer available"))?;
-    match &connection.status {
-        ConnectionStatus::Failed { message } => {
-            Err(format!("connection '{connection_id}' failed: {message}"))
+        .find(|connection| {
+            connection.id == path.connection_id && connection.configuration == configuration
+        })
+        .ok_or_else(|| {
+            format!(
+                "connection '{}' is no longer configured",
+                path.connection_id
+            )
+        })?;
+    let snapshot = match connection.status {
+        ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client
+            .disconnect_connection(path.context_id.clone(), path.connection_id.clone())
+            .await
+            .map_err(rpc_error)?,
+        ConnectionStatus::Disconnecting => {
+            return Err(format!(
+                "connection '{}' is still disconnecting",
+                path.connection_id
+            ));
         }
-        ConnectionStatus::Disconnected => Err(format!(
-            "connection '{connection_id}' disconnected before {target} was available"
-        )),
-        ConnectionStatus::Disconnecting => Err(format!(
-            "connection '{connection_id}' is disconnecting before {target} was available"
-        )),
-        ConnectionStatus::Connecting | ConnectionStatus::Connected { .. } => Ok(()),
-    }
+        ConnectionStatus::Disconnected | ConnectionStatus::Failed { .. } => context,
+    };
+    let snapshot = client
+        .delete_connection(
+            path.context_id,
+            path.connection_id.clone(),
+            MutationOptions {
+                expected_revision: Some(snapshot.revision),
+                request_id: None,
+            },
+        )
+        .await
+        .map_err(rpc_error)?;
+    Ok((
+        format!("Connection {} removed", path.connection_id),
+        snapshot,
+    ))
 }
 
 fn rpc_error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
+}
+
+fn configured_context_id(selection_file: &Path, cwd: &str) -> Result<Option<String>, String> {
+    let bytes = match std::fs::read(selection_file) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        == Some(2)
+    {
+        let bindings = value
+            .get("cwdBindings")
+            .and_then(serde_json::Value::as_object);
+        return Ok(path_and_parents(cwd)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find_map(|directory| {
+                bindings?
+                    .get(&directory)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            }));
+    }
+    Ok(value
+        .get("context")
+        .or_else(|| value.get("workspace"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_context_uses_the_nearest_cli_cwd_binding() {
+        let path =
+            std::env::temp_dir().join(format!("jsdbg-tui-selection-{}.json", std::process::id()));
+        std::fs::write(
+            &path,
+            br#"{
+                "schemaVersion": 2,
+                "cwdBindings": {
+                    "d:\\work": "parent",
+                    "d:\\work\\project": "project"
+                },
+                "activeScopes": {},
+                "scopes": {}
+            }"#,
+        )
+        .unwrap();
+
+        let selected = configured_context_id(&path, "d:\\work\\project\\src").unwrap();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(selected.as_deref(), Some("project"));
+    }
 }

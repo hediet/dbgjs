@@ -3959,6 +3959,12 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
         ConnectionConfiguration::ProcessTree { root_pid } => {
             format!("process tree rooted at PID {root_pid}")
         }
+        ConnectionConfiguration::ScopedProcessTree {
+            root_pid,
+            target_id,
+        } => {
+            format!("process tree rooted at PID {root_pid}, scoped to {target_id}")
+        }
         ConnectionConfiguration::Playwright {
             url,
             playwright_package: _,
@@ -4007,6 +4013,7 @@ fn connection_configuration_kind(configuration: &ConnectionConfiguration) -> &'s
         ConnectionConfiguration::NodeInspector { .. } => "node-inspector",
         ConnectionConfiguration::Process { .. } => "process",
         ConnectionConfiguration::ProcessTree { .. } => "process-tree",
+        ConnectionConfiguration::ScopedProcessTree { .. } => "scoped-process-tree",
         ConnectionConfiguration::Playwright { .. } => "playwright",
         ConnectionConfiguration::Chrome { .. } => "chrome",
         ConnectionConfiguration::Node { .. } => "node",
@@ -4551,6 +4558,7 @@ mod tests {
             root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
             targets: Vec::new(),
+            targets_observed: false,
             target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
@@ -4664,6 +4672,7 @@ mod tests {
                 target(2, "renderer-3", Some("$node-root"), "page"),
                 target(2, "renderer-3/target/iframe", Some("renderer-3"), "iframe"),
             ],
+            targets_observed: true,
             target_discovery_error: None,
         };
 
@@ -4731,6 +4740,7 @@ mod tests {
             root_kind: ProcessRootKind::Vscode,
             runtime_metadata_available: true,
             targets: Vec::new(),
+            targets_observed: false,
             target_discovery_error: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),

@@ -514,13 +514,21 @@ impl CdpDebuggerSession {
                 source_map_url,
                 ..
             } if script.session == self.session => {
-                let source = self
+                let source = match self
                     .client
                     .debugger_get_script_source(DebuggerGetScriptSourceParams::new(
                         script.script_id.clone(),
                     ))
                     .await
-                    .map_err(CdpRuntimeError::protocol)?;
+                {
+                    Ok(source) => source,
+                    Err(error) => {
+                        return Ok(Some(Input::EffectFailed {
+                            effect_id: *effect_id,
+                            message: CdpRuntimeError::protocol(error).to_string(),
+                        }));
+                    }
+                };
                 let (source_map, resolved_source_map_url, source_map_error) = match source_map_url {
                     Some(source_map_url) => {
                         match self
