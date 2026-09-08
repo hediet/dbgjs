@@ -477,6 +477,20 @@ capturing target still belongs to the recorded connection generation, so a
 capture completing after reconnect cannot be attributed to the replacement
 target.
 
+Heap captures retain a mapping bundle in the durable catalog: generated script
+URLs, CDP hashes and source, source-map URL/content or load diagnostics, connection
+generation, execution-context auxiliary data, and owning frame IDs. Live and
+stored class queries share the same pure projection over captured inputs; stored
+analysis does not consult the current target. Per-script mapping availability is
+explicit, including unavailable metadata for older captures.
+
+`heap supply-map <capture> <script-id> <captured-script-hash> <map-file>` adds or
+replaces only that script's mapping bundle, leaving the heap payload immutable.
+It validates the captured hash, map structure, and any generated `file` name.
+The caller must supply a map from the captured build; a source map does not
+intrinsically prove which generated hash it belongs to. `heap classes --no-cache`
+is rejected rather than silently ignored.
+
 `capture delete` removes immutable heap storage before persisting catalog
 removal. Filesystem failures are explicit and retain the catalog entry; retries
 accept already-absent files, including after catalog persistence fails following
@@ -743,6 +757,15 @@ Context selection and target resolution are separate operations. A
 `--target <target-id-or-selector>` scope is resolved only inside the selected
 context. An exact canonical target ID resolves context-wide without requiring
 `--connection`; exact ID equality takes precedence over friendly matching.
+
+Target listings print copyable `connection/target@generation` selectors,
+including for nested iframe targets; indentation describes hierarchy, not a
+relative selector grammar. Commands also accept `connection/target` without a
+generation. Qualified matches take precedence over unqualified IDs and friendly
+matches. A generation-qualified selector does not follow a reconnected target.
+Its generation remains part of the RPC selector until the service atomically
+resolves it and selects the debugger handle; it is not discarded by CLI lookup.
+An explicit `--connection` constrains resolution before ambiguity checking.
 
 Friendly title, URL, and substring matching remains a convenience. It must
 resolve exactly one target. Ambiguity is never hidden: an error lists every
@@ -1153,6 +1176,11 @@ than choosing by current target focus.
 Locations shown to users are one-based. CDP's zero-based locations are converted
 at the protocol boundary.
 
+`source resolve` requires an exact canonical URI (as printed by `source list`).
+An unmatched abbreviation reports canonical substring candidates and explicitly
+labels multiple candidates as ambiguous; only an empty inventory reports that
+no sources are observed.
+
 ### 13.3 Automatic formatting
 
 Formatting is a derived source projection and never mutates runtime content.
@@ -1185,9 +1213,29 @@ jsdbg source grep checkout --view formatted
 There is intentionally no `--view policy`; omitting `--view` is the policy
 behavior.
 
+On first access, a formatted URI acquires the original script before selecting
+its formatting projection. Minified scripts do not need source maps to be
+pretty-printed.
+
 ### 13.4 Source search
 
 Searching logical/projected sources is a first-class operation:
+
+Search acquires matching metadata-only runtime scripts before scanning them.
+Map-bearing scripts are also acquired to discover matching authored filenames,
+even when their generated bundle URL does not match `--path`. Acquisition shares
+the source-show/tree path, observes search deadlines and cancellation, and keeps
+individual fetch failures from preventing other sources from being searched.
+JSON results include `skipped` entries with source identity and reason; human
+output lists the same diagnostics after the searched/skipped counts.
+
+Cancelling a source-map read closes its CDP stream without waiting for the read
+response. If cancellation happens before the resource-load response, bounded
+response tracking closes the stream when its handle arrives. At most four
+resource loads per target remain outstanding; further loads fail explicitly
+until a response or disconnect releases capacity. Load/read/close waits time out
+after 30 seconds, and abandoned-stream close dispatch has a five-second bound.
+No background task waits indefinitely for a late resource-load response.
 
 ```text
 jsdbg source grep "validateUser"

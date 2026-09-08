@@ -115,6 +115,16 @@ pub struct ScriptState {
     pub source_map_url: Option<String>,
     pub version: u64,
     pub source: ScriptSourceState,
+    pub provenance: crate::service_api::ScriptProvenance,
+    pub captured_source: Option<CapturedScriptSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedScriptSource {
+    pub content: Arc<str>,
+    pub source_map: Option<Arc<[u8]>>,
+    pub source_map_url: Option<String>,
+    pub source_map_error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -550,6 +560,8 @@ pub enum Effect {
         generated_url: String,
         script_hash: String,
         source_map_url: Option<String>,
+        #[serde(default)]
+        frame_id: Option<String>,
     },
     BuildSourceView {
         effect_id: EffectId,
@@ -653,7 +665,18 @@ pub enum Input {
         hash: String,
         source_map_url: Option<String>,
     },
+    ScriptParsedWithProvenance {
+        session: SessionKey,
+        script_id: String,
+        url: String,
+        hash: String,
+        source_map_url: Option<String>,
+        provenance: crate::service_api::ScriptProvenance,
+    },
     RequestScriptSource {
+        script: ScriptKey,
+    },
+    RefreshScriptSource {
         script: ScriptKey,
     },
     ScriptSourceFetched {
@@ -846,6 +869,23 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             None => stale_effect(&mut state, effect_id),
         },
         Input::SessionDetached { session } => detach_session(&mut state, &session),
+        Input::ScriptParsedWithProvenance {
+            session, script_id, url, hash, source_map_url, provenance,
+        } => {
+            let key = ScriptKey { session: session.clone(), script_id: script_id.clone() };
+            let mut transition = reduce(previous, Input::ScriptParsed {
+                session, script_id, url, hash, source_map_url,
+            });
+            if let Some(script) = Arc::make_mut(&mut Arc::make_mut(&mut transition.state).scripts).get_mut(&key) {
+                Arc::make_mut(script).provenance = provenance.clone();
+            }
+            for effect in &mut transition.effects {
+                if let Effect::FetchScriptSource { frame_id, .. } = effect {
+                    *frame_id = provenance.frame_id.clone();
+                }
+            }
+            return transition;
+        }
         Input::ScriptParsed {
             session,
             script_id,
@@ -876,6 +916,8 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                     source_map_url,
                     version,
                     source: ScriptSourceState::Unresolved,
+                    provenance: Default::default(),
+                    captured_source: None,
                 }),
             );
             let breakpoint_keys = state.breakpoints.keys().cloned().collect::<Vec<_>>();
@@ -917,6 +959,23 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 schedule_source_hydration(&mut state, &key, false, &mut effects);
             }
         }
+        Input::RefreshScriptSource { script } => {
+            let Some(current) = previous.scripts.get(&script) else {
+                return reduce(previous, Input::RequestScriptSource { script });
+            };
+            let mut refreshed = reduce(previous, Input::ScriptParsedWithProvenance {
+                session: script.session.clone(),
+                script_id: script.script_id.clone(),
+                url: current.url.clone(),
+                hash: current.hash.clone(),
+                source_map_url: current.source_map_url.clone(),
+                provenance: current.provenance.clone(),
+            });
+            schedule_source_hydration(
+                Arc::make_mut(&mut refreshed.state), &script, true, &mut refreshed.effects,
+            );
+            return refreshed;
+        }
         Input::RequestScriptSource { script } => {
             if !state.scripts.contains_key(&script) {
                 invalid(
@@ -948,7 +1007,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                 stale_effect(&mut state, effect_id);
                 return finish(state, effects);
             }
-            if let Some(message) = source_map_error {
+            if let Some(message) = source_map_error.clone() {
                 push_diagnostic(
                     &mut state,
                     Diagnostic::SourceMapUnavailable {
@@ -966,6 +1025,12 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             );
             let scripts = Arc::make_mut(&mut state.scripts);
             let script_state = Arc::make_mut(scripts.get_mut(&script).unwrap());
+            script_state.captured_source = Some(CapturedScriptSource {
+                content: content.clone(),
+                source_map: source_map.clone(),
+                source_map_url: source_map_url.clone(),
+                source_map_error,
+            });
             script_state.source = ScriptSourceState::Loaded {
                 content: content.clone(),
                 source_map: source_map.clone(),
@@ -1907,6 +1972,7 @@ fn schedule_source_hydration(
         generated_url: script_state.url.clone(),
         script_hash: script_state.hash.clone(),
         source_map_url: script_state.source_map_url.clone(),
+        frame_id: script_state.provenance.frame_id.clone(),
     });
 }
 
@@ -2958,6 +3024,37 @@ mod tests {
         assert!(Arc::ptr_eq(&sessions, &with_breakpoint.sessions));
         assert!(Arc::ptr_eq(&scripts, &with_breakpoint.scripts));
         assert_eq!(with_breakpoint.revision, attached.revision + 1);
+    }
+
+    #[test]
+    fn script_provenance_selects_owning_frame_for_source_map_fetches() {
+        let (state, session) = configured_session();
+        let parsed = reduce(&state, Input::ScriptParsedWithProvenance {
+            session, script_id: "child-script".into(), url: "https://example.test/app.js".into(),
+            hash: "captured-hash".into(), source_map_url: Some("app.js.map".into()),
+            provenance: crate::service_api::ScriptProvenance {
+                execution_context_id: Some(23),
+                execution_context_aux_data: Some(serde_json::json!({"frameId": "child-frame"})),
+                frame_id: Some("child-frame".into()),
+            },
+        });
+        let script = parsed.state.scripts.keys().next().unwrap().clone();
+        let requested = reduce(&parsed.state, Input::RequestScriptSource { script: script.clone() });
+        let [Effect::FetchScriptSource { effect_id, frame_id, .. }] = requested.effects.as_slice()
+            else { panic!("missing source fetch") };
+        assert_eq!(frame_id.as_deref(), Some("child-frame"));
+        let fetched = reduce(&requested.state, Input::ScriptSourceFetched {
+            effect_id: *effect_id, content: Arc::from("class a {}"),
+            source_map: Some(Arc::from(b"{\"version\":3}".as_slice())),
+            source_map_url: Some("https://example.test/app.js.map".into()), source_map_error: None,
+        });
+        let [Effect::BuildSourceView { effect_id, .. }] = fetched.effects.as_slice()
+            else { panic!("missing source view build") };
+        let resolved = reduce(&fetched.state, Input::SourceViewBuilt { effect_id: *effect_id, logical_sources: BTreeMap::new() });
+        let captured = resolved.state.scripts[&script].captured_source.as_ref().unwrap();
+        assert_eq!(captured.content.as_ref(), "class a {}");
+        assert!(captured.source_map.is_some());
+        assert_eq!(resolved.state.scripts[&script].provenance.execution_context_id, Some(23));
     }
 
     #[test]
@@ -4745,6 +4842,8 @@ mod tests {
                 old_script.clone(),
                 Arc::new(ScriptState {
                     url: "old.js".into(),
+                    provenance: Default::default(),
+                    captured_source: None,
                     hash: "old-hash".into(),
                     source_map_url: Some("old.js.map".into()),
                     version: 1,
@@ -4938,6 +5037,8 @@ mod tests {
                 script.clone(),
                 Arc::new(ScriptState {
                     url: format!("bundle-{index:04}.js"),
+                    provenance: Default::default(),
+                    captured_source: None,
                     hash: format!("hash-{index:04}"),
                     source_map_url: Some(format!("bundle-{index:04}.js.map")),
                     version: 1,

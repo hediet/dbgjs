@@ -34,5 +34,6 @@ pub mod source_view;
 pub mod stdio_transport;
 pub mod target_debugger;
 pub mod target_domain;
+pub mod target_selector;
 pub mod virtual_browser_root;
 pub mod websocket_transport;

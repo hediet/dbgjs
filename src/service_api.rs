@@ -692,6 +692,18 @@ pub struct SourceSearchSnapshot {
     pub searched_sources: u32,
     pub searched_contents: u32,
     pub skipped_sources: u32,
+    #[serde(default)]
+    pub skipped: Vec<SourceSearchSkip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchSkip {
+    pub path: String,
+    pub kind: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1375,6 +1387,69 @@ pub struct HeapCaptureResult {
     pub capture_id: String,
     pub bytes_written: u64,
     pub timing: HeapSnapshotTiming,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub mapping: Option<HeapMappingSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptProvenance {
+    pub execution_context_id: Option<i64>,
+    pub execution_context_aux_data: Option<serde_json::Value>,
+    pub frame_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapMappingSnapshot {
+    pub connection_generation: u64,
+    pub scripts: Vec<HeapScriptSnapshot>,
+    pub hydration_duration_micros: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapScriptSnapshot {
+    pub script_id: String,
+    pub url: String,
+    pub hash: String,
+    pub provenance: ScriptProvenance,
+    pub source_map_url: Option<String>,
+    pub generated_source: Option<String>,
+    pub source_map: Option<String>,
+    pub mapping_status: HeapMappingStatus,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapMappingStatus {
+    #[default]
+    NotAttempted,
+    NoMapSupplied,
+    MapLoadingFailed,
+    Mapped,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapScriptMappingDiagnostic {
+    pub script_id: String,
+    pub url: String,
+    pub hash: String,
+    pub provenance: ScriptProvenance,
+    pub status: HeapMappingStatus,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSourceMapSupply {
+    pub script_id: String,
+    pub script_hash: String,
+    pub source_map_url: String,
+    pub source_map: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1411,6 +1486,10 @@ pub struct HeapClassAnalysisSnapshot {
     pub source_map_hydration_duration_micros: u64,
     pub constructor_group_count: u64,
     pub used_cached_groups: bool,
+    #[serde(default)]
+    pub mapping_status: HeapMappingStatus,
+    #[serde(default)]
+    pub script_mappings: Vec<HeapScriptMappingDiagnostic>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1424,6 +1503,10 @@ pub struct HeapClassSnapshotEntry {
     pub shallow_size: u64,
     pub instances: Vec<HeapInstanceSnapshot>,
     pub omitted_instance_count: u64,
+    #[serde(default)]
+    pub script_id: String,
+    #[serde(default)]
+    pub provenance: ScriptProvenance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1885,6 +1968,12 @@ pub trait DebuggerServiceApi {
         capture_name: String,
         filter: Option<String>,
     ) -> Result<HeapClassSnapshot, JsonRpcError>;
+
+    async fn supply_stored_heap_source_map(
+        context_id: String,
+        capture_name: String,
+        supply: HeapSourceMapSupply,
+    ) -> Result<(), JsonRpcError>;
 
     async fn attach_target(
         context_id: String,

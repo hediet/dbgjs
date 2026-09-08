@@ -70,7 +70,7 @@ VS Code process tree 33508
    |- w:33508/7  window  linkrpc
    |  |- p:43336  renderer  [renderer]
    |  |  `- renderer-3  [page]
-   |  |     `- ./target/57B3B333337F3E49DC315EEC50F11741  [iframe]
+   |  |     `- renderer-3/target/57B3B333337F3E49DC315EEC50F11741  [iframe]
    |  `- p:15388  extension-host  [extension-host]
    `- p:24664  agent-host  [agent-host]
       `- p:41552  Code - Insiders.exe  [copilot]
@@ -152,8 +152,8 @@ Use `--output <path>` to choose the destination.
 
 `renderer process ... maps to multiple Electron webContents`
 
-- jsdbg refuses to guess. Inspect the live `WebContents` set and select an
-  explicit target when that workflow is available.
+- jsdbg refuses to guess. The error prints qualified target attachment commands;
+  choose the intended target from those candidates.
 
 ### Inspect nested renderer targets
 
@@ -170,11 +170,15 @@ jsdbg target attach --target <printed-target-id> --set
 jsdbg screenshot capture --output iframe.png
 ```
 
-Tree output shortens descendants relative to their displayed parent. If a
-renderer is `renderer-2` and its child is printed as `./target/F2CDE85C`, the
-copyable target ID is `renderer-2/target/F2CDE85C`. `target attach`, `target
-cdp`, evaluation, source inspection, and screenshot capture all accept that
-same ID. An OOPIF cannot execute `Page.captureScreenshot` directly, so the
+Tree output prints complete selectors rather than parent-relative fragments.
+`target list` qualifies each selector with its connection and generation, for
+example `process-tree-33508/renderer-2/target/F2CDE85C@1`. You can copy it directly
+into `--target`, or omit `@1` to follow the current connection generation.
+`process list --full` prints canonical IDs such as
+`renderer-2/target/F2CDE85C`, since discovery need not belong to a persistent
+connection yet. `target attach`, `target cdp`, evaluation, source inspection,
+and screenshot capture accept those IDs once the corresponding connection
+is present. An OOPIF cannot execute `Page.captureScreenshot` directly, so the
 screenshot capability follows the frame-owner relation and clips a temporary
 capture from the embedding page; it does not user-attach the rest of the tree.
 
@@ -323,6 +327,42 @@ jsdbg heap dominators $objectRef
 
 Heap object references are capture-qualified. `.` selects the latest capture,
 so `.#12345` means heap object `12345` in the latest capture.
+
+Heap captures also retain the observed script URLs and CDP hashes, generated
+source, source-map URLs/content, connection generation, and execution-context
+and owning-frame metadata. `heap classes <name>` uses these captured inputs,
+including after disconnecting or restarting the service; it never substitutes
+scripts from the current target. Constructor groups remain separate across
+scripts and display frame/context labels when available.
+
+JSON analysis includes per-script `scriptMappings` with the captured hash and
+one of `notAttempted`, `noMapSupplied`, `mapLoadingFailed`, or `mapped`, plus
+failure reasons. Legacy captures without metadata remain readable and explicitly
+report mapping as not attempted. Missing production maps are not diagnosed as
+network failures. Source-map hydration timing records capture-time work, not a
+new fetch during offline analysis.
+
+For bundles distributed without maps, supply a matching build artifact:
+
+```powershell
+jsdbg heap classes baseline --json
+jsdbg heap supply-map baseline 200 <captured-script-hash> .\build\editor.js.map
+jsdbg heap classes baseline
+```
+
+The supply command persists the map with that capture, rejects mismatched or
+missing captured hashes, malformed/unsupported maps, and a `file` field naming
+a different generated bundle. The hash is an explicit association to the
+captured script: source maps do not themselves cryptographically attest their
+generated input. Use a map from the same build. No map or source is fetched from
+the network during offline analysis. Maps without `sourcesContent` can still
+project positions, but cannot recover authored constructor names.
+
+`heap classes --no-cache` is explicitly rejected. Capture a new snapshot to
+refresh metadata; supplying a map updates only the selected stored capture.
+New captures retry previously failed or invalid source-map acquisitions with
+the map cache bypassed, even if the generated source was already resolved.
+This does not change the metadata or mapping results of older captures.
 
 ## 8. Disconnect and clean up
 

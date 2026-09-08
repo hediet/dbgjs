@@ -44,6 +44,7 @@ pub struct HydratedSource {
 pub struct HydratedSourceBatch {
     pub sources: Vec<HydratedSource>,
     pub skipped_sources: u32,
+    pub skipped: Vec<crate::service_api::SourceSearchSkip>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +114,15 @@ impl SearchControl {
 
     pub fn check(&self) -> Result<(), SearchError> {
         self.interruption().map_or(Ok(()), Err)
+    }
+
+    pub async fn interrupted(&self) -> SearchError {
+        loop {
+            if let Some(error) = self.interruption() {
+                return error;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     fn interruption(&self) -> Option<SearchError> {

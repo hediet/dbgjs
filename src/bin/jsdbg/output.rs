@@ -134,8 +134,26 @@ pub struct TargetListOutput {
 }
 
 impl OutputFormat {
+    pub fn print_heap_map_supplied(&self, capture: &str, script: &str) -> Result<(), serde_json::Error> {
+        match self {
+            Self::Json => println!("{}", serde_json::to_string(&serde_json::json!({
+                "captureId": capture, "scriptId": script, "sourceMapSaved": true
+            }))?),
+            Self::Human => println!("Source map saved for script:{script} in heap capture '{capture}'."),
+        }
+        Ok(())
+    }
+
     pub fn is_json(self) -> bool {
         matches!(self, Self::Json)
+    }
+
+    pub fn print_eval(&self, value: &ValueSnapshot) -> Result<(), serde_json::Error> {
+        self.print(value)?;
+        if matches!(self, Self::Human) && value.preview.truncated {
+            println!("Preview truncated; rerun target eval with --full or --max-preview-length <n>.");
+        }
+        Ok(())
     }
 
     pub fn from_arguments(arguments: &mut Vec<String>) -> Self {
@@ -685,6 +703,9 @@ impl HumanOutput for SourceSearchSnapshot {
             "{} source(s) searched, {} skipped",
             self.searched_sources, self.skipped_sources
         );
+        for source in &self.skipped {
+            println!("Skipped {} ({}): {}", source.path, source.kind, source.reason);
+        }
     }
 }
 
@@ -1686,7 +1707,6 @@ impl HumanOutput for TargetListOutput {
             print_target_tree(
                 self,
                 *root,
-                None,
                 "",
                 index + 1 == roots.len(),
                 &children,
@@ -1695,7 +1715,7 @@ impl HumanOutput for TargetListOutput {
         }
         for index in 0..self.targets.len() {
             if !visited.contains(&index) {
-                print_target_tree(self, index, None, "", true, &children, &mut visited);
+                print_target_tree(self, index, "", true, &children, &mut visited);
             }
         }
     }
@@ -1704,7 +1724,6 @@ impl HumanOutput for TargetListOutput {
 fn print_target_tree(
     output: &TargetListOutput,
     index: usize,
-    parent_index: Option<usize>,
     prefix: &str,
     last: bool,
     children: &BTreeMap<usize, Vec<usize>>,
@@ -1720,7 +1739,7 @@ fn print_target_tree(
     } else {
         &target.title
     };
-    let selector = target_tree_selector(entry, parent_index.map(|index| &output.targets[index]));
+    let selector = target_tree_selector(entry);
     println!(
         "{prefix}{}{} {}  [{}{}]  {:?}  {}",
         if last { "└─" } else { "├─" },
@@ -1737,7 +1756,6 @@ fn print_target_tree(
         print_target_tree(
             output,
             *child,
-            Some(index),
             &child_prefix,
             child_index + 1 == child_indices.len(),
             children,
@@ -1746,26 +1764,12 @@ fn print_target_tree(
     }
 }
 
-fn target_tree_selector(entry: &TargetListEntry, parent: Option<&TargetListEntry>) -> String {
-    let Some(parent) = parent else {
-        return format!("{}/{}", entry.connection_id, entry.target.target_id);
-    };
-    let target_id = entry.target.target_id.as_str();
-    let parent_id = parent.target.target_id.as_str();
-    if let Some(suffix) = target_id
-        .strip_prefix(parent_id)
-        .and_then(|suffix| suffix.strip_prefix('/'))
-    {
-        return format!("./{suffix}");
-    }
-    let target_directory = target_id.rsplit_once('/').map(|(directory, _)| directory);
-    let parent_directory = parent_id.rsplit_once('/').map(|(directory, _)| directory);
-    if target_directory == parent_directory
-        && let Some((_, name)) = target_id.rsplit_once('/')
-    {
-        return format!("./{name}");
-    }
-    format!("./{target_id}")
+fn target_tree_selector(entry: &TargetListEntry) -> String {
+    cdp_client::target_selector::qualified_target_selector(
+        &entry.connection_id,
+        &entry.target.target_id,
+        entry.connection_generation,
+    )
 }
 
 impl HumanOutput for Vec<ProcessTreeSnapshot> {
@@ -2148,7 +2152,7 @@ fn process_render_node<'a>(
             .get(&process.process_id)
             .into_iter()
             .flatten()
-            .map(|target| process_target_render_node(target, None, target_children)),
+            .map(|target| process_target_render_node(target, target_children)),
     );
     ProcessRenderNode {
         path_segment: process_path_segment(process),
@@ -2159,50 +2163,18 @@ fn process_render_node<'a>(
 
 fn process_target_render_node<'a>(
     target: &'a ProcessTargetSnapshot,
-    parent: Option<&ProcessTargetSnapshot>,
     children: &BTreeMap<String, Vec<&'a ProcessTargetSnapshot>>,
 ) -> ProcessRenderNode<'a> {
     ProcessRenderNode {
-        path_segment: process_target_selector(target, parent),
+        path_segment: target.target.target_id.clone(),
         leaf: ProcessTreeLeaf::Target(target),
         children: children
             .get(&target.target.target_id)
             .into_iter()
             .flatten()
-            .map(|child| process_target_render_node(child, Some(target), children))
+            .map(|child| process_target_render_node(child, children))
             .collect(),
     }
-}
-
-fn process_target_selector(
-    target: &ProcessTargetSnapshot,
-    parent: Option<&ProcessTargetSnapshot>,
-) -> String {
-    let Some(parent) = parent else {
-        return target.target.target_id.clone();
-    };
-    target
-        .target
-        .target_id
-        .strip_prefix(&parent.target.target_id)
-        .and_then(|suffix| suffix.strip_prefix('/'))
-        .map(|suffix| format!("./{suffix}"))
-        .or_else(|| {
-            let target_directory = target.target.target_id.rsplit_once('/')?.0;
-            let parent_directory = parent.target.target_id.rsplit_once('/')?.0;
-            (target_directory == parent_directory).then(|| {
-                format!(
-                    "./{}",
-                    target
-                        .target
-                        .target_id
-                        .rsplit_once('/')
-                        .expect("target directory was found")
-                        .1
-                )
-            })
-        })
-        .unwrap_or_else(|| format!("./{}", target.target.target_id))
 }
 
 fn process_path_segment(process: &ProcessSnapshot) -> String {
@@ -3001,7 +2973,7 @@ impl BoundedTreeStyle<HeapClassMetrics, Vec<HeapClassSnapshotEntry>> for HeapCla
             };
             output.push(format!(
                 "{prefix}{branch} {}  {} instances, {}{}",
-                class.name,
+                heap_class_label(class),
                 class.instance_count,
                 compact_bytes(class.shallow_size),
                 inline
@@ -3099,11 +3071,11 @@ fn render_heap_classes_human(
         .parse_duration_micros
         .saturating_add(snapshot.analysis.projection_duration_micros);
     let analysis = format!(
-        "{:.3}s (parse {:.3}s, projection {:.3}s, source-map hydration {:.3}s; {} constructor groups{})",
+        "{:.3}s (parse {:.3}s, projection {:.3}s; mapping {}; {} constructor groups{})",
         analysis_duration as f64 / 1_000_000.0,
         snapshot.analysis.parse_duration_micros as f64 / 1_000_000.0,
         snapshot.analysis.projection_duration_micros as f64 / 1_000_000.0,
-        snapshot.analysis.source_map_hydration_duration_micros as f64 / 1_000_000.0,
+        heap_mapping_status_label(&snapshot.analysis.mapping_status),
         snapshot.analysis.constructor_group_count,
         if snapshot.analysis.used_cached_groups {
             ", cached"
@@ -3126,6 +3098,14 @@ fn render_heap_classes_human(
     });
     if snapshot.classes.is_empty() {
         return output;
+    }
+    for diagnostic in &snapshot.analysis.script_mappings {
+        if diagnostic.status != cdp_client::service_api::HeapMappingStatus::Mapped
+            && output.len() < maximum_lines.saturating_sub(1) {
+            output.push(format!("Mapping script:{} ({}): {}{}",
+                diagnostic.script_id, diagnostic.url, heap_mapping_status_label(&diagnostic.status),
+                diagnostic.diagnostic.as_ref().map(|reason| format!(" — {reason}")).unwrap_or_default()));
+        }
     }
     if options.sort_by_instances {
         render_heap_classes_ranked(snapshot, &options, maximum_lines, &mut output);
@@ -3175,6 +3155,23 @@ fn render_heap_classes_human(
     output
 }
 
+fn heap_mapping_status_label(status: &cdp_client::service_api::HeapMappingStatus) -> &'static str {
+    use cdp_client::service_api::HeapMappingStatus;
+    match status {
+        HeapMappingStatus::NotAttempted => "not attempted (metadata unavailable)",
+        HeapMappingStatus::NoMapSupplied => "no map supplied",
+        HeapMappingStatus::MapLoadingFailed => "map loading failed",
+        HeapMappingStatus::Mapped => "mapped (captured metadata)",
+    }
+}
+
+fn heap_class_label(class: &HeapClassSnapshotEntry) -> String {
+    let mut labels = Vec::new();
+    if let Some(frame) = &class.provenance.frame_id { labels.push(format!("frame:{frame}")); }
+    if let Some(context) = class.provenance.execution_context_id { labels.push(format!("context:{context}")); }
+    if labels.is_empty() { class.name.clone() } else { format!("{} [{}]", class.name, labels.join(", ")) }
+}
+
 fn render_heap_classes_ranked(
     snapshot: &HeapClassSnapshot,
     options: &HeapClassOutputOptions,
@@ -3204,7 +3201,7 @@ fn render_heap_classes_ranked(
         output.push(format!(
             "{:>4}. {}  {} instances, {}  {}:{}:{}",
             index + 1,
-            class.name,
+            heap_class_label(class),
             class.instance_count,
             compact_bytes(class.shallow_size),
             normalize_source_path(&class.source_url),
@@ -4682,13 +4679,13 @@ mod tests {
                 "└─ p:1  electron.exe  [electron-main]",
                 "   └─ p:2  renderer  [renderer]",
                 "      └─ renderer-3  [page]  \"renderer-3\"  ",
-                "         └─ ./target/iframe  [iframe]  \"renderer-3/target/iframe\"  ",
+                "         └─ renderer-3/target/iframe  [iframe]  \"renderer-3/target/iframe\"  ",
             ]
         );
     }
 
     #[test]
-    fn target_tree_uses_parent_relative_selectors() {
+    fn target_tree_uses_round_trippable_qualified_selectors() {
         let entry = |target_id: &str| TargetListEntry {
             connection_id: "tree".to_owned(),
             connection_generation: 1,
@@ -4713,16 +4710,32 @@ mod tests {
         let page = entry("cdp-browser-1/target/page");
         let page_iframe = entry("cdp-browser-1/target/iframe");
 
-        assert_eq!(target_tree_selector(&root, None), "tree/$node-root:tree");
+        assert_eq!(target_tree_selector(&root), "tree/$node-root:tree@1");
         assert_eq!(
-            target_tree_selector(&browser, Some(&root)),
-            "./cdp-browser-1"
+            target_tree_selector(&browser),
+            "tree/cdp-browser-1@1"
         );
         assert_eq!(
-            target_tree_selector(&renderer_iframe, Some(&renderer)),
-            "./target/iframe"
+            target_tree_selector(&renderer_iframe),
+            "tree/renderer-1/target/iframe@1"
         );
-        assert_eq!(target_tree_selector(&page_iframe, Some(&page)), "./iframe");
+        assert_eq!(
+            target_tree_selector(&page_iframe),
+            "tree/cdp-browser-1/target/iframe@1"
+        );
+        for entry in [
+            &root, &browser, &renderer, &renderer_iframe, &page, &page_iframe,
+        ] {
+            assert_eq!(
+                cdp_client::target_selector::match_target_selector(
+                    &entry.target,
+                    &entry.connection_id,
+                    entry.connection_generation,
+                    &target_tree_selector(entry),
+                ),
+                Some(cdp_client::target_selector::TargetSelectorMatch::Qualified),
+            );
+        }
     }
 
     #[test]
@@ -4923,6 +4936,8 @@ mod tests {
         let retained = count.min(20);
         HeapClassSnapshotEntry {
             name: name.to_owned(),
+            script_id: "1".into(),
+            provenance: Default::default(),
             source_url: "src/model.ts".to_owned(),
             location: SourceLocation {
                 source_url: "src/model.ts".to_owned(),
@@ -4959,8 +4974,24 @@ mod tests {
                 source_map_hydration_duration_micros: 0,
                 constructor_group_count: 0,
                 used_cached_groups: false,
+                mapping_status: Default::default(),
+                script_mappings: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn heap_class_labels_include_owning_frame_and_context() {
+        let mut class = heap_class("Original", 1);
+        class.provenance.frame_id = Some("webview-child".into());
+        class.provenance.execution_context_id = Some(23);
+        assert_eq!(super::heap_class_label(&class), "Original [frame:webview-child, context:23]");
+        let lines = render_heap_classes_human(&heap_snapshot(vec![class]), HeapClassOutputOptions {
+            all: true, max_lines: 300, instances: false, sort_by_instances: true, trim_width: false,
+        });
+        assert!(lines.iter().any(|line| line.contains("frame:webview-child")));
+        assert!(lines.iter().any(|line| line.contains("mapping not attempted")));
+        assert!(!lines.iter().any(|line| line.contains("source-map hydration 0.000s")));
     }
 
     #[test]

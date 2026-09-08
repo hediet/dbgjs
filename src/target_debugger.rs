@@ -62,6 +62,12 @@ use crate::service_api::{
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_search::{HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::Position;
+use crate::service_api::{
+    HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapScriptMappingDiagnostic,
+    HeapSourceMapSupply, ScriptProvenance,
+};
+use crate::source_view::{GeneratedSourceInput, ResolvedSourceView, ResolutionPolicy};
+use crate::context_source_model::SourceContributionId;
 
 const COMMAND_BUFFER: usize = 32;
 const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
@@ -1415,6 +1421,30 @@ async fn run_target(
                 control,
                 response,
             })) => {
+                if !response.is_closed() && control.check().is_ok() {
+                    let result = acquire_sources(
+                        &mut driver,
+                        SourceAcquisition::Search(path_selector.as_deref()),
+                        Some(&control),
+                    )
+                    .await;
+                    if let Err(error) = result {
+                        let _ = response.send(Err(error));
+                        continue;
+                    }
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
                 complete_source_search_batch(response, &control, || {
                     driver.source_effects().search_source_batch(
                         driver.state(),
@@ -1992,6 +2022,7 @@ async fn run_target(
             })) => {
                 let capture_id = capture_id.unwrap_or_else(|| ".".to_owned());
                 let path = temporary_heap_snapshot_path();
+                let mapping = capture_heap_mapping(&mut driver, &session_key, connection_generation).await;
                 let result = take_heap_snapshot(
                     &driver,
                     path.clone(),
@@ -2003,11 +2034,12 @@ async fn run_target(
                     capture_id: capture_id.clone(),
                     bytes_written: written.bytes_written,
                     timing: heap_snapshot_timing(&written),
+                    mapping: Some(mapping.clone()),
                 });
                 if let Ok(capture) = &result {
                     let timing = capture.timing.clone();
                     if let Some(previous) =
-                        heap_captures.insert(capture_id.clone(), StoredHeapCapture { path, timing })
+                        heap_captures.insert(capture_id.clone(), StoredHeapCapture { path, timing, mapping })
                     {
                         let _ = tokio::fs::remove_file(previous.path).await;
                     }
@@ -2086,6 +2118,11 @@ async fn run_target(
                 response,
             })) => {
                 let result = async {
+                    if no_cache {
+                        return Err(TargetDebuggerError::HeapAnalysis(
+                            "--no-cache is not supported for captured heaps; capture a new snapshot to refresh mapping metadata".into(),
+                        ));
+                    }
                     let parse_started = Instant::now();
                     let filter = filter
                         .as_deref()
@@ -2123,26 +2160,21 @@ async fn run_target(
                         };
                     let parse_duration = parse_started.elapsed();
                     let projection_started = Instant::now();
-                    let (mut snapshot, source_map_hydration_duration) = project_heap_classes(
-                        &mut driver,
-                        &session_key,
+                    let mut snapshot = project_heap_classes(
                         capture_id.clone(),
                         &groups,
                         filter.as_ref(),
-                        no_cache,
-                    )
-                    .await?;
+                        heap_captures.get(&capture_id).map(|capture| &capture.mapping),
+                    )?;
                     snapshot.analysis = HeapClassAnalysisSnapshot {
                         snapshot_timing: heap_captures
                             .get(&capture_id)
                             .map(|capture| capture.timing.clone()),
                         parse_duration_micros: parse_duration.as_micros() as u64,
                         projection_duration_micros: projection_started.elapsed().as_micros() as u64,
-                        source_map_hydration_duration_micros: source_map_hydration_duration
-                            .as_micros()
-                            as u64,
                         constructor_group_count: groups.len() as u64,
                         used_cached_groups,
+                        ..snapshot.analysis
                     };
                     heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
                     for class in &snapshot.classes {
@@ -2661,6 +2693,7 @@ fn temporary_heap_snapshot_path() -> PathBuf {
 struct StoredHeapCapture {
     path: PathBuf,
     timing: HeapSnapshotTiming,
+    mapping: HeapMappingSnapshot,
 }
 
 async fn load_heap_graph(
@@ -2915,6 +2948,8 @@ async fn take_heap_snapshot(
 }
 
 struct ProjectedHeapClass {
+    script_id: String,
+    provenance: ScriptProvenance,
     name: String,
     source_url: String,
     location: SourceLocation,
@@ -2924,17 +2959,135 @@ struct ProjectedHeapClass {
     instances: Vec<crate::heap_snapshot::HeapInstanceRecord>,
 }
 
-struct MappedHeapConstructor<'a> {
-    group: &'a HeapConstructorGroup,
-    generated_url: String,
-    generated_location: SourceLocation,
-    mapped: Option<(String, Position, Arc<str>)>,
+async fn capture_heap_mapping(
+    driver: &mut DebuggerDriver,
+    session: &SessionKey,
+    connection_generation: u64,
+) -> HeapMappingSnapshot {
+    let started = Instant::now();
+    let keys = driver.state().scripts.keys()
+        .filter(|key| &key.session == session).cloned().collect::<Vec<_>>();
+    let mut errors = BTreeMap::new();
+    for key in &keys {
+        let Some(script) = driver.state().scripts.get(key) else { continue };
+        let previous = captured_heap_script(key, script, None);
+        let retry = previous.mapping_status == HeapMappingStatus::MapLoadingFailed
+            || (script.captured_source.is_some() && script.source_map_url.is_some()
+                && previous.source_map.is_none());
+        if retry || script.captured_source.is_none() {
+            if retry { driver.set_source_map_cache_enabled(false); }
+            let input = if retry {
+                Input::RefreshScriptSource { script: key.clone() }
+            } else {
+                Input::RequestScriptSource { script: key.clone() }
+            };
+            let result = driver.apply(input).await;
+            if retry { driver.set_source_map_cache_enabled(true); }
+            if let Err(error) = result {
+                errors.insert(key.clone(), error.to_string());
+            }
+        }
+    }
+    let scripts = keys.iter().filter_map(|key| {
+        let script = driver.state().scripts.get(key)?;
+        Some(captured_heap_script(key, script, errors.get(key).cloned()))
+    }).collect();
+    HeapMappingSnapshot { connection_generation, scripts, hydration_duration_micros: started.elapsed().as_micros() as u64 }
+}
+
+fn captured_heap_script(
+    key: &ScriptKey,
+    script: &crate::debugger_engine::ScriptState,
+    acquisition_error: Option<String>,
+) -> HeapScriptSnapshot {
+        let fetched = script.captured_source.as_ref();
+        let source_map = fetched.and_then(|source| source.source_map.as_ref())
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+        let diagnostic = acquisition_error
+            .or_else(|| fetched.and_then(|source| source.source_map_error.clone()))
+            .or_else(|| match &script.source {
+                ScriptSourceState::Failed(error) => Some(error.clone()),
+                _ => None,
+            });
+        let mapping_status = if diagnostic.is_some() {
+            HeapMappingStatus::MapLoadingFailed
+        } else if source_map.is_some() {
+            HeapMappingStatus::Mapped
+        } else if script.source_map_url.is_none() {
+            HeapMappingStatus::NoMapSupplied
+        } else {
+            HeapMappingStatus::NotAttempted
+        };
+        let mut captured = HeapScriptSnapshot {
+            script_id: key.script_id.clone(), url: script.url.clone(), hash: script.hash.clone(),
+            provenance: script.provenance.clone(),
+            source_map_url: fetched.and_then(|source| source.source_map_url.clone())
+                .or_else(|| script.source_map_url.clone()),
+            generated_source: fetched.map(|source| source.content.to_string()),
+            source_map, mapping_status, diagnostic,
+        };
+        if let Some(map) = &captured.source_map {
+            if let Err(error) = heap_source_view(&captured, map) {
+                captured.mapping_status = HeapMappingStatus::MapLoadingFailed;
+                captured.diagnostic = Some(error);
+            }
+        }
+        captured
+}
+
+fn heap_source_view(script: &HeapScriptSnapshot, map: &str) -> Result<ResolvedSourceView, String> {
+    sourcemap::decode_slice(map.as_bytes()).map_err(|error| format!("invalid source map: {error}"))?;
+    let mut view = ResolvedSourceView::new(
+        ResolutionPolicy::PreferSourcesContent, Arc::new(ContextSourceModel::new()),
+        SourceContributionId::new("stored-heap"), BTreeMap::new(),
+    );
+    view.add_generated(GeneratedSourceInput {
+        url: &script.url, content: script.generated_source.as_deref().unwrap_or(""),
+        source_map: Some(map.as_bytes()), source_map_url: script.source_map_url.as_deref(),
+        minified: false,
+    }).map_err(|error| error.to_string())?;
+    if let Some(error) = view.diagnostics().iter().find_map(|diagnostic| match diagnostic {
+        crate::source_view::SourceDiagnostic::SourceMapFailed { error, .. } => Some(error),
+        _ => None,
+    }) {
+        return Err(error.clone());
+    }
+    Ok(view)
+}
+
+pub(crate) fn supply_heap_source_map(
+    mapping: &mut HeapMappingSnapshot,
+    supply: HeapSourceMapSupply,
+) -> Result<(), TargetDebuggerError> {
+    let script = mapping.scripts.iter_mut().find(|script| script.script_id == supply.script_id)
+        .ok_or_else(|| TargetDebuggerError::HeapAnalysis(format!("captured script '{}' not found", supply.script_id)))?;
+    if script.hash.is_empty() || script.hash != supply.script_hash {
+        return Err(TargetDebuggerError::HeapAnalysis("source map script hash does not match the captured script".into()));
+    }
+    let json: serde_json::Value = serde_json::from_str(&supply.source_map)
+        .map_err(|error| TargetDebuggerError::HeapAnalysis(format!("invalid source map: {error}")))?;
+    if let Some(file) = json.get("file").and_then(serde_json::Value::as_str) {
+        let basename = |url: &str| url.split(['?', '#']).next().unwrap_or(url)
+            .rsplit(['/', '\\']).next().unwrap_or(url).to_owned();
+        if basename(file) != basename(&script.url) {
+            return Err(TargetDebuggerError::HeapAnalysis("source map file does not match the captured script URL".into()));
+        }
+    }
+    let mut updated = script.clone();
+    updated.source_map_url = Some(supply.source_map_url);
+    heap_source_view(&updated, &supply.source_map).map_err(TargetDebuggerError::HeapAnalysis)?;
+    updated.source_map = Some(supply.source_map);
+    updated.mapping_status = HeapMappingStatus::Mapped;
+    updated.diagnostic = None;
+    *script = updated;
+    Ok(())
 }
 
 pub fn stored_heap_classes(
     path: &Path,
     capture_id: String,
     filter: Option<&str>,
+    mapping: Option<&HeapMappingSnapshot>,
 ) -> Result<HeapClassSnapshot, TargetDebuggerError> {
     let started = Instant::now();
     let filter = filter
@@ -2946,180 +3099,75 @@ pub fn stored_heap_classes(
     let groups = parse_constructor_groups(file)
         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
     let parse_duration = started.elapsed();
-    let mut alias_counters = BTreeMap::<String, u64>::new();
-    let mut classes = groups
-        .iter()
-        .filter(|group| {
-            filter.as_ref().is_none_or(|filter| {
-                filter.is_match(&group.generated_name)
-                    || filter.is_match(&format!("script:{}", group.script_id))
-            })
-        })
-        .map(|group| {
-            let name = heap_class_display_name(&group.generated_name).to_owned();
-            let instances = group
-                .instances
-                .iter()
-                .take(20)
-                .map(|instance| {
-                    let counter = alias_counters.entry(name.clone()).or_default();
-                    *counter = counter.saturating_add(1);
-                    HeapInstanceSnapshot {
-                        alias: format!("{name}@{}", *counter),
-                        heap_object_id: instance.heap_object_id.to_string(),
-                        shallow_size: instance.shallow_size,
-                    }
-                })
-                .collect::<Vec<_>>();
-            HeapClassSnapshotEntry {
-                name,
-                source_url: format!("script:{}", group.script_id),
-                location: source_location(
-                    format!("script:{}", group.script_id),
-                    group.line,
-                    group.column,
-                ),
-                generated_name: group.generated_name.clone(),
-                instance_count: group.instance_count,
-                shallow_size: group.shallow_size,
-                omitted_instance_count: group.instance_count.saturating_sub(instances.len() as u64),
-                instances,
-            }
-        })
-        .collect::<Vec<_>>();
-    classes.sort_by_key(|class| std::cmp::Reverse(class.instance_count));
-    Ok(HeapClassSnapshot {
-        capture_id,
-        total_instances: classes.iter().map(|class| class.instance_count).sum(),
-        total_shallow_size: classes.iter().map(|class| class.shallow_size).sum(),
-        classes,
-        analysis: HeapClassAnalysisSnapshot {
-            snapshot_timing: None,
-            parse_duration_micros: parse_duration.as_micros() as u64,
-            projection_duration_micros: 0,
-            source_map_hydration_duration_micros: 0,
-            constructor_group_count: groups.len() as u64,
-            used_cached_groups: false,
-        },
-    })
+    let projection_started = Instant::now();
+    let mut snapshot = project_heap_classes(capture_id, &groups, filter.as_ref(), mapping)?;
+    snapshot.analysis.parse_duration_micros = parse_duration.as_micros() as u64;
+    snapshot.analysis.projection_duration_micros = projection_started.elapsed().as_micros() as u64;
+    Ok(snapshot)
 }
 
-async fn project_heap_classes(
-    driver: &mut DebuggerDriver,
-    session_key: &SessionKey,
+fn project_heap_classes(
     capture_id: String,
     groups: &[HeapConstructorGroup],
     filter: Option<&regex::Regex>,
-    no_cache: bool,
-) -> Result<(HeapClassSnapshot, Duration), TargetDebuggerError> {
-    let scripts = groups
-        .iter()
-        .map(|group| ScriptKey {
-            session: session_key.clone(),
-            script_id: group.script_id.to_string(),
-        })
-        .collect::<BTreeSet<_>>();
-    driver.set_source_map_cache_enabled(!no_cache);
-    let hydration_started = Instant::now();
-    let mut hydration_result = Ok(());
-    for script in &scripts {
-        let eligible = driver.state().scripts.get(script).is_some_and(|state| {
-            state.source_map_url.is_some() && matches!(state.source, ScriptSourceState::Unresolved)
-        });
-        if eligible {
-            hydration_result = driver
-                .apply(Input::RequestScriptSource {
-                    script: script.clone(),
-                })
-                .await
-                .map(|_| ());
-            if hydration_result.is_err() {
-                break;
+    mapping: Option<&HeapMappingSnapshot>,
+) -> Result<HeapClassSnapshot, TargetDebuggerError> {
+    let scripts = mapping.map(|mapping| mapping.scripts.iter()
+        .map(|script| (script.script_id.clone(), script)).collect::<BTreeMap<_, _>>())
+        .unwrap_or_default();
+    let mut views = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for script_id in groups.iter().map(|group| group.script_id.to_string()).collect::<BTreeSet<_>>() {
+        let Some(script) = scripts.get(&script_id) else {
+            diagnostics.push(HeapScriptMappingDiagnostic {
+                script_id: script_id.clone(), url: format!("script:{script_id}"), hash: String::new(),
+                provenance: Default::default(), status: HeapMappingStatus::NotAttempted,
+                diagnostic: Some("capture has no script mapping metadata (legacy capture or unobserved script)".into()),
+            });
+            continue;
+        };
+        let mut diagnostic = HeapScriptMappingDiagnostic {
+            script_id: script_id.clone(), url: script.url.clone(), hash: script.hash.clone(),
+            provenance: script.provenance.clone(), status: script.mapping_status.clone(),
+            diagnostic: script.diagnostic.clone(),
+        };
+        if let Some(map) = &script.source_map {
+            match heap_source_view(script, map) {
+                Ok(view) => {
+                    diagnostic.status = HeapMappingStatus::Mapped;
+                    diagnostic.diagnostic = None;
+                    views.insert(script_id.clone(), view);
+                }
+                Err(error) => {
+                    diagnostic.status = HeapMappingStatus::MapLoadingFailed;
+                    diagnostic.diagnostic = Some(error);
+                }
             }
         }
+        diagnostics.push(diagnostic);
     }
-    driver.set_source_map_cache_enabled(true);
-    hydration_result?;
-    let source_map_hydration_duration = hydration_started.elapsed();
-
-    let state = driver.state().clone();
-    let source_effects = driver.source_effects();
-    let mapped_groups = groups
-        .iter()
-        .map(|group| {
-            let script = ScriptKey {
-                session: session_key.clone(),
-                script_id: group.script_id.to_string(),
-            };
-            let generated_url = state.scripts.get(&script).map_or_else(
-                || format!("script:{}", group.script_id),
-                |state| state.url.clone(),
-            );
-            MappedHeapConstructor {
-                group,
-                generated_location: source_location(
-                    generated_url.clone(),
-                    group.line,
-                    group.column,
-                ),
-                mapped: source_effects.project_generated_position(
-                    &state,
-                    &script,
-                    Position {
-                        line: group.line,
-                        column: group.column,
-                    },
-                ),
-                generated_url,
-            }
-        })
-        .collect::<Vec<_>>();
-    source_effects.prepare_breadcrumbs(
-        &state,
-        &mapped_groups
-            .iter()
-            .filter_map(|mapped| {
-                mapped.mapped.as_ref().map(|(source_url, _, content)| {
-                    (
-                        ScriptKey {
-                            session: session_key.clone(),
-                            script_id: mapped.group.script_id.to_string(),
-                        },
-                        source_url.clone(),
-                        content.clone(),
-                    )
-                })
-            })
-            .collect::<Vec<_>>(),
-    );
-    let mut projected = BTreeMap::<(String, u32, u32, String), ProjectedHeapClass>::new();
-    for mapped_group in mapped_groups {
-        let group = mapped_group.group;
-        let script = ScriptKey {
-            session: session_key.clone(),
-            script_id: group.script_id.to_string(),
-        };
-        let (source_url, location, name) = match mapped_group.mapped {
-            Some((source_url, position, content)) => {
-                let location = source_location(source_url.clone(), position.line, position.column);
-                let name = source_effects
-                    .breadcrumb(
-                        &state,
-                        &script,
-                        &source_url,
-                        location.line,
-                        location.column,
-                        &content,
-                    )
-                    .map(|name| heap_class_display_name(&name).to_owned())
-                    .unwrap_or_else(|| group.generated_name.clone());
-                (source_url, location, name)
-            }
-            None => (
-                mapped_group.generated_url,
-                mapped_group.generated_location,
-                group.generated_name.clone(),
+    let mut projected = BTreeMap::<(String, String, u32, u32, String), ProjectedHeapClass>::new();
+    for group in groups {
+        let script_id = group.script_id.to_string();
+        let script = scripts.get(&script_id);
+        let generated_url = script.map(|script| script.url.clone())
+            .filter(|url| !url.is_empty()).unwrap_or_else(|| format!("script:{script_id}"));
+        let mapped = views.get(&script_id).and_then(|view|
+            view.source_map_location(&generated_url, Position { line: group.line, column: group.column })
+                .map(|(url, position)| {
+                    let name = view.text(&url).ok().and_then(|content|
+                        crate::language_intelligence::breadcrumb(&url, &content, position.line + 1, position.column + 1));
+                    let canonical_url = crate::source_view::canonical_source_uri(
+                        script.and_then(|script| script.source_map_url.as_deref()), &url).display();
+                    (canonical_url, position, name)
+                }));
+        let (source_url, location, name) = match mapped {
+            Some((url, position, name)) => (
+                url.clone(), source_location(url, position.line, position.column),
+                name.map(|name| heap_class_display_name(&name).to_owned()).unwrap_or_else(|| group.generated_name.clone()),
             ),
+            None => (generated_url.clone(), source_location(generated_url, group.line, group.column),
+                heap_class_display_name(&group.generated_name).to_owned()),
         };
         if filter.is_some_and(|filter| {
             !filter.is_match(&name)
@@ -3130,12 +3178,15 @@ async fn project_heap_classes(
         }
         let class = projected
             .entry((
+                script_id.clone(),
                 source_url.clone(),
                 location.line,
                 location.column,
                 name.clone(),
             ))
             .or_insert_with(|| ProjectedHeapClass {
+                script_id,
+                provenance: script.map(|script| script.provenance.clone()).unwrap_or_default(),
                 name,
                 source_url,
                 location,
@@ -3174,6 +3225,8 @@ async fn project_heap_classes(
                 })
                 .collect::<Vec<_>>();
             HeapClassSnapshotEntry {
+                script_id: class.script_id,
+                provenance: class.provenance,
                 name: class.name,
                 source_url: class.source_url,
                 location: class.location,
@@ -3185,8 +3238,16 @@ async fn project_heap_classes(
             }
         })
         .collect();
-    Ok((
-        HeapClassSnapshot {
+    let mapping_status = if diagnostics.iter().any(|d| d.status == HeapMappingStatus::Mapped) {
+        HeapMappingStatus::Mapped
+    } else if diagnostics.iter().any(|d| d.status == HeapMappingStatus::MapLoadingFailed) {
+        HeapMappingStatus::MapLoadingFailed
+    } else if mapping.is_none() || diagnostics.iter().any(|d| d.status == HeapMappingStatus::NotAttempted) {
+        HeapMappingStatus::NotAttempted
+    } else {
+        HeapMappingStatus::NoMapSupplied
+    };
+    Ok(HeapClassSnapshot {
             capture_id,
             total_instances,
             total_shallow_size,
@@ -3195,13 +3256,13 @@ async fn project_heap_classes(
                 snapshot_timing: None,
                 parse_duration_micros: 0,
                 projection_duration_micros: 0,
-                source_map_hydration_duration_micros: 0,
+                source_map_hydration_duration_micros: mapping.map_or(0, |mapping| mapping.hydration_duration_micros),
                 constructor_group_count: groups.len() as u64,
-                used_cached_groups: true,
+                used_cached_groups: false,
+                mapping_status,
+                script_mappings: diagnostics,
             },
-        },
-        source_map_hydration_duration,
-    ))
+        })
 }
 
 fn heap_class_display_name(name: &str) -> &str {
@@ -3615,78 +3676,96 @@ async fn hydrate_source_for_path(
     driver: &mut DebuggerDriver,
     source_path: &str,
 ) -> Result<(), TargetDebuggerError> {
-    let exact_scripts = driver
-        .state()
-        .scripts
-        .iter()
-        .filter_map(|(key, script)| (script.url == source_path).then_some(key.clone()))
-        .collect::<Vec<_>>();
-    if !exact_scripts.is_empty() {
-        for script in exact_scripts {
-            if driver
-                .state()
-                .scripts
-                .get(&script)
-                .is_some_and(|script| matches!(script.source, ScriptSourceState::Unresolved))
-            {
-                driver
-                    .apply(Input::RequestScriptSource {
-                        script: script.clone(),
-                    })
-                    .await?;
-            }
-        }
-        return Ok(());
-    }
-
-    if driver
-        .state()
-        .scripts
-        .keys()
-        .any(|script| script_contains_source(driver, script, source_path))
-    {
-        return Ok(());
-    }
-
-    let candidates = driver
-        .state()
-        .scripts
-        .iter()
-        .filter_map(|(key, script)| {
-            (script.source_map_url.is_some()
-                && matches!(script.source, ScriptSourceState::Unresolved))
-            .then_some(key.clone())
-        })
-        .collect::<Vec<_>>();
-    for script in candidates {
-        driver
-            .apply(Input::RequestScriptSource {
-                script: script.clone(),
-            })
-            .await?;
-        if script_contains_source(driver, &script, source_path) {
-            break;
-        }
-    }
-    Ok(())
+    acquire_sources(driver, SourceAcquisition::Exact(source_path), None).await
 }
 
 async fn hydrate_sources(
     driver: &mut DebuggerDriver,
     include_unmapped: bool,
 ) -> Result<(), TargetDebuggerError> {
-    let scripts = driver
-        .state()
+    acquire_sources(driver, SourceAcquisition::All { include_unmapped }, None).await
+}
+
+#[derive(Clone, Copy)]
+enum SourceAcquisition<'a> {
+    Exact(&'a str),
+    Search(Option<&'a str>),
+    All { include_unmapped: bool },
+}
+
+fn original_source_path(path: &str) -> &str {
+    path.strip_suffix("?formatted").unwrap_or(path)
+}
+
+fn source_acquisition_candidates(
+    state: &DebuggerState,
+    request: SourceAcquisition<'_>,
+) -> Vec<ScriptKey> {
+    let exact_runtime = match request {
+        SourceAcquisition::Exact(path) => state
+            .scripts
+            .values()
+            .any(|script| script.url == original_source_path(path)),
+        _ => false,
+    };
+    state
         .scripts
         .iter()
         .filter_map(|(key, script)| {
-            (matches!(script.source, ScriptSourceState::Unresolved)
-                && (include_unmapped || script.source_map_url.is_some()))
-            .then_some(key.clone())
+            let selected = match request {
+                SourceAcquisition::Exact(path) if exact_runtime => {
+                    script.url == original_source_path(path)
+                }
+                SourceAcquisition::Exact(_) => script.source_map_url.is_some(),
+                SourceAcquisition::Search(selector) => {
+                    selector.is_none_or(|selector| {
+                        script.url.contains(original_source_path(selector))
+                    }) || script.source_map_url.is_some()
+                }
+                SourceAcquisition::All { include_unmapped } => {
+                    include_unmapped || script.source_map_url.is_some()
+                }
+            };
+            (selected
+                && matches!(
+                    script.source,
+                    ScriptSourceState::Unresolved | ScriptSourceState::Failed(_)
+                ))
+            .then(|| key.clone())
         })
-        .collect::<Vec<_>>();
-    for script in scripts {
-        driver.apply(Input::RequestScriptSource { script }).await?;
+        .collect()
+}
+
+async fn acquire_sources(
+    driver: &mut DebuggerDriver,
+    request: SourceAcquisition<'_>,
+    control: Option<&SearchControl>,
+) -> Result<(), TargetDebuggerError> {
+    let authored_path = match request {
+        SourceAcquisition::Exact(path)
+            if !driver.state().scripts.values().any(|script| {
+                script.url == original_source_path(path)
+            }) => Some(original_source_path(path)),
+        _ => None,
+    };
+    if let Some(path) = authored_path
+        && driver.state().scripts.keys().any(|script| script_contains_source(driver, script, path))
+    {
+        return Ok(());
+    }
+    for script in source_acquisition_candidates(driver.state(), request) {
+        if let Some(control) = control {
+            control.check()?;
+        }
+        driver.acquire_script_source(script.clone(), control).await?;
+        if let Some(control) = control {
+            control.check()?;
+        }
+        if let Some(path) = authored_path
+            && script_contains_source(driver, &script, path)
+        {
+            break;
+        }
     }
     Ok(())
 }
@@ -4615,6 +4694,9 @@ fn bounded_projection_function(max_preview_length: u32) -> String {
     __jsdbgText = "-0";
   }} else {{
     return {{ __jsdbgKind: "remote", __jsdbgValue }};
+  }}
+  if (__jsdbgMaxLength >= __jsdbgText.length) {{
+    return {{ __jsdbgKind, __jsdbgText, __jsdbgTruncated: false }};
   }}
   let __jsdbgPreview = "";
   let __jsdbgLength = 0;
@@ -5911,7 +5993,18 @@ fn generated_script_callback_breadcrumb(
 }
 
 #[cfg(test)]
+#[path = "source_acquisition_tests.rs"]
+mod source_acquisition_tests;
+
+#[cfg(test)]
+#[path = "heap_mapping_retry_tests.rs"]
+mod heap_mapping_retry_tests;
+
+#[cfg(test)]
 mod tests {
+    use super::{project_heap_classes, supply_heap_source_map};
+    use crate::heap_snapshot::HeapConstructorGroup;
+    use crate::service_api::{HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapSourceMapSupply, ScriptProvenance};
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
@@ -6119,6 +6212,8 @@ mod tests {
             script.clone(),
             Arc::new(ScriptState {
                 url: "bundle.js".into(),
+                provenance: Default::default(),
+                captured_source: None,
                 hash: "hash".into(),
                 source_map_url: Some("bundle.js.map".into()),
                 version: 1,
@@ -6233,6 +6328,8 @@ mod tests {
                 script.clone(),
                 Arc::new(ScriptState {
                     url: format!("{}.js", script.script_id),
+                    provenance: Default::default(),
+                    captured_source: None,
                     hash: format!("{}-hash", script.script_id),
                     source_map_url: Some(format!("{}.js.map", script.script_id)),
                     version: 1,
@@ -6953,6 +7050,108 @@ mod tests {
                 .self_time_micros,
             100
         );
+    }
+
+    #[test]
+    fn heap_mapping_survives_serialization_and_keeps_frame_groups_separate() {
+        let mapping = heap_mapping_fixture();
+        let restored: HeapMappingSnapshot =
+            serde_json::from_slice(&serde_json::to_vec(&mapping).unwrap()).unwrap();
+        let groups = heap_mapping_groups();
+        let snapshot = project_heap_classes("offline".into(), &groups, None, Some(&restored)).unwrap();
+        assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
+        assert_eq!(snapshot.classes.len(), 2);
+        assert_eq!(snapshot.classes[0].name, "Original");
+        assert_eq!(snapshot.classes[0].location.line, 1);
+        assert_eq!(snapshot.classes[0].source_url, "https://example.test/original.ts");
+        assert_ne!(snapshot.classes[0].provenance.frame_id, snapshot.classes[1].provenance.frame_id);
+        assert_eq!(snapshot.analysis.script_mappings[0].hash, "captured-hash");
+        assert_eq!(restored.connection_generation, 42);
+    }
+
+    #[test]
+    fn heap_mapping_reports_legacy_absent_and_invalid_maps() {
+        let groups = heap_mapping_groups();
+        let legacy = project_heap_classes("old".into(), &groups, None, None).unwrap();
+        assert_eq!(legacy.analysis.mapping_status, HeapMappingStatus::NotAttempted);
+        assert!(legacy.analysis.script_mappings.iter().all(|script| script.diagnostic.is_some()));
+        let mut mapping = heap_mapping_fixture();
+        for script in &mut mapping.scripts {
+            script.source_map = None;
+            script.mapping_status = HeapMappingStatus::NoMapSupplied;
+        }
+        let absent = project_heap_classes("absent".into(), &groups, None, Some(&mapping)).unwrap();
+        assert_eq!(absent.analysis.mapping_status, HeapMappingStatus::NoMapSupplied);
+        assert_eq!(absent.classes[0].source_url, "https://example.test/app.js");
+        mapping.scripts[0].source_map = Some("{broken".into());
+        let invalid = project_heap_classes("invalid".into(), &groups, None, Some(&mapping)).unwrap();
+        assert_eq!(invalid.analysis.script_mappings[0].status, HeapMappingStatus::MapLoadingFailed);
+        assert!(invalid.analysis.script_mappings[0].diagnostic.as_ref().unwrap().contains("invalid source map"));
+    }
+
+    #[test]
+    fn heap_maps_without_sources_content_still_project_locations() {
+        let mut mapping = heap_mapping_fixture();
+        for script in &mut mapping.scripts {
+            let mut map: serde_json::Value = serde_json::from_str(script.source_map.as_ref().unwrap()).unwrap();
+            map.as_object_mut().unwrap().remove("sourcesContent");
+            script.source_map = Some(map.to_string());
+        }
+        let snapshot = project_heap_classes("without-content".into(), &heap_mapping_groups(), None, Some(&mapping)).unwrap();
+        assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
+        assert_eq!(snapshot.classes[0].source_url, "https://example.test/original.ts");
+        assert_eq!(snapshot.classes[0].name, "a");
+    }
+
+    #[test]
+    fn heap_supplied_maps_require_captured_hash_and_matching_file() {
+        let mut mapping = heap_mapping_fixture();
+        let original = mapping.clone();
+        let mut supply = HeapSourceMapSupply {
+            script_id: "7".into(), script_hash: "wrong-hash".into(),
+            source_map_url: "file:///maps/app.js.map".into(),
+            source_map: mapping.scripts[0].source_map.clone().unwrap(),
+        };
+        assert!(supply_heap_source_map(&mut mapping, supply.clone()).unwrap_err().to_string().contains("hash"));
+        assert_eq!(mapping, original);
+        supply.script_hash = "captured-hash".into();
+        supply.source_map = supply.source_map.replace("\"app.js\"", "\"other.js\"");
+        assert!(supply_heap_source_map(&mut mapping, supply.clone()).unwrap_err().to_string().contains("file"));
+        assert_eq!(mapping, original);
+        supply.source_map = "{invalid".into();
+        assert!(supply_heap_source_map(&mut mapping, supply.clone()).is_err());
+        assert_eq!(mapping, original);
+        supply.source_map = original.scripts[0].source_map.clone().unwrap();
+        supply_heap_source_map(&mut mapping, supply).unwrap();
+        assert_eq!(mapping.scripts[0].source_map_url.as_deref(), Some("file:///maps/app.js.map"));
+        assert_eq!(mapping.scripts[0].hash, "captured-hash");
+    }
+
+    fn heap_mapping_fixture() -> HeapMappingSnapshot {
+        HeapMappingSnapshot {
+            connection_generation: 42, hydration_duration_micros: 12,
+            scripts: ["7", "8"].into_iter().map(|id| HeapScriptSnapshot {
+                script_id: id.into(), url: "https://example.test/app.js".into(),
+                hash: "captured-hash".into(),
+                provenance: ScriptProvenance {
+                    execution_context_id: Some(id.parse().unwrap()),
+                    execution_context_aux_data: Some(serde_json::json!({"frameId": format!("frame-{id}"), "isDefault": true})),
+                    frame_id: Some(format!("frame-{id}")),
+                },
+                generated_source: Some("class a {}".into()),
+                source_map_url: Some("https://example.test/app.js.map".into()),
+                source_map: Some(r#"{"version":3,"file":"app.js","sources":["original.ts"],"sourcesContent":["class Original { constructor() {} }"],"names":[],"mappings":"AAAA"}"#.into()),
+                mapping_status: HeapMappingStatus::Mapped, diagnostic: None,
+            }).collect(),
+        }
+    }
+
+    fn heap_mapping_groups() -> Vec<HeapConstructorGroup> {
+        [7, 8].into_iter().map(|script_id| HeapConstructorGroup {
+            script_id, generated_name: "a".into(), line: 0, column: 0,
+            instance_count: 1, shallow_size: 16,
+            instances: vec![crate::heap_snapshot::HeapInstanceRecord { heap_object_id: script_id as u64, shallow_size: 16 }],
+        }).collect()
     }
 
     #[test]

@@ -738,9 +738,25 @@ impl SourceEffectInterpreter {
         control: &SearchControl,
     ) -> Result<HydratedSourceBatch, SearchError> {
         let mut sources = BTreeMap::new();
-        let mut skipped = BTreeSet::new();
+        let mut skipped = BTreeMap::new();
         for (script_key, script) in state.scripts.iter() {
             control.check()?;
+            let authored_error = script
+                .captured_source
+                .as_ref()
+                .and_then(|source| source.source_map_error.as_deref())
+                .or_else(|| match &script.source {
+                    ScriptSourceState::Failed(reason) if script.source_map_url.is_some() => {
+                        Some(reason.as_str())
+                    }
+                    _ => None,
+                });
+            if let Some(reason) = authored_error {
+                skipped.insert(
+                    (script.url.clone(), "source-map".to_owned()),
+                    format!("could not discover authored sources: {reason}"),
+                );
+            }
             if path_selector.is_none_or(|selector| script.url.contains(selector)) {
                 let identity = (script.url.clone(), "runtime".to_owned());
                 if let Some(content) = self.generated_source_content(state, script_key) {
@@ -763,13 +779,37 @@ impl SourceEffectInterpreter {
                             content,
                         });
                 } else {
-                    skipped.insert(identity);
+                    skipped.insert(identity, Self::script_source_skip_reason(&script.source));
                 }
             }
             let ScriptSourceState::Resolved(view) = &script.source else {
                 continue;
             };
             let retained = self.views.get(&view.view_id);
+            if let Some(retained) = retained {
+                for diagnostic in retained.view.diagnostics() {
+                    match diagnostic {
+                        crate::source_view::SourceDiagnostic::SourceMapFailed { error, .. } => {
+                            skipped.insert(
+                                (script.url.clone(), "source-map".to_owned()),
+                                format!("could not discover authored sources: {error}"),
+                            );
+                        }
+                        crate::source_view::SourceDiagnostic::MissingContent { logical_url } => {
+                            let path = canonical_authored_url(retained, logical_url);
+                            if path_selector.is_none_or(|selector| {
+                                logical_url.contains(selector) || path.contains(selector)
+                            }) {
+                                skipped.insert(
+                                    (path, "authored".to_owned()),
+                                    "source map supplies no content and no workspace content is available".to_owned(),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             for (logical_url, candidate) in view.logical_sources.iter() {
                 control.check()?;
                 let source_url = retained.map_or_else(
@@ -783,7 +823,10 @@ impl SourceEffectInterpreter {
                 }
                 let provenance = provenance_label(&candidate.provenance);
                 let Some(content) = self.store.get(candidate.content) else {
-                    skipped.insert((source_url, "authored".to_owned()));
+                    skipped.insert(
+                        (source_url, "authored".to_owned()),
+                        "source content is not available in the content store".to_owned(),
+                    );
                     continue;
                 };
                 sources
@@ -806,11 +849,32 @@ impl SourceEffectInterpreter {
             .values()
             .map(|source| (source.path.clone(), source.kind.clone()))
             .collect::<BTreeSet<_>>();
-        skipped.retain(|identity| !hydrated.contains(identity));
+        skipped.retain(|identity, _| !hydrated.contains(identity));
         Ok(HydratedSourceBatch {
             sources: sources.into_values().collect(),
             skipped_sources: skipped.len().min(u32::MAX as usize) as u32,
+            skipped: skipped
+                .into_iter()
+                .map(|((path, kind), reason)| crate::service_api::SourceSearchSkip {
+                    path,
+                    kind,
+                    connection_id: None,
+                    target_id: None,
+                    reason,
+                })
+                .collect(),
         })
+    }
+
+    fn script_source_skip_reason(source: &ScriptSourceState) -> String {
+        match source {
+            ScriptSourceState::Unresolved => "script content has not been requested".to_owned(),
+            ScriptSourceState::Pending(_) => "script content acquisition is pending".to_owned(),
+            ScriptSourceState::Failed(reason) => format!("script content acquisition failed: {reason}"),
+            ScriptSourceState::Loaded { .. } | ScriptSourceState::Resolved(_) => {
+                "script content is no longer retained".to_owned()
+            }
+        }
     }
 
     pub fn map_source_position(
@@ -866,6 +930,7 @@ impl SourceEffectInterpreter {
                 .map(|view| view.generated_content.clone()),
             _ => None,
         }
+        .or_else(|| script.captured_source.as_ref().map(|source| source.content.clone()))
     }
 
     pub fn clear_caches(&self) {
@@ -1098,6 +1163,8 @@ mod tests {
             script.clone(),
             Arc::new(crate::debugger_engine::ScriptState {
                 url: "https://example.test/app.js".into(),
+                provenance: Default::default(),
+                captured_source: None,
                 hash: "runtime-hash".into(),
                 source_map_url: None,
                 version: 1,
@@ -1154,6 +1221,8 @@ mod tests {
             script,
             Arc::new(crate::debugger_engine::ScriptState {
                 url: "dist/app.js".into(),
+                provenance: Default::default(),
+                captured_source: None,
                 hash: "runtime-hash".into(),
                 source_map_url: None,
                 version: 1,

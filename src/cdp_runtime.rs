@@ -34,6 +34,12 @@ use crate::session_transport::CdpSessionMux;
 use crate::source_view::Position;
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
 
+#[path = "cdp_source_map_resources.rs"]
+mod source_map_resources;
+use source_map_resources::SourceMapResources;
+
+const SOURCE_MAP_RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Backlog for each session's raw CDP event broadcast. Generous because relay consumers must
 /// not silently miss console/network/lifecycle events while draining a burst.
 const RAW_EVENT_BUFFER: usize = 1024;
@@ -108,8 +114,11 @@ impl CdpConnection {
         let (heap_snapshot_progress, _) = watch::channel(None);
         let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
         let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source_map_resources = SourceMapResources::new(
+            mux.open_root().map_err(CdpRuntimeError::OpenSession)?,
+        );
         let root_channel = Channel::new(
-            Box::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?),
+            Box::new(source_map_resources.transport()),
             Box::new(CdpEventHandler {
                 session: session.clone(),
                 sender: event_sender,
@@ -126,6 +135,7 @@ impl CdpConnection {
             channel: root_channel.clone(),
             events: event_receiver,
             source_map_frame_id: Mutex::new(None),
+            source_map_resources,
             source_map_cache_enabled: AtomicBool::new(true),
             source_map_cache_hits: AtomicU64::new(0),
             source_map_cache_misses: AtomicU64::new(0),
@@ -159,12 +169,13 @@ impl CdpConnection {
         let (heap_snapshot_progress, _) = watch::channel(None);
         let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
         let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source_map_resources = SourceMapResources::new(
+            self.mux
+                .open_session(session.session_id.clone())
+                .map_err(CdpRuntimeError::OpenSession)?,
+        );
         let channel = Channel::new(
-            Box::new(
-                self.mux
-                    .open_session(session.session_id.clone())
-                    .map_err(CdpRuntimeError::OpenSession)?,
-            ),
+            Box::new(source_map_resources.transport()),
             Box::new(CdpEventHandler {
                 session: session.clone(),
                 sender: event_sender,
@@ -183,6 +194,7 @@ impl CdpConnection {
             channel: channel.clone(),
             events: event_receiver,
             source_map_frame_id: Mutex::new(None),
+            source_map_resources,
             source_map_cache_enabled: AtomicBool::new(true),
             source_map_cache_hits: AtomicU64::new(0),
             source_map_cache_misses: AtomicU64::new(0),
@@ -296,6 +308,7 @@ pub struct CdpDebuggerSession {
     channel: Channel,
     events: mpsc::UnboundedReceiver<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
     source_map_frame_id: Mutex<Option<String>>,
+    source_map_resources: Arc<SourceMapResources>,
     source_map_cache_enabled: AtomicBool,
     source_map_cache_hits: AtomicU64,
     source_map_cache_misses: AtomicU64,
@@ -512,6 +525,7 @@ impl CdpDebuggerSession {
                 generated_url,
                 script_hash,
                 source_map_url,
+                frame_id,
                 ..
             } if script.session == self.session => {
                 let source = match self
@@ -532,7 +546,7 @@ impl CdpDebuggerSession {
                 let (source_map, resolved_source_map_url, source_map_error) = match source_map_url {
                     Some(source_map_url) => {
                         match self
-                            .load_source_map(generated_url, script_hash, source_map_url)
+                            .load_source_map(generated_url, script_hash, source_map_url, frame_id.as_deref())
                             .await
                         {
                             Ok((source_map, resolved_url)) => {
@@ -658,6 +672,7 @@ impl CdpDebuggerSession {
         generated_url: &str,
         script_hash: &str,
         source_map_url: &str,
+        frame_id: Option<&str>,
     ) -> Result<(Vec<u8>, String), CdpRuntimeError> {
         if source_map_url.starts_with("data:") {
             return decode_source_map_data_url(source_map_url)
@@ -709,7 +724,7 @@ impl CdpDebuggerSession {
         if cache_enabled {
             self.source_map_cache_misses.fetch_add(1, Ordering::Relaxed);
         }
-        let bytes = match self.load_source_map_via_cdp(&resolved_url).await {
+        let bytes = match self.load_source_map_via_cdp(&resolved_url, frame_id).await {
             Ok(bytes) => bytes,
             Err(cdp_error) if Self::direct_source_map_scheme(&resolved_url) => {
                 Self::load_source_map_direct(&resolved_url)
@@ -740,8 +755,12 @@ impl CdpDebuggerSession {
     async fn load_source_map_via_cdp(
         &self,
         resolved_url: &str,
+        owning_frame_id: Option<&str>,
     ) -> Result<Vec<u8>, CdpRuntimeError> {
-        let cached_frame_id = { self.source_map_frame_id.lock().await.clone() };
+        let cached_frame_id = match owning_frame_id {
+            Some(frame_id) => Some(frame_id.to_owned()),
+            None => self.source_map_frame_id.lock().await.clone(),
+        };
         let frame_id = match cached_frame_id {
             Some(frame_id) => frame_id,
             None => {
@@ -763,15 +782,33 @@ impl CdpDebuggerSession {
             NetworkLoadNetworkResourceOptions::new(false, true),
         );
         params.frame_id = Some(frame_id);
-        let loaded = self
-            .client
-            .network_load_network_resource(params)
+        let mut params = serde_json::to_value(params).expect("CDP resource parameters serialize");
+        let resource = self.source_map_resources.register(&mut params).map_err(|message| {
+            CdpRuntimeError::SourceMapProtocol {
+                url: resolved_url.to_owned(),
+                source: Box::new(CdpRuntimeError::Transport(message.to_owned())),
+            }
+        })?;
+        let loaded = tokio::time::timeout(
+            SOURCE_MAP_RESOURCE_TIMEOUT,
+            self.channel.call("Network.loadNetworkResource", params),
+        )
             .await
+            .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+                url: resolved_url.to_owned(),
+                source: Box::new(CdpRuntimeError::Transport("resource load timed out".to_owned())),
+            })?
             .map_err(|error| CdpRuntimeError::SourceMapProtocol {
                 url: resolved_url.to_owned(),
                 source: Box::new(CdpRuntimeError::protocol(error)),
-            })?
-            .resource;
+            })?;
+        let loaded: crate::cdp::NetworkLoadNetworkResourcePageResult =
+            serde_json::from_value(loaded["resource"].clone()).map_err(|error| {
+                CdpRuntimeError::SourceMapProtocol {
+                    url: resolved_url.to_owned(),
+                    source: Box::new(CdpRuntimeError::Transport(error.to_string())),
+                }
+            })?;
         if !loaded.success {
             return Err(CdpRuntimeError::SourceMapLoadFailed {
                 url: resolved_url.to_owned(),
@@ -787,7 +824,13 @@ impl CdpDebuggerSession {
             loop {
                 let mut params = IoReadParams::new(stream.clone());
                 params.size = Some(8 * 1024 * 1024);
-                let chunk = self.client.io_read(params).await.map_err(|error| {
+                let chunk = tokio::time::timeout(
+                    SOURCE_MAP_RESOURCE_TIMEOUT,
+                    self.client.io_read(params),
+                ).await.map_err(|_| CdpRuntimeError::SourceMapProtocol {
+                    url: resolved_url.to_owned(),
+                    source: Box::new(CdpRuntimeError::Transport("resource read timed out".to_owned())),
+                })?.map_err(|error| {
                     CdpRuntimeError::SourceMapProtocol {
                         url: resolved_url.to_owned(),
                         source: Box::new(CdpRuntimeError::protocol(error)),
@@ -809,14 +852,21 @@ impl CdpDebuggerSession {
             Ok(bytes)
         }
         .await;
-        let close_result = self
-            .client
-            .io_close(IoCloseParams::new(stream))
-            .await
+        let close_result = tokio::time::timeout(
+            SOURCE_MAP_RESOURCE_TIMEOUT,
+            self.client.io_close(IoCloseParams::new(stream)),
+        ).await
+            .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+                url: resolved_url.to_owned(),
+                source: Box::new(CdpRuntimeError::Transport("resource close timed out".to_owned())),
+            })?
             .map_err(|error| CdpRuntimeError::SourceMapProtocol {
                 url: resolved_url.to_owned(),
                 source: Box::new(CdpRuntimeError::protocol(error)),
             });
+        if close_result.is_ok() {
+            resource.disarm();
+        }
         match (read_result, close_result) {
             (Ok(bytes), Ok(_)) => Ok(bytes),
             (Err(read), Ok(_)) => Err(read),
@@ -899,7 +949,15 @@ impl CdpRuntimeEvent {
         pause_epoch: Option<u64>,
     ) -> Result<Option<Input>, CdpRuntimeEventError> {
         match self {
-            Self::ScriptParsed { session, params } => Ok(Some(Input::ScriptParsed {
+            Self::ScriptParsed { session, params } => Ok(Some(Input::ScriptParsedWithProvenance {
+                provenance: crate::service_api::ScriptProvenance {
+                    execution_context_id: Some(params.execution_context_id),
+                    frame_id: params.execution_context_aux_data.as_ref()
+                        .and_then(|data| data.get("frameId"))
+                        .and_then(Value::as_str).map(str::to_owned),
+                    execution_context_aux_data: params.execution_context_aux_data
+                        .map(|data| serde_json::Value::Object(data.into_iter().collect())),
+                },
                 session,
                 script_id: params.script_id,
                 url: params.url,
@@ -1536,8 +1594,28 @@ impl CdpRuntimeError {
 }
 
 #[cfg(test)]
+#[path = "cdp_source_map_resource_tests.rs"]
+mod source_map_resource_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_events_preserve_execution_context_and_owning_frame() {
+        let params: DebuggerScriptParsedParams = serde_json::from_value(serde_json::json!({
+            "scriptId": "7", "url": "https://example.test/app.js",
+            "startLine": 0, "startColumn": 0, "endLine": 1, "endColumn": 0,
+            "executionContextId": 23, "hash": "captured",
+            "executionContextAuxData": {"frameId": "child-frame", "isDefault": true}
+        })).unwrap();
+        let session = SessionKey { connection_generation: 1, session_id: "test".into() };
+        let input = CdpRuntimeEvent::ScriptParsed { session, params }.into_input(None).unwrap().unwrap();
+        let Input::ScriptParsedWithProvenance { provenance, .. } = input else { panic!("script event lost provenance") };
+        assert_eq!(provenance.execution_context_id, Some(23));
+        assert_eq!(provenance.frame_id.as_deref(), Some("child-frame"));
+        assert_eq!(provenance.execution_context_aux_data.unwrap()["isDefault"], true);
+    }
 
     #[test]
     fn accepts_node_single_debug_symbols_object() {

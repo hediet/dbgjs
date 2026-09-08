@@ -158,6 +158,15 @@ impl DebuggerDriver {
         self.drain_effects(effects).await
     }
 
+    pub async fn acquire_script_source(
+        &mut self,
+        script: crate::debugger_engine::ScriptKey,
+        control: Option<&crate::source_search::SearchControl>,
+    ) -> Result<(), DebuggerDriverError> {
+        let effects = self.reduce_recorded(Input::RequestScriptSource { script });
+        self.drain_effects_with_control(effects, control).await
+    }
+
     pub async fn process_next_event(&mut self) -> Result<bool, DebuggerDriverError> {
         let event = self
             .session
@@ -215,11 +224,40 @@ impl DebuggerDriver {
     }
 
     async fn drain_effects(&mut self, effects: Vec<Effect>) -> Result<(), DebuggerDriverError> {
+        self.drain_effects_with_control(effects, None).await
+    }
+
+    async fn drain_effects_with_control(
+        &mut self,
+        effects: Vec<Effect>,
+        control: Option<&crate::source_search::SearchControl>,
+    ) -> Result<(), DebuggerDriverError> {
         let mut queue = VecDeque::from(effects);
         while let Some(effect) = queue.pop_front() {
             let completion =
                 match source_effect_completion(&effect, self.sources.interpret(&effect)) {
                     Some(input) => Some(input),
+                    None if matches!(effect, Effect::FetchScriptSource { .. }) => {
+                        let result = match control {
+                            Some(control) => tokio::select! {
+                                biased;
+                                error = control.interrupted() => Ok(Some(Input::EffectFailed {
+                                    effect_id: effect.effect_id(),
+                                    message: error.to_string(),
+                                })),
+                                result = self.session.execute(&effect) => result,
+                            },
+                            None => self.session.execute(&effect).await,
+                        };
+                        Some(match result {
+                            Ok(Some(input)) => input,
+                            Ok(None) => return Err(DebuggerDriverError::UnhandledEffect(effect)),
+                            Err(error) => Input::EffectFailed {
+                                effect_id: effect.effect_id(),
+                                message: error.to_string(),
+                            },
+                        })
+                    }
                     None => self.session.execute(&effect).await?,
                 };
             let Some(completion) = completion else {

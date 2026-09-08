@@ -266,7 +266,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [target, eval, arguments @ ..] if target == "target" && eval == "eval" => {
-            let expression = read_eval_expression(arguments, io::stdin())?;
+            let options = parse_eval_options(arguments, io::stdin())?;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
@@ -277,18 +277,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                 )
                 .await)?;
-            output.print(&rpc(client
+            output.print_eval(&rpc(client
                 .inspect_value(
                     scope.context,
                     scope.connection,
                     scope.target,
                     pause_epoch(&snapshot),
                     ValueSelector::Expression {
-                        expression: expression.clone(),
+                        expression: options.expression,
                         allow_side_effects: true,
                     },
                     ValueInspectionOptions {
-                        max_preview_length: DEFAULT_VALUE_PREVIEW_LENGTH,
+                        max_preview_length: options.max_preview_length,
                         max_properties: DEFAULT_VALUE_PROPERTY_LIMIT,
                         retain_references: false,
                     },
@@ -688,7 +688,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let options = parse_heap_class_options(options)?;
-            let _ = options.no_cache;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             if options.capture {
@@ -719,6 +718,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     trim_width: options.trim_width,
                 },
             )?;
+        }
+        [heap, supply, capture, script, hash, map] if heap == "heap" && supply == "supply-map" => {
+            let map_path = absolute_path(Path::new(map))?;
+            let source_map_url = url::Url::from_file_path(&map_path)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid source map path"))?.to_string();
+            let source_map = tokio::fs::read_to_string(map_path).await?;
+            let client = ensure_service(&state_file).await?;
+            let context = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            rpc(client.supply_stored_heap_source_map(context, capture.clone(),
+                cdp_client::service_api::HeapSourceMapSupply {
+                    script_id: script.clone(), script_hash: hash.clone(), source_map_url, source_map,
+                }).await)?;
+            output.print_heap_map_supplied(capture, script)?;
         }
         [capture, list] if capture == "capture" && list == "list" => {
             let client = ensure_service(&state_file).await?;
@@ -2300,7 +2312,15 @@ fn target_list_output(
                 && scope
                     .target
                     .as_deref()
-                    .is_none_or(|selector| target_matches_selector(&node.target, selector))
+                    .is_none_or(|selector| {
+                        cdp_client::target_selector::match_target_selector(
+                            &node.target,
+                            &node.connection_id,
+                            node.connection_generation,
+                            selector,
+                        )
+                        .is_some()
+                    })
                 && options.target_type.as_deref().is_none_or(|target_type| {
                     node.target.target_type.eq_ignore_ascii_case(target_type)
                 })
@@ -2321,7 +2341,14 @@ fn target_list_output(
             connection_generation: node.connection_generation,
             selected: selection_applies
                 && selection.connection.as_deref() == Some(node.connection_id.as_str())
-                && selection.target.as_deref() == Some(node.target.target_id.as_str()),
+                && selection.target.as_deref().is_some_and(|selector| {
+                    cdp_client::target_selector::match_target_selector(
+                        &node.target,
+                        &node.connection_id,
+                        node.connection_generation,
+                        selector,
+                    ).is_some_and(|rank| rank >= cdp_client::target_selector::TargetSelectorMatch::Canonical)
+                }),
             parent_target_id: node.parent_target_id.clone(),
             target: node.target.clone(),
         })
@@ -2389,16 +2416,6 @@ fn connection_configuration_matches(
             ConnectionKindFilter::Stdio
         )
     )
-}
-
-fn target_matches_selector(
-    target: &cdp_client::service_api::TargetSnapshot,
-    selector: &str,
-) -> bool {
-    target.target_id == selector
-        || target.target_type == selector
-        || target.title == selector
-        || target.url == selector
 }
 
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
@@ -2566,6 +2583,9 @@ fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io
         arguments.as_slice(),
         [connection, add, stdio, ..]
             if connection == "connection" && add == "add" && stdio == "--stdio"
+    ) || matches!(
+        arguments.as_slice(),
+        [target, eval, ..] if target == "target" && eval == "eval"
     );
     let mut options = ScopeOptions::default();
     let mut index = 0;
@@ -3192,31 +3212,25 @@ async fn resolve_scope(
         }
     };
     let snapshot = rpc(client.get_context(context.clone()).await)?;
+    if options.connection.is_some() {
+        return Ok(resolve_target_scope(context, &snapshot, selection, options)?);
+    }
     let use_selection = selection.context.as_deref() == Some(context.as_str());
     if let Some(selector) = options.target.as_ref().or_else(|| {
-        (options.connection.is_none() && use_selection)
-            .then(|| selection.target.as_ref())
-            .flatten()
+        use_selection.then(|| selection.target.as_ref()).flatten()
     }) {
         let target = rpc(client
             .resolve_target(context.clone(), selector.clone())
             .await)?;
-        if let Some(requested_connection) = options.connection.as_deref()
-            && requested_connection != target.connection_id
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "canonical target '{}' belongs to connection '{}', not requested connection '{}'",
-                    target.target_id, target.connection_id, requested_connection
-                ),
-            )
-            .into());
-        }
         return Ok(ResolvedScope {
             context,
+            target: cdp_client::target_selector::resolved_target_selector(
+                &target.connection_id,
+                &target.target_id,
+                target.connection_generation,
+                Some(selector),
+            ),
             connection: target.connection_id,
-            target: target.target_id,
         });
     }
     Ok(resolve_target_scope(
@@ -3308,14 +3322,41 @@ fn resolve_target_scope(
         .iter()
         .flat_map(|connection| {
             connection.targets.iter().filter_map(|target| {
-                let matches = requested_target
-                    .is_none_or(|selector| target_matches_selector(target, selector));
-                matches.then_some((connection.id.as_str(), target))
+                let rank = match requested_target {
+                    Some(selector) => cdp_client::target_selector::match_target_selector(
+                        target,
+                        &connection.id,
+                        connection.generation,
+                        selector,
+                    )?,
+                    None => cdp_client::target_selector::TargetSelectorMatch::Friendly,
+                };
+                Some((rank, connection.id.as_str(), target))
             })
         })
         .collect::<Vec<_>>();
+    let best_rank = candidates.iter().map(|(rank, _, _)| *rank).max();
+    let candidates = candidates
+        .into_iter()
+        .filter(|(rank, _, _)| Some(*rank) == best_rank)
+        .map(|(_, connection, target)| (connection, target))
+        .collect::<Vec<_>>();
     let (connection, target) = match candidates.as_slice() {
-        [(connection, target)] => ((*connection).to_owned(), target.target_id.clone()),
+        [(connection, target)] => {
+            let generation = snapshot.connections.iter()
+                .find(|candidate| candidate.id == *connection)
+                .expect("candidate connection belongs to the snapshot")
+                .generation;
+            (
+                (*connection).to_owned(),
+                cdp_client::target_selector::resolved_target_selector(
+                    connection,
+                    &target.target_id,
+                    generation,
+                    requested_target.map(String::as_str),
+                ),
+            )
+        }
         [] => {
             let selector = requested_target.map_or("<unspecified>", String::as_str);
             return Err(io::Error::new(
@@ -3953,7 +3994,6 @@ struct HeapClassOptions {
     max_lines: usize,
     instances: bool,
     sort_by_instances: bool,
-    no_cache: bool,
     trim_width: bool,
 }
 
@@ -4625,7 +4665,6 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
     let mut max_lines = 300_usize;
     let mut instances = false;
     let mut sort_by_instances = false;
-    let mut no_cache = false;
     let mut trim_width = true;
     let mut index = 0;
     while index < values.len() {
@@ -4648,7 +4687,8 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
             "--all" => all = true,
             "--instances" => instances = true,
             "--sort-by-instances" => sort_by_instances = true,
-            "--no-cache" => no_cache = true,
+            "--no-cache" => return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                "--no-cache is not supported for captured heaps; capture a new snapshot to refresh mapping metadata")),
             "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
@@ -4698,7 +4738,6 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
         max_lines,
         instances,
         sort_by_instances,
-        no_cache,
         trim_width,
     })
 }
@@ -5334,8 +5373,14 @@ async fn resolve_renderer_target_id(
             }
             _ => {
                 return Err(format!(
-                    "renderer process {process_id} maps to multiple Electron webContents targets: {}; attach one with `jsdbg target attach --target <target-id>`",
-                    candidates.join(", ")
+                    "renderer process {process_id} maps to multiple Electron webContents targets. Attach one with:\n{}",
+                    candidates
+                        .iter()
+                        .map(|target_id| format!(
+                            "  jsdbg target attach --context \":{context_id}\" --target \"{connection_id}/{target_id}\""
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("\n")
                 )
                 .into());
             }
@@ -5949,6 +5994,48 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
     Ok(options)
 }
 
+struct EvalOptions {
+    expression: String,
+    max_preview_length: u32,
+}
+
+fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOptions, io::Error> {
+    let mut expression = Vec::new();
+    let mut max_preview_length = None;
+    let mut full = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--full" => full = true,
+            "--max-preview-length" => {
+                index += 1;
+                max_preview_length =
+                    Some(parse_u32_option(arguments, index, "--max-preview-length")?);
+            }
+            "--" => {
+                expression.extend_from_slice(&arguments[index + 1..]);
+                break;
+            }
+            _ => expression.push(arguments[index].clone()),
+        }
+        index += 1;
+    }
+    if full && max_preview_length.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--full and --max-preview-length cannot be combined",
+        ));
+    }
+    Ok(EvalOptions {
+        expression: read_eval_expression(&expression, stdin)?,
+        max_preview_length: if full {
+            u32::MAX
+        } else {
+            max_preview_length.unwrap_or(DEFAULT_VALUE_PREVIEW_LENGTH)
+        },
+    })
+}
+
 fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<String, io::Error> {
     match arguments {
         [expression] if expression != "-" => Ok(expression.clone()),
@@ -6379,7 +6466,8 @@ commands:
   jsdbg target wait running [target scope]
   jsdbg target resume [--epoch <epoch>] [target scope]
   jsdbg target step into|over|out [--epoch <epoch>] [target scope]
-  jsdbg target eval <expression|-> [target scope]  ('-' reads the expression from stdin)
+  jsdbg target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
+    '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
   jsdbg page playwright - [target scope]
   jsdbg page playwright --eval <program> [target scope]
   jsdbg target watch <expression> [target scope]
@@ -6408,6 +6496,7 @@ commands:
   jsdbg capture delete <name> [--context <id>]
   jsdbg promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
   jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
+  jsdbg heap supply-map <capture> <script-id> <captured-script-hash> <map-file>
   jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
   jsdbg heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
   jsdbg heap show <capture#heap-object-id> [--limit <count>|--all] [--full-strings]
@@ -6452,7 +6541,8 @@ mod tests {
         parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
-        png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
+        parse_eval_options, png_dimensions, read_eval_expression, read_playwright_program,
+        resolve_target_scope,
         select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use cdp_client::context_identity::ContextKind;
@@ -6486,6 +6576,60 @@ mod tests {
                 .to_string()
                 .contains("'-' alone")
         );
+    }
+
+    #[test]
+    fn target_eval_options_preserve_full_and_bounded_strings() {
+        let full = parse_eval_options(
+            &arguments(&["--full", "-"]),
+            "JSON.stringify(value)".as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(full.expression, "JSON.stringify(value)");
+        assert_eq!(full.max_preview_length, u32::MAX);
+        let bounded = parse_eval_options(
+            &arguments(&["answer", "--max-preview-length", "2000"]),
+            "".as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(bounded.expression, "answer");
+        assert_eq!(bounded.max_preview_length, 2000);
+        let default = parse_eval_options(&arguments(&["-1"]), "".as_bytes()).unwrap();
+        assert_eq!(default.max_preview_length, 120);
+        assert_eq!(default.expression, "-1");
+        assert_eq!(
+            parse_eval_options(&arguments(&["--counter"]), "".as_bytes())
+                .unwrap()
+                .expression,
+            "--counter",
+        );
+        assert_eq!(
+            parse_eval_options(&arguments(&["--", "--counter"]), "".as_bytes())
+                .unwrap()
+                .expression,
+            "--counter",
+        );
+        let mut command = arguments(&["target", "eval", "--context", ":test", "--", "--full"]);
+        let scope = extract_scope_options(&mut command).unwrap();
+        assert_eq!(scope.context.as_deref(), Some(":test"));
+        assert_eq!(
+            parse_eval_options(&command[2..], "".as_bytes())
+                .unwrap()
+                .expression,
+            "--full",
+        );
+        for invalid in [
+            vec!["--full", "--max-preview-length", "10", "answer"],
+            vec!["answer", "--max-preview-length"],
+            vec!["answer", "--max-preview-length", "-1"],
+            vec!["answer", "--unknown"],
+            vec!["--full"],
+        ] {
+            assert!(
+                parse_eval_options(&arguments(&invalid), "".as_bytes()).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]
@@ -6873,6 +7017,59 @@ mod tests {
         assert_eq!(targets.targets.len(), 1);
         assert_eq!(targets.targets[0].target.target_id, "page-1");
         assert!(targets.targets[0].selected);
+        let entry = &targets.targets[0];
+        let qualified = cdp_client::target_selector::qualified_target_selector(
+            &entry.connection_id,
+            &entry.target.target_id,
+            entry.connection_generation,
+        );
+        let filtered = target_list_output(
+            &snapshot,
+            &selection,
+            &ScopeOptions {
+                target: Some(qualified),
+                ..ScopeOptions::default()
+            },
+            &TargetListOptions::default(),
+        );
+        assert_eq!(filtered.targets.len(), 1);
+        assert_eq!(filtered.targets[0].target.target_id, "page-1");
+    }
+
+    #[test]
+    fn target_scope_resolves_qualified_nested_ids() {
+        let snapshot = context_snapshot(&[
+            ("process-a", &["renderer-11/target/iframe"]),
+            ("process-b", &["renderer-11/target/iframe"]),
+        ]);
+        let generation = snapshot
+            .connections
+            .iter()
+            .find(|connection| connection.id == "process-b")
+            .unwrap()
+            .generation;
+        for selector in [
+            "process-b/renderer-11/target/iframe".to_owned(),
+            format!("process-b/renderer-11/target/iframe@{generation}"),
+        ] {
+            let expected = if selector.ends_with(&format!("@{generation}")) {
+                selector.clone()
+            } else {
+                "renderer-11/target/iframe".to_owned()
+            };
+            let scope = resolve_target_scope(
+                "ctx".to_owned(),
+                &snapshot,
+                &CliSelection::default(),
+                &ScopeOptions {
+                    target: Some(selector),
+                    ..ScopeOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(scope.connection, "process-b");
+            assert_eq!(scope.target, expected);
+        }
     }
 
     #[test]
@@ -7065,7 +7262,6 @@ mod tests {
             "--instances",
             "--max-lines",
             "42",
-            "--no-cache",
             "--no-trim",
         ]))
         .unwrap();
@@ -7075,8 +7271,9 @@ mod tests {
         assert!(options.sort_by_instances);
         assert!(options.instances);
         assert_eq!(options.max_lines, 42);
-        assert!(options.no_cache);
         assert!(!options.trim_width);
+        assert!(parse_heap_class_options(&arguments(&["--no-cache"]))
+            .err().unwrap().to_string().contains("not supported for captured heaps"));
     }
 
     #[test]

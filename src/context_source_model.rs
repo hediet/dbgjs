@@ -42,6 +42,13 @@ pub struct ContextSourceGraphSelection {
     pub graph: ContextSourceGraphSnapshot,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("No source has exact URI '{selector}'. Source resolution requires an exact URI.{suggestions}")]
+pub struct SourceResolutionError {
+    pub selector: String,
+    pub suggestions: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CompactedProjectionKind {
     Identity,
@@ -302,7 +309,10 @@ impl ContextSourceModel {
         snapshots_by_id(&state, &projected)
     }
 
-    pub fn resolve_sources(&self, selector: &str) -> ContextSourceGraphSelection {
+    pub fn resolve_sources(
+        &self,
+        selector: &str,
+    ) -> Result<ContextSourceGraphSelection, SourceResolutionError> {
         let state = self.state.lock().unwrap();
         let roots = state
             .files
@@ -310,6 +320,30 @@ impl ContextSourceModel {
             .filter(|source| source.uri.as_str() == selector || source.uri.display() == selector)
             .map(|source| source.id)
             .collect::<BTreeSet<_>>();
+        if roots.is_empty() && state.files.snapshots().next().is_some() {
+            let candidates = state
+                .files
+                .snapshots()
+                .filter(|source| {
+                    source.uri.as_str().contains(selector) || source.uri.display().contains(selector)
+                })
+                .map(|source| source.uri.display())
+                .collect::<BTreeSet<_>>();
+            let suggestions = if candidates.is_empty() {
+                " Use source list to inspect the observed inventory.".to_owned()
+            } else {
+                format!(
+                    " {}Canonical candidate{}:\n{}",
+                    if candidates.len() > 1 { "The abbreviated name is ambiguous. " } else { "" },
+                    if candidates.len() == 1 { "" } else { "s" },
+                    candidates.into_iter().collect::<Vec<_>>().join("\n")
+                )
+            };
+            return Err(SourceResolutionError {
+                selector: selector.to_owned(),
+                suggestions,
+            });
+        }
         let selected = reachable_dependencies(&state.graph, &roots);
         let projections = state
             .graph
@@ -319,13 +353,13 @@ impl ContextSourceModel {
             })
             .cloned()
             .collect();
-        ContextSourceGraphSelection {
+        Ok(ContextSourceGraphSelection {
             roots: roots.into_iter().collect(),
             graph: ContextSourceGraphSnapshot {
                 sources: snapshots_by_id(&state, &selected),
                 projections,
             },
-        }
+        })
     }
 }
 
@@ -1542,7 +1576,7 @@ mod tests {
             [first_leaf, second_leaf]
         );
 
-        let resolved = model.resolve_sources("https://example.test/out/app.js");
+        let resolved = model.resolve_sources("https://example.test/out/app.js").unwrap();
         assert_eq!(resolved.roots, [generated]);
         assert_eq!(resolved.graph.sources.len(), 4);
         assert_eq!(resolved.graph.projections.len(), 3);
@@ -1550,6 +1584,44 @@ mod tests {
         model.release(&owner);
         assert!(model.loaded_sources().is_empty());
         assert!(model.resolved_loaded_sources().is_empty());
+    }
+
+    #[test]
+    fn source_resolution_distinguishes_empty_unmatched_and_ambiguous_inventory() {
+        let model = ContextSourceModel::new();
+        assert!(model.resolve_sources("editor.js").unwrap().roots.is_empty());
+        let owner = SourceContributionId::new("target");
+        let first = model
+            .intern_version(
+                &owner,
+                SourceUri::parse("https://one.test/editor.js").unwrap(),
+                RevisionNamespace::new("cdp-script").unwrap(),
+                "1",
+            )
+            .unwrap();
+        let abbreviated = model.resolve_sources("editor.js").unwrap_err().to_string();
+        assert!(abbreviated.contains("requires an exact URI"));
+        assert!(abbreviated.contains("https://one.test/editor.js"));
+        assert!(!abbreviated.contains("ambiguous"));
+        assert_eq!(
+            model.resolve_sources("https://one.test/editor.js").unwrap().roots,
+            [first]
+        );
+        model
+            .intern_version(
+                &owner,
+                SourceUri::parse("https://two.test/editor.js").unwrap(),
+                RevisionNamespace::new("cdp-script").unwrap(),
+                "2",
+            )
+            .unwrap();
+        let ambiguous = model.resolve_sources("editor.js").unwrap_err().to_string();
+        assert!(ambiguous.contains("ambiguous"));
+        assert!(ambiguous.contains("https://one.test/editor.js"));
+        assert!(ambiguous.contains("https://two.test/editor.js"));
+        let unmatched = model.resolve_sources("absent.js").unwrap_err().to_string();
+        assert!(unmatched.contains("source list"));
+        assert!(!unmatched.contains("No sources are currently observed"));
     }
 
     #[test]

@@ -920,6 +920,8 @@ fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
 struct StoredCapture {
     metadata: CaptureSnapshot,
     payload: CapturePayloadReference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    heap_mapping: Option<crate::service_api::HeapMappingSnapshot>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -2638,7 +2640,9 @@ impl DebuggerServiceApi for DebuggerService {
                 edges: Vec::new(),
             });
         };
-        let selection = model.resolve_sources(&source);
+        let selection = model
+            .resolve_sources(&source)
+            .map_err(|error| invalid_params(error.to_string()))?;
         Ok(uncompacted_graph_snapshot(
             selection.graph,
             selection.roots.into_iter().map(|source| source.0).collect(),
@@ -2837,8 +2841,14 @@ impl DebuggerServiceApi for DebuggerService {
 
         let mut documents = Vec::new();
         let mut skipped_sources = 0_u32;
+        let mut skipped = Vec::new();
         for (connection_id, target_id, mut batch) in batches {
             skipped_sources = skipped_sources.saturating_add(batch.skipped_sources);
+            skipped.extend(batch.skipped.into_iter().map(|mut source| {
+                source.connection_id = Some(connection_id.clone());
+                source.target_id = Some(target_id.clone());
+                source
+            }));
             select_source_views(&mut batch.sources, &formatting, &target_id, options.view);
             documents.extend(batch.sources.into_iter().map(|source| SearchDocument {
                 identity: SourceIdentity {
@@ -2855,20 +2865,22 @@ impl DebuggerServiceApi for DebuggerService {
 
         let worker_control = control.clone();
         let worker = tokio::task::spawn_blocking(move || {
-            let mut skipped_local = 0_u32;
+            let mut skipped_local = Vec::new();
             for path in local_sources {
                 worker_control.check()?;
-                let file_path = match source_file_path(&path) {
-                    Ok(file_path) => file_path,
-                    Err(_) => {
-                        skipped_local = skipped_local.saturating_add(1);
-                        continue;
-                    }
-                };
-                let content = match fs::read_to_string(file_path) {
+                let content = match source_file_path(&path)
+                    .map_err(|error| error.message)
+                    .and_then(|file_path| fs::read_to_string(file_path).map_err(|error| error.to_string()))
+                {
                     Ok(content) => Arc::<str>::from(content),
-                    Err(_) => {
-                        skipped_local = skipped_local.saturating_add(1);
+                    Err(reason) => {
+                        skipped_local.push(crate::service_api::SourceSearchSkip {
+                            path,
+                            kind: "intent".to_owned(),
+                            connection_id: None,
+                            target_id: None,
+                            reason,
+                        });
                         continue;
                     }
                 };
@@ -2902,6 +2914,8 @@ impl DebuggerServiceApi for DebuggerService {
                 .map_err(source_search_error)?,
         };
         cancellation.disarm();
+        skipped_sources = skipped_sources.saturating_add(skipped_local.len().min(u32::MAX as usize) as u32);
+        skipped.extend(skipped_local);
         let matches = result
             .hits
             .into_iter()
@@ -2925,7 +2939,8 @@ impl DebuggerServiceApi for DebuggerService {
             matches,
             searched_sources: result.searched_sources,
             searched_contents: result.searched_contents,
-            skipped_sources: skipped_sources.saturating_add(skipped_local),
+            skipped_sources,
+            skipped,
         })
     }
 
@@ -3187,6 +3202,7 @@ impl DebuggerServiceApi for DebuggerService {
                     StoredCapture {
                         metadata: reservation.metadata.clone(),
                         payload: completed.payload.clone(),
+                        heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
                     },
                     true,
                 )
@@ -3343,7 +3359,7 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
         filter: Option<String>,
     ) -> Result<HeapClassSnapshot, JsonRpcError> {
-        let payload = {
+        let (payload, mapping) = {
             let state = self.state.lock().await;
             let capture = state
                 .captures
@@ -3354,7 +3370,7 @@ impl DebuggerServiceApi for DebuggerService {
                     "capture '{capture_name}' is not a heap snapshot"
                 )));
             }
-            capture.payload.clone()
+            (capture.payload.clone(), capture.heap_mapping.clone())
         };
         let CapturePayload::HeapSnapshot { path } =
             load_capture_payload(&payload, CaptureKind::HeapSnapshot)
@@ -3366,11 +3382,33 @@ impl DebuggerServiceApi for DebuggerService {
         };
         let capture_for_task = capture_name.clone();
         tokio::task::spawn_blocking(move || {
-            stored_heap_classes(Path::new(&path), capture_for_task, filter.as_deref())
+            stored_heap_classes(Path::new(&path), capture_for_task, filter.as_deref(), mapping.as_ref())
         })
         .await
         .map_err(|error| internal_error(error.to_string()))?
         .map_err(target_debugger_rpc_error)
+    }
+
+    async fn supply_stored_heap_source_map(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        capture_name: String,
+        supply: crate::service_api::HeapSourceMapSupply,
+    ) -> Result<(), JsonRpcError> {
+        let mut state = self.state.lock().await;
+        let previous = state.clone();
+        let capture = state.captures.get_mut(&(context_id, capture_name.clone()))
+            .ok_or_else(|| not_found("capture", &capture_name))?;
+        if capture.metadata.kind != CaptureKind::HeapSnapshot {
+            return Err(invalid_params("capture is not a heap snapshot"));
+        }
+        let mapping = capture.heap_mapping.as_mut().ok_or_else(||
+            invalid_state("legacy capture has no captured script hashes; cannot safely supply a source map"))?;
+        crate::target_debugger::supply_heap_source_map(mapping, supply)
+            .map_err(target_debugger_rpc_error)?;
+        self.persist_or_restore(&mut state, previous)?;
+        Ok(())
     }
 
     async fn attach_target(
@@ -3465,12 +3503,11 @@ impl DebuggerServiceApi for DebuggerService {
         let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         let _attachment_guard = self.attachment_lock.lock().await;
-        let target_id = self
-            .resolve_target_id(&context_id, &connection_id, &target_id)
-            .await?;
-        let key = (context_id.clone(), connection_id.clone(), target_id.clone());
-        let (debugger, runtime, attachment, attempt) = {
+        let (key, debugger, runtime, attachment, attempt) = {
             let state = self.state.lock().await;
+            let target_id =
+                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            let key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
                 .get(&context_id)
@@ -3497,6 +3534,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
             (
+                key.clone(),
                 debugger,
                 runtime,
                 state.debug_attachments.get(&key).cloned(),
@@ -3744,11 +3782,10 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         expected_generation: u64,
     ) -> Result<PlaywrightProxyEndpoint, JsonRpcError> {
-        let target_id = self
-            .resolve_target_id(&context_id, &connection_id, &target_id)
-            .await?;
-        let (runtime, browser_context_id) = {
+        let (target_id, runtime, browser_context_id) = {
             let state = self.state.lock().await;
+            let target_id =
+                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
             let connection = state
                 .contexts
                 .get(&context_id)
@@ -3780,7 +3817,7 @@ impl DebuggerServiceApi for DebuggerService {
                 .get(&(context_id.clone(), connection_id.clone()))
                 .cloned()
                 .ok_or_else(|| invalid_state("connection is not connected"))?;
-            (runtime, target.target.browser_context_id)
+            (target_id, runtime, target.target.browser_context_id)
         };
 
         let id = random_instance_id().map_err(|error| internal_error(error.to_string()))?;
@@ -4120,12 +4157,11 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
     ) -> Result<ScreenshotSnapshot, JsonRpcError> {
-        let target_id = self
-            .resolve_target_id(&context_id, &connection_id, &target_id)
-            .await?;
         let selected = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
+        let owner = selected.snapshot();
+        let target_id = owner.target_id;
         let (target_type, parent_id) = {
             let state = self.state.lock().await;
             let connection = state
@@ -4135,6 +4171,9 @@ impl DebuggerServiceApi for DebuggerService {
                 .connections
                 .get(&connection_id)
                 .ok_or_else(|| not_found("connection", &connection_id))?;
+            if connection.generation != owner.connection_generation {
+                return Err(invalid_state("connection changed before the screenshot could be captured"));
+            }
             let target = context_connection_target(
                 &state,
                 &context_id,
@@ -4168,7 +4207,11 @@ impl DebuggerServiceApi for DebuggerService {
             let (parent, created) = service
                 .relay_ensure_attached(&owner_id, &context_id, &connection_id, &parent_id)
                 .await?;
-            let result = capture_embedded_frame_screenshot(&parent, &frame_id).await;
+            let result = if parent.snapshot().connection_generation != owner.connection_generation {
+                Err(invalid_state("connection changed before the screenshot could be captured"))
+            } else {
+                capture_embedded_frame_screenshot(&parent, &frame_id).await
+            };
             if created {
                 service
                     .relay_release_attachment(
@@ -4885,7 +4928,12 @@ impl DebuggerService {
                 return Ok(None);
             };
             if reservation.metadata.connection_id != connection_id
-                || reservation.metadata.target_id != target_id
+                || (reservation.metadata.target_id != target_id
+                    && crate::target_selector::qualified_target_selector(
+                        connection_id,
+                        &reservation.metadata.target_id,
+                        reservation.metadata.connection_generation,
+                    ) != target_id)
                 || reservation.metadata.kind != kind
             {
                 return Err(invalid_state(&format!(
@@ -5089,6 +5137,7 @@ impl DebuggerService {
             StoredCapture {
                 metadata: metadata.clone(),
                 payload: completed.payload,
+                heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -5122,6 +5171,7 @@ impl DebuggerService {
             StoredCapture {
                 metadata: metadata.clone(),
                 payload: completed.payload.clone(),
+                heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -5198,12 +5248,11 @@ impl DebuggerService {
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, JsonRpcError> {
         let _attachment_guard = self.attachment_lock.lock().await;
-        let mut target_id = self
-            .resolve_target_id(&context_id, &connection_id, &target_id)
-            .await?;
-        let mut debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
-        let prior_owner = {
+        let (mut target_id, mut debugger_key, prior_owner, mut resolved_generation) = {
             let mut state = self.state.lock().await;
+            let target_id =
+                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
                 .get(&context_id)
@@ -5212,6 +5261,7 @@ impl DebuggerService {
                 .connections
                 .get(&connection_id)
                 .ok_or_else(|| not_found("connection", &connection_id))?;
+            let resolved_generation = connection.generation;
             if options
                 .expected_connection_generation
                 .is_some_and(|expected| expected != connection.generation)
@@ -5258,7 +5308,7 @@ impl DebuggerService {
                 }
                 remove_debugger_registration(&mut state, &owner.key);
             }
-            prior_owner
+            (target_id, debugger_key, prior_owner, resolved_generation)
         };
 
         let mut outcome = TargetAttachmentOutcome::Created;
@@ -5275,8 +5325,14 @@ impl DebuggerService {
                 self.disconnect_connection(ctx, owner.key.0.clone(), owner.key.1.clone())
                     .await?;
                 if owner_is_requested {
-                    self.connect_connection(ctx, context_id.clone(), connection_id.clone())
+                    let connected = self
+                        .connect_connection(ctx, context_id.clone(), connection_id.clone())
                         .await?;
+                    resolved_generation = connected.connections
+                        .iter()
+                        .find(|connection| connection.id == connection_id)
+                        .ok_or_else(|| not_found("connection", &connection_id))?
+                        .generation;
                     target_id = self
                         .resolve_target_id(&context_id, &connection_id, &target_id)
                         .await?;
@@ -5305,6 +5361,11 @@ impl DebuggerService {
                 .connections
                 .get(&connection_id)
                 .ok_or_else(|| not_found("connection", &connection_id))?;
+            if connection.generation != resolved_generation {
+                return Err(invalid_state(
+                    "connection changed before the target could be attached",
+                ));
+            }
             let target = context_connection_target(
                 &state,
                 &context_id,
@@ -5530,12 +5591,10 @@ impl DebuggerService {
         connection_id: &str,
         target_id: &str,
     ) -> Result<TargetDebuggerHandle, JsonRpcError> {
-        let target_id = self
-            .resolve_target_id(context_id, connection_id, target_id)
-            .await?;
-        self.state
-            .lock()
-            .await
+        let state = self.state.lock().await;
+        let target_id =
+            Self::resolve_target_id_in_state(&state, context_id, connection_id, target_id)?;
+        state
             .target_debuggers
             .get(&(
                 context_id.to_owned(),
@@ -6047,18 +6106,14 @@ impl DebuggerService {
                     .into_values()
             {
                 let target = target_resource.target;
-                let exact = target.target_id == selector;
-                let friendly = target.target_type.eq_ignore_ascii_case(selector)
-                    || target.title.eq_ignore_ascii_case(selector)
-                    || target.url == selector
-                    || target
-                        .title
-                        .to_lowercase()
-                        .contains(&selector.to_lowercase())
-                    || target.url.to_lowercase().contains(&selector.to_lowercase());
-                if exact || friendly {
+                if let Some(rank) = crate::target_selector::match_target_selector(
+                    &target,
+                    connection_id,
+                    connection.generation,
+                    selector,
+                ) {
                     candidates.push((
-                        exact,
+                        rank,
                         CanonicalTargetSnapshot {
                             context_id: context_id.to_owned(),
                             resource_id: target_resource.resource_id.to_string(),
@@ -6071,19 +6126,12 @@ impl DebuggerService {
                 }
             }
         }
-        let exact = candidates
-            .iter()
-            .filter(|(exact, _)| *exact)
-            .map(|(_, target)| target.clone())
+        let best_rank = candidates.iter().map(|(rank, _)| *rank).max();
+        let matches = candidates
+            .into_iter()
+            .filter(|(rank, _)| Some(*rank) == best_rank)
+            .map(|(_, target)| target)
             .collect::<Vec<_>>();
-        let matches = if exact.is_empty() {
-            candidates
-                .into_iter()
-                .map(|(_, target)| target)
-                .collect::<Vec<_>>()
-        } else {
-            exact
-        };
         match matches.as_slice() {
             [target] => Ok(target.clone()),
             [] => Err(not_found("target selector", selector)),
@@ -6117,6 +6165,15 @@ impl DebuggerService {
         selector: &str,
     ) -> Result<String, JsonRpcError> {
         let state = self.state.lock().await;
+        Self::resolve_target_id_in_state(&state, context_id, connection_id, selector)
+    }
+
+    fn resolve_target_id_in_state(
+        state: &ServiceState,
+        context_id: &str,
+        connection_id: &str,
+        selector: &str,
+    ) -> Result<String, JsonRpcError> {
         let connection = state
             .contexts
             .get(context_id)
@@ -6125,24 +6182,41 @@ impl DebuggerService {
             .get(connection_id)
             .ok_or_else(|| not_found("connection", connection_id))?;
         let targets =
-            context_connection_targets(&state, context_id, connection_id, connection.generation);
-        if targets.contains_key(selector) {
-            return Ok(selector.to_owned());
-        }
-        let matches = targets
+            context_connection_targets(state, context_id, connection_id, connection.generation);
+        let candidates = targets
             .values()
             .map(|target| &target.target)
-            .filter(|target| {
-                target.target_type == selector || target.title == selector || target.url == selector
+            .filter_map(|target| {
+                crate::target_selector::match_target_selector(
+                    target,
+                    connection_id,
+                    connection.generation,
+                    selector,
+                )
+                .map(|rank| (rank, target.target_id.clone()))
             })
-            .map(|target| target.target_id.clone())
+            .collect::<Vec<_>>();
+        let best_rank = candidates.iter().map(|(rank, _)| *rank).max();
+        let matches = candidates
+            .into_iter()
+            .filter(|(rank, _)| Some(*rank) == best_rank)
+            .map(|(_, target_id)| target_id)
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [target_id] => Ok(target_id.clone()),
             [] => Err(not_found("target selector", selector)),
             _ => Err(invalid_params(&format!(
-                "target selector '{selector}' is ambiguous across {} targets",
-                matches.len()
+                "target selector '{selector}' is ambiguous across {} targets. Qualified candidates: {}",
+                matches.len(),
+                matches
+                    .iter()
+                    .map(|target_id| crate::target_selector::qualified_target_selector(
+                        connection_id,
+                        target_id,
+                        connection.generation,
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ))),
         }
     }
@@ -8003,6 +8077,7 @@ fn migrate_embedded_capture_state(
             Ok(StoredCapture {
                 metadata: capture.metadata,
                 payload,
+                heap_mapping: None,
             })
         })
         .collect::<Result<Vec<_>, ServicePersistenceError>>()?;
@@ -8900,6 +8975,7 @@ mod tests {
         StoredCapture {
             metadata,
             payload: payload_reference_from_file(path).unwrap(),
+            heap_mapping: None,
         }
     }
 
@@ -8930,6 +9006,7 @@ mod tests {
         StoredCapture {
             metadata,
             payload: reference,
+            heap_mapping: None,
         }
     }
 
@@ -9367,6 +9444,7 @@ mod tests {
         fs::create_dir_all(final_path.parent().unwrap()).unwrap();
         fs::write(&final_path, b"completed heap").unwrap();
         let result = HeapCaptureResult {
+            mapping: None,
             capture_id: "heap".into(),
             bytes_written: 14,
             timing: Default::default(),
@@ -9456,6 +9534,7 @@ mod tests {
                     payload,
                     HeapCaptureResult {
                         capture_id: "discard".into(),
+                        mapping: None,
                         bytes_written: 14,
                         timing: Default::default(),
                     },
@@ -10075,6 +10154,74 @@ mod tests {
     }
 
     #[test]
+    fn stored_heap_maps_survive_service_restart_without_a_live_target() {
+        use crate::service_api::{HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, ScriptProvenance};
+        let root = std::env::current_dir().unwrap().join("target")
+            .join(format!("offline-heap-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let heap_path = root.join("capture.heapsnapshot");
+        fs::write(&heap_path, r#"{
+            "snapshot":{"meta":{
+                "node_fields":["type","name","id","self_size","edge_count"],
+                "node_types":[["hidden","object"],"string","number","number","number"],
+                "location_fields":["object_index","script_id","line","column"]
+            }},
+            "nodes":[1,0,7,16,0],"locations":[0,7,0,0],"strings":["a"]
+        }"#).unwrap();
+        let mut capture = heap_capture("test", "heap", "target-a", "runtime", &heap_path);
+        capture.heap_mapping = Some(HeapMappingSnapshot {
+            connection_generation: 42, hydration_duration_micros: 10,
+            scripts: vec![HeapScriptSnapshot {
+                script_id: "7".into(), url: "https://example.test/app.js".into(), hash: "captured-hash".into(),
+                provenance: ScriptProvenance { execution_context_id: Some(7),
+                    execution_context_aux_data: None, frame_id: Some("child-frame".into()) },
+                source_map_url: Some("https://example.test/app.js.map".into()),
+                generated_source: Some("class a {}".into()),
+                source_map: Some(r#"{"version":3,"sources":["original.ts"],"sourcesContent":["class Original {}"],"names":[],"mappings":"AAAA"}"#.into()),
+                mapping_status: HeapMappingStatus::Mapped, diagnostic: None,
+            }],
+        });
+        let mut state = ServiceState::default();
+        state.captures.insert(("test".into(), "heap".into()), capture);
+        let writer = service_with_state(persistence_path.clone(), state);
+        writer.persist(&writer.state.blocking_lock()).unwrap();
+        drop(writer);
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path.clone()).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let snapshot = restored.get_stored_heap_classes(&CallCtx::default(),
+                "test".into(), "heap".into(), None).await.unwrap();
+            assert_eq!(snapshot.classes[0].name, "Original");
+            assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
+            assert_eq!(snapshot.classes[0].provenance.frame_id.as_deref(), Some("child-frame"));
+            assert!(restored.state.lock().await.target_debuggers.is_empty());
+            let mut supply = crate::service_api::HeapSourceMapSupply {
+                script_id: "7".into(), script_hash: "wrong".into(),
+                source_map_url: "file:///maps/app.js.map".into(),
+                source_map: r#"{"version":3,"file":"app.js","sources":["supplied.ts"],"sourcesContent":["class Supplied {}"],"names":[],"mappings":"AAAA"}"#.into(),
+            };
+            assert!(restored.supply_stored_heap_source_map(&CallCtx::default(),
+                "test".into(), "heap".into(), supply.clone()).await.is_err());
+            supply.script_hash = "captured-hash".into();
+            restored.supply_stored_heap_source_map(&CallCtx::default(),
+                "test".into(), "heap".into(), supply).await.unwrap();
+        });
+        drop(restored);
+        let (shutdown, _) = watch::channel(false);
+        let reloaded = DebuggerService::load(shutdown, persistence_path).unwrap();
+        runtime.block_on(async {
+            let snapshot = reloaded.get_stored_heap_classes(&CallCtx::default(),
+                "test".into(), "heap".into(), None).await.unwrap();
+            assert_eq!(snapshot.classes[0].name, "Supplied");
+            assert_eq!(snapshot.analysis.script_mappings[0].hash, "captured-hash");
+        });
+        drop(reloaded);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn schema_five_validates_payload_integrity_and_kind_on_restart() {
         let root = std::env::current_dir()
             .unwrap()
@@ -10174,6 +10321,115 @@ mod tests {
             "{error}"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn qualified_target_selectors_round_trip_nested_ids_and_generations() {
+        let mut state = ServiceState::default();
+        let target_id = "renderer-11/target/iframe";
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                (
+                    "process-tree-1",
+                    2,
+                    vec![target(target_id, "Editor", "https://a.test")],
+                ),
+                (
+                    "process-tree-2",
+                    7,
+                    vec![target(target_id, "Editor", "https://b.test")],
+                ),
+            ],
+        );
+        assert!(DebuggerService::resolve_canonical_target(&state, "test", target_id).is_err());
+        for selector in [
+            format!("process-tree-2/{target_id}"),
+            crate::target_selector::qualified_target_selector("process-tree-2", target_id, 7),
+        ] {
+            let resolved =
+                DebuggerService::resolve_canonical_target(&state, "test", &selector).unwrap();
+            assert_eq!(resolved.connection_id, "process-tree-2");
+            assert_eq!(resolved.target_id, target_id);
+            assert_eq!(resolved.connection_generation, 7);
+        }
+        assert!(
+            DebuggerService::resolve_canonical_target(
+                &state,
+                "test",
+                &format!("process-tree-2/{target_id}@6"),
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn qualified_target_requests_reject_reconnect_after_resolution() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "browser",
+                1,
+                vec![target("renderer/target/frame", "Editor", "https://test")],
+            )],
+        );
+        let selector = "browser/renderer/target/frame@1";
+        let resolved = DebuggerService::resolve_canonical_target(&state, "test", selector).unwrap();
+        let request_target = crate::target_selector::resolved_target_selector(
+            &resolved.connection_id,
+            &resolved.target_id,
+            resolved.connection_generation,
+            Some(selector),
+        );
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "browser",
+                2,
+                vec![target("renderer/target/frame", "Editor", "https://test")],
+            )],
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let ctx = CallCtx::default();
+        let errors = [
+            service.get_target(
+                &ctx,
+                "test".to_owned(),
+                "browser".to_owned(),
+                request_target.clone(),
+            ).await.unwrap_err(),
+            service.inspect_value(
+                &ctx,
+                "test".to_owned(),
+                "browser".to_owned(),
+                request_target.clone(),
+                None,
+                ValueSelector::Expression {
+                    expression: "1".to_owned(),
+                    allow_side_effects: true,
+                },
+                ValueInspectionOptions {
+                    max_preview_length: 120,
+                    max_properties: 20,
+                    retain_references: false,
+                },
+            ).await.unwrap_err(),
+            service.attach_target(
+                &ctx,
+                "test".to_owned(),
+                "browser".to_owned(),
+                request_target,
+                TargetAttachOptions::default(),
+            ).await.unwrap_err(),
+        ];
+        for error in errors {
+            assert!(error.message.contains("target selector"), "{error:?}");
+            assert!(error.message.contains(selector), "{error:?}");
+        }
     }
 
     #[test]

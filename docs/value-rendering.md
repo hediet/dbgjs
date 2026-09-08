@@ -6,6 +6,15 @@ characters by default and append `...` when truncated. Evaluation remains
 effectful; `value` remains side-effect-safe unless `--allow-side-effects` is
 passed.
 
+`target eval --full <expression>` removes the preview limit for strings. For a
+JSON-serializable object, use
+`target eval --full 'JSON.stringify(value)'`; full mode does not recursively
+serialize arbitrary objects or invoke their getters. The JSON response keeps the
+same `ValueSnapshot` shape and preserves the complete string in
+`preview.preview`. `--max-preview-length <n>` selects a character limit instead;
+it cannot be combined with `--full`. Human output suggests these options when
+the result preview is truncated.
+
 Object property lists are bounded to 20 entries by default. `target eval` uses
 an ephemeral object group and releases it after rendering; `value` retains
 references for explicit follow-up inspection and accepts `--max-properties` to

@@ -865,11 +865,8 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
             "configure-1",
         ],
     );
-    assert_eq!(configured["breakpoints"][0]["status"], "disabled");
-    assert_eq!(
-        configured["breakpoints"][0]["condition"],
-        "validationValue > 0"
-    );
+    assert_eq!(configured["status"], "disabled");
+    assert_eq!(configured["condition"], "validationValue > 0");
     let observed = run_json(
         &cli,
         &service,
@@ -898,7 +895,14 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
             "configure-1",
         ],
     );
-    assert_eq!(repeated["revision"], configured["revision"]);
+    assert_eq!(repeated, configured);
+    let repeated_context = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &["context", "show", "--context", "managed"],
+    );
+    assert_eq!(repeated_context["revision"], 2);
 
     let matches = run_json(
         &cli,
@@ -974,7 +978,7 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
     assert_eq!(source_graph["nodes"], serde_json::json!([]));
     assert_eq!(source_graph["edges"], serde_json::json!([]));
 
-    let configured_revision = configured["revision"].as_u64().unwrap().to_string();
+    let configured_revision = repeated_context["revision"].as_u64().unwrap().to_string();
     let deleted = run_json(
         &cli,
         &service,
@@ -1151,7 +1155,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     let Ok(mut node) = Command::new("node")
         .args([
             "-e",
-            "const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+            "const vm=require('node:vm');vm.runInThisContext(\"globalThis.lateSource=function(){return 'lateSourceNeedle';};\",{filename:'https://fixtures.test/late.min.js'});vm.runInThisContext(\"globalThis.formatFirst=function(){return 'formattedFirstNeedle';};\",{filename:'https://fixtures.test/format-first.min.js'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1298,6 +1302,38 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         "{ambiguity}"
     );
 
+    let sources = run_json(
+        &cli, &service, &state_file,
+        &["source", "list", "--path", "late.min.js", "--context", &context],
+    );
+    assert!(sources.as_array().is_some_and(|sources| !sources.is_empty()), "{sources}");
+    let searched = run_json(
+        &cli, &service, &state_file,
+        &["source", "grep", "lateSourceNeedle", "--path", "late.min.js", "--context", &context],
+    );
+    assert!(searched["searchedSources"].as_u64().unwrap() > 0, "{searched}");
+    assert_eq!(searched["skippedSources"], 0);
+    assert!(!searched["matches"].as_array().unwrap().is_empty());
+
+    run_json(
+        &cli, &service, &state_file,
+        &["source", "formatting", "set", "on", "--context", &context],
+    );
+    let formatted = run_json(
+        &cli, &service, &state_file,
+        &["source", "show", "https://fixtures.test/format-first.min.js", "--view", "formatted", "--context", &context],
+    );
+    assert_eq!(formatted["path"], "https://fixtures.test/format-first.min.js?formatted");
+    assert!(formatted["content"].as_str().unwrap().contains("formattedFirstNeedle"));
+    assert!(formatted["totalLines"].as_u64().unwrap() > 1);
+    let searched = run_json(
+        &cli, &service, &state_file,
+        &["source", "grep", "formattedFirstNeedle", "--path", "format-first.min.js", "--view", "formatted", "--context", &context],
+    );
+    assert!(searched["matches"].as_array().unwrap().iter().any(|matched| {
+        matched["path"] == "https://fixtures.test/format-first.min.js?formatted"
+    }), "{searched}");
+
     let evaluated = run_json(
         &cli,
         &service,
@@ -1313,6 +1349,49 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         ],
     );
     assert_eq!(evaluated["preview"]["preview"], "42");
+    for selector in ["runtime-a/$node-root:runtime-a", "runtime-a/$node-root:runtime-a@1"] {
+        run_json(
+            &cli, &service, &state_file,
+            &["target", "show", "--context", &context, "--target", selector],
+        );
+        let attach = run_in(
+            &cli, &service, &state_file, &std::env::current_dir().unwrap(),
+            &["target", "attach", "--context", &context, "--target", selector],
+        );
+        assert!(!attach.0.success());
+        assert!(String::from_utf8_lossy(&attach.2).contains("target ownership conflict"));
+        let result = run_json(
+            &cli, &service, &state_file,
+            &["target", "eval", "6 * 7", "--context", &context, "--target", selector],
+        );
+        assert_eq!(result["preview"]["preview"], "42");
+    }
+    for expression in ["'x'.repeat(4096)", "JSON.stringify({text:'x'.repeat(4096)})"] {
+        let full = run_json(
+            &cli, &service, &state_file,
+            &["target", "eval", expression, "--full", "--context", &context, "--target", "runtime-a/$node-root:runtime-a@1"],
+        );
+        let expected = if expression.starts_with("JSON") {
+            serde_json::json!({"text": "x".repeat(4096)}).to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        assert_eq!(full["preview"]["preview"], expected);
+        assert_eq!(full["preview"]["truncated"], false);
+        assert!(!contains_reference(&full));
+        let bounded = run_json(
+            &cli, &service, &state_file,
+            &["target", "eval", expression, "--max-preview-length", "200", "--context", &context, "--target", "runtime-a/$node-root:runtime-a"],
+        );
+        assert_eq!(bounded["preview"]["preview"], &expected[..200]);
+        assert_eq!(bounded["preview"]["truncated"], true);
+    }
+    let truncated = run_human_in(
+        &cli, &service, &state_file, &std::env::current_dir().unwrap(),
+        &["target", "eval", "'x'.repeat(4096)", "--context", &context, "--target", "runtime-a/$node-root:runtime-a"],
+    );
+    assert!(truncated.0.success());
+    assert!(String::from_utf8_lossy(&truncated.1).contains("--full"));
     run_json(
         &cli,
         &service,
