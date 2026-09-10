@@ -56,6 +56,12 @@ fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
         &root,
         &["context", "create", ".", "Root", "--set"],
     );
+    #[cfg(unix)]
+    let root_id = fs::canonicalize(&root)
+        .unwrap()
+        .to_string_lossy()
+        .to_lowercase();
+    #[cfg(not(unix))]
     let root_id = root.to_string_lossy().to_lowercase();
     assert_eq!(root_context["id"], root_id.as_ref());
 
@@ -66,6 +72,12 @@ fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
         &child,
         &["context", "create", ".", "UI"],
     );
+    #[cfg(unix)]
+    let child_id = fs::canonicalize(&child)
+        .unwrap()
+        .to_string_lossy()
+        .to_lowercase();
+    #[cfg(not(unix))]
     let child_id = child.to_string_lossy().to_lowercase();
     assert_eq!(child_context["id"], child_id.as_ref());
 

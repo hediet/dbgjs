@@ -228,8 +228,8 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
     let token = random_token()?;
     let directory_name = format!("jsdbg-{}", &token[..16]);
     let candidates = [
-        env::temp_dir().join(&directory_name).join("service.sock"),
-        Path::new("/tmp").join(directory_name).join("service.sock"),
+        Path::new("/tmp").join(&directory_name).join("service.sock"),
+        env::temp_dir().join(directory_name).join("service.sock"),
     ];
     candidates
         .into_iter()
