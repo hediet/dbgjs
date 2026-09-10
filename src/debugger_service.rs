@@ -2840,10 +2840,9 @@ impl DebuggerServiceApi for DebuggerService {
         batches.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
 
         let mut documents = Vec::new();
-        let mut skipped_sources = 0_u32;
         let mut skipped = Vec::new();
         for (connection_id, target_id, mut batch) in batches {
-            skipped_sources = skipped_sources.saturating_add(batch.skipped_sources);
+            debug_assert_eq!(batch.skipped_sources as usize, batch.skipped.len());
             skipped.extend(batch.skipped.into_iter().map(|mut source| {
                 source.connection_id = Some(connection_id.clone());
                 source.target_id = Some(target_id.clone());
@@ -2914,8 +2913,8 @@ impl DebuggerServiceApi for DebuggerService {
                 .map_err(source_search_error)?,
         };
         cancellation.disarm();
-        skipped_sources = skipped_sources.saturating_add(skipped_local.len().min(u32::MAX as usize) as u32);
         skipped.extend(skipped_local);
+        let skipped_sources = skipped.len().min(u32::MAX as usize) as u32;
         let matches = result
             .hits
             .into_iter()

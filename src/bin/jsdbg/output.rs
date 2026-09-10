@@ -148,10 +148,12 @@ impl OutputFormat {
         matches!(self, Self::Json)
     }
 
-    pub fn print_eval(&self, value: &ValueSnapshot) -> Result<(), serde_json::Error> {
+    pub fn print_eval(&self, value: &ValueSnapshot, full: bool) -> Result<(), serde_json::Error> {
         self.print(value)?;
-        if matches!(self, Self::Human) && value.preview.truncated {
-            println!("Preview truncated; rerun target eval with --full or --max-preview-length <n>.");
+        if matches!(self, Self::Human) {
+            if let Some(guidance) = eval_truncation_guidance(value, full) {
+                println!("{guidance}");
+            }
         }
         Ok(())
     }
@@ -748,6 +750,9 @@ impl HumanOutput for SourceSearchSnapshot {
                 self.omitted_matches
             );
         }
+        if let Some(message) = source_search_incomplete_message(self) {
+            println!("{message}");
+        }
         println!(
             "{} source(s) searched, {} skipped",
             self.searched_sources, self.skipped_sources
@@ -756,6 +761,15 @@ impl HumanOutput for SourceSearchSnapshot {
             println!("Skipped {} ({}): {}", source.path, source.kind, source.reason);
         }
     }
+}
+
+fn source_search_incomplete_message(snapshot: &SourceSearchSnapshot) -> Option<String> {
+    (snapshot.searched_sources == 0 && snapshot.skipped_sources > 0).then(|| {
+        format!(
+            "Search incomplete: no sources were searched because all {} candidate source(s) were skipped.",
+            snapshot.skipped_sources
+        )
+    })
 }
 
 impl HumanOutput for Vec<SourceGraphViewSnapshot> {
@@ -3950,6 +3964,14 @@ fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
     render_value_preview(&evaluation.preview)
 }
 
+fn eval_truncation_guidance(value: &ValueSnapshot, full: bool) -> Option<&'static str> {
+    value.preview.truncated.then_some(if full {
+        "Preview remains incomplete in --full mode because this value cannot be safely represented in full. Evaluate JSON.stringify(value) to render a JSON-serializable value."
+    } else {
+        "Preview truncated; rerun target eval with --full or --max-preview-length <n>. For objects, evaluate JSON.stringify(value) to request JSON serialization."
+    })
+}
+
 fn render_value_snapshot(value: &ValueSnapshot) -> String {
     value
         .class_name
@@ -4225,12 +4247,13 @@ mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
-        aggregate_coverage_entries, coverage_entries, effective_file_metrics, heap_path_lines,
-        heap_show_lines, looks_minified_identifier, page_logs, process_tree_lines,
-        process_trees_json, render_compacted_source_graph, render_evaluation,
+        aggregate_coverage_entries, coverage_entries, effective_file_metrics,
+        eval_truncation_guidance, heap_path_lines, heap_show_lines, looks_minified_identifier,
+        page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
+        render_evaluation,
         render_heap_classes_human, render_uncompacted_source_graph, render_value_snapshot,
-        source_tree_lines, style_process_label, style_session_label, target_tree_selector,
-        terminal_text,
+        source_search_incomplete_message, source_tree_lines, style_process_label,
+        style_session_label, target_tree_selector, terminal_text,
     };
     use cdp_client::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
@@ -4240,8 +4263,9 @@ mod tests {
         HeapInstanceSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot,
         HeapReferenceDirection, HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming,
         HeapTraversalDirection, ProcessRole, ProcessRootKind, ProcessSnapshot,
-        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceSuffixRewriteSnapshot,
-        SourceTreeKind, SourceTreeSnapshot, TargetSnapshot, UncompactedProjectionSnapshot,
+        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceSearchSkip,
+        SourceSearchSnapshot, SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
+        TargetSnapshot, UncompactedProjectionSnapshot,
         UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
         UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValuePreviewSnapshot,
         ValueSelector, ValueSnapshot,
@@ -4291,6 +4315,76 @@ mod tests {
         assert_eq!(
             render_evaluation(&evaluation),
             render_value_snapshot(&value)
+        );
+    }
+
+    #[test]
+    fn evaluation_truncation_guidance_distinguishes_preview_limits_from_full_mode() {
+        let value = ValueSnapshot {
+            selector: ValueSelector::Expression {
+                expression: "value".to_owned(),
+                allow_side_effects: true,
+            },
+            subtype: None,
+            class_name: None,
+            preview: ValuePreviewSnapshot {
+                kind: "symbol".to_owned(),
+                preview: None,
+                truncated: true,
+                reference: None,
+            },
+            properties: Vec::new(),
+            omitted_property_count: 0,
+            properties_truncated: false,
+            promise: None,
+        };
+
+        assert!(eval_truncation_guidance(&value, false).unwrap().contains("--full"));
+        assert!(
+            eval_truncation_guidance(&value, true)
+                .unwrap()
+                .contains("cannot be safely represented")
+        );
+        assert_eq!(
+            serde_json::to_value(&value).unwrap()["preview"],
+            serde_json::json!({
+                "kind": "symbol",
+                "preview": null,
+                "truncated": true,
+                "reference": null
+            })
+        );
+    }
+
+    #[test]
+    fn fully_skipped_source_search_is_reported_as_incomplete() {
+        let snapshot = SourceSearchSnapshot {
+            matches: Vec::new(),
+            omitted_matches: 0,
+            searched_sources: 0,
+            searched_contents: 0,
+            skipped_sources: 1,
+            skipped: vec![SourceSearchSkip {
+                path: "missing.js".to_owned(),
+                kind: "runtime".to_owned(),
+                connection_id: Some("connection".to_owned()),
+                target_id: Some("target".to_owned()),
+                reason: "script was collected".to_owned(),
+            }],
+        };
+
+        assert_eq!(
+            source_search_incomplete_message(&snapshot).as_deref(),
+            Some(
+                "Search incomplete: no sources were searched because all 1 candidate source(s) were skipped."
+            )
+        );
+        assert_eq!(
+            source_search_incomplete_message(&SourceSearchSnapshot {
+                searched_sources: 1,
+                ..snapshot
+            }),
+            None
         );
     }
 

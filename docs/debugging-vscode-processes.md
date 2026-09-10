@@ -319,7 +319,11 @@ jsdbg source grep 'hubRpcConnection'
 Use `--path` to select logical paths before content is loaded and
 `--timeout-ms` to bound the complete search. JSON matches include content
 identity, provenance, endpoint applicability, and match length; identical
-content is searched once and then fanned out to each logical source.
+content is searched once and then fanned out to each logical source. Skipped
+sources include their path, kind, target identity, and reason in JSON and human
+output. If every candidate source is skipped, human output explicitly reports
+the search as incomplete rather than presenting an empty result as a successful
+no-match.
 
 Use a source URL or projected source path from those results:
 

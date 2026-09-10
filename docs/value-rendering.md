@@ -13,7 +13,12 @@ serialize arbitrary objects or invoke their getters. The JSON response keeps the
 same `ValueSnapshot` shape and preserves the complete string in
 `preview.preview`. `--max-preview-length <n>` selects a character limit instead;
 it cannot be combined with `--full`. Human output suggests these options when
-the result preview is truncated.
+the result preview is truncated. If a value remains incomplete in `--full`
+mode (for example, a `Symbol` whose description would require invoking a
+getter), human output says that it cannot be represented safely and recommends
+evaluating `JSON.stringify(value)` when the value is JSON-serializable. JSON
+output never adds prose around the response: `preview.truncated` explicitly
+reports completeness in every rendering mode.
 
 Object property lists are bounded to 20 entries by default. `target eval` uses
 an ephemeral object group and releases it after rendering; `value` retains

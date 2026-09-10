@@ -282,7 +282,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.target.clone(),
                 )
                 .await)?;
-            output.print_eval(&rpc(client
+            let value = rpc(client
                 .inspect_value(
                     scope.context,
                     scope.connection,
@@ -298,7 +298,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         retain_references: false,
                     },
                 )
-                .await)?)?;
+                .await)?;
+            output.print_eval(&value, options.full)?;
         }
         [page, playwright, arguments @ ..] if page == "page" && playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
@@ -6016,6 +6017,7 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
 struct EvalOptions {
     expression: String,
     max_preview_length: u32,
+    full: bool,
 }
 
 fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOptions, io::Error> {
@@ -6052,6 +6054,7 @@ fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOpti
         } else {
             max_preview_length.unwrap_or(DEFAULT_VALUE_PREVIEW_LENGTH)
         },
+        full,
     })
 }
 
@@ -6607,6 +6610,7 @@ mod tests {
         .unwrap();
         assert_eq!(full.expression, "JSON.stringify(value)");
         assert_eq!(full.max_preview_length, u32::MAX);
+        assert!(full.full);
         let bounded = parse_eval_options(
             &arguments(&["answer", "--max-preview-length", "2000"]),
             "".as_bytes(),
@@ -6614,9 +6618,11 @@ mod tests {
         .unwrap();
         assert_eq!(bounded.expression, "answer");
         assert_eq!(bounded.max_preview_length, 2000);
+        assert!(!bounded.full);
         let default = parse_eval_options(&arguments(&["-1"]), "".as_bytes()).unwrap();
         assert_eq!(default.max_preview_length, 120);
         assert_eq!(default.expression, "-1");
+        assert!(!default.full);
         assert_eq!(
             parse_eval_options(&arguments(&["--counter"]), "".as_bytes())
                 .unwrap()
