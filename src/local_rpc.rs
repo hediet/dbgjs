@@ -228,8 +228,8 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
     let token = random_token()?;
     let directory_name = format!("jsdbg-{}", &token[..16]);
     let candidates = [
-        Path::new("/tmp").join(&directory_name).join("service.sock"),
-        env::temp_dir().join(directory_name).join("service.sock"),
+        env::temp_dir().join(&directory_name).join("service.sock"),
+        Path::new("/tmp").join(directory_name).join("service.sock"),
     ];
     candidates
         .into_iter()
@@ -485,12 +485,21 @@ fn write_endpoint(path: &Path, endpoint: &LocalServiceEndpoint) -> Result<(), Lo
 }
 
 fn ensure_private_directory(path: &Path) -> Result<(), std::io::Error> {
-    fs::create_dir_all(path)?;
+    let created = match fs::create_dir(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path)?;
+            true
+        }
+        Err(error) => return Err(error),
+    };
     #[cfg(unix)]
-    {
+    if created {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    let _ = created;
     Ok(())
 }
 
@@ -635,6 +644,31 @@ pub enum LocalRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn private_directory_setup_preserves_existing_directory_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = env::temp_dir().join(format!(
+            "jsdbg-directory-permissions-{}-{}",
+            std::process::id(),
+            random_token().unwrap()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+
+        ensure_private_directory(&root).unwrap();
+        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
+
+        let created = root.join("created");
+        ensure_private_directory(&created).unwrap();
+        assert_eq!(
+            fs::metadata(&created).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn spawned_service_mismatch_reports_the_rebuild_command() {
