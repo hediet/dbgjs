@@ -765,6 +765,13 @@ generation. Qualified matches take precedence over unqualified IDs and friendly
 matches. A generation-qualified selector does not follow a reconnected target.
 Its generation remains part of the RPC selector until the service atomically
 resolves it and selects the debugger handle; it is not discarded by CLI lookup.
+Connection qualification is also preserved for generation-less selectors, so a
+nested ID beginning with its own connection name cannot resolve to a different
+target on the service's second lookup. `target list --target` uses the same
+identity precedence as show, attach, eval, log, and raw CDP requests. Stale
+qualified identities never fall back to matching titles or URLs. An explicit
+selector with no discovered match fails with an error that acknowledges that
+discovery may be incomplete rather than presenting an empty success.
 An explicit `--connection` constrains resolution before ambiguity checking.
 
 Friendly title, URL, and substring matching remains a convenience. It must

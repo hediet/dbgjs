@@ -304,6 +304,115 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
 }
 
 #[test]
+fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
+    let root = std::env::current_dir().unwrap().join("target")
+        .join(format!("selector-roundtrip-{}", unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests").join("fixtures").join("selector_browser.mjs");
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":selectors", "--set"]);
+    for connection in ["browser", "second"] {
+        let connected = run(&[
+            "connection", "add", "--stdio", "--topology", "browser",
+            "--connection", connection, "--connect", "--", "node", fixture.to_str().unwrap(),
+        ]);
+        let connection = connected["connections"].as_array().unwrap().iter()
+            .find(|item| item["id"] == connection).unwrap();
+        assert_eq!(connection["targets"].as_array().unwrap().len(), 3, "{connected}");
+    }
+    let (status, stdout, stderr) = run_human_in(
+        &cli, &service, &state_file, &root, &["target", "list"],
+    );
+    assert_success(&["target", "list"], status, &stdout, &stderr);
+    let printed = String::from_utf8(stdout).unwrap();
+    let selector = printed.lines()
+        .filter_map(|line| line.split_once("  ["))
+        .filter_map(|(identity, _)| identity.split_whitespace().last())
+        .find(|word| word.starts_with("browser/browser/renderer/target/frame@"))
+        .unwrap_or_else(|| panic!("listing should print a copyable nested target identity: {printed}"));
+    assert_eq!(selector, "browser/browser/renderer/target/frame@1");
+    let target_id = "browser/renderer/target/frame";
+    for connection_scope in [false, true] {
+        for selector in [selector, selector.strip_suffix("@1").unwrap()] {
+            let scope = if connection_scope {
+                vec!["--target", selector, "--connection", "browser"]
+            } else {
+                vec!["--target", selector]
+            };
+            let command = |args: &[&str]| {
+                let mut args = args.to_vec();
+                args.extend_from_slice(&scope);
+                run(&args)
+            };
+            let listed = command(&["target", "list"]);
+            assert_eq!(listed["targets"].as_array().unwrap().len(), 1, "{listed}");
+            assert_eq!(listed["targets"][0]["targetId"], target_id, "{listed}");
+            let attached = command(&["target", "attach", "--force"]);
+            assert_eq!(attached["target"]["targetId"], target_id, "{attached}");
+            let shown = command(&["target", "show"]);
+            assert_eq!(shown["target"]["targetId"], target_id, "{shown}");
+            let evaluated = command(&["target", "eval", "identity"]);
+            assert!(evaluated["preview"]["preview"].as_str().unwrap().contains(target_id), "{evaluated}");
+            let raw = command(&["target", "cdp", "Runtime.evaluate", "--params", r#"{"expression":"identity"}"#]);
+            assert_eq!(raw["result"]["value"], target_id, "{raw}");
+            let logs = command(&["log", "--after", "0"]);
+            assert!(logs.to_string().contains(target_id), "{logs}");
+        }
+    }
+    for selector in ["Duplicate title", "renderer/target/frame"] {
+        let (status, _, stderr) = run_in(
+            &cli, &service, &state_file, &root,
+            &["target", "show", "--target", selector],
+        );
+        assert!(!status.success());
+        assert!(String::from_utf8_lossy(&stderr).contains("ambiguous"));
+    }
+    run(&["connection", "disconnect", "--connection", "browser"]);
+    run(&["connection", "connect", "--connection", "browser"]);
+    for operation in [
+        vec!["target", "list"],
+        vec!["target", "show"],
+        vec!["target", "attach"],
+        vec!["target", "eval", "identity"],
+        vec!["log"],
+        vec!["target", "cdp", "Runtime.evaluate", "--params", r#"{"expression":"identity"}"#],
+    ] {
+        for explicit_connection in [false, true] {
+            for (selector, expected_error) in [
+                (selector, "stale connection generation"),
+                ("browser/undiscovered/frame@2", "discovery may be incomplete"),
+            ] {
+                let mut args = operation.clone();
+                args.extend(["--target", selector]);
+                if explicit_connection {
+                    args.extend(["--connection", "browser"]);
+                }
+                let (status, _, stderr) = run_in(&cli, &service, &state_file, &root, &args);
+                assert!(!status.success(), "unresolved selector unexpectedly accepted: {args:?}");
+                let error = String::from_utf8_lossy(&stderr);
+                assert!(error.contains(expected_error), "{args:?}: {error}");
+            }
+        }
+    }
+    let fresh = selector.replace("@1", "@2");
+    run(&["target", "attach", "--target", &fresh]);
+    for selector in [fresh.as_str(), "browser/browser/renderer/target/frame"] {
+        let shown = run(&["target", "show", "--target", selector]);
+        assert_eq!(shown["target"]["targetId"], target_id, "{shown}");
+    }
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+#[test]
 fn target_relay_forwards_cdp_and_enforces_exclusive_context_ownership() {
     let root = std::env::temp_dir().join(format!(
         "jsdbg-target-relay-{}-{}",

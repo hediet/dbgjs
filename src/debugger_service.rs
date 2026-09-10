@@ -6154,34 +6154,28 @@ impl DebuggerService {
                     .into_values()
             {
                 let target = target_resource.target;
-                if let Some(rank) = crate::target_selector::match_target_selector(
-                    &target,
-                    connection_id,
-                    connection.generation,
-                    selector,
-                ) {
-                    candidates.push((
-                        rank,
-                        CanonicalTargetSnapshot {
-                            context_id: context_id.to_owned(),
-                            resource_id: target_resource.resource_id.to_string(),
-                            target_id: target.target_id.clone(),
-                            connection_id: connection_id.clone(),
-                            connection_generation: connection.generation,
-                            target,
-                        },
-                    ));
-                }
+                candidates.push(CanonicalTargetSnapshot {
+                    context_id: context_id.to_owned(),
+                    resource_id: target_resource.resource_id.to_string(),
+                    target_id: target.target_id.clone(),
+                    connection_id: connection_id.clone(),
+                    connection_generation: connection.generation,
+                    target,
+                });
             }
         }
-        let best_rank = candidates.iter().map(|(rank, _)| *rank).max();
-        let matches = candidates
-            .into_iter()
-            .filter(|(rank, _)| Some(*rank) == best_rank)
-            .map(|(_, target)| target)
-            .collect::<Vec<_>>();
+        let matches = crate::target_selector::select_target_matches(
+            &candidates,
+            context.connections.iter().map(|(id, connection)| (id.as_str(), connection.generation)),
+            Some(selector),
+            |target| crate::target_selector::TargetSelectorCandidate {
+                target: &target.target,
+                connection_id: &target.connection_id,
+                generation: target.connection_generation,
+            },
+        ).map_err(|message| invalid_params(&message))?;
         match matches.as_slice() {
-            [target] => Ok(target.clone()),
+            [target] => Ok((*target).clone()),
             [] => Err(not_found("target selector", selector)),
             _ => {
                 let details = matches
@@ -6234,21 +6228,20 @@ impl DebuggerService {
         let candidates = targets
             .values()
             .map(|target| &target.target)
-            .filter_map(|target| {
-                crate::target_selector::match_target_selector(
-                    target,
-                    connection_id,
-                    connection.generation,
-                    selector,
-                )
-                .map(|rank| (rank, target.target_id.clone()))
-            })
             .collect::<Vec<_>>();
-        let best_rank = candidates.iter().map(|(rank, _)| *rank).max();
-        let matches = candidates
+        let matches = crate::target_selector::select_target_matches(
+            &candidates,
+            state.contexts[context_id].connections.iter()
+                .map(|(id, connection)| (id.as_str(), connection.generation)),
+            Some(selector),
+            |target| crate::target_selector::TargetSelectorCandidate {
+                target,
+                connection_id,
+                generation: connection.generation,
+            },
+        ).map_err(|message| invalid_params(&message))?
             .into_iter()
-            .filter(|(rank, _)| Some(*rank) == best_rank)
-            .map(|(_, target_id)| target_id)
+            .map(|target| target.target_id.clone())
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [target_id] => Ok(target_id.clone()),
@@ -10369,6 +10362,93 @@ mod tests {
             "{error}"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn target_selector_resolution_preserves_nested_connection_prefixes() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [("browser", 7, vec![
+                target("browser/frame", "Nested", "https://nested.test"),
+                target("frame", "Other", "https://other.test"),
+            ])],
+        );
+        for selector in ["browser/browser/frame", "browser/browser/frame@7"] {
+            let resolved = DebuggerService::resolve_canonical_target(&state, "test", selector).unwrap();
+            assert_eq!(resolved.target_id, "browser/frame");
+            let request = crate::target_selector::resolved_target_selector(
+                &resolved.connection_id, &resolved.target_id, resolved.connection_generation, Some(selector),
+            );
+            assert_eq!(
+                DebuggerService::resolve_target_id_in_state(&state, "test", "browser", &request).unwrap(),
+                "browser/frame",
+            );
+        }
+    }
+
+    #[test]
+    fn target_selector_stale_identity_never_falls_back_to_friendly_match() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                ("browser", 2, vec![target("frame/child", "Current", "https://current.test")]),
+                ("decoy", 1, vec![target("other", "browser/frame/child@1", "https://other.test")]),
+            ],
+        );
+        let error = DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
+            .unwrap_err();
+        assert!(error.message.contains("stale connection generation"), "{error:?}");
+        let missing = DebuggerService::resolve_canonical_target(&state, "test", "browser/missing@2")
+            .unwrap_err();
+        assert!(missing.message.contains("discovery may be incomplete"), "{missing:?}");
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                ("browser", 2, vec![]),
+                ("decoy", 1, vec![target("other", "browser/frame/child@1", "https://other.test")]),
+            ],
+        );
+        let error = DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
+            .unwrap_err();
+        assert!(error.message.contains("stale connection generation"), "{error:?}");
+    }
+
+    #[test]
+    fn target_selector_literal_id_wins_over_qualification_shaped_friendly_text() {
+        let mut state = ServiceState::default();
+        let literal = "browser/renderer/target/frame@1";
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [
+                ("browser", 2, vec![target(literal, "Exact", "https://exact.test")]),
+                ("decoy", 1, vec![target("other", literal, "https://other.test")]),
+            ],
+        );
+        let resolved = DebuggerService::resolve_canonical_target(&state, "test", literal).unwrap();
+        assert_eq!(resolved.target_id, literal);
+        assert_eq!(resolved.connection_id, "browser");
+        assert_eq!(
+            DebuggerService::resolve_target_id_in_state(&state, "test", "browser", literal).unwrap(),
+            literal,
+        );
+    }
+
+    #[test]
+    fn target_selector_missing_discovery_is_not_a_confident_empty_result() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(&mut state, "test", [("browser", 1, vec![])]);
+        for error in [
+            DebuggerService::resolve_canonical_target(&state, "test", "browser/frame@1").unwrap_err(),
+            DebuggerService::resolve_target_id_in_state(&state, "test", "browser", "browser/frame@1").unwrap_err(),
+        ] {
+            assert!(error.message.contains("discovery may be incomplete"), "{error:?}");
+        }
     }
 
     #[test]

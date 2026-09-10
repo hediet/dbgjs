@@ -1925,7 +1925,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection,
                 &scope_options,
                 &options,
-            ))?;
+            )?)?;
         }
         [target, attach, options @ ..] if target == "target" && attach == "attach" => {
             let options = parse_attach_options(options)?;
@@ -2305,9 +2305,9 @@ fn target_list_output(
     selection: &CliSelection,
     scope: &ScopeOptions,
     options: &TargetListOptions,
-) -> TargetListOutput {
+) -> Result<TargetListOutput, io::Error> {
     let selection_applies = selection.context.as_deref() == Some(snapshot.id.as_str());
-    let targets = snapshot
+    let candidates = snapshot
         .target_forest
         .iter()
         .filter(|node| {
@@ -2315,19 +2315,21 @@ fn target_list_output(
                 .connection
                 .as_deref()
                 .is_none_or(|connection| node.connection_id == connection)
-                && scope
-                    .target
-                    .as_deref()
-                    .is_none_or(|selector| {
-                        cdp_client::target_selector::match_target_selector(
-                            &node.target,
-                            &node.connection_id,
-                            node.connection_generation,
-                            selector,
-                        )
-                        .is_some()
-                    })
-                && options.target_type.as_deref().is_none_or(|target_type| {
+        })
+        .collect::<Vec<_>>();
+    let targets = cdp_client::target_selector::select_target_matches(
+        &candidates,
+        snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
+        scope.target.as_deref(),
+        |node| cdp_client::target_selector::TargetSelectorCandidate {
+            target: &node.target,
+            connection_id: &node.connection_id,
+            generation: node.connection_generation,
+        },
+    ).map_err(io::Error::other)?
+        .into_iter()
+        .filter(|node| {
+            options.target_type.as_deref().is_none_or(|target_type| {
                     node.target.target_type.eq_ignore_ascii_case(target_type)
                 })
                 && options
@@ -2359,12 +2361,12 @@ fn target_list_output(
             target: node.target.clone(),
         })
         .collect();
-    TargetListOutput {
+    Ok(TargetListOutput {
         agent_instance_id: snapshot.agent_instance_id.clone(),
         context_id: snapshot.id.clone(),
         revision: snapshot.revision,
         targets,
-    }
+    })
 }
 
 fn connection_status_matches(status: &ConnectionStatus, filter: ConnectionStatusFilter) -> bool {
@@ -3341,38 +3343,27 @@ fn resolve_target_scope(
     let candidates = candidate_connections
         .iter()
         .flat_map(|connection| {
-            connection.targets.iter().filter_map(|target| {
-                let rank = match requested_target {
-                    Some(selector) => cdp_client::target_selector::match_target_selector(
-                        target,
-                        &connection.id,
-                        connection.generation,
-                        selector,
-                    )?,
-                    None => cdp_client::target_selector::TargetSelectorMatch::Friendly,
-                };
-                Some((rank, connection.id.as_str(), target))
-            })
+            connection.targets.iter().map(|target| (*connection, target))
         })
         .collect::<Vec<_>>();
-    let best_rank = candidates.iter().map(|(rank, _, _)| *rank).max();
-    let candidates = candidates
-        .into_iter()
-        .filter(|(rank, _, _)| Some(*rank) == best_rank)
-        .map(|(_, connection, target)| (connection, target))
-        .collect::<Vec<_>>();
+    let candidates = cdp_client::target_selector::select_target_matches(
+        &candidates,
+        snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
+        requested_target.map(String::as_str),
+        |(connection, target)| cdp_client::target_selector::TargetSelectorCandidate {
+            target,
+            connection_id: &connection.id,
+            generation: connection.generation,
+        },
+    ).map_err(io::Error::other)?;
     let (connection, target) = match candidates.as_slice() {
         [(connection, target)] => {
-            let generation = snapshot.connections.iter()
-                .find(|candidate| candidate.id == *connection)
-                .expect("candidate connection belongs to the snapshot")
-                .generation;
             (
-                (*connection).to_owned(),
+                connection.id.clone(),
                 cdp_client::target_selector::resolved_target_selector(
-                    connection,
+                    &connection.id,
                     &target.target_id,
-                    generation,
+                    connection.generation,
                     requested_target.map(String::as_str),
                 ),
             )
@@ -3390,7 +3381,7 @@ fn resolve_target_scope(
             let selector = requested_target.map_or("<unspecified>", String::as_str);
             let connections = candidates
                 .iter()
-                .map(|(connection, _)| *connection)
+                .map(|(connection, _)| connection.id.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
             let hint = if connections.len() > 1 {
                 " use --connection <id> to disambiguate"
@@ -3400,9 +3391,12 @@ fn resolve_target_scope(
             let details = candidates
                 .iter()
                 .map(|(connection, target)| {
+                    let qualified = cdp_client::target_selector::qualified_target_selector(
+                        &connection.id, &target.target_id, connection.generation,
+                    );
                     format!(
-                        "\n  {connection}/{}  type={}  title={:?}  url={}",
-                        target.target_id, target.target_type, target.title, target.url
+                        "\n  {qualified}  type={}  title={:?}  url={}",
+                        target.target_type, target.title, target.url
                     )
                 })
                 .collect::<String>();
@@ -7039,7 +7033,7 @@ mod tests {
                 url: Some("EXAMPLE.TEST".to_owned()),
                 attached: Some(true),
             },
-        );
+        ).unwrap();
         assert_eq!(targets.targets.len(), 1);
         assert_eq!(targets.targets[0].target.target_id, "page-1");
         assert!(targets.targets[0].selected);
@@ -7057,9 +7051,53 @@ mod tests {
                 ..ScopeOptions::default()
             },
             &TargetListOptions::default(),
-        );
+        ).unwrap();
         assert_eq!(filtered.targets.len(), 1);
         assert_eq!(filtered.targets[0].target.target_id, "page-1");
+    }
+
+    #[test]
+    fn target_list_identity_wins_over_friendly_matches() {
+        let mut snapshot = context_snapshot(&[
+            ("browser", &["renderer/target/frame", "other"]),
+            ("other-browser", &["renderer/target/frame"]),
+        ]);
+        let selector = format!(
+            "browser/renderer/target/frame@{}",
+            snapshot.connections[0].generation,
+        );
+        snapshot.connections[0].targets[1].title = selector.clone();
+        snapshot.target_forest = snapshot.connections.iter()
+            .flat_map(ConnectionSnapshot::target_forest)
+            .collect();
+        let listed = target_list_output(
+            &snapshot,
+            &CliSelection::default(),
+            &ScopeOptions { target: Some(selector), ..ScopeOptions::default() },
+            &TargetListOptions::default(),
+        ).unwrap();
+        assert_eq!(listed.targets.len(), 1);
+        assert_eq!(listed.targets[0].target.target_id, "renderer/target/frame");
+    }
+
+    #[test]
+    fn target_list_and_scope_reject_stale_identity_instead_of_matching_title() {
+        let mut snapshot = context_snapshot(&[("browser", &["renderer/target/frame", "decoy"])]);
+        let generation = snapshot.connections[0].generation;
+        let stale = format!("browser/renderer/target/frame@{}", generation + 1);
+        snapshot.connections[0].targets[1].title = stale.clone();
+        snapshot.target_forest = snapshot.connections.iter()
+            .flat_map(ConnectionSnapshot::target_forest)
+            .collect();
+        let options = ScopeOptions { target: Some(stale), ..ScopeOptions::default() };
+        let error = target_list_output(
+            &snapshot, &CliSelection::default(), &options, &TargetListOptions::default(),
+        ).err().unwrap();
+        assert!(error.to_string().contains("stale connection generation"), "{error}");
+        let error = resolve_target_scope(
+            "ctx".to_owned(), &snapshot, &CliSelection::default(), &options,
+        ).unwrap_err();
+        assert!(error.to_string().contains("stale connection generation"), "{error}");
     }
 
     #[test]
@@ -7078,11 +7116,7 @@ mod tests {
             "process-b/renderer-11/target/iframe".to_owned(),
             format!("process-b/renderer-11/target/iframe@{generation}"),
         ] {
-            let expected = if selector.ends_with(&format!("@{generation}")) {
-                selector.clone()
-            } else {
-                "renderer-11/target/iframe".to_owned()
-            };
+            let expected = selector.clone();
             let scope = resolve_target_scope(
                 "ctx".to_owned(),
                 &snapshot,
