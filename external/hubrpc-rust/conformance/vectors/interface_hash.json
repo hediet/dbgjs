@@ -1,0 +1,370 @@
+[
+  {
+    "name": "minimal",
+    "schema": {
+      "id": "test.iface",
+      "hash": "",
+      "methods": {
+        "ping": {
+          "params": true,
+          "result": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hash": "0ae42ee73d10bfa4"
+  },
+  {
+    "name": "comment-stripped",
+    "schema": {
+      "id": "test.iface",
+      "hash": "",
+      "comment": "this comment must not change the hash vs `minimal`",
+      "methods": {
+        "ping": {
+          "comment": "method comment also stripped",
+          "params": true,
+          "result": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hash": "0ae42ee73d10bfa4"
+  },
+  {
+    "name": "with-annotations-and-description",
+    "schema": {
+      "id": "test.iface",
+      "hash": "",
+      "description": "A normative description (part of the hash).",
+      "methods": {
+        "doIt": {
+          "description": "Does it. Idempotently.",
+          "annotations": {
+            "idempotent": true,
+            "dangerous": true
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "n": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "n"
+            ],
+            "additionalProperties": false
+          },
+          "result": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "hash": "2f6e93b7a34087c5"
+  },
+  {
+    "name": "pizza",
+    "schema": {
+      "id": "com.acme.pizza",
+      "hash": "ignored-at-root",
+      "description": "Order pizzas and track delivery.",
+      "comment": "non-normative note that MUST NOT affect the hash",
+      "methods": {
+        "order": {
+          "description": "Place a new pizza order. Charges money.",
+          "comment": "calls the payment provider",
+          "annotations": {
+            "dangerous": true
+          },
+          "params": {
+            "$ref": "#/components/schemas/PizzaOrder"
+          },
+          "result": {
+            "$ref": "#/components/schemas/OrderConfirmation"
+          },
+          "errors": [
+            {
+              "code": 1001,
+              "message": "out of dough"
+            }
+          ]
+        },
+        "trackDelivery": {
+          "annotations": {
+            "readOnly": true
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "orderId"
+            ],
+            "additionalProperties": false
+          },
+          "result": {
+            "type": "string"
+          },
+          "serverStream": {
+            "$ref": "#/components/schemas/DeliveryUpdate"
+          }
+        },
+        "cancelOrder": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "orderId"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "PizzaOrder": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "margherita",
+                  "pepperoni",
+                  "hawaiian",
+                  "veggie"
+                ]
+              },
+              "size": {
+                "enum": [
+                  "small",
+                  "medium",
+                  "large"
+                ]
+              },
+              "quantity": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "quantity",
+              "size"
+            ],
+            "additionalProperties": false
+          },
+          "OrderConfirmation": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string"
+              },
+              "etaMinutes": {
+                "type": "integer"
+              },
+              "priceCents": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "orderId",
+              "etaMinutes",
+              "priceCents"
+            ],
+            "additionalProperties": false
+          },
+          "DeliveryUpdate": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hash": "078a378dad75757e"
+  },
+  {
+    "name": "rich-extensions-stripped",
+    "schema": {
+      "id": "test.rich",
+      "hash": "",
+      "description": "Normative description.",
+      "methods": {
+        "order": {
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          },
+          "result": {
+            "type": "string"
+          },
+          "description": "Places an order."
+        }
+      }
+    },
+    "hash": "3b0090d7837c98af"
+  },
+  {
+    "name": "rich-extensions",
+    "schema": {
+      "id": "test.rich",
+      "hash": "",
+      "description": "Normative description.",
+      "x-codegen": {
+        "tsClientName": "OrderClient",
+        "package": "@acme/orders"
+      },
+      "methods": {
+        "order": {
+          "x-safety": {
+            "requiresConfirmation": true,
+            "rateLimitPerMin": 5
+          },
+          "params": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false,
+            "x-validation": "z.object({}).strict()"
+          },
+          "result": {
+            "type": "string",
+            "x-format": "order-id"
+          },
+          "description": "Places an order."
+        }
+      }
+    },
+    "hash": "3b0090d7837c98af"
+  },
+  {
+    "name": "rich-unnormalized",
+    "schema": {
+      "id": "test.norm",
+      "hash": "",
+      "description": "Normative.",
+      "x-codegen": {
+        "client": "NormClient"
+      },
+      "methods": {
+        "op": {
+          "x-safety": {
+            "readOnly": true
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "b": {
+                "type": "string",
+                "minLength": 2
+              },
+              "a": {
+                "type": "integer",
+                "default": 0
+              }
+            },
+            "required": [
+              "b",
+              "a"
+            ],
+            "x-validation": "z.object({})"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Blob",
+            "x-format": "id"
+          },
+          "clientStream": {},
+          "serverStream": {
+            "x-only": "extension"
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "Blob": {
+            "type": "object",
+            "title": "Blob",
+            "properties": {
+              "y": {
+                "type": "number"
+              },
+              "x": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "y",
+              "x"
+            ],
+            "examples": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "hash": "189384909507c866"
+  },
+  {
+    "name": "rich-unnormalized-normalized",
+    "schema": {
+      "id": "test.norm",
+      "hash": "",
+      "description": "Normative.",
+      "methods": {
+        "op": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "b": {
+                "type": "string"
+              },
+              "a": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "a",
+              "b"
+            ],
+            "additionalProperties": false
+          },
+          "result": {
+            "$ref": "#/components/schemas/Blob"
+          },
+          "clientStream": true,
+          "serverStream": true
+        }
+      },
+      "components": {
+        "schemas": {
+          "Blob": {
+            "type": "object",
+            "title": "Blob",
+            "properties": {
+              "y": {
+                "type": "number"
+              },
+              "x": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "hash": "189384909507c866"
+  }
+]

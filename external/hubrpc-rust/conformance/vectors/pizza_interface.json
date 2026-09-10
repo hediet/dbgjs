@@ -1,0 +1,464 @@
+{
+  "id": "com.acme.pizza",
+  "hash": "a27d45a4f94b297f",
+  "schema": {
+    "id": "com.acme.pizza",
+    "hash": "a27d45a4f94b297f",
+    "methods": {
+      "order": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "margherita",
+                "pepperoni",
+                "hawaiian",
+                "veggie"
+              ]
+            },
+            "size": {
+              "type": "string",
+              "enum": [
+                "small",
+                "medium",
+                "large"
+              ]
+            },
+            "quantity": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "quantity",
+            "size"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "eta_minutes": {
+              "type": "integer"
+            },
+            "price_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "eta_minutes",
+            "order_id",
+            "price_cents"
+          ],
+          "additionalProperties": false
+        },
+        "description": "Place a new pizza order. Charges money.",
+        "annotations": {
+          "dangerous": true
+        }
+      },
+      "order_status": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "queued"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "baking"
+                },
+                "progress": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "progress",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "out_for_delivery"
+                },
+                "driver": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "driver",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "delivered"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "cancelled"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "discriminator": {
+            "propertyName": "state"
+          }
+        },
+        "description": "Current status of an order. Pure query.",
+        "annotations": {
+          "readOnly": true
+        }
+      },
+      "cancel_order": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id"
+          ],
+          "additionalProperties": false
+        },
+        "description": "Fire-and-forget cancel request."
+      },
+      "watch_order": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "order_id"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "total_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_cents"
+          ],
+          "additionalProperties": false
+        },
+        "serverStream": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "queued"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "baking"
+                },
+                "progress": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "progress",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "out_for_delivery"
+                },
+                "driver": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "driver",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "delivered"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "cancelled"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason",
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "discriminator": {
+            "propertyName": "state"
+          }
+        },
+        "description": "Live status updates until delivered/cancelled."
+      },
+      "build_order": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string",
+              "enum": [
+                "margherita",
+                "pepperoni",
+                "hawaiian",
+                "veggie"
+              ]
+            }
+          },
+          "required": [
+            "base"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "order_id": {
+              "type": "string"
+            },
+            "eta_minutes": {
+              "type": "integer"
+            },
+            "price_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "eta_minutes",
+            "order_id",
+            "price_cents"
+          ],
+          "additionalProperties": false
+        },
+        "clientStream": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cents",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "kitchen_session": {
+        "params": {
+          "type": "object",
+          "properties": {
+            "station": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "station"
+          ],
+          "additionalProperties": false
+        },
+        "result": {
+          "type": "object",
+          "properties": {
+            "plated": {
+              "type": "integer"
+            },
+            "burned": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "burned",
+            "plated"
+          ],
+          "additionalProperties": false
+        },
+        "clientStream": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "fire"
+                },
+                "ticket": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ticket",
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cancel"
+                },
+                "ticket": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ticket",
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "discriminator": {
+            "propertyName": "type"
+          }
+        },
+        "serverStream": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "plated"
+                },
+                "dish": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dish",
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "burned"
+                },
+                "dish": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dish",
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "discriminator": {
+            "propertyName": "type"
+          }
+        }
+      }
+    },
+    "description": "Order pizzas and track delivery."
+  }
+}

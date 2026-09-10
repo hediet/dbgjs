@@ -1,0 +1,22 @@
+{
+	"name": "hubrpc-rust",
+	"image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/sshd:1": {
+			"version": "latest"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"tamasfe.even-better-toml"
+			]
+		}
+	},
+	"postCreateCommand": "rustup component add clippy rustfmt && cargo fetch",
+	"remoteUser": "vscode"
+}

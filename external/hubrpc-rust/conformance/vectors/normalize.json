@@ -1,0 +1,253 @@
+[
+  {
+    "name": "drops-incidental-keys",
+    "raw": {
+      "type": "string",
+      "minLength": 1,
+      "default": "x",
+      "title": "Name"
+    },
+    "normalized": {
+      "type": "string",
+      "title": "Name"
+    }
+  },
+  {
+    "name": "object-defaults-closed",
+    "raw": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "a"
+      ]
+    },
+    "normalized": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "a"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "empty-becomes-true",
+    "raw": {},
+    "normalized": true
+  },
+  {
+    "name": "not-empty-becomes-false",
+    "raw": {
+      "not": {}
+    },
+    "normalized": false
+  },
+  {
+    "name": "required-sorted",
+    "raw": {
+      "type": "object",
+      "properties": {
+        "b": {
+          "type": "string"
+        },
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "b",
+        "a"
+      ]
+    },
+    "normalized": {
+      "type": "object",
+      "properties": {
+        "b": {
+          "type": "string"
+        },
+        "a": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "nested-array-items",
+    "raw": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer",
+            "maximum": 9
+          }
+        },
+        "required": [
+          "x"
+        ]
+      }
+    },
+    "normalized": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "name": "oneof-discriminator-synth",
+    "raw": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "queued"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "baking"
+            },
+            "progress": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "state",
+            "progress"
+          ]
+        }
+      ]
+    },
+    "normalized": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "queued"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "baking"
+            },
+            "progress": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "progress",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "discriminator": {
+        "propertyName": "state"
+      }
+    }
+  },
+  {
+    "name": "discriminator-dropped-without-oneof",
+    "raw": {
+      "type": "object",
+      "properties": {
+        "k": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "k"
+      ],
+      "discriminator": {
+        "propertyName": "k"
+      }
+    },
+    "normalized": {
+      "type": "object",
+      "properties": {
+        "k": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "k"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ref-passthrough",
+    "raw": {
+      "$ref": "#/components/schemas/Foo",
+      "description": "kept"
+    },
+    "normalized": {
+      "$ref": "#/components/schemas/Foo",
+      "description": "kept"
+    }
+  },
+  {
+    "name": "tuple-prefixitems",
+    "raw": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        }
+      ]
+    },
+    "normalized": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        }
+      ]
+    }
+  }
+]

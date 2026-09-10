@@ -1,0 +1,85 @@
+[
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "s::i::m",
+      "params": {
+        "a": 1,
+        "b": [
+          2,
+          3
+        ]
+      }
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": "req-7",
+      "method": "list"
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "method": "ping",
+      "params": [
+        1,
+        2
+      ]
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "method": "noParams"
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "ok": true
+      }
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": null
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": null,
+      "result": null
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "error": {
+        "code": -32601,
+        "message": "method not found"
+      }
+    }
+  },
+  {
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "error": {
+        "code": -32602,
+        "message": "bad params",
+        "data": {
+          "field": "a"
+        }
+      }
+    }
+  }
+]

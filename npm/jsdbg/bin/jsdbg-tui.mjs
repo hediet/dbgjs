@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+import { launch } from "../lib/launch.mjs";
+launch("jsdbg-tui");

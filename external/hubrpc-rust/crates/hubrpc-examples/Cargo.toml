@@ -1,0 +1,23 @@
+[package]
+name = "hubrpc-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Runnable examples for the Rust hubrpc port. Each example is a pair of binaries (a server and a
+# consumer) that share a single `#[hub_rpc_interface]` contract defined in this crate's library —
+# the "shared crate" pattern from docs/examples.md. The library also exposes small helpers so the
+# client examples and the e2e tests can spawn the server binaries without repeating themselves.
+
+[dependencies]
+hubrpc = { path = "../hubrpc" }
+hubrpc-tokio = { path = "../hubrpc-tokio" }
+tokio = { workspace = true, features = ["process", "io-std", "net", "rt-multi-thread", "macros", "time"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+# Builds + locates the example server binaries on demand (Cargo only sets CARGO_BIN_EXE_* for bin
+# targets, not examples), so a client can spawn `--example calc_server` as a child process.
+escargot = "0.5"

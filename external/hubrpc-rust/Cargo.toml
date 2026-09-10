@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hubrpc",
+    "crates/hubrpc-macros",
+    "crates/hubrpc-tokio",
+    "crates/hubrpc-examples",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+async-trait = "0.1"
+futures = "0.3"
+sha2 = "0.10"
+schemars = "0.8"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+url = "2"
+percent-encoding = "2"

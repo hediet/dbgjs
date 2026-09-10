@@ -1,0 +1,99 @@
+[
+  {
+    "value": {
+      "b": 1,
+      "a": 2
+    },
+    "canonical": "{\"a\":2,\"b\":1}"
+  },
+  {
+    "value": {
+      "n": 1,
+      "m": 42
+    },
+    "canonical": "{\"m\":42,\"n\":1}"
+  },
+  {
+    "value": "a\tb\nc\u0001d",
+    "canonical": "\"a\\tb\\nc\\u0001d\""
+  },
+  {
+    "value": {
+      "z": [
+        3,
+        2,
+        1
+      ],
+      "a": {
+        "y": true,
+        "x": null
+      }
+    },
+    "canonical": "{\"a\":{\"x\":null,\"y\":true},\"z\":[3,2,1]}"
+  },
+  {
+    "value": [],
+    "canonical": "[]"
+  },
+  {
+    "value": {},
+    "canonical": "{}"
+  },
+  {
+    "value": {
+      "0": "zero",
+      "2": "two",
+      "10": "ten",
+      "": "empty-key"
+    },
+    "canonical": "{\"\":\"empty-key\",\"0\":\"zero\",\"10\":\"ten\",\"2\":\"two\"}"
+  },
+  {
+    "value": {
+      "price": 1299,
+      "currency": "EUR",
+      "note": "extra \"cheese\""
+    },
+    "canonical": "{\"currency\":\"EUR\",\"note\":\"extra \\\"cheese\\\"\",\"price\":1299}"
+  },
+  {
+    "value": "unicode: café ☕ 日本語",
+    "canonical": "\"unicode: café ☕ 日本語\""
+  },
+  {
+    "value": {
+      "negative": -5,
+      "zeroFloat": 0.5,
+      "neg": -2.25
+    },
+    "canonical": "{\"neg\":-2.25,\"negative\":-5,\"zeroFloat\":0.5}"
+  },
+  {
+    "value": true,
+    "canonical": "true"
+  },
+  {
+    "value": false,
+    "canonical": "false"
+  },
+  {
+    "value": null,
+    "canonical": "null"
+  },
+  {
+    "value": 0,
+    "canonical": "0"
+  },
+  {
+    "value": [
+      1,
+      "two",
+      false,
+      null,
+      {
+        "k": "v"
+      }
+    ],
+    "canonical": "[1,\"two\",false,null,{\"k\":\"v\"}]"
+  }
+]

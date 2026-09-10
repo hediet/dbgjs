@@ -1,0 +1,372 @@
+{
+  "parse": [
+    {
+      "input": "/tmp/bare.sock",
+      "result": {
+        "kind": "socket",
+        "path": "/tmp/bare.sock"
+      }
+    },
+    {
+      "input": "\\\\.\\pipe\\foo",
+      "result": {
+        "kind": "socket",
+        "path": "\\\\.\\pipe\\foo"
+      }
+    },
+    {
+      "input": "ws://bare-detect",
+      "result": {
+        "kind": "ws",
+        "url": "ws://bare-detect/"
+      }
+    },
+    {
+      "input": "WSS://Bare-Detect/p",
+      "result": {
+        "kind": "ws",
+        "url": "wss://bare-detect/p"
+      }
+    },
+    {
+      "input": "ws://hub.example/rpc?token=abc123",
+      "result": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc",
+        "token": "abc123"
+      }
+    },
+    {
+      "input": "ws://hub.example/rpc?token=abc123&x=1",
+      "result": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc?x=1",
+        "token": "abc123"
+      }
+    },
+    {
+      "input": "wss://hub.example:8443/rpc",
+      "result": {
+        "kind": "ws",
+        "url": "wss://hub.example:8443/rpc"
+      }
+    },
+    {
+      "input": "ws://hub.example/rpc?",
+      "result": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc"
+      }
+    },
+    {
+      "input": "unix:/tmp/hub.sock",
+      "result": {
+        "kind": "socket",
+        "path": "/tmp/hub.sock"
+      }
+    },
+    {
+      "input": "unix:/tmp/hub.sock?token=t0ken",
+      "result": {
+        "kind": "socket",
+        "path": "/tmp/hub.sock",
+        "token": "t0ken"
+      }
+    },
+    {
+      "input": "unix:/tmp/a%20b.sock",
+      "result": {
+        "kind": "socket",
+        "path": "/tmp/a b.sock"
+      }
+    },
+    {
+      "input": "npipe://./pipe/foo",
+      "result": {
+        "kind": "socket",
+        "path": "\\\\.\\pipe\\foo"
+      }
+    },
+    {
+      "input": "npipe://./pipe/hub?token=zz",
+      "result": {
+        "kind": "socket",
+        "path": "\\\\.\\pipe\\hub",
+        "token": "zz"
+      }
+    },
+    {
+      "input": "cmd-stdio:?command=run-hub",
+      "result": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        }
+      }
+    },
+    {
+      "input": "cmd-stdio:?argv=run-hub&argv=--flag",
+      "result": {
+        "kind": "cmd-stdio",
+        "command": {
+          "argv": [
+            "run-hub",
+            "--flag"
+          ]
+        }
+      }
+    },
+    {
+      "input": "cmd-stdio:?command=run-hub&env=A=1&env=B=2",
+      "result": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        },
+        "env": {
+          "A": "1",
+          "B": "2"
+        }
+      }
+    },
+    {
+      "input": "cmd:?command=run-hub",
+      "result": {
+        "kind": "cmd-env",
+        "command": {
+          "command": "run-hub"
+        }
+      }
+    },
+    {
+      "input": "cmd:?command=run-hub&provisionSlot=slot-7",
+      "result": {
+        "kind": "cmd-env",
+        "command": {
+          "command": "run-hub"
+        },
+        "provisionSlot": "slot-7"
+      }
+    },
+    {
+      "input": "cmd:?argv=run&argv=--x&provisionSlot=s&env=K=V",
+      "result": {
+        "kind": "cmd-env",
+        "command": {
+          "argv": [
+            "run",
+            "--x"
+          ]
+        },
+        "provisionSlot": "s",
+        "env": {
+          "K": "V"
+        }
+      }
+    },
+    {
+      "input": "",
+      "error": "endpoint URI is empty"
+    },
+    {
+      "input": "   ",
+      "error": "endpoint URI is empty"
+    },
+    {
+      "input": "http://hub.example/rpc",
+      "error": "unsupported endpoint scheme 'http:' (expected unix:, npipe:, ws:, wss:, cmd:, or cmd-stdio:)"
+    },
+    {
+      "input": "cmd:?provisionSlot=s",
+      "error": "endpoint 'cmd:' requires a 'command' or 'argv' query parameter"
+    },
+    {
+      "input": "cmd-stdio:?env=BROKEN",
+      "error": "endpoint 'env' param must be 'KEY=VALUE', got 'BROKEN'"
+    }
+  ],
+  "format": [
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "/tmp/hub.sock"
+      },
+      "options": null,
+      "formatted": "unix:/tmp/hub.sock"
+    },
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "/tmp/hub.sock",
+        "token": "secret"
+      },
+      "options": null,
+      "formatted": "unix:/tmp/hub.sock?token=***"
+    },
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "/tmp/hub.sock",
+        "token": "secret"
+      },
+      "options": {
+        "revealToken": true
+      },
+      "formatted": "unix:/tmp/hub.sock?token=secret"
+    },
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "\\\\.\\pipe\\foo"
+      },
+      "options": null,
+      "formatted": "npipe://./pipe/foo"
+    },
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "\\\\.\\pipe\\foo",
+        "token": "abc"
+      },
+      "options": null,
+      "formatted": "npipe://./pipe/foo?token=***"
+    },
+    {
+      "spec": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc"
+      },
+      "options": null,
+      "formatted": "ws://hub.example/rpc"
+    },
+    {
+      "spec": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc",
+        "token": "abc123"
+      },
+      "options": null,
+      "formatted": "ws://hub.example/rpc?token=***"
+    },
+    {
+      "spec": {
+        "kind": "ws",
+        "url": "ws://hub.example/rpc",
+        "token": "abc123"
+      },
+      "options": {
+        "revealToken": true
+      },
+      "formatted": "ws://hub.example/rpc?token=abc123"
+    },
+    {
+      "spec": {
+        "kind": "ws",
+        "url": "wss://hub.example:8443/rpc?x=1",
+        "token": "abc123"
+      },
+      "options": {
+        "revealToken": true
+      },
+      "formatted": "wss://hub.example:8443/rpc?x=1&token=abc123"
+    },
+    {
+      "spec": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        }
+      },
+      "options": null,
+      "formatted": "cmd-stdio:?command=run-hub"
+    },
+    {
+      "spec": {
+        "kind": "cmd-stdio",
+        "command": {
+          "argv": [
+            "run-hub",
+            "--flag"
+          ]
+        }
+      },
+      "options": null,
+      "formatted": "cmd-stdio:?argv=run-hub&argv=--flag"
+    },
+    {
+      "spec": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        },
+        "env": {
+          "A": "1",
+          "B": "2"
+        }
+      },
+      "options": null,
+      "formatted": "cmd-stdio:?command=run-hub&env=A%3D1&env=B%3D2"
+    },
+    {
+      "spec": {
+        "kind": "cmd-env",
+        "command": {
+          "command": "run-hub"
+        },
+        "provisionSlot": "slot-7"
+      },
+      "options": null,
+      "formatted": "cmd:?command=run-hub&provisionSlot=slot-7"
+    },
+    {
+      "spec": {
+        "kind": "cmd-env",
+        "command": {
+          "argv": [
+            "run",
+            "--x"
+          ]
+        },
+        "env": {
+          "K": "V"
+        }
+      },
+      "options": null,
+      "formatted": "cmd:?argv=run&argv=--x&env=K%3DV"
+    }
+  ],
+  "isHubEndpoint": [
+    {
+      "spec": {
+        "kind": "socket",
+        "path": "/tmp/x.sock"
+      },
+      "expected": true
+    },
+    {
+      "spec": {
+        "kind": "ws",
+        "url": "ws://h/p"
+      },
+      "expected": true
+    },
+    {
+      "spec": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "x"
+        }
+      },
+      "expected": false
+    },
+    {
+      "spec": {
+        "kind": "cmd-env",
+        "command": {
+          "command": "x"
+        }
+      },
+      "expected": false
+    }
+  ]
+}

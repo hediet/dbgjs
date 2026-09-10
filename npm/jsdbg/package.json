@@ -1,0 +1,21 @@
+{
+  "name": "@hediet/jsdbg",
+  "version": "0.1.0",
+  "description": "Native JavaScript debugger CLI",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22" },
+  "bin": {
+    "jsdbg": "bin/jsdbg.mjs",
+    "jsdbg-tui": "bin/jsdbg-tui.mjs"
+  },
+  "files": ["bin", "lib", "README.md"],
+  "dependencies": { "playwright": "1.62.1" },
+  "optionalDependencies": {
+    "@hediet/jsdbg-win32-x64": "0.1.0",
+    "@hediet/jsdbg-darwin-x64": "0.1.0",
+    "@hediet/jsdbg-darwin-arm64": "0.1.0",
+    "@hediet/jsdbg-linux-x64-gnu": "0.1.0",
+    "@hediet/jsdbg-linux-arm64-gnu": "0.1.0"
+  }
+}

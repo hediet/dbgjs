@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/cdp-protocol", "crates/cdp-tui"]
+exclude = ["external/hubrpc-rust"]
 resolver = "3"
 
 [package]
@@ -18,8 +19,8 @@ getrandom = "0.3"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-hubrpc = { path = "../hubrpc-rust/crates/hubrpc" }
-hubrpc-tokio = { path = "../hubrpc-rust/crates/hubrpc-tokio" }
+hubrpc = { path = "external/hubrpc-rust/crates/hubrpc" }
+hubrpc-tokio = { path = "external/hubrpc-rust/crates/hubrpc-tokio" }
 im = "15.1"
 libc = "0.2"
 schemars = "1"
