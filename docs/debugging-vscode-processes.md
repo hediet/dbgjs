@@ -33,6 +33,51 @@ under:
 %LOCALAPPDATA%\hediet\cdp-client\
 ```
 
+## Reading logs and capture coverage
+
+```powershell
+jsdbg log
+jsdbg log --after 0 --limit 100 --json
+```
+
+`log` reports capture status even when there are no entries. **No captured
+entries does not mean no errors occurred.** The current collector retains only
+`Runtime.consoleAPICalled` events (including `console.error`), not browser
+diagnostics (`Log.entryAdded`), uncaught exceptions (`Runtime.exceptionThrown`),
+or network failures. Attaching now cannot recover past network failures.
+
+Capture is target-local and begins when jsdbg starts configuring that target's
+CDP session with `Runtime.enable`. `startedAtUnixMs` is the observed local start
+of that configuration request, not an event timestamp or the start of the
+page/process. CDP may replay buffered console messages from before this time;
+there is no guarantee of complete earlier history. Reading logs never attaches
+the target or its descendants. A known but unattached target reports `inactive`
+with unknown start/loss metadata and no collected categories.
+
+The service's `get_logs` response and CLI JSON contain context, connection,
+canonical target, connection generation, and `capture` metadata. Attached
+target snapshots also expose this metadata as `logCapture`. `captureId`
+identifies this in-memory collector, and `sessionId` identifies its CDP session
+(an empty string denotes a root session). Each entry keeps its original CDP
+console parameters in `params`, including type, timestamp, execution context,
+and any stack trace/locations supplied by the runtime. Missing frame information
+is not inferred, and child-target logs are not implicitly aggregated.
+
+The ring retains at most 100 entries. `evictedCount` counts entries removed from
+this collector's ring since its start; `droppedCount: null` means upstream loss
+is not measurable, **not zero loss**. `stopped` means its event-processing loop
+ended; `unknown` supports snapshots lacking capture metadata. Captures and their
+messages are not persisted across detach, reconnect, or service restart.
+
+The CLI shows the newest 20 unseen entries by default. `skipped` retains its
+existing meaning (ring eviction plus the display limit); `evictedSinceCursor`
+and `omittedByLimit` separate those causes. `nextCursor` advances past all
+observed entries, including those omitted by the display limit. Normal reads
+persist this cursor; explicit `--after` reads do not. Persisted cursors are
+scoped to the canonical target, connection generation, and capture identity,
+so reconnecting or reattaching starts a new cursor. Explicit cursors must belong
+to the current capture.
+
 ## 2. Discover the VS Code process tree
 
 ```powershell

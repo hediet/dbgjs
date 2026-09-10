@@ -41,8 +41,8 @@ use crate::promise_debugging::{
 use crate::service_api::{
     BreakpointApplicationSnapshot, BreakpointApplicationStatus, BreakpointMappingSnapshot,
     BreakpointScriptAssessmentSnapshot, BreakpointScriptAssessmentStatus,
-    BreakpointSourceCandidateSnapshot, ConsoleMessageSnapshot, CoverageAnalysisSnapshot,
-    CoverageFunctionSnapshot, CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot,
+    BreakpointSourceCandidateSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
+    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot,
     CpuProfileAnalysisSnapshot, CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot,
     CpuProfileNodeSnapshot, CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
     FrameProjectionSnapshot, FrameSnapshot, HeapAggregateBy, HeapAggregateEntrySnapshot,
@@ -2625,6 +2625,7 @@ async fn run_target(
                 failed.phase = TargetDebuggerPhase::Failed {
                     message: error.to_string(),
                 };
+                failed.log_capture.status = crate::service_api::LogCaptureStatus::Stopped;
                 publish_snapshot(&snapshots, &pause_events, failed);
                 break;
             }
@@ -5167,14 +5168,8 @@ fn snapshot_from_driver(
             };
         }
     }
-    result.logs = driver
-        .console_messages()
-        .iter()
-        .map(|(index, values)| ConsoleMessageSnapshot {
-            index: *index,
-            values: values.clone(),
-        })
-        .collect();
+    result.logs = driver.console_messages().iter().cloned().collect();
+    result.log_capture = driver.log_capture();
     for result_breakpoint in &mut result.breakpoints {
         let Some((_, breakpoint)) = driver.state().breakpoints.iter().find(|(key, _)| {
             key.client_id == context_id && key.breakpoint_id == result_breakpoint.id
@@ -5550,6 +5545,7 @@ fn snapshot(
             scripts: Vec::new(),
             breakpoints: Vec::new(),
             logs: Vec::new(),
+            log_capture: Default::default(),
             pause: None,
         };
     };
@@ -5855,6 +5851,7 @@ fn snapshot(
         scripts,
         breakpoints,
         logs: Vec::new(),
+        log_capture: Default::default(),
         pause,
     }
 }
@@ -6077,6 +6074,7 @@ mod tests {
             scripts: Vec::new(),
             breakpoints: Vec::new(),
             logs: Vec::new(),
+            log_capture: Default::default(),
             pause: None,
         }
     }

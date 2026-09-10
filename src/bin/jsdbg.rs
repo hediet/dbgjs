@@ -176,13 +176,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client
-                .get_target(
+                .get_logs(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
                 )
                 .await)?;
-            let current_scope = log_scope(&scope, &snapshot);
+            let current_scope = log_scope(
+                &scope,
+                &snapshot.target_id,
+                snapshot.connection_generation,
+                &snapshot.capture,
+            );
             let persisted_cursor = if selection.log_scope.as_deref() == Some(current_scope.as_str())
             {
                 selection.log_cursor
@@ -190,7 +195,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 0
             };
             let (after, limit, explicit_after) = parse_log_options(options, persisted_cursor)?;
-            let next = output.print_logs(&snapshot.logs, after, limit)?;
+            let next = output.print_logs(&snapshot, after, limit)?;
             if !explicit_after {
                 selection.log_cursor = next;
                 selection.log_scope = Some(current_scope);
@@ -2666,10 +2671,19 @@ fn parse_context_create_options(
     ))
 }
 
-fn log_scope(scope: &ResolvedScope, snapshot: &TargetDebuggerSnapshot) -> String {
+fn log_scope(
+    scope: &ResolvedScope,
+    target_id: &str,
+    connection_generation: u64,
+    capture: &cdp_client::service_api::LogCaptureSnapshot,
+) -> String {
     format!(
-        "{}\0{}\0{}\0{}",
-        scope.context, scope.connection, scope.target, snapshot.connection_generation
+        "{}\0{}\0{}\0{}\0{}",
+        scope.context,
+        scope.connection,
+        target_id,
+        connection_generation,
+        capture.capture_id.as_deref().unwrap_or("")
     )
 }
 
@@ -3177,7 +3191,12 @@ fn select_scope(
         &mut selection,
         scope,
         snapshot.logs.last().map_or(0, |message| message.index),
-        log_scope(scope, snapshot),
+        log_scope(
+            scope,
+            &snapshot.target_id,
+            snapshot.connection_generation,
+            &snapshot.log_capture,
+        ),
     );
     write_selection(path, &selection)
 }
@@ -6478,6 +6497,7 @@ commands:
   jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
   jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
   jsdbg log [--after <cursor>] [--limit <count>] [target scope]
+    reports target-local console capture coverage, not browser/network diagnostics; does not attach
   jsdbg target click <css-selector> [target scope]
   jsdbg target key <ctrl+n|ctrl+k,ctrl+m|ctrl+k,n|enter|accept|arrowup> [target scope]
   jsdbg target type <text> [target scope]
@@ -7123,6 +7143,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scope.connection, "process-2");
+    }
+
+    #[test]
+    fn log_cursor_scope_changes_on_reconnect_and_reattachment() {
+        use cdp_client::service_api::LogCaptureSnapshot;
+        let scope = ResolvedScope {
+            context: "ctx".into(),
+            connection: "browser".into(),
+            target: "selected-alias".into(),
+        };
+        let capture = LogCaptureSnapshot {
+            capture_id: Some("first".into()),
+            ..Default::default()
+        };
+        let first = super::log_scope(&scope, "frame", 1, &capture);
+        assert_eq!(first, super::log_scope(&scope, "frame", 1, &capture));
+        assert_ne!(first, super::log_scope(&scope, "frame", 2, &capture));
+        assert_ne!(first, super::log_scope(&scope, "other-frame", 1, &capture));
+        let second = LogCaptureSnapshot {
+            capture_id: Some("second".into()),
+            ..capture
+        };
+        assert_ne!(first, super::log_scope(&scope, "frame", 1, &second));
+        assert_eq!(super::parse_log_options(&[], 17).unwrap(), (17, 20, false));
+        assert_eq!(
+            super::parse_log_options(&["--after".into(), "0".into()], 17).unwrap(),
+            (0, 20, true)
+        );
     }
 
     #[test]

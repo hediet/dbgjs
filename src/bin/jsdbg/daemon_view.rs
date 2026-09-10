@@ -528,6 +528,7 @@ mod tests {
                 ),
             ],
             logs: vec![],
+            log_capture: Default::default(),
             pause: Some(PauseSnapshot {
                 epoch: 3,
                 reason: "other".to_owned(),

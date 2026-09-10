@@ -867,6 +867,8 @@ pub struct TargetDebuggerSnapshot {
     pub scripts: Vec<TargetScriptSnapshot>,
     pub breakpoints: Vec<TargetBreakpointSnapshot>,
     pub logs: Vec<ConsoleMessageSnapshot>,
+    #[serde(default)]
+    pub log_capture: LogCaptureSnapshot,
     pub pause: Option<PauseSnapshot>,
 }
 
@@ -898,6 +900,41 @@ pub struct TargetAttachmentResult {
 pub struct ConsoleMessageSnapshot {
     pub index: u64,
     pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogCaptureSnapshot {
+    pub status: LogCaptureStatus,
+    pub capture_id: Option<String>,
+    pub session_id: Option<String>,
+    pub started_at_unix_ms: Option<u64>,
+    pub collected_events: Vec<String>,
+    pub evicted_count: Option<u64>,
+    pub dropped_count: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum LogCaptureStatus {
+    Active,
+    Inactive,
+    Stopped,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetLogSnapshot {
+    pub context_id: String,
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub capture: LogCaptureSnapshot,
+    pub messages: Vec<ConsoleMessageSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1987,6 +2024,12 @@ pub trait DebuggerServiceApi {
         connection_id: String,
         target_id: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError>;
+
+    async fn get_logs(
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<TargetLogSnapshot, JsonRpcError>;
 
     async fn wait_target(
         context_id: String,

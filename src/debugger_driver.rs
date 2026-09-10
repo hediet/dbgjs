@@ -10,15 +10,54 @@ use crate::cdp_runtime::{
     HeapSnapshotStreamProgress, RawCdpEvent, SourceMapCacheStats,
 };
 use crate::debugger_engine::{DebuggerState, Effect, Input, SessionPhase, reduce};
+use crate::service_api::{ConsoleMessageSnapshot, LogCaptureSnapshot, LogCaptureStatus};
 use crate::source_effects::{SourceEffectError, SourceEffectInterpreter};
+
+#[derive(Default)]
+struct ConsoleLog {
+    messages: VecDeque<ConsoleMessageSnapshot>,
+    evicted_count: u64,
+    next_index: u64,
+}
+
+impl ConsoleLog {
+    fn push(&mut self, params: &crate::cdp::RuntimeConsoleApicalledParams) {
+        const MAX_CONSOLE_MESSAGES: usize = 100;
+        if self.messages.len() == MAX_CONSOLE_MESSAGES {
+            self.messages.pop_front();
+            self.evicted_count = self.evicted_count.saturating_add(1);
+        }
+        self.next_index = self.next_index.saturating_add(1);
+        self.messages.push_back(ConsoleMessageSnapshot {
+            index: self.next_index,
+            values: params
+                .args
+                .iter()
+                .map(|argument| {
+                    argument
+                        .value
+                        .as_ref()
+                        .map(|value| match value {
+                            serde_json::Value::String(value) => value.clone(),
+                            value => value.to_string(),
+                        })
+                        .or_else(|| argument.unserializable_value.clone())
+                        .or_else(|| argument.description.clone())
+                        .unwrap_or_else(|| "undefined".to_owned())
+                })
+                .collect(),
+            params: serde_json::to_value(params).ok(),
+        });
+    }
+}
 
 pub struct DebuggerDriver {
     state: Arc<DebuggerState>,
     session: CdpDebuggerSession,
     sources: SourceEffectInterpreter,
     recording: DebuggerRecording,
-    console_messages: VecDeque<(u64, Vec<String>)>,
-    next_console_index: u64,
+    console_log: ConsoleLog,
+    log_capture: LogCaptureSnapshot,
 }
 
 impl DebuggerDriver {
@@ -32,8 +71,8 @@ impl DebuggerDriver {
             session,
             sources,
             recording: DebuggerRecording::default(),
-            console_messages: VecDeque::new(),
-            next_console_index: 1,
+            console_log: ConsoleLog::default(),
+            log_capture: LogCaptureSnapshot::default(),
         }
     }
 
@@ -95,8 +134,15 @@ impl DebuggerDriver {
         &self.recording
     }
 
-    pub fn console_messages(&self) -> &VecDeque<(u64, Vec<String>)> {
-        &self.console_messages
+    pub fn console_messages(&self) -> &VecDeque<ConsoleMessageSnapshot> {
+        &self.console_log.messages
+    }
+
+    pub fn log_capture(&self) -> LogCaptureSnapshot {
+        LogCaptureSnapshot {
+            evicted_count: Some(self.console_log.evicted_count),
+            ..self.log_capture.clone()
+        }
     }
 
     pub fn logical_source_content(
@@ -188,31 +234,7 @@ impl DebuggerDriver {
             _ => None,
         };
         if let CdpRuntimeEvent::Console { params, .. } = &event {
-            const MAX_CONSOLE_MESSAGES: usize = 100;
-            if self.console_messages.len() == MAX_CONSOLE_MESSAGES {
-                self.console_messages.pop_front();
-            }
-            let index = self.next_console_index;
-            self.next_console_index = self.next_console_index.saturating_add(1);
-            self.console_messages.push_back((
-                index,
-                params
-                    .args
-                    .iter()
-                    .map(|argument| {
-                        argument
-                            .value
-                            .as_ref()
-                            .map(|value| match value {
-                                serde_json::Value::String(value) => value.clone(),
-                                value => value.to_string(),
-                            })
-                            .or_else(|| argument.unserializable_value.clone())
-                            .or_else(|| argument.description.clone())
-                            .unwrap_or_else(|| "undefined".to_owned())
-                    })
-                    .collect(),
-            ));
+            self.console_log.push(params);
             self.apply(Input::ConsoleMessageObserved).await?;
             return Ok(true);
         }
@@ -234,6 +256,9 @@ impl DebuggerDriver {
     ) -> Result<(), DebuggerDriverError> {
         let mut queue = VecDeque::from(effects);
         while let Some(effect) = queue.pop_front() {
+            if let Effect::ConfigureSession { session, .. } = &effect {
+                self.log_capture = begin_log_capture(&session.session_id);
+            }
             let completion =
                 match source_effect_completion(&effect, self.sources.interpret(&effect)) {
                     Some(input) => Some(input),
@@ -278,6 +303,27 @@ impl DebuggerDriver {
         self.state = transition.state;
         self.sources.retain_for_state(&self.state);
         effects
+    }
+}
+
+fn begin_log_capture(session_id: &str) -> LogCaptureSnapshot {
+    static NEXT_CAPTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let started = std::time::SystemTime::now();
+    LogCaptureSnapshot {
+        status: LogCaptureStatus::Active,
+        capture_id: Some(format!(
+            "{started:?}-{}-{}",
+            std::process::id(),
+            NEXT_CAPTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )),
+        session_id: Some(session_id.to_owned()),
+        started_at_unix_ms: started
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok()),
+        collected_events: vec!["Runtime.consoleAPICalled".to_owned()],
+        evicted_count: Some(0),
+        dropped_count: None,
     }
 }
 
@@ -355,6 +401,62 @@ mod tests {
     use super::*;
     use crate::debugger_engine::{EffectId, ScriptKey, SessionKey};
     use crate::source_view::Position;
+
+    #[test]
+    fn log_capture_start_is_observed_and_reattachment_has_a_new_identity() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let first = begin_log_capture("");
+        let second = begin_log_capture("");
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        assert_eq!(first.status, LogCaptureStatus::Active);
+        assert_eq!(first.session_id.as_deref(), Some(""));
+        assert_eq!(first.collected_events, ["Runtime.consoleAPICalled"]);
+        assert_eq!(first.evicted_count, Some(0));
+        assert_eq!(first.dropped_count, None);
+        assert!((before..=after).contains(&u128::from(first.started_at_unix_ms.unwrap())));
+        assert_ne!(first.capture_id, second.capture_id);
+    }
+
+    #[test]
+    fn log_ring_counts_eviction_and_preserves_console_provenance() {
+        let mut log = ConsoleLog::default();
+        assert!(log.messages.is_empty());
+        assert_eq!(log.evicted_count, 0);
+        let params = serde_json::json!({
+            "type": "error",
+            "args": [{"type": "string", "value": "error from frame"}],
+            "executionContextId": 42,
+            "timestamp": 1234.5,
+            "stackTrace": {"callFrames": [{
+                "functionName": "render",
+                "scriptId": "17",
+                "url": "https://example.test/frame.js",
+                "lineNumber": 3,
+                "columnNumber": 7
+            }]}
+        });
+        let event = serde_json::from_value(params.clone()).unwrap();
+        for _ in 0..103 {
+            log.push(&event);
+        }
+        assert_eq!(log.messages.len(), 100);
+        assert_eq!(log.evicted_count, 3);
+        let first = log.messages.front().unwrap();
+        assert_eq!(first.index, 4);
+        assert_eq!(first.values, ["error from frame"]);
+        assert_eq!(first.params, Some(params));
+        assert_eq!(log.messages.back().unwrap().index, 103);
+        let fresh = ConsoleLog::default();
+        assert!(fresh.messages.is_empty());
+        assert_eq!(fresh.evicted_count, 0);
+        assert_eq!(fresh.next_index, 0);
+    }
 
     #[test]
     fn source_mapping_failure_completes_effect_without_stopping_driver() {

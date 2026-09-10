@@ -225,6 +225,85 @@ process.stdin.on('end', () => process.exit(0));
 "#;
 
 #[test]
+fn cli_log_reports_empty_capture_retention_and_reconnect() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("log-coverage-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |arguments: &[&str]| run_json_in(&cli, &service, &state_file, &root, arguments);
+    run(&["context", "create", ":log-coverage", "Logs", "--set"]);
+    let connected = run(&[
+        "connection", "add", "--stdio", "--connection", "adapter", "--connect",
+        "--", "node", "--input-type=module", "--eval", FAKE_CDP_TARGET_SCRIPT,
+    ]);
+    let target = connected["connections"][0]["targets"][0]["targetId"].as_str().unwrap();
+    let scoped = |arguments: &[&str]| {
+        let mut args = arguments.to_vec();
+        args.extend(["--connection", "adapter", "--target", target]);
+        run(&args)
+    };
+    let inactive = scoped(&["log"]);
+    assert_eq!(inactive["capture"]["status"], "inactive");
+    assert_eq!(inactive["messages"], serde_json::json!([]));
+    assert!(inactive["capture"]["startedAtUnixMs"].is_null());
+    assert!(inactive["capture"]["evictedCount"].is_null());
+
+    let attached = scoped(&["target", "attach"]);
+    let empty = scoped(&["log"]);
+    assert_eq!(empty["capture"], attached["target"]["logCapture"]);
+    assert_eq!(empty["capture"]["status"], "active");
+    assert_eq!(empty["capture"]["collectedEvents"], serde_json::json!(["Runtime.consoleAPICalled"]));
+    assert!(empty["capture"]["startedAtUnixMs"].is_u64());
+    assert!(empty["capture"]["droppedCount"].is_null());
+    assert_eq!(empty["messages"], serde_json::json!([]));
+    let human = run_human_in(
+        &cli, &service, &state_file, &root,
+        &["log", "--connection", "adapter", "--target", target],
+    );
+    assert_success(&["log"], human.0, &human.1, &human.2);
+    assert!(String::from_utf8(human.1).unwrap().contains("this does not mean no errors occurred"));
+
+    scoped(&[
+        "target", "cdp", "Runtime.evaluate", "--params",
+        r#"{"expression":"42"}"#,
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let message = loop {
+        let snapshot = scoped(&["log", "--after", "0"]);
+        if !snapshot["messages"].as_array().unwrap().is_empty() {
+            break snapshot;
+        }
+        assert!(Instant::now() < deadline, "console event was not captured");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(message["messages"][0]["index"], 1);
+    assert_eq!(message["messages"][0]["params"]["executionContextId"], 1);
+    assert_eq!(message["messages"][0]["values"][0], "hello-from-fake-target");
+    assert_eq!(message["nextCursor"], 1);
+    assert_eq!(scoped(&["log"])["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(scoped(&["log"])["messages"], serde_json::json!([]));
+
+    run(&["connection", "disconnect", "--connection", "adapter"]);
+    run(&["connection", "connect", "--connection", "adapter"]);
+    scoped(&["target", "attach"]);
+    let fresh = scoped(&["log"]);
+    assert_eq!(fresh["capture"]["status"], "active");
+    assert_ne!(fresh["capture"]["captureId"], empty["capture"]["captureId"]);
+    assert_ne!(fresh["connectionGeneration"], empty["connectionGeneration"]);
+    assert_eq!(fresh["nextCursor"], 0);
+    assert_eq!(fresh["messages"], serde_json::json!([]));
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    fs::remove_dir_all(&root).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
 fn target_relay_forwards_cdp_and_enforces_exclusive_context_ownership() {
     let root = std::env::temp_dir().join(format!(
         "jsdbg-target-relay-{}-{}",

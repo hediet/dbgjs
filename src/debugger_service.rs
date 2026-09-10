@@ -3438,6 +3438,55 @@ impl DebuggerServiceApi for DebuggerService {
             .snapshot())
     }
 
+    async fn get_logs(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+    ) -> Result<crate::service_api::TargetLogSnapshot, JsonRpcError> {
+        use crate::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
+        let state = self.state.lock().await;
+        ensure_context_not_relayed(&state, &context_id)?;
+        let target_id =
+            Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+        let context = state
+            .contexts
+            .get(&context_id)
+            .ok_or_else(|| not_found("context", &context_id))?;
+        let connection = context
+            .connections
+            .get(&connection_id)
+            .ok_or_else(|| not_found("connection", &connection_id))?;
+        if !context_connection_has_target(
+            &state,
+            &context_id,
+            &connection_id,
+            connection.generation,
+            &target_id,
+        ) {
+            return Err(not_found("target", &target_id));
+        }
+        let snapshot = state
+            .target_debuggers
+            .get(&(context_id.clone(), connection_id.clone(), target_id.clone()))
+            .map(TargetDebuggerHandle::snapshot);
+        Ok(TargetLogSnapshot {
+            context_id,
+            connection_id,
+            target_id,
+            connection_generation: connection.generation,
+            capture: snapshot.as_ref().map_or_else(
+                || LogCaptureSnapshot {
+                    status: LogCaptureStatus::Inactive,
+                    ..Default::default()
+                },
+                |snapshot| snapshot.log_capture.clone(),
+            ),
+            messages: snapshot.map_or_else(Vec::new, |snapshot| snapshot.logs),
+        })
+    }
+
     async fn wait_target(
         &self,
         _ctx: &CallCtx,
@@ -10362,6 +10411,54 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn logs_for_unattached_target_are_inactive_without_attaching() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state,
+            "test",
+            [(
+                "browser",
+                2,
+                vec![target("renderer/target/frame", "Frame", "https://test")],
+            )],
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let logs = service
+            .get_logs(
+                &CallCtx::default(),
+                "test".into(),
+                "browser".into(),
+                "browser/renderer/target/frame@2".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(serde_json::to_value(&logs).unwrap(), serde_json::json!({
+            "contextId": "test", "connectionId": "browser",
+            "targetId": "renderer/target/frame", "connectionGeneration": 2,
+            "messages": [],
+            "capture": {
+                "status": "inactive", "captureId": null, "sessionId": null,
+                "startedAtUnixMs": null, "collectedEvents": [],
+                "evictedCount": null, "droppedCount": null
+            }
+        }));
+        assert!(service.state.lock().await.target_debuggers.is_empty());
+        for selector in ["browser/renderer/target/frame@1", "missing"] {
+            assert!(
+                service
+                    .get_logs(
+                        &CallCtx::default(),
+                        "test".into(),
+                        "browser".into(),
+                        selector.into(),
+                    )
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]

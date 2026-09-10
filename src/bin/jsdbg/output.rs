@@ -309,15 +309,24 @@ impl OutputFormat {
 
     pub fn print_logs(
         &self,
-        logs: &[ConsoleMessageSnapshot],
+        snapshot: &cdp_client::service_api::TargetLogSnapshot,
         after: u64,
         limit: usize,
     ) -> Result<u64, serde_json::Error> {
+        let logs = &snapshot.messages;
         let (skipped, displayed) = page_logs(logs, after, limit);
+        let next = logs.last().map_or(after, |message| message.index.max(after));
+        let evicted_since_cursor = logs.first().map_or(0, |message| {
+            message.index.saturating_sub(after.saturating_add(1))
+        });
         match self {
             Self::Human => {
+                println!("{}", log_coverage_human(snapshot, displayed.is_empty(), after));
                 if skipped > 0 {
-                    println!("[...skipped {skipped} entries...]");
+                    println!(
+                        "[...skipped {skipped} entries: {evicted_since_cursor} evicted, {} omitted by limit...]",
+                        skipped.saturating_sub(evicted_since_cursor)
+                    );
                 }
                 for message in &displayed {
                     println!("[{}] {}", message.index, message.values.join(" "));
@@ -328,13 +337,19 @@ impl OutputFormat {
                 serde_json::to_string_pretty(&serde_json::json!({
                     "after": after,
                     "skipped": skipped,
+                    "evictedSinceCursor": evicted_since_cursor,
+                    "omittedByLimit": skipped.saturating_sub(evicted_since_cursor),
                     "messages": displayed,
+                    "nextCursor": next,
+                    "contextId": snapshot.context_id,
+                    "connectionId": snapshot.connection_id,
+                    "targetId": snapshot.target_id,
+                    "connectionGeneration": snapshot.connection_generation,
+                    "capture": snapshot.capture,
                 }))?
             ),
         }
-        Ok(logs
-            .last()
-            .map_or(after, |message| message.index.max(after)))
+        Ok(next)
     }
 
     pub fn print_coverage_stopped(&self) -> Result<(), serde_json::Error> {
@@ -528,6 +543,40 @@ impl OutputFormat {
         }
         Ok(())
     }
+}
+
+fn log_coverage_human(
+    snapshot: &cdp_client::service_api::TargetLogSnapshot,
+    empty: bool,
+    after: u64,
+) -> String {
+    use cdp_client::service_api::LogCaptureStatus;
+    let capture = &snapshot.capture;
+    let status = match capture.status {
+        LogCaptureStatus::Active => "active",
+        LogCaptureStatus::Inactive => "inactive (target is not attached)",
+        LogCaptureStatus::Stopped => "stopped",
+        LogCaptureStatus::Unknown => "unknown",
+    };
+    let mut text = format!(
+        "Log capture: {status}; target {}/{}/{}; generation {}.\nCollected events: {}.\nStarted (Unix ms): {}; session: {}; capture: {}.\nRetained: {}; evicted: {}; dropped before retention: {}.\nBrowser diagnostics (Log.entryAdded), uncaught exceptions (Runtime.exceptionThrown), and network failures are not collected.",
+        snapshot.context_id, snapshot.connection_id, snapshot.target_id, snapshot.connection_generation,
+        if capture.collected_events.is_empty() { "none".to_owned() } else { capture.collected_events.join(", ") },
+        capture.started_at_unix_ms.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
+        capture.session_id.as_deref().unwrap_or("unknown"),
+        capture.capture_id.as_deref().unwrap_or("unknown"),
+        snapshot.messages.len(),
+        capture.evicted_count.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
+        capture.dropped_count.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
+    );
+    if empty {
+        text.push_str(if after == 0 {
+            "\nNo captured entries to display; this does not mean no errors occurred."
+        } else {
+            "\nNo captured entries to display after the cursor; this does not mean no errors occurred."
+        });
+    }
+    text
 }
 
 fn page_logs(
@@ -5241,16 +5290,65 @@ mod tests {
     }
 
     #[test]
+    fn log_empty_reports_capture_status_not_absence_of_errors() {
+        use cdp_client::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
+        let mut snapshot = TargetLogSnapshot {
+            context_id: "context".into(),
+            connection_id: "browser".into(),
+            target_id: "renderer/target/frame".into(),
+            connection_generation: 2,
+            messages: vec![],
+            capture: LogCaptureSnapshot {
+                status: LogCaptureStatus::Active,
+                capture_id: Some("capture-1".into()),
+                session_id: Some("session-1".into()),
+                started_at_unix_ms: Some(1234),
+                collected_events: vec!["Runtime.consoleAPICalled".into()],
+                evicted_count: Some(0),
+                dropped_count: None,
+            },
+        };
+        let text = super::log_coverage_human(&snapshot, true, 0);
+        assert!(text.contains("Log capture: active"));
+        assert!(text.contains("Started (Unix ms): 1234"));
+        assert!(text.contains("No captured entries to display; this does not mean no errors occurred."));
+        assert!(text.contains("evicted: 0; dropped before retention: unknown"));
+        assert!(text.contains("Browser diagnostics (Log.entryAdded)"));
+        assert!(text.contains("network failures are not collected"));
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["capture"]["status"], "active");
+        assert!(json["capture"]["droppedCount"].is_null());
+        assert_eq!(page_logs(&[], 0, 20), (0, vec![]));
+        assert_eq!(page_logs(&[], 5, 20), (0, vec![]));
+        let text = super::log_coverage_human(&snapshot, true, 5);
+        assert!(text.contains("after the cursor"));
+        snapshot.capture = LogCaptureSnapshot {
+            status: LogCaptureStatus::Inactive,
+            ..Default::default()
+        };
+        let text = super::log_coverage_human(&snapshot, true, 0);
+        assert!(text.contains("inactive (target is not attached)"));
+        assert!(text.contains("Started (Unix ms): unknown"));
+        assert!(text.contains("evicted: unknown"));
+    }
+
+    #[test]
     fn log_paging_counts_entries_evicted_before_the_retained_window() {
         let logs = (50..=149)
             .map(|index| ConsoleMessageSnapshot {
                 index,
                 values: vec![index.to_string()],
+                params: None,
             })
             .collect::<Vec<_>>();
         let (skipped, displayed) = page_logs(&logs, 1, 20);
         assert_eq!(skipped, 128);
         assert_eq!(displayed.first().unwrap().index, 130);
         assert_eq!(displayed.last().unwrap().index, 149);
+        assert_eq!(page_logs(&logs, 149, 20), (0, vec![]));
+        assert_eq!(page_logs(&logs, 200, 20), (0, vec![]));
+        let (skipped, displayed) = page_logs(&logs, 140, 20);
+        assert_eq!(skipped, 0);
+        assert_eq!(displayed.len(), 9);
     }
 }
