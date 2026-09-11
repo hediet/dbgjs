@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import net from "node:net";
 
@@ -93,6 +94,7 @@ class FakeWebContents extends EventEmitter {
 const contents = new FakeWebContents(7, 4242, "deterministic renderer", "file:///renderer.html", true);
 const fakeDebugger = contents.debugger;
 const allContents = [contents];
+const windows = [{ id: 1, webContents: contents, isDestroyed: () => false }];
 const app = new EventEmitter();
 const createWebContents = (id, processId, title) => {
 	const created = new FakeWebContents(id, processId, title, `file:///${title}.html`);
@@ -104,6 +106,11 @@ globalThis.require = (name) => {
 	if (name === "electron") {
 		return {
 			app,
+			BrowserWindow: {
+				fromWebContents: (contents) => windows.find(
+					(window) => window.webContents === contents || contents.ownerWindow === window,
+				),
+			},
 			webContents: {
 				fromId: (id) => allContents.find((candidate) => candidate.id === id),
 				getAllWebContents: () => allContents,
@@ -124,6 +131,17 @@ const install = (0, eval)(`(${source})`);
 const token = "deterministic-token";
 const bridge = await install(token);
 const { port } = bridge.endpoint();
+assert.equal(bridge.list()[0].primaryWindowId, 1);
+const shared = new FakeWebContents(8, contents.processId, "shared renderer", "file:///shared.html");
+shared.ownerWindow = windows[0];
+allContents.push(shared);
+assert.equal(bridge.list().find((target) => target.webContentsId === shared.id).primaryWindowId, undefined);
+windows.push({ id: 2, webContents: shared, isDestroyed: () => false });
+shared.ownerWindow = windows[1];
+assert.equal(bridge.list().find((target) => target.webContentsId === shared.id).primaryWindowId, 2);
+windows[1].isDestroyed = () => true;
+assert.equal(bridge.list().find((target) => target.webContentsId === shared.id).primaryWindowId, undefined);
+allContents.pop();
 
 const connect = (role, force = false, webContentsId = contents.id) => new Promise((resolve, reject) => {
 	const socket = net.connect({ host: "127.0.0.1", port });
@@ -280,6 +298,15 @@ const changedFrame = await waitForControlFrame(
 	(frame) => frame.kind === "targetInfoChanged" && frame.target?.webContentsId === discovered.id,
 );
 console.log(`discovery-update: ${changedFrame.kind}`);
+const discoveredWindow = { id: 3, webContents: discovered, isDestroyed: () => false };
+windows.push(discoveredWindow);
+app.emit("browser-window-created", {}, discoveredWindow);
+const ownershipFrame = await waitForControlFrame(
+	(frame) => frame.kind === "targetInfoChanged"
+		&& frame.target?.webContentsId === discovered.id
+		&& frame.target.primaryWindowId === discoveredWindow.id,
+);
+assert.equal(ownershipFrame.target.primaryWindowId, 3);
 
 // A renderer created while wait-for-debugger is armed is genuinely paused before its first script.
 await sendControl({ kind: "setWaitForDebuggerOnStart", enabled: true });

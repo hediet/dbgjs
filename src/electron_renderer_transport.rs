@@ -36,6 +36,8 @@ pub struct ElectronRendererTarget {
     pub web_contents_id: u64,
     pub process_id: u32,
     #[serde(default)]
+    pub primary_window_id: Option<u32>,
+    #[serde(default)]
     pub host_web_contents_id: Option<u64>,
     #[serde(default)]
     pub opener_web_contents_id: Option<u64>,

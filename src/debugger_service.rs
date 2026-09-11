@@ -6575,6 +6575,9 @@ fn sync_connection_resource_graph(
         if let Some(process_id) = runtime.target_process_id(&runtime_id) {
             facts = facts.with_attribute("processId", serde_json::Value::from(process_id));
         }
+        if let Some(window_id) = runtime.target_primary_window_id(&runtime_id) {
+            facts = facts.with_attribute("primaryWindowId", serde_json::Value::from(window_id));
+        }
         if let Some(subtype) = &target.subtype {
             facts = facts.with_attribute("subtype", serde_json::Value::String(subtype.clone()));
         }

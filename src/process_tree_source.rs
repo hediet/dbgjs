@@ -143,6 +143,7 @@ impl ProcessTreeTargetSource {
                 subtype: None,
             },
             process_id: Some(self.root_pid),
+            primary_window_id: None,
             waiting_for_debugger: false,
         }
     }
@@ -176,6 +177,7 @@ impl ProcessTreeTargetSource {
                                 url,
                             ),
                             process_id,
+                            primary_window_id: None,
                             waiting_for_debugger: false,
                         };
                         source.nodes.lock().unwrap().insert(
@@ -950,6 +952,7 @@ fn upsert_nested_target(
             subtype: info.subtype,
         },
         process_id,
+        primary_window_id: None,
         waiting_for_debugger: false,
     };
     nested_targets.lock().unwrap().insert(
@@ -1000,6 +1003,7 @@ fn renderer_host_target(target: &ElectronRendererTarget) -> HostTarget {
             subtype: Some("electron-renderer".to_owned()),
         },
         process_id: (target.process_id > 0).then_some(target.process_id),
+        primary_window_id: target.primary_window_id,
         waiting_for_debugger: target.waiting_for_debugger,
     }
 }
@@ -1083,6 +1087,7 @@ mod tests {
             "renderer-2".to_owned(),
             ElectronRendererTarget {
                 web_contents_id: 2,
+                primary_window_id: None,
                 process_id: 77,
                 host_web_contents_id: None,
                 opener_web_contents_id: None,
@@ -1171,6 +1176,7 @@ mod tests {
     fn web_contents_host_and_opener_are_preserved_as_target_relations() {
         let target = renderer_host_target(&ElectronRendererTarget {
             web_contents_id: 3,
+            primary_window_id: Some(7),
             process_id: 77,
             host_web_contents_id: Some(2),
             opener_web_contents_id: Some(1),
@@ -1183,5 +1189,6 @@ mod tests {
 
         assert_eq!(target.snapshot.parent_id.as_deref(), Some("renderer-2"));
         assert_eq!(target.snapshot.opener_id.as_deref(), Some("renderer-1"));
+        assert_eq!(target.primary_window_id, Some(7));
     }
 }

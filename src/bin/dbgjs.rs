@@ -24,8 +24,9 @@ use dbgjs::service_api::{
     HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
     MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
-    ProcessRootKind, PromiseState, SourceDisplayOptions, SourceFormattingMode, SourceSearchOptions,
-    SourceTreeKind, SourceViewPreference, StepKind, TargetAttachOptions, TargetBreakpointStatus,
+    ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
+    SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
+    TargetAttachOptions, TargetBreakpointStatus,
     TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus, TargetWaitPredicate,
     ValueInspectionOptions, ValueSelector,
 };
@@ -1136,108 +1137,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 dbgjs::process_discovery::discover_recognized_process_trees().await?
             };
-            let (process_id, process_tree_root_pid) = match options.locator {
-                ProcessAttachLocator::Process(process_id) => (process_id, None),
-                ProcessAttachLocator::ProcessTreeProcess {
-                    root_pid,
-                    process_id,
-                } => {
-                    let process_id = discovered
-                        .iter()
-                        .find(|tree| tree.root_process_id == root_pid)
-                        .and_then(|tree| {
-                            tree.processes
-                                .iter()
-                                .find(|process| process.process_id == process_id)
-                        })
-                        .map(|process| process.process_id)
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::NotFound,
-                                format!(
-                                    "process process-tree://{root_pid}/process/{process_id} is no longer available"
-                                ),
-                            )
-                        })?;
-                    (process_id, Some(root_pid))
-                }
-                ProcessAttachLocator::VscodeProcess {
-                    root_pid,
-                    process_id,
-                } => {
-                    let process_id = discovered
-                        .iter()
-                        .find(|tree| tree.root_process_id == root_pid)
-                        .and_then(|tree| {
-                            tree.processes
-                                .iter()
-                                .find(|process| process.process_id == process_id)
-                        })
-                        .map(|process| process.process_id)
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::NotFound,
-                                format!(
-                                    "VS Code process vscode://{root_pid}/process/{process_id} is no longer available"
-                                ),
-                            )
-                        })?;
-                    (process_id, Some(root_pid))
-                }
-                ProcessAttachLocator::VscodeWindow {
-                    root_pid,
-                    window_id,
-                } => discovered
-                    .iter()
-                    .find(|tree| tree.root_process_id == root_pid)
-                    .and_then(|tree| {
-                        tree.processes.iter().find(|process| {
-                            process.role == ProcessRole::Renderer
-                                && process.window_id == Some(window_id)
-                        })
-                    })
-                    .map(|process| process.process_id)
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!(
-                                "VS Code window w:{root_pid}/{window_id} is no longer available"
-                            ),
-                        )
-                    })
-                    .map(|process_id| (process_id, Some(root_pid)))?,
-            };
-            let process_tree_target = discovered
-                .into_iter()
-                .filter(|tree| {
-                    process_tree_root_pid.is_none_or(|root| tree.root_process_id == root)
-                })
-                .find_map(|tree| {
-                    tree.processes
-                        .into_iter()
-                        .find(|process| process.process_id == process_id && process.attachable)
-                        .map(|process| {
-                            (tree.root_process_id, process.debug_target_id, process.role)
-                        })
-                });
-            let (connection_id, configuration, target_id, renderer_process_id) =
-                if let Some((root_process_id, Some(target_id), role)) = process_tree_target {
-                    (
-                        format!("process-tree-{root_process_id}"),
-                        ConnectionConfiguration::ProcessTree {
-                            root_pid: root_process_id,
-                        },
-                        target_id,
-                        (role == ProcessRole::Renderer).then_some(process_id),
-                    )
-                } else {
-                    (
-                        format!("process-{process_id}"),
-                        ConnectionConfiguration::Process { process_id },
-                        "$node-root".to_owned(),
-                        None,
-                    )
-                };
+            let (connection_id, configuration, target) =
+                process_attach_destination(options.locator, &discovered)?;
             let client = ensure_service(&state_file).await?;
             let context = rpc(client.get_context(context_id.clone()).await)?;
             let existing = context
@@ -1275,12 +1176,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .connect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
-            let target_id = if let Some(process_id) = renderer_process_id {
-                resolve_renderer_target_id(&client, &context_id, &connection_id, process_id).await?
-            } else if target_id == "$node-root" {
-                synthetic_node_target_id(&connection_id)
-            } else {
-                target_id
+            let target_id = match target {
+                ProcessAttachTarget::Renderer(selector) => {
+                    resolve_renderer_target_id(&client, &context_id, &connection_id, selector).await?
+                }
+                ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
+                    synthetic_node_target_id(&connection_id)
+                }
+                ProcessAttachTarget::Target(target_id) => target_id,
             };
             if target_id != synthetic_node_target_id(&connection_id) {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -5335,71 +5238,209 @@ async fn print_breakpoint_result(
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessAttachTarget {
+    Target(String),
+    Renderer(RendererAttachSelector),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RendererAttachSelector {
+    Process(u32),
+    Window { root_pid: u32, window_id: u32 },
+}
+
+impl std::fmt::Display for RendererAttachSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Process(process_id) => write!(f, "renderer process {process_id}"),
+            Self::Window {
+                root_pid,
+                window_id,
+            } => {
+                write!(f, "VS Code window w:{root_pid}/{window_id}")
+            }
+        }
+    }
+}
+
+fn process_attach_destination(
+    locator: ProcessAttachLocator,
+    discovered: &[ProcessTreeSnapshot],
+) -> io::Result<(String, ConnectionConfiguration, ProcessAttachTarget)> {
+    let (process_id, root_pid) = match locator {
+        ProcessAttachLocator::VscodeWindow {
+            root_pid,
+            window_id,
+        } => {
+            if !discovered
+                .iter()
+                .any(|tree| tree.root_process_id == root_pid)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("VS Code window w:{root_pid}/{window_id} is no longer available"),
+                ));
+            }
+            return Ok((
+                format!("process-tree-{root_pid}"),
+                ConnectionConfiguration::ProcessTree { root_pid },
+                ProcessAttachTarget::Renderer(RendererAttachSelector::Window {
+                    root_pid,
+                    window_id,
+                }),
+            ));
+        }
+        ProcessAttachLocator::Process(process_id) => (process_id, None),
+        ProcessAttachLocator::ProcessTreeProcess {
+            root_pid,
+            process_id,
+        }
+        | ProcessAttachLocator::VscodeProcess {
+            root_pid,
+            process_id,
+        } => {
+            if !discovered.iter().any(|tree| {
+                tree.root_process_id == root_pid
+                    && tree
+                        .processes
+                        .iter()
+                        .any(|process| process.process_id == process_id)
+            }) {
+                let scheme = if matches!(locator, ProcessAttachLocator::VscodeProcess { .. }) {
+                    "vscode"
+                } else {
+                    "process-tree"
+                };
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "process {scheme}://{root_pid}/process/{process_id} is no longer available"
+                    ),
+                ));
+            }
+            (process_id, Some(root_pid))
+        }
+    };
+    let process_tree_target = discovered
+        .iter()
+        .filter(|tree| root_pid.is_none_or(|root| tree.root_process_id == root))
+        .find_map(|tree| {
+            tree.processes
+                .iter()
+                .find(|process| process.process_id == process_id && process.attachable)
+                .map(|process| (tree.root_process_id, process))
+        });
+    if let Some((root_pid, process)) = process_tree_target
+        && let Some(target_id) = &process.debug_target_id
+    {
+        Ok((
+            format!("process-tree-{root_pid}"),
+            ConnectionConfiguration::ProcessTree { root_pid },
+            if process.role == ProcessRole::Renderer {
+                ProcessAttachTarget::Renderer(RendererAttachSelector::Process(process_id))
+            } else {
+                ProcessAttachTarget::Target(target_id.clone())
+            },
+        ))
+    } else {
+        Ok((
+            format!("process-{process_id}"),
+            ConnectionConfiguration::Process { process_id },
+            ProcessAttachTarget::Target("$node-root".to_owned()),
+        ))
+    }
+}
+
+fn select_renderer_target(
+    graph: &ResourceGraphSnapshot,
+    context_id: &str,
+    connection_id: &str,
+    selector: RendererAttachSelector,
+) -> Result<Option<String>, String> {
+    let (attribute, value) = match selector {
+        RendererAttachSelector::Process(process_id) => ("processId", process_id),
+        RendererAttachSelector::Window { window_id, .. } => ("primaryWindowId", window_id),
+    };
+    let candidates = graph
+        .resources
+        .iter()
+        .filter(|resource| {
+            resource
+                .attributes
+                .get("connectionId")
+                .and_then(serde_json::Value::as_str)
+                == Some(connection_id)
+                && resource
+                    .attributes
+                    .get("subtype")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("electron-renderer")
+                && resource
+                    .attributes
+                    .get(attribute)
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(u64::from(value))
+        })
+        .filter_map(|resource| Some((resource.attributes.get("targetId")?.as_str()?, resource)))
+        .collect::<BTreeMap<_, _>>();
+    match candidates.len() {
+        0 => Ok(None),
+        1 => Ok(candidates.keys().next().map(|id| (*id).to_owned())),
+        _ => Err(format!(
+            "{selector} maps to multiple Electron webContents targets. Attach one with:\n{}",
+            candidates.into_iter().map(|(target_id, resource)| {
+                let text = |key: &str| {
+                    resource.attributes.get(key).and_then(serde_json::Value::as_str).unwrap_or("")
+                };
+                format!(
+                    "  title: {:?}\n  URL: {:?}\n  dbgjs target attach --context \":{context_id}\" --target \"{connection_id}/{target_id}\"",
+                    text("title"), text("url"),
+                )
+            }).collect::<Vec<_>>().join("\n")
+        )),
+    }
+}
+
 async fn resolve_renderer_target_id(
     client: &DebuggerServiceApiClient,
     context_id: &str,
     connection_id: &str,
-    process_id: u32,
+    selector: RendererAttachSelector,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let graph = rpc(client.get_resource_graph(context_id.to_owned()).await)?;
-        let mut candidates = graph
-            .resources
-            .iter()
-            .filter(|resource| {
-                resource
-                    .attributes
-                    .get("connectionId")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(connection_id)
-                    && resource
-                        .attributes
-                        .get("processId")
-                        .and_then(serde_json::Value::as_u64)
-                        == Some(u64::from(process_id))
-                    && resource
-                        .attributes
-                        .get("subtype")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("electron-renderer")
-            })
-            .filter_map(|resource| {
-                resource
-                    .attributes
-                    .get("targetId")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect::<Vec<_>>();
-        candidates.sort();
-        candidates.dedup();
-        match candidates.as_slice() {
-            [target_id] => return Ok(target_id.clone()),
-            [] if std::time::Instant::now() < deadline => {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    wait_for_renderer_target_id(
+        context_id,
+        connection_id,
+        selector,
+        Duration::from_secs(10),
+        async || Ok(rpc(client.get_resource_graph(context_id.to_owned()).await)?),
+    )
+    .await
+}
+
+async fn wait_for_renderer_target_id(
+    context_id: &str,
+    connection_id: &str,
+    selector: RendererAttachSelector,
+    wait: Duration,
+    mut get_graph: impl AsyncFnMut() -> Result<ResourceGraphSnapshot, Box<dyn std::error::Error>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    tokio::time::timeout(wait, async {
+        loop {
+            let graph = get_graph().await?;
+            if let Some(target_id) =
+                select_renderer_target(&graph, context_id, connection_id, selector)?
+            {
+                return Ok(target_id);
             }
-            [] => {
-                return Err(format!(
-                    "renderer process {process_id} has no live Electron webContents"
-                )
-                .into());
-            }
-            _ => {
-                return Err(format!(
-                    "renderer process {process_id} maps to multiple Electron webContents targets. Attach one with:\n{}",
-                    candidates
-                        .iter()
-                        .map(|target_id| format!(
-                            "  dbgjs target attach --context \":{context_id}\" --target \"{connection_id}/{target_id}\""
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                )
-                .into());
-            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|_| Err(format!(
+        "{selector} has no live Electron webContents matching its identity after {}s; discovery may be incomplete or the target may have closed. Re-run process list --full and retry.",
+        wait.as_secs_f64(),
+    ).into()))
 }
 
 async fn add_connection(
@@ -6543,6 +6584,10 @@ until the relay process exits or the context is deleted."
 #[cfg(test)]
 mod tests {
     use super::{
+        ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
+        select_renderer_target, wait_for_renderer_target_id,
+    };
+    use super::{
         AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, ResolvedScope, ScopeOptions,
@@ -6566,13 +6611,212 @@ mod tests {
     use dbgjs::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
-        ProcessRootKind, PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
-        ValueSelector,
+        ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, ResourceSnapshot,
+        SourceFormattingMode, SourceViewPreference, TargetSnapshot, ValueSelector,
     };
     use std::fs;
+    use std::time::Duration;
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn renderer_resource(id: &str, process_id: u32, window_id: Option<u32>) -> ResourceSnapshot {
+        ResourceSnapshot {
+            id: format!("electron-web-contents:100/{id}"),
+            kinds: vec!["page".to_owned()],
+            label: None,
+            attributes: serde_json::from_value(serde_json::json!({
+                "connectionId": "process-tree-100",
+                "targetId": id,
+                "processId": process_id,
+                "primaryWindowId": window_id,
+                "subtype": "electron-renderer",
+                "title": format!("Title {id}"),
+                "url": format!("file:///{id}.html"),
+            }))
+            .unwrap(),
+            contributors: Vec::new(),
+            capabilities: Vec::new(),
+            frontiers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn window_attachment_preserves_identity_despite_stale_or_multiple_renderer_pids() {
+        for processes in [
+            serde_json::json!([]),
+            serde_json::json!([
+                {"processId": 11, "name": "oopif", "commandLine": "", "creationDate": "",
+                 "role": "renderer", "windowId": 7, "attachable": true, "debugTargetId": "old-oopif"},
+                {"processId": 22, "name": "main", "commandLine": "", "creationDate": "",
+                 "role": "renderer", "windowId": 7, "attachable": true, "debugTargetId": "old-main"}
+            ]),
+        ] {
+            let tree: ProcessTreeSnapshot = serde_json::from_value(serde_json::json!({
+                "rootProcessId": 100,
+                "processes": processes,
+                "runtimeMetadataAvailable": false
+            }))
+            .unwrap();
+            assert_eq!(
+                process_attach_destination(
+                    ProcessAttachLocator::VscodeWindow {
+                        root_pid: 100,
+                        window_id: 7
+                    },
+                    &[tree]
+                )
+                .unwrap(),
+                (
+                    "process-tree-100".to_owned(),
+                    ConnectionConfiguration::ProcessTree { root_pid: 100 },
+                    ProcessAttachTarget::Renderer(RendererAttachSelector::Window {
+                        root_pid: 100,
+                        window_id: 7
+                    }),
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn window_attachment_selects_primary_web_contents_not_shared_pid_or_nested_target() {
+        let mut graph = ResourceGraphSnapshot {
+            revision: 1,
+            resources: vec![
+                renderer_resource("renderer-1", 22, Some(8)),
+                renderer_resource("renderer-2", 22, Some(7)),
+                renderer_resource("renderer-3", 22, None),
+            ],
+            relations: Vec::new(),
+        };
+        let window = RendererAttachSelector::Window {
+            root_pid: 100,
+            window_id: 7,
+        };
+        assert_eq!(
+            select_renderer_target(&graph, "ctx", "process-tree-100", window),
+            Ok(Some("renderer-2".to_owned()))
+        );
+        assert_eq!(
+            select_renderer_target(&graph, "ctx", "other-connection", window),
+            Ok(None)
+        );
+        graph.resources.remove(1);
+        assert_eq!(
+            select_renderer_target(&graph, "ctx", "process-tree-100", window),
+            Ok(None)
+        );
+        graph
+            .resources
+            .push(renderer_resource("renderer-4", 33, Some(7)));
+        assert_eq!(
+            select_renderer_target(&graph, "ctx", "process-tree-100", window),
+            Ok(Some("renderer-4".to_owned()))
+        );
+        assert_eq!(
+            select_renderer_target(
+                &graph,
+                "ctx",
+                "process-tree-100",
+                RendererAttachSelector::Process(11)
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn renderer_attachment_ambiguity_is_strict_and_actionable_for_pids_and_windows() {
+        let graph = ResourceGraphSnapshot {
+            revision: 1,
+            resources: vec![
+                renderer_resource("renderer-1", 22, Some(7)),
+                renderer_resource("renderer-2", 22, Some(7)),
+            ],
+            relations: Vec::new(),
+        };
+        for selector in [
+            RendererAttachSelector::Process(22),
+            RendererAttachSelector::Window {
+                root_pid: 100,
+                window_id: 7,
+            },
+        ] {
+            let error =
+                select_renderer_target(&graph, "ctx", "process-tree-100", selector).unwrap_err();
+            assert!(error.contains(&format!("{selector} maps to multiple")));
+            for id in ["renderer-1", "renderer-2"] {
+                assert!(error.contains(&format!("title: \"Title {id}\"")));
+                assert!(error.contains(&format!("URL: \"file:///{id}.html\"")));
+                assert!(error.contains(&format!(
+                    "dbgjs target attach --context \":ctx\" --target \"process-tree-100/{id}\""
+                )));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn renderer_attachment_waits_for_incomplete_discovery() {
+        let mut attempts = 0;
+        let target = wait_for_renderer_target_id(
+            "ctx",
+            "process-tree-100",
+            RendererAttachSelector::Window {
+                root_pid: 100,
+                window_id: 7,
+            },
+            Duration::from_secs(2),
+            async || {
+                attempts += 1;
+                Ok(ResourceGraphSnapshot {
+                    revision: attempts,
+                    resources: if attempts == 1 {
+                        Vec::new()
+                    } else {
+                        vec![renderer_resource("renderer-2", 22, Some(7))]
+                    },
+                    relations: Vec::new(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(target, "renderer-2");
+        assert_eq!(attempts, 2);
+    }
+
+    #[tokio::test]
+    async fn renderer_attachment_bounds_incomplete_and_stalled_discovery() {
+        for stalled in [false, true] {
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_renderer_target_id(
+                    "ctx",
+                    "process-tree-100",
+                    RendererAttachSelector::Window {
+                        root_pid: 100,
+                        window_id: 7,
+                    },
+                    Duration::from_millis(10),
+                    async || {
+                        if stalled {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok(ResourceGraphSnapshot {
+                            revision: 1,
+                            resources: Vec::new(),
+                            relations: Vec::new(),
+                        })
+                    },
+                ),
+            )
+            .await
+            .expect("resolution must remain bounded");
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("w:100/7 has no live Electron webContents"));
+            assert!(error.contains("after 0.01s; discovery may be incomplete"));
+        }
     }
 
     #[test]

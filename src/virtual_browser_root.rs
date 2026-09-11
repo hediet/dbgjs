@@ -34,7 +34,7 @@ use crate::session_transport::{CdpEnvelope, CdpSessionMux};
 use crate::target_domain::{from_json, invalid_params, target_info_from_snapshot, to_json};
 
 /// One target a [`TargetSource`] knows about. `snapshot` is the provider-neutral CDP `TargetInfo`;
-/// the remaining fields carry the two pieces of per-target state the debugger service needs but
+/// the remaining fields carry per-target state the debugger service needs but
 /// CDP's `TargetInfo` cannot express.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostTarget {
@@ -42,6 +42,8 @@ pub struct HostTarget {
     /// The OS process hosting the target, when the source knows it. Used to recognize the same
     /// physical target across connections.
     pub process_id: Option<u32>,
+    /// The live Electron BrowserWindow whose primary webContents is this target.
+    pub primary_window_id: Option<u32>,
     /// Whether the target's startup is genuinely blocked waiting for a debugger to resume it.
     pub waiting_for_debugger: bool,
 }
@@ -361,6 +363,10 @@ impl VirtualBrowserRoot {
     /// The OS process hosting `target_id`, when the source knows it.
     pub fn target_process_id(&self, target_id: &str) -> Option<u32> {
         self.state.known.lock().unwrap().get(target_id)?.process_id
+    }
+
+    pub fn target_primary_window_id(&self, target_id: &str) -> Option<u32> {
+        self.state.known.lock().unwrap().get(target_id)?.primary_window_id
     }
 
     /// Whether `target_id` is genuinely paused waiting for a debugger to resume it.
@@ -1030,6 +1036,7 @@ mod tests {
                 subtype: None,
             },
             process_id: Some(process_id),
+            primary_window_id: None,
             waiting_for_debugger: false,
         }
     }
@@ -1295,6 +1302,32 @@ mod tests {
         harness.settle().await;
         assert!(harness.methods().is_empty());
         assert_eq!(harness.root.target_process_id("pid-77"), Some(77));
+    }
+
+    #[tokio::test]
+    async fn live_primary_window_ownership_is_updated_and_removed() {
+        let harness = Harness::start(Vec::new());
+        let mut target = host_target("renderer-1", 77);
+        target.primary_window_id = Some(7);
+        harness
+            .sender
+            .send(TargetSourceEvent::Upserted(target.clone()))
+            .unwrap();
+        harness.settle().await;
+        assert_eq!(harness.root.target_primary_window_id("renderer-1"), Some(7));
+        target.primary_window_id = None;
+        harness
+            .sender
+            .send(TargetSourceEvent::Upserted(target))
+            .unwrap();
+        harness.settle().await;
+        assert_eq!(harness.root.target_primary_window_id("renderer-1"), None);
+        harness
+            .sender
+            .send(TargetSourceEvent::Removed("renderer-1".to_owned()))
+            .unwrap();
+        harness.settle().await;
+        assert_eq!(harness.root.target_primary_window_id("renderer-1"), None);
     }
 
     #[tokio::test]

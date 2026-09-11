@@ -5,7 +5,7 @@ async (token) => {
 	if (typeof electronRequire !== "function") {
 		throw new Error("renderer bridge requires the Electron main-process context");
 	}
-	const { app, webContents } = electronRequire("electron");
+	const { app, BrowserWindow, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
 	const registryKey = Symbol.for("hediet.dbgjs.rendererBridge");
 	const previous = globalThis[registryKey];
@@ -43,6 +43,7 @@ async (token) => {
 	const descriptor = (contents) => ({
 		webContentsId: contents.id,
 		processId: safeProcessId(contents),
+		primaryWindowId: safePrimaryWindowId(contents),
 		hostWebContentsId: safeRelatedWebContentsId(contents, "hostWebContents"),
 		openerWebContentsId: safeRelatedWebContentsId(contents, "opener"),
 		type: contents.getType(),
@@ -51,6 +52,15 @@ async (token) => {
 		waitingForDebugger: startupBlocks.get(contents.id)?.blocked === true,
 		attached: isAttached(contents),
 	});
+	const safePrimaryWindowId = (contents) => {
+		try {
+			const window = BrowserWindow.fromWebContents(contents);
+			return window && !window.isDestroyed() && window.webContents === contents
+				? window.id : undefined;
+		} catch {
+			return undefined;
+		}
+	};
 	const safeRelatedWebContentsId = (contents, property) => {
 		try {
 			const related = contents[property];
@@ -121,6 +131,11 @@ async (token) => {
 	};
 	const publishTarget = (kind, contents) => {
 		publish(kind, { target: descriptor(contents) });
+	};
+	const onAppBrowserWindowCreated = (_event, window) => {
+		if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+			publishTarget("targetInfoChanged", window.webContents);
+		}
 	};
 	/// Renderer discovery is event driven: Electron reports every webContents through its own
 	/// lifecycle events, so the bridge never polls the operating system for renderer processes.
@@ -555,6 +570,7 @@ async (token) => {
 			disposed = true;
 			waitForDebuggerOnStart = false;
 			app.off("web-contents-created", onAppWebContentsCreated);
+			app.off("browser-window-created", onAppBrowserWindowCreated);
 			clearTimeout(controlTimer);
 			const serverClosed = new Promise((resolve) => server.close(resolve));
 			const releases = Promise.all(
@@ -586,6 +602,7 @@ async (token) => {
 		watch(contents);
 	}
 	app.on("web-contents-created", onAppWebContentsCreated);
+	app.on("browser-window-created", onAppBrowserWindowCreated);
 	globalThis[registryKey] = { owner: "dbgjs", token, bridge };
 	controlTimer = setTimeout(() => {
 		if (!controlSocket) {

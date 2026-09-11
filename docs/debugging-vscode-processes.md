@@ -166,12 +166,22 @@ window 7  linkrpc
 `- 43336  renderer  [renderer]
 ```
 
-Create a context and attach the renderer PID:
+Create a context and attach the window's primary renderer:
 
 ```powershell
 dbgjs context create --context linkrpc-renderer "LinkRPC renderer" --set
-dbgjs process attach p:43336 --set
+dbgjs process attach w:33508/7 --set
 ```
+
+Window attachment keeps the window identity through live Electron discovery and
+selects the BrowserWindow's primary `webContents`. It does not select the first
+renderer PID listed under the window: that PID can belong to an out-of-process
+iframe, and multiple `webContents` can share a renderer PID. Stale process-list
+window metadata is not used to choose the target.
+
+Use `dbgjs process attach p:43336 --set` to explicitly select by PID instead.
+PID attachment succeeds only when it identifies exactly one live Electron
+`webContents`; it never prefers a primary window over other matching contents.
 
 Capture the current renderer viewport in the system temporary directory:
 
@@ -198,7 +208,15 @@ Use `--output <path>` to choose the destination.
 `renderer process ... maps to multiple Electron webContents`
 
 - dbgjs refuses to guess. The error prints qualified target attachment commands;
-  choose the intended target from those candidates.
+  choose the intended target using the title and URL printed with each candidate.
+
+`VS Code window w:... has no live Electron webContents matching its identity`
+
+- Window resolution waits at most 10 seconds for live discovery, including an
+  incomplete initial inventory. Re-run `dbgjs process list --full` and retry.
+- A closed window, missing live ownership metadata, or failed discovery does not
+  fall back to another window or a renderer PID. Window ambiguity also fails
+  with titles, URLs, and copyable target attachment commands.
 
 ### Inspect nested renderer targets
 

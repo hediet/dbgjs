@@ -723,6 +723,12 @@ impl ConnectionRuntime {
             .and_then(|root| root.target_process_id(target_id))
     }
 
+    pub fn target_primary_window_id(&self, target_id: &str) -> Option<u32> {
+        self.virtual_root
+            .as_ref()
+            .and_then(|root| root.target_primary_window_id(target_id))
+    }
+
     pub async fn refresh_targets(&self) -> Option<crate::virtual_browser_root::TargetObservation> {
         Some(self.virtual_root.as_ref()?.refresh_targets().await)
     }
