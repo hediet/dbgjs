@@ -228,7 +228,11 @@ process.stdin.on('end', () => process.exit(0));
 fn cli_log_reports_empty_capture_retention_and_reconnect() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("artifacts")
-        .join(format!("log-coverage-{}-{}", std::process::id(), unique_suffix()));
+        .join(format!(
+            "log-coverage-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
     let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
@@ -237,10 +241,21 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
     let run = |arguments: &[&str]| run_json_in(&cli, &service, &state_file, &root, arguments);
     run(&["context", "create", ":log-coverage", "Logs", "--set"]);
     let connected = run(&[
-        "connection", "add", "--stdio", "--connection", "adapter", "--connect",
-        "--", "node", "--input-type=module", "--eval", FAKE_CDP_TARGET_SCRIPT,
+        "connection",
+        "add",
+        "--stdio",
+        "--connection",
+        "adapter",
+        "--connect",
+        "--",
+        "node",
+        "--input-type=module",
+        "--eval",
+        FAKE_CDP_TARGET_SCRIPT,
     ]);
-    let target = connected["connections"][0]["targets"][0]["targetId"].as_str().unwrap();
+    let target = connected["connections"][0]["targets"][0]["targetId"]
+        .as_str()
+        .unwrap();
     let scoped = |arguments: &[&str]| {
         let mut args = arguments.to_vec();
         args.extend(["--connection", "adapter", "--target", target]);
@@ -256,19 +271,32 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
     let empty = scoped(&["log"]);
     assert_eq!(empty["capture"], attached["target"]["logCapture"]);
     assert_eq!(empty["capture"]["status"], "active");
-    assert_eq!(empty["capture"]["collectedEvents"], serde_json::json!(["Runtime.consoleAPICalled"]));
+    assert_eq!(
+        empty["capture"]["collectedEvents"],
+        serde_json::json!(["Runtime.consoleAPICalled"])
+    );
     assert!(empty["capture"]["startedAtUnixMs"].is_u64());
     assert!(empty["capture"]["droppedCount"].is_null());
     assert_eq!(empty["messages"], serde_json::json!([]));
     let human = run_human_in(
-        &cli, &service, &state_file, &root,
+        &cli,
+        &service,
+        &state_file,
+        &root,
         &["log", "--connection", "adapter", "--target", target],
     );
     assert_success(&["log"], human.0, &human.1, &human.2);
-    assert!(String::from_utf8(human.1).unwrap().contains("this does not mean no errors occurred"));
+    assert!(
+        String::from_utf8(human.1)
+            .unwrap()
+            .contains("this does not mean no errors occurred")
+    );
 
     scoped(&[
-        "target", "cdp", "Runtime.evaluate", "--params",
+        "target",
+        "cdp",
+        "Runtime.evaluate",
+        "--params",
         r#"{"expression":"42"}"#,
     ]);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -282,7 +310,10 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
     };
     assert_eq!(message["messages"][0]["index"], 1);
     assert_eq!(message["messages"][0]["params"]["executionContextId"], 1);
-    assert_eq!(message["messages"][0]["values"][0], "hello-from-fake-target");
+    assert_eq!(
+        message["messages"][0]["values"][0],
+        "hello-from-fake-target"
+    );
     assert_eq!(message["nextCursor"], 1);
     assert_eq!(scoped(&["log"])["messages"].as_array().unwrap().len(), 1);
     assert_eq!(scoped(&["log"])["messages"], serde_json::json!([]));
@@ -299,13 +330,52 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
     run(&["service", "stop"]);
     wait_until_removed(&state_file);
     cleanup_persistent_state(&state_file);
-    fs::remove_dir_all(&root).unwrap();
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
     cleanup.disarm();
+}
+
+#[cfg(windows)]
+#[test]
+fn test_directory_cleanup_waits_for_windows_locks_and_reports_timeout() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let root = std::env::temp_dir().join(format!("dbgjs-cleanup-{}", unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let locked_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .open(root.join("locked"))
+        .unwrap();
+    let error = remove_test_directory(&root, Duration::ZERO).unwrap_err();
+    assert!(matches!(error.raw_os_error(), Some(32 | 33)));
+    assert!(root.exists());
+
+    let release = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        drop(locked_file);
+    });
+    let result = remove_test_directory(&root, Duration::from_secs(5));
+    release.join().unwrap();
+    result.unwrap();
+    assert!(!root.exists());
+}
+
+#[test]
+fn test_directory_cleanup_preserves_non_lock_errors() {
+    let path = std::env::temp_dir().join(format!("dbgjs-cleanup-file-{}", unique_suffix()));
+    File::create(&path).unwrap();
+    let expected = fs::remove_dir_all(&path).unwrap_err();
+    let actual = remove_test_directory(&path, Duration::ZERO).unwrap_err();
+    fs::remove_file(&path).unwrap();
+    assert_eq!(actual.raw_os_error(), expected.raw_os_error());
 }
 
 #[test]
 fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
-    let root = std::env::current_dir().unwrap().join("target")
+    let root = std::env::current_dir()
+        .unwrap()
+        .join("target")
         .join(format!("selector-roundtrip-{}", unique_suffix()));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
@@ -313,28 +383,49 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
     let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests").join("fixtures").join("selector_browser.mjs");
+        .join("tests")
+        .join("fixtures")
+        .join("selector_browser.mjs");
     let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
     run(&["context", "create", ":selectors", "--set"]);
     for connection in ["browser", "second"] {
         let connected = run(&[
-            "connection", "add", "--stdio", "--topology", "browser",
-            "--connection", connection, "--connect", "--", "node", fixture.to_str().unwrap(),
+            "connection",
+            "add",
+            "--stdio",
+            "--topology",
+            "browser",
+            "--connection",
+            connection,
+            "--connect",
+            "--",
+            "node",
+            fixture.to_str().unwrap(),
         ]);
-        let connection = connected["connections"].as_array().unwrap().iter()
-            .find(|item| item["id"] == connection).unwrap();
-        assert_eq!(connection["targets"].as_array().unwrap().len(), 3, "{connected}");
+        let connection = connected["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == connection)
+            .unwrap();
+        assert_eq!(
+            connection["targets"].as_array().unwrap().len(),
+            3,
+            "{connected}"
+        );
     }
-    let (status, stdout, stderr) = run_human_in(
-        &cli, &service, &state_file, &root, &["target", "list"],
-    );
+    let (status, stdout, stderr) =
+        run_human_in(&cli, &service, &state_file, &root, &["target", "list"]);
     assert_success(&["target", "list"], status, &stdout, &stderr);
     let printed = String::from_utf8(stdout).unwrap();
-    let selector = printed.lines()
+    let selector = printed
+        .lines()
         .filter_map(|line| line.split_once("  ["))
         .filter_map(|(identity, _)| identity.split_whitespace().last())
         .find(|word| word.starts_with("browser/browser/renderer/target/frame@"))
-        .unwrap_or_else(|| panic!("listing should print a copyable nested target identity: {printed}"));
+        .unwrap_or_else(|| {
+            panic!("listing should print a copyable nested target identity: {printed}")
+        });
     assert_eq!(selector, "browser/browser/renderer/target/frame@1");
     let target_id = "browser/renderer/target/frame";
     for connection_scope in [false, true] {
@@ -357,8 +448,20 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
             let shown = command(&["target", "show"]);
             assert_eq!(shown["target"]["targetId"], target_id, "{shown}");
             let evaluated = command(&["target", "eval", "identity"]);
-            assert!(evaluated["preview"]["preview"].as_str().unwrap().contains(target_id), "{evaluated}");
-            let raw = command(&["target", "cdp", "Runtime.evaluate", "--params", r#"{"expression":"identity"}"#]);
+            assert!(
+                evaluated["preview"]["preview"]
+                    .as_str()
+                    .unwrap()
+                    .contains(target_id),
+                "{evaluated}"
+            );
+            let raw = command(&[
+                "target",
+                "cdp",
+                "Runtime.evaluate",
+                "--params",
+                r#"{"expression":"identity"}"#,
+            ]);
             assert_eq!(raw["result"]["value"], target_id, "{raw}");
             let logs = command(&["log", "--after", "0"]);
             assert!(logs.to_string().contains(target_id), "{logs}");
@@ -366,7 +469,10 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
     }
     for selector in ["Duplicate title", "renderer/target/frame"] {
         let (status, _, stderr) = run_in(
-            &cli, &service, &state_file, &root,
+            &cli,
+            &service,
+            &state_file,
+            &root,
             &["target", "show", "--target", selector],
         );
         assert!(!status.success());
@@ -380,12 +486,21 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
         vec!["target", "attach"],
         vec!["target", "eval", "identity"],
         vec!["log"],
-        vec!["target", "cdp", "Runtime.evaluate", "--params", r#"{"expression":"identity"}"#],
+        vec![
+            "target",
+            "cdp",
+            "Runtime.evaluate",
+            "--params",
+            r#"{"expression":"identity"}"#,
+        ],
     ] {
         for explicit_connection in [false, true] {
             for (selector, expected_error) in [
                 (selector, "stale connection generation"),
-                ("browser/undiscovered/frame@2", "discovery may be incomplete"),
+                (
+                    "browser/undiscovered/frame@2",
+                    "discovery may be incomplete",
+                ),
             ] {
                 let mut args = operation.clone();
                 args.extend(["--target", selector]);
@@ -393,7 +508,10 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
                     args.extend(["--connection", "browser"]);
                 }
                 let (status, _, stderr) = run_in(&cli, &service, &state_file, &root, &args);
-                assert!(!status.success(), "unresolved selector unexpectedly accepted: {args:?}");
+                assert!(
+                    !status.success(),
+                    "unresolved selector unexpectedly accepted: {args:?}"
+                );
                 let error = String::from_utf8_lossy(&stderr);
                 assert!(error.contains(expected_error), "{args:?}: {error}");
             }
@@ -1503,36 +1621,102 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     );
 
     let sources = run_json(
-        &cli, &service, &state_file,
-        &["source", "list", "--path", "late.min.js", "--context", &context],
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "list",
+            "--path",
+            "late.min.js",
+            "--context",
+            &context,
+        ],
     );
-    assert!(sources.as_array().is_some_and(|sources| !sources.is_empty()), "{sources}");
+    assert!(
+        sources
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty()),
+        "{sources}"
+    );
     let searched = run_json(
-        &cli, &service, &state_file,
-        &["source", "grep", "lateSourceNeedle", "--path", "late.min.js", "--context", &context],
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "grep",
+            "lateSourceNeedle",
+            "--path",
+            "late.min.js",
+            "--context",
+            &context,
+        ],
     );
-    assert!(searched["searchedSources"].as_u64().unwrap() > 0, "{searched}");
+    assert!(
+        searched["searchedSources"].as_u64().unwrap() > 0,
+        "{searched}"
+    );
     assert_eq!(searched["skippedSources"], 0);
     assert!(!searched["matches"].as_array().unwrap().is_empty());
 
     run_json(
-        &cli, &service, &state_file,
+        &cli,
+        &service,
+        &state_file,
         &["source", "formatting", "set", "on", "--context", &context],
     );
     let formatted = run_json(
-        &cli, &service, &state_file,
-        &["source", "show", "https://fixtures.test/format-first.min.js", "--view", "formatted", "--context", &context],
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "show",
+            "https://fixtures.test/format-first.min.js",
+            "--view",
+            "formatted",
+            "--context",
+            &context,
+        ],
     );
-    assert_eq!(formatted["path"], "https://fixtures.test/format-first.min.js?formatted");
-    assert!(formatted["content"].as_str().unwrap().contains("formattedFirstNeedle"));
+    assert_eq!(
+        formatted["path"],
+        "https://fixtures.test/format-first.min.js?formatted"
+    );
+    assert!(
+        formatted["content"]
+            .as_str()
+            .unwrap()
+            .contains("formattedFirstNeedle")
+    );
     assert!(formatted["totalLines"].as_u64().unwrap() > 1);
     let searched = run_json(
-        &cli, &service, &state_file,
-        &["source", "grep", "formattedFirstNeedle", "--path", "format-first.min.js", "--view", "formatted", "--context", &context],
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "grep",
+            "formattedFirstNeedle",
+            "--path",
+            "format-first.min.js",
+            "--view",
+            "formatted",
+            "--context",
+            &context,
+        ],
     );
-    assert!(searched["matches"].as_array().unwrap().iter().any(|matched| {
-        matched["path"] == "https://fixtures.test/format-first.min.js?formatted"
-    }), "{searched}");
+    assert!(
+        searched["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|matched| {
+                matched["path"] == "https://fixtures.test/format-first.min.js?formatted"
+            }),
+        "{searched}"
+    );
 
     let evaluated = run_json(
         &cli,
@@ -1549,27 +1733,73 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         ],
     );
     assert_eq!(evaluated["preview"]["preview"], "42");
-    for selector in ["runtime-a/$node-root:runtime-a", "runtime-a/$node-root:runtime-a@1"] {
+    for selector in [
+        "runtime-a/$node-root:runtime-a",
+        "runtime-a/$node-root:runtime-a@1",
+    ] {
         run_json(
-            &cli, &service, &state_file,
-            &["target", "show", "--context", &context, "--target", selector],
+            &cli,
+            &service,
+            &state_file,
+            &[
+                "target",
+                "show",
+                "--context",
+                &context,
+                "--target",
+                selector,
+            ],
         );
         let attach = run_in(
-            &cli, &service, &state_file, &std::env::current_dir().unwrap(),
-            &["target", "attach", "--context", &context, "--target", selector],
+            &cli,
+            &service,
+            &state_file,
+            &std::env::current_dir().unwrap(),
+            &[
+                "target",
+                "attach",
+                "--context",
+                &context,
+                "--target",
+                selector,
+            ],
         );
         assert!(!attach.0.success());
         assert!(String::from_utf8_lossy(&attach.2).contains("target ownership conflict"));
         let result = run_json(
-            &cli, &service, &state_file,
-            &["target", "eval", "6 * 7", "--context", &context, "--target", selector],
+            &cli,
+            &service,
+            &state_file,
+            &[
+                "target",
+                "eval",
+                "6 * 7",
+                "--context",
+                &context,
+                "--target",
+                selector,
+            ],
         );
         assert_eq!(result["preview"]["preview"], "42");
     }
-    for expression in ["'x'.repeat(4096)", "JSON.stringify({text:'x'.repeat(4096)})"] {
+    for expression in [
+        "'x'.repeat(4096)",
+        "JSON.stringify({text:'x'.repeat(4096)})",
+    ] {
         let full = run_json(
-            &cli, &service, &state_file,
-            &["target", "eval", expression, "--full", "--context", &context, "--target", "runtime-a/$node-root:runtime-a@1"],
+            &cli,
+            &service,
+            &state_file,
+            &[
+                "target",
+                "eval",
+                expression,
+                "--full",
+                "--context",
+                &context,
+                "--target",
+                "runtime-a/$node-root:runtime-a@1",
+            ],
         );
         let expected = if expression.starts_with("JSON") {
             serde_json::json!({"text": "x".repeat(4096)}).to_string()
@@ -1580,15 +1810,38 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         assert_eq!(full["preview"]["truncated"], false);
         assert!(!contains_reference(&full));
         let bounded = run_json(
-            &cli, &service, &state_file,
-            &["target", "eval", expression, "--max-preview-length", "200", "--context", &context, "--target", "runtime-a/$node-root:runtime-a"],
+            &cli,
+            &service,
+            &state_file,
+            &[
+                "target",
+                "eval",
+                expression,
+                "--max-preview-length",
+                "200",
+                "--context",
+                &context,
+                "--target",
+                "runtime-a/$node-root:runtime-a",
+            ],
         );
         assert_eq!(bounded["preview"]["preview"], &expected[..200]);
         assert_eq!(bounded["preview"]["truncated"], true);
     }
     let truncated = run_human_in(
-        &cli, &service, &state_file, &std::env::current_dir().unwrap(),
-        &["target", "eval", "'x'.repeat(4096)", "--context", &context, "--target", "runtime-a/$node-root:runtime-a"],
+        &cli,
+        &service,
+        &state_file,
+        &std::env::current_dir().unwrap(),
+        &[
+            "target",
+            "eval",
+            "'x'.repeat(4096)",
+            "--context",
+            &context,
+            "--target",
+            "runtime-a/$node-root:runtime-a",
+        ],
     );
     assert!(truncated.0.success());
     assert!(String::from_utf8_lossy(&truncated.1).contains("--full"));
@@ -2698,6 +2951,27 @@ fn wait_until_removed(path: &Path) {
     }
     assert!(!path.exists(), "service state file was not removed");
     let _ = fs::remove_file(path.with_extension("startup.lock"));
+}
+
+fn remove_test_directory(path: &Path, timeout: Duration) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            // Endpoint removal can precede the daemon releasing its Windows file handles.
+            Err(error)
+                if cfg!(windows)
+                    && matches!(error.raw_os_error(), Some(32 | 33))
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(
+                    Duration::from_millis(20)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn heap_capture_files(root: &Path) -> Vec<PathBuf> {

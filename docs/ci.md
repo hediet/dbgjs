@@ -64,3 +64,8 @@ running can still encounter the Windows lock.
 Alternatively, build into a separate `CARGO_TARGET_DIR` while a previous build
 is running. This avoids the lock but uses another build cache and more disk.
 Stop only the service instance you own before removing its run directory.
+
+Service endpoint removal does not guarantee that the daemon process has finished
+exiting and released its Windows file handles. The log-capture integration test
+retries temporary-directory cleanup for up to five seconds on Windows sharing
+or lock violations; other errors and persistent locks still fail the test.
