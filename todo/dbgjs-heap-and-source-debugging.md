@@ -1,4 +1,4 @@
-# Improve jsdbg heap and source debugging
+# Improve dbgjs heap and source debugging
 
 Findings from debugging Markdown editor iframes in a running VS Code Insiders
 window on 2026-09-07. Implementation references were inspected at commit
@@ -27,7 +27,7 @@ Insiders Markdown editor distribution also had no `sourceMappingURL` directives
 in its 107 JavaScript files and no adjacent `.map` files. These are independent
 limitations; there was no evidence of a source-map CDN fetch failure.
 
-**Implementation:** [CLI dispatch](../src/bin/jsdbg.rs) around lines 689-711,
+**Implementation:** [CLI dispatch](../src/bin/dbgjs.rs) around lines 689-711,
 [stored service path](../src/debugger_service.rs) around lines 3339-3373,
 [unmapped and live analyzers](../src/target_debugger.rs) around lines 2934-3043,
 and [capture persistence](../src/debugger_service.rs) around lines 4650-4657.
@@ -112,7 +112,7 @@ formatting and formatted grep without source maps.
 `--target`. JSON output exposed the accepted canonical `targetId`:
 `renderer-11/target/<id>`, without the connection prefix.
 
-**Implementation:** [target display](../src/bin/jsdbg/output.rs) around lines
+**Implementation:** [target display](../src/bin/dbgjs/output.rs) around lines
 1749-1768 and [selector resolution](../src/debugger_service.rs) around lines
 6034-6060.
 
@@ -137,7 +137,7 @@ regression covering reconnection between CLI resolution and service execution.
 inspection in `JSON.stringify(...)` does not bypass the limit, requiring repeated
 small evaluations to inspect iframe attributes and script URLs.
 
-**Implementation:** [evaluation options](../src/bin/jsdbg.rs) around lines
+**Implementation:** [evaluation options](../src/bin/dbgjs.rs) around lines
 265-295 and [preview limit](../src/promise_debugging.rs) around line 7.
 
 **Verification:** Evaluate a long string and a JSON-serialized object; confirm

@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
-const agentHostPid = Number(required("JSDBG_AGENT_HOST_PID"));
-const copilotPids = JSON.parse(required("JSDBG_COPILOT_PIDS"));
+const agentHostPid = Number(required("DBGJS_AGENT_HOST_PID"));
+const copilotPids = JSON.parse(required("DBGJS_COPILOT_PIDS"));
 
 async function main() {
 	const endpoint = await inspectorForPid(agentHostPid);
@@ -21,13 +21,13 @@ async function main() {
 		);
 		const clients = await cdp.call("Runtime.queryObjects", {
 			prototypeObjectId: requiredObjectId(prototype, "CopilotClient.prototype"),
-			objectGroup: "jsdbg-agent-sessions",
+			objectGroup: "dbgjs-agent-sessions",
 		});
 		const clientsId = requiredObjectId(clients.objects, "CopilotClient instances");
 		const mapPrototype = await evaluate(cdp, "Map.prototype");
 		const maps = await cdp.call("Runtime.queryObjects", {
 			prototypeObjectId: requiredObjectId(mapPrototype, "Map.prototype"),
-			objectGroup: "jsdbg-agent-sessions",
+			objectGroup: "dbgjs-agent-sessions",
 		});
 		const mapsId = requiredObjectId(maps.objects, "Map instances");
 
@@ -91,7 +91,7 @@ async function main() {
 		process.stdout.write(`${JSON.stringify(result)}\n`);
 	} finally {
 		await cdp.call("Runtime.releaseObjectGroup", {
-			objectGroup: "jsdbg-agent-sessions",
+			objectGroup: "dbgjs-agent-sessions",
 		}).catch(() => undefined);
 		cdp.close();
 	}

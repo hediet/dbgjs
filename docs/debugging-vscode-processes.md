@@ -1,6 +1,6 @@
-# Debugging VS Code Processes with jsdbg
+# Debugging VS Code Processes with dbgjs
 
-This guide shows how to attach jsdbg to an already-running VS Code renderer,
+This guide shows how to attach dbgjs to an already-running VS Code renderer,
 extension host, or agent host from scratch.
 
 Existing VS Code process discovery and inspector activation are currently
@@ -14,30 +14,30 @@ The workflow is the same for all three runtime types:
 4. Attach the process PID.
 5. Debug the selected target.
 
-jsdbg handles the transport differences automatically.
+dbgjs handles the transport differences automatically.
 
-## 1. Build jsdbg
+## 1. Build dbgjs
 
-From the cdp-client repository:
+From the dbgjs repository:
 
 ```powershell
 cargo build --bins
 $env:PATH = "$PWD\target\debug;$env:PATH"
 ```
 
-The first command that needs the debugger service starts `jsdbg-service`
+The first command that needs the debugger service starts `dbgjs-service`
 automatically. By default, its endpoint and persistent contexts are stored
 under:
 
 ```text
-%LOCALAPPDATA%\hediet\cdp-client\
+%LOCALAPPDATA%\hediet\dbgjs\
 ```
 
 ## Reading logs and capture coverage
 
 ```powershell
-jsdbg log
-jsdbg log --after 0 --limit 100 --json
+dbgjs log
+dbgjs log --after 0 --limit 100 --json
 ```
 
 `log` reports capture status even when there are no entries. **No captured
@@ -46,7 +46,7 @@ entries does not mean no errors occurred.** The current collector retains only
 diagnostics (`Log.entryAdded`), uncaught exceptions (`Runtime.exceptionThrown`),
 or network failures. Attaching now cannot recover past network failures.
 
-Capture is target-local and begins when jsdbg starts configuring that target's
+Capture is target-local and begins when dbgjs starts configuring that target's
 CDP session with `Runtime.enable`. `startedAtUnixMs` is the observed local start
 of that configuration request, not an event timestamp or the start of the
 page/process. CDP may replay buffered console messages from before this time;
@@ -81,7 +81,7 @@ to the current capture.
 ## 2. Discover the VS Code process tree
 
 ```powershell
-jsdbg process list --root vscode --no-cmd-line --no-trim
+dbgjs process list --root vscode --no-cmd-line --no-trim
 ```
 
 `--root` recognizes `vscode`, `node`, `electron`, and `browser` roots and lists
@@ -96,7 +96,7 @@ Root discovery is passive by default. Add `--full` to run the same process-tree
 target discovery used by a connection:
 
 ```powershell
-jsdbg process list --root vscode --full --no-cmd-line
+dbgjs process list --root vscode --full --no-cmd-line
 ```
 
 The full view temporarily enables demand-driven discovery and nests Electron
@@ -128,14 +128,14 @@ locator for each process. Full process and window locators are accepted by the
 same attach command:
 
 ```powershell
-jsdbg process attach vscode://33508/process/43336 --set
-jsdbg process attach vscode://33508/window/7 --set
+dbgjs process attach vscode://33508/process/43336 --set
+dbgjs process attach vscode://33508/window/7 --set
 ```
 
 Non-VS Code roots use the corresponding process-tree locator:
 
 ```powershell
-jsdbg process attach process-tree://12496/process/12496 --set
+dbgjs process attach process-tree://12496/process/12496 --set
 ```
 
 Use the role label, window grouping, and PID together:
@@ -169,14 +169,14 @@ window 7  linkrpc
 Create a context and attach the renderer PID:
 
 ```powershell
-jsdbg context create --context linkrpc-renderer "LinkRPC renderer" --set
-jsdbg process attach p:43336 --set
+dbgjs context create --context linkrpc-renderer "LinkRPC renderer" --set
+dbgjs process attach p:43336 --set
 ```
 
 Capture the current renderer viewport in the system temporary directory:
 
 ```powershell
-jsdbg screenshot capture
+dbgjs screenshot capture
 ```
 
 Use `--output <path>` to choose the destination.
@@ -188,7 +188,7 @@ Use `--output <path>` to choose the destination.
 - Stop another active renderer debugger, such as
   `Developer: Debug Renderer in New Window`, and retry.
 - Or explicitly use `process attach p:<pid> --force`. Only this opt-in path calls
-  Electron's debugger detach before jsdbg attaches.
+  Electron's debugger detach before dbgjs attaches.
 
 `renderer process ... has no live Electron webContents`
 
@@ -197,22 +197,22 @@ Use `--output <path>` to choose the destination.
 
 `renderer process ... maps to multiple Electron webContents`
 
-- jsdbg refuses to guess. The error prints qualified target attachment commands;
+- dbgjs refuses to guess. The error prints qualified target attachment commands;
   choose the intended target from those candidates.
 
 ### Inspect nested renderer targets
 
-While a process-tree connection is being observed, jsdbg correlates each
+While a process-tree connection is being observed, dbgjs correlates each
 Electron WebContents with its native CDP target and enables related-target
 auto-attach on that page. Its OOPIFs and workers therefore appear beneath the
 correct renderer without copying the browser-global target inventory beneath
 every renderer:
 
 ```powershell
-jsdbg target list --type iframe
-jsdbg target graph
-jsdbg target attach --target <printed-target-id> --set
-jsdbg screenshot capture --output iframe.png
+dbgjs target list --type iframe
+dbgjs target graph
+dbgjs target attach --target <printed-target-id> --set
+dbgjs screenshot capture --output iframe.png
 ```
 
 Tree output prints complete selectors rather than parent-relative fragments.
@@ -247,9 +247,9 @@ Attach the VS Code main process through its process-tree connection, then hold
 the pause-on-start lease before opening the window that fails:
 
 ```powershell
-jsdbg context create --context vscode-startup "VS Code startup" --set
-jsdbg process attach p:33508 --set
-jsdbg connection pause-future on
+dbgjs context create --context vscode-startup "VS Code startup" --set
+dbgjs process attach p:33508 --set
+dbgjs connection pause-future on
 ```
 
 New Electron WebContents are discovered from the main process event stream and
@@ -257,15 +257,15 @@ blocked in `Page.waitForDebugger` before page startup continues. After opening
 the Agents window, list processes again and attach its `p:` or `w:` reference:
 
 ```powershell
-jsdbg process list --root vscode --no-cmd-line
-jsdbg process attach w:33508/9 --set
+dbgjs process list --root vscode --no-cmd-line
+dbgjs process attach w:33508/9 --set
 ```
 
 Attaching adopts the reserved renderer transport. Disable the policy when no
 more future renderers should be blocked:
 
 ```powershell
-jsdbg connection pause-future off
+dbgjs connection pause-future off
 ```
 
 Disconnecting the process-tree connection or deleting its context also releases
@@ -283,8 +283,8 @@ window 7  linkrpc
 Create a context and attach:
 
 ```powershell
-jsdbg context create --context linkrpc-ext-host "LinkRPC extension host" --set
-jsdbg process attach p:15388 --set
+dbgjs context create --context linkrpc-ext-host "LinkRPC extension host" --set
+dbgjs process attach p:15388 --set
 ```
 
 ## 5. Debug the agent host
@@ -298,8 +298,8 @@ Find the process marked `[agent-host]`:
 Create a context and attach:
 
 ```powershell
-jsdbg context create --context vscode-agent-host "VS Code agent host" --set
-jsdbg process attach p:24664 --set
+dbgjs context create --context vscode-agent-host "VS Code agent host" --set
+dbgjs process attach p:24664 --set
 ```
 
 ## 6. Inspect sources and set a breakpoint
@@ -307,13 +307,13 @@ jsdbg process attach p:24664 --set
 List the sources known to the selected context:
 
 ```powershell
-jsdbg source list
+dbgjs source list
 ```
 
 Search projected authored and generated sources:
 
 ```powershell
-jsdbg source grep 'hubRpcConnection'
+dbgjs source grep 'hubRpcConnection'
 ```
 
 Use `--path` to select logical paths before content is loaded and
@@ -329,20 +329,20 @@ Use a source URL or projected source path from those results:
 
 ```powershell
 $sourceUrl = 'file:///path/from/source-list/hubRpcConnection.ts'
-jsdbg breakpoint set connection-send $sourceUrl 120 --column 1
+dbgjs breakpoint set connection-send $sourceUrl 120 --column 1
 ```
 
 Inspect the current target after the breakpoint binds or pauses:
 
 ```powershell
-jsdbg target show
-jsdbg target eval 'someExpression'
-jsdbg target watch 'someExpression'
-jsdbg target step over
-jsdbg target resume
+dbgjs target show
+dbgjs target eval 'someExpression'
+dbgjs target watch 'someExpression'
+dbgjs target step over
+dbgjs target resume
 ```
 
-If a source map points to an authored file whose content is unavailable, jsdbg
+If a source map points to an authored file whose content is unavailable, dbgjs
 keeps the target paused and usable. The frame falls back to its generated
 JavaScript location and includes a warning with the mapped authored location.
 This is a presentation-layer limitation; evaluation, stepping, and resume
@@ -355,23 +355,23 @@ and agent-host targets:
 
 ```powershell
 # Precise JavaScript coverage
-jsdbg coverage start
-jsdbg coverage capture --id baseline
-jsdbg coverage stop --exclude baseline
-jsdbg coverage show --all
+dbgjs coverage start
+dbgjs coverage capture --id baseline
+dbgjs coverage stop --exclude baseline
+dbgjs coverage show --all
 
 # CPU profile
-jsdbg profile start
-jsdbg profile stop --id startup
-jsdbg profile show startup --view functions --sort self
+dbgjs profile start
+dbgjs profile stop --id startup
+dbgjs profile show startup --view functions --sort self
 
 # Heap classes and retention
-jsdbg heap classes --capture --sort-by-instances --max-lines 40
-jsdbg heap select --name HubRpcConnection --limit 20 --dominators
+dbgjs heap classes --capture --sort-by-instances --max-lines 40
+dbgjs heap select --name HubRpcConnection --limit 20 --dominators
 $objectRef = '.#12345'
-jsdbg heap refs $objectRef --both --all-edges --limit 30
-jsdbg heap retainer-path $objectRef
-jsdbg heap dominators $objectRef
+dbgjs heap refs $objectRef --both --all-edges --limit 30
+dbgjs heap retainer-path $objectRef
+dbgjs heap dominators $objectRef
 ```
 
 Heap object references are capture-qualified. `.` selects the latest capture,
@@ -394,9 +394,9 @@ new fetch during offline analysis.
 For bundles distributed without maps, supply a matching build artifact:
 
 ```powershell
-jsdbg heap classes baseline --json
-jsdbg heap supply-map baseline 200 <captured-script-hash> .\build\editor.js.map
-jsdbg heap classes baseline
+dbgjs heap classes baseline --json
+dbgjs heap supply-map baseline 200 <captured-script-hash> .\build\editor.js.map
+dbgjs heap classes baseline
 ```
 
 The supply command persists the map with that capture, rejects mismatched or
@@ -427,23 +427,23 @@ distinguishes `created` from `stolen`.
 Disconnect only one connection:
 
 ```powershell
-jsdbg connection disconnect --context linkrpc-renderer --connection process-tree-33508
-jsdbg connection disconnect --context linkrpc-ext-host --connection process-15388
-jsdbg connection disconnect --context vscode-agent-host --connection process-24664
+dbgjs connection disconnect --context linkrpc-renderer --connection process-tree-33508
+dbgjs connection disconnect --context linkrpc-ext-host --connection process-15388
+dbgjs connection disconnect --context vscode-agent-host --connection process-24664
 ```
 
 Delete durable context state when it is no longer useful:
 
 ```powershell
-jsdbg context delete --context linkrpc-renderer
-jsdbg context delete --context linkrpc-ext-host
-jsdbg context delete --context vscode-agent-host
+dbgjs context delete --context linkrpc-renderer
+dbgjs context delete --context linkrpc-ext-host
+dbgjs context delete --context vscode-agent-host
 ```
 
 Stop the complete local debugger service and close all live transports:
 
 ```powershell
-jsdbg service stop
+dbgjs service stop
 ```
 
 Each renderer attachment is owned by a loopback socket. Normal shutdown waits
@@ -452,8 +452,8 @@ releases the attachment when the operating system closes the socket.
 
 ## 9. How a process-tree connection works
 
-`jsdbg process attach <pid>` connects to a *virtual browser root*: a CDP
-endpoint jsdbg synthesizes for the process tree below `<pid>`. It speaks the
+`dbgjs process attach <pid>` connects to a *virtual browser root*: a CDP
+endpoint dbgjs synthesizes for the process tree below `<pid>`. It speaks the
 same `Browser`/`Target` subset a real Chrome browser endpoint speaks, so nothing
 above the transport needs to know whether a connection is backed by Chrome, by
 an OS process tree, or by an Electron application:
@@ -481,12 +481,12 @@ inspectors), so it only runs while a client asks for it:
   starts when the first one does and stops when the last one drops.
 
 Note that the debugger service itself enables `Target.setDiscoverTargets` for
-the lifetime of a connection so that `jsdbg target list` stays live. A connected
+the lifetime of a connection so that `dbgjs target list` stays live. A connected
 process tree therefore does poll continuously in practice — but the polling is
 now a consequence of an explicit CDP demand, and it stops as soon as discovery
 is turned off or the connection closes.
 
-Electron renderer discovery is never polled. The bridge jsdbg installs in the
+Electron renderer discovery is never polled. The bridge dbgjs installs in the
 Electron main process subscribes to `app`'s `web-contents-created` and each
 `webContents`' own navigation, title, and `destroyed` events, and pushes them to
 the virtual root. Renderer target ids are `renderer-<webContentsId>`.

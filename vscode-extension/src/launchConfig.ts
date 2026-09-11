@@ -10,7 +10,7 @@ import type {
 import type { TargetNodeSnapshot } from "./apiTypes.js";
 import type { TargetReference } from "./model.js";
 
-export type JsdbgLaunchConfiguration =
+export type DbgjsLaunchConfiguration =
 	| { readonly runtime: "context"; }
 	| {
 			readonly runtime: "target";
@@ -122,7 +122,7 @@ export async function resolveLaunch(
 	}
 }
 
-export function parseLaunch(value: unknown): JsdbgLaunchConfiguration {
+export function parseLaunch(value: unknown): DbgjsLaunchConfiguration {
 	const object = objectValue(value, "launch configuration");
 	const runtime = object.runtime ?? "context";
 	if (runtime === "context") {
@@ -176,7 +176,7 @@ export function parseLaunch(value: unknown): JsdbgLaunchConfiguration {
 			...optionalStringArray(object, "args"),
 		};
 	}
-	throw new Error(`Unsupported jsdbg runtime '${String(runtime)}'`);
+	throw new Error(`Unsupported dbgjs runtime '${String(runtime)}'`);
 }
 
 export function targetDebugConfiguration(
@@ -184,7 +184,7 @@ export function targetDebugConfiguration(
 	node: TargetNodeSnapshot,
 ): vscode.DebugConfiguration {
 	return {
-		type: "jsdbg",
+		type: "dbgjs",
 		request: "attach",
 		name: targetSessionName(node),
 		runtime: "target",
@@ -241,7 +241,7 @@ export async function findInstalledChrome(
 		}
 	}
 	throw new Error(
-		"No installed Chrome or Chromium executable was found. Set 'executablePath' in the jsdbg launch configuration.",
+		"No installed Chrome or Chromium executable was found. Set 'executablePath' in the dbgjs launch configuration.",
 	);
 }
 
@@ -323,14 +323,14 @@ function objectValue(value: unknown, label: string): Record<string, unknown> {
 
 function requiredString(value: unknown, name: string): string {
 	if (typeof value !== "string" || value.length === 0) {
-		throw new Error(`jsdbg launch property '${name}' must be a non-empty string`);
+		throw new Error(`dbgjs launch property '${name}' must be a non-empty string`);
 	}
 	return value;
 }
 
 function requiredNumber(value: unknown, name: string): number {
 	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-		throw new Error(`jsdbg launch property '${name}' must be a non-negative integer`);
+		throw new Error(`dbgjs launch property '${name}' must be a non-negative integer`);
 	}
 	return value;
 }
@@ -353,7 +353,7 @@ function optionalBoolean<TName extends string>(
 		return {};
 	}
 	if (typeof value !== "boolean") {
-		throw new Error(`jsdbg launch property '${name}' must be a boolean`);
+		throw new Error(`dbgjs launch property '${name}' must be a boolean`);
 	}
 	return { [name]: value } as Record<TName, boolean>;
 }
@@ -368,7 +368,7 @@ function optionalStringArray<TName extends string>(
 	}
 	if (!Array.isArray(value)
 		|| !value.every((item): item is string => typeof item === "string")) {
-		throw new Error(`jsdbg launch property '${name}' must be an array of strings`);
+		throw new Error(`dbgjs launch property '${name}' must be an array of strings`);
 	}
 	const result: Partial<Record<TName, readonly string[]>> = {};
 	result[name] = value;
@@ -382,7 +382,7 @@ function nullableStringRecord(
 	const object = objectValue(value, name);
 	for (const [key, item] of Object.entries(object)) {
 		if (typeof item !== "string" && item !== null) {
-			throw new Error(`jsdbg launch property '${name}.${key}' must be a string or null`);
+			throw new Error(`dbgjs launch property '${name}.${key}' must be a string or null`);
 		}
 	}
 	return object as Record<string, string | null>;

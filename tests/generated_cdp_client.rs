@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use cdp_client::cdp::{
+use dbgjs::cdp::{
     CdpClient, DebuggerPausedParams, DebuggerScriptParsedParams, DebuggerSetBreakpointByUrlParams,
     RuntimeEvaluateParams, RuntimeRemoteObjectType, TargetAttachToTargetParams,
 };
-use cdp_client::session_transport::{CdpEnvelope, CdpSessionMux};
+use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
 use hubrpc::connection::channel::{Channel, RejectingHandler};
 use hubrpc::prelude::{JsonRpcMessage, MessageTransport};
 use hubrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};

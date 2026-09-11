@@ -2,23 +2,23 @@
 	"version": "0.2.0",
 	"configurations": [
 		{
-			"name": "Launch Node.js with jsdbg",
-			"type": "jsdbg",
+			"name": "Launch Node.js with dbgjs",
+			"type": "dbgjs",
 			"request": "launch",
 			"runtime": "node",
 			"program": "${workspaceFolder}/node-app.js"
 		},
 		{
-			"name": "Launch compiled TypeScript with jsdbg",
-			"type": "jsdbg",
+			"name": "Launch compiled TypeScript with dbgjs",
+			"type": "dbgjs",
 			"request": "launch",
 			"runtime": "node",
 			"program": "${workspaceFolder}/dist/tsc-app.js",
 			"preLaunchTask": "Compile TypeScript example"
 		},
 		{
-			"name": "Launch TypeScript with tsx and jsdbg",
-			"type": "jsdbg",
+			"name": "Launch TypeScript with tsx and dbgjs",
+			"type": "dbgjs",
 			"request": "launch",
 			"runtime": "node",
 			"runtimeArgs": [
@@ -29,24 +29,24 @@
 			"preLaunchTask": "Install example dependencies"
 		},
 		{
-			"name": "Launch local page in Chrome with jsdbg",
-			"type": "jsdbg",
+			"name": "Launch local page in Chrome with dbgjs",
+			"type": "dbgjs",
 			"request": "launch",
 			"runtime": "chrome",
 			"url": "${workspaceFolder}/index.html",
 			"headless": false
 		},
 		{
-			"name": "Launch vscode.dev in Chrome with jsdbg",
-			"type": "jsdbg",
+			"name": "Launch vscode.dev in Chrome with dbgjs",
+			"type": "dbgjs",
 			"request": "launch",
 			"runtime": "chrome",
 			"url": "https://vscode.dev",
 			"headless": false
 		},
 		{
-			"name": "Attach to persisted jsdbg targets",
-			"type": "jsdbg",
+			"name": "Attach to persisted dbgjs targets",
+			"type": "dbgjs",
 			"request": "attach",
 			"runtime": "context"
 		}

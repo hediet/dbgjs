@@ -14,8 +14,8 @@ if (!inspector.url()) {
 	inspector.open(0, "127.0.0.1", false);
 }
 const endpoint = inspector.url();
-const port = Number(process.env.JSDBG_NODE_DISCOVERY_PORT);
-const token = process.env.JSDBG_NODE_DISCOVERY_TOKEN;
+const port = Number(process.env.DBGJS_NODE_DISCOVERY_PORT);
+const token = process.env.DBGJS_NODE_DISCOVERY_TOKEN;
 if (endpoint && Number.isInteger(port) && token) {
 	const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
 		socket.write(JSON.stringify({
@@ -35,14 +35,14 @@ if (endpoint && Number.isInteger(port) && token) {
 main().catch(reportError);
 
 async function main() {
-	const executable = required("JSDBG_NODE_EXECUTABLE");
-	const program = required("JSDBG_NODE_PROGRAM");
-	const cwd = required("JSDBG_NODE_CWD");
-	const runtimeArgs = parseJson("JSDBG_NODE_RUNTIME_ARGS", []);
-	const programArgs = parseJson("JSDBG_NODE_ARGS", []);
-	const environment = parseJson("JSDBG_NODE_ENV", {});
+	const executable = required("DBGJS_NODE_EXECUTABLE");
+	const program = required("DBGJS_NODE_PROGRAM");
+	const cwd = required("DBGJS_NODE_CWD");
+	const runtimeArgs = parseJson("DBGJS_NODE_RUNTIME_ARGS", []);
+	const programArgs = parseJson("DBGJS_NODE_ARGS", []);
+	const environment = parseJson("DBGJS_NODE_ENV", {});
 	const discovery = await createDiscoveryServer();
-	const bootloaderDirectory = await mkdtemp(join(tmpdir(), "jsdbg-node-loader-"));
+	const bootloaderDirectory = await mkdtemp(join(tmpdir(), "dbgjs-node-loader-"));
 	const bootloader = join(bootloaderDirectory, "discover.cjs");
 	await writeFile(bootloader, bootloaderSource, { mode: 0o600 });
 	const child = spawn(executable, [
@@ -59,8 +59,8 @@ async function main() {
 				environment.NODE_OPTIONS ?? process.env.NODE_OPTIONS,
 				`--require=${JSON.stringify(bootloader)}`,
 			),
-			JSDBG_NODE_DISCOVERY_PORT: String(discovery.port),
-			JSDBG_NODE_DISCOVERY_TOKEN: discovery.token,
+			DBGJS_NODE_DISCOVERY_PORT: String(discovery.port),
+			DBGJS_NODE_DISCOVERY_TOKEN: discovery.token,
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});

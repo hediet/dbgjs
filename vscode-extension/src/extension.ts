@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { ContextSnapshot } from "./apiTypes.js";
-import { JsdbgDebugAdapter } from "./dapAdapter.js";
+import { DbgjsDebugAdapter } from "./dapAdapter.js";
 import { DebugSessionReconciler } from "./debugSessionReconciler.js";
 import {
 	EditorOverlayTracker,
@@ -9,7 +9,7 @@ import {
 import { TargetTreeProvider } from "./targetTree.js";
 import { WorkspaceContextController } from "./workspaceContext.js";
 
-export interface JsdbgExtensionApi {
+export interface DbgjsExtensionApi {
 	readonly contextId: string;
 	readonly ready: Promise<void>;
 	getSnapshot(): ContextSnapshot | undefined;
@@ -17,17 +17,17 @@ export interface JsdbgExtensionApi {
 	refresh(): Promise<void>;
 }
 
-export function activate(context: vscode.ExtensionContext): JsdbgExtensionApi {
-	const output = vscode.window.createOutputChannel("jsdbg");
+export function activate(context: vscode.ExtensionContext): DbgjsExtensionApi {
+	const output = vscode.window.createOutputChannel("dbgjs");
 	const log = (message: string): void => {
 		const line = `[${new Date().toISOString()}] ${message}`;
 		output.appendLine(line);
-		if (process.env.JSDBG_TEST_LOG_STDOUT === "1") {
-			console.log(`[jsdbg] ${line}`);
+		if (process.env.DBGJS_TEST_LOG_STDOUT === "1") {
+			console.log(`[dbgjs] ${line}`);
 		}
 	};
 	context.subscriptions.push(output);
-	log("Activating jsdbg extension");
+	log("Activating dbgjs extension");
 	const controller = new WorkspaceContextController(context, log);
 	const overlays = new EditorOverlayTracker();
 	const targetTree = new TargetTreeProvider(controller);
@@ -38,30 +38,30 @@ export function activate(context: vscode.ExtensionContext): JsdbgExtensionApi {
 		overlays,
 		targetTree,
 		sessionReconciler,
-		vscode.window.registerTreeDataProvider("jsdbg.targets", targetTree),
-		vscode.commands.registerCommand("jsdbg.refreshTargets", async () => {
+		vscode.window.registerTreeDataProvider("dbgjs.targets", targetTree),
+		vscode.commands.registerCommand("dbgjs.refreshTargets", async () => {
 			try {
 				await controller.refresh();
 			} catch (error) {
 				await vscode.window.showErrorMessage(
-					`Failed to refresh jsdbg targets: ${errorMessage(error)}`,
+					`Failed to refresh dbgjs targets: ${errorMessage(error)}`,
 				);
 			}
 		}),
-		vscode.commands.registerCommand("jsdbg.copyContextId", async () => {
+		vscode.commands.registerCommand("dbgjs.copyContextId", async () => {
 			await vscode.env.clipboard.writeText(controller.contextId);
 		}),
-		vscode.debug.registerDebugAdapterDescriptorFactory("jsdbg", {
+		vscode.debug.registerDebugAdapterDescriptorFactory("dbgjs", {
 			createDebugAdapterDescriptor: (session) =>
 				new vscode.DebugAdapterInlineImplementation(
-					new JsdbgDebugAdapter(controller, session, sessionReconciler, log),
+					new DbgjsDebugAdapter(controller, session, sessionReconciler, log),
 				),
 		}),
 	);
 
-	log("Registered debug adapter descriptor factory for 'jsdbg'");
+	log("Registered debug adapter descriptor factory for 'dbgjs'");
 	void vscode.window.showInformationMessage(
-		"jsdbg extension activated; debug adapter 'jsdbg' is registered.",
+		"dbgjs extension activated; debug adapter 'dbgjs' is registered.",
 		"Show Log",
 	).then((selection) => {
 		if (selection === "Show Log") {
@@ -71,11 +71,11 @@ export function activate(context: vscode.ExtensionContext): JsdbgExtensionApi {
 
 	void controller.ready.catch((error: unknown) => {
 		void vscode.window.showWarningMessage(
-			`jsdbg daemon is unavailable: ${errorMessage(error)}`,
+			`dbgjs daemon is unavailable: ${errorMessage(error)}`,
 			"Retry",
 		).then((selection) => {
 			if (selection === "Retry") {
-				void vscode.commands.executeCommand("jsdbg.refreshTargets");
+				void vscode.commands.executeCommand("dbgjs.refreshTargets");
 			}
 		});
 	});

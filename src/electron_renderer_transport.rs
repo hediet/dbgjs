@@ -24,7 +24,7 @@ use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::session_transport::CdpEnvelope;
 
 const BRIDGE_SOURCE: &str = include_str!("providers/electron_renderer_bridge.js");
-const BRIDGE_OBJECT_GROUP: &str = "jsdbg-electron-renderer-bridge";
+const BRIDGE_OBJECT_GROUP: &str = "dbgjs-electron-renderer-bridge";
 const MAX_SOCKET_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 

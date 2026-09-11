@@ -1,20 +1,20 @@
-# jsdbg-tui
+# dbgjs-tui
 
-`jsdbg-tui` is a leaf terminal client for the `cdp-client` debugger service. It
+`dbgjs-tui` is a leaf terminal client for the `dbgjs` debugger service. It
 uses only the public service API and never opens CDP connections itself.
 
-Build the service before running the TUI so that the sibling `jsdbg-service`
+Build the service before running the TUI so that the sibling `dbgjs-service`
 executable uses the same service API:
 
 ```console
-cargo build --bin jsdbg-service
-cargo run -p cdp-tui --bin jsdbg-tui
+cargo build --bin dbgjs-service
+cargo run -p dbgjs-tui --bin dbgjs-tui
 ```
 
 Select a context explicitly when the current directory does not identify one:
 
 ```console
-cargo run -p cdp-tui --bin jsdbg-tui -- --context :my-context
+cargo run -p dbgjs-tui --bin dbgjs-tui -- --context :my-context
 ```
 
 ## Keys

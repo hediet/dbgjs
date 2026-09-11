@@ -44,12 +44,12 @@ globalThis.heapFixture = [new ${name}(), new ${name}()];`,
 		server.once("error", reject);
 		server.listen(0, "127.0.0.1", resolve);
 	});
-	const directory = await mkdtemp(join(tmpdir(), "jsdbg-heap-frames-"));
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-heap-frames-"));
 	const environment = {
-		JSDBG_SERVICE_EXE: resolve(`target/debug/jsdbg-service${process.platform === "win32" ? ".exe" : ""}`),
-		JSDBG_SERVICE_STATE: join(directory, "service.json"),
+		DBGJS_SERVICE_EXE: resolve(`target/debug/dbgjs-service${process.platform === "win32" ? ".exe" : ""}`),
+		DBGJS_SERVICE_STATE: join(directory, "service.json"),
 	};
-	const cli = resolve(`target/debug/jsdbg${process.platform === "win32" ? ".exe" : ""}`);
+	const cli = resolve(`target/debug/dbgjs${process.platform === "win32" ? ".exe" : ""}`);
 	const contextId = `:heap-frames-${process.pid}`;
 	const json = async (...arguments_) => {
 		const result = await run(cli, ["--json", ...arguments_], environment, { timeoutMs: 60_000 });

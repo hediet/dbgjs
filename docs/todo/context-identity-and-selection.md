@@ -19,8 +19,8 @@ The common workflow should require no explicit selection:
 
 ```text
 cd D:\src\shop
-jsdbg context create .
-jsdbg status
+dbgjs context create .
+dbgjs status
 ```
 
 The second command resolves the context whose identity is `d:\src\shop`.
@@ -290,7 +290,7 @@ This deliberately makes VS Code share the context created by:
 
 ```text
 cd D:\src\shop
-jsdbg context create .
+dbgjs context create .
 ```
 
 The extension should stop deriving a hashed daemon-local context name from the

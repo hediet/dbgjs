@@ -1,4 +1,4 @@
-use cdp_client::service_api::{
+use dbgjs::service_api::{
     AgentSessionSnapshot, BreakpointPendingReason, BreakpointSnapshot, BreakpointStatus,
     CaptureSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
     CompactedSourceNodeSnapshot, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
@@ -311,7 +311,7 @@ impl OutputFormat {
 
     pub fn print_logs(
         &self,
-        snapshot: &cdp_client::service_api::TargetLogSnapshot,
+        snapshot: &dbgjs::service_api::TargetLogSnapshot,
         after: u64,
         limit: usize,
     ) -> Result<u64, serde_json::Error> {
@@ -548,11 +548,11 @@ impl OutputFormat {
 }
 
 fn log_coverage_human(
-    snapshot: &cdp_client::service_api::TargetLogSnapshot,
+    snapshot: &dbgjs::service_api::TargetLogSnapshot,
     empty: bool,
     after: u64,
 ) -> String {
-    use cdp_client::service_api::LogCaptureStatus;
+    use dbgjs::service_api::LogCaptureStatus;
     let capture = &snapshot.capture;
     let status = match capture.status {
         LogCaptureStatus::Active => "active",
@@ -916,10 +916,10 @@ fn source_tree_lines(
         return vec![format!(
             "No {} sources are currently observed.",
             match snapshot.kind {
-                cdp_client::service_api::SourceTreeKind::Loaded => "loaded",
-                cdp_client::service_api::SourceTreeKind::SourceMapped => "source-mapped",
-                cdp_client::service_api::SourceTreeKind::Formatted => "formatted",
-                cdp_client::service_api::SourceTreeKind::Resolved => "resolved",
+                dbgjs::service_api::SourceTreeKind::Loaded => "loaded",
+                dbgjs::service_api::SourceTreeKind::SourceMapped => "source-mapped",
+                dbgjs::service_api::SourceTreeKind::Formatted => "formatted",
+                dbgjs::service_api::SourceTreeKind::Resolved => "resolved",
             }
         )];
     }
@@ -1403,8 +1403,8 @@ fn promise_line(promise: &PromiseSnapshot) -> String {
     )
 }
 
-fn promise_state_name(state: cdp_client::service_api::PromiseState) -> &'static str {
-    use cdp_client::service_api::PromiseState;
+fn promise_state_name(state: dbgjs::service_api::PromiseState) -> &'static str {
+    use dbgjs::service_api::PromiseState;
     match state {
         PromiseState::Pending => "pending",
         PromiseState::Fulfilled => "fulfilled",
@@ -1414,10 +1414,10 @@ fn promise_state_name(state: cdp_client::service_api::PromiseState) -> &'static 
 }
 
 fn promise_classification_name(
-    classification: cdp_client::service_api::PromiseClassification,
+    classification: dbgjs::service_api::PromiseClassification,
 ) -> &'static str {
     match classification {
-        cdp_client::service_api::PromiseClassification::Indeterminate => "indeterminate",
+        dbgjs::service_api::PromiseClassification::Indeterminate => "indeterminate",
     }
 }
 
@@ -1538,10 +1538,10 @@ fn heap_path_lines(path: &HeapPathSnapshot) -> Vec<String> {
     lines
 }
 
-fn heap_path_step_line(step: &cdp_client::service_api::HeapPathStepSnapshot) -> String {
+fn heap_path_step_line(step: &dbgjs::service_api::HeapPathStepSnapshot) -> String {
     let direction = match step.direction {
-        cdp_client::service_api::HeapTraversalDirection::Outgoing => "->",
-        cdp_client::service_api::HeapTraversalDirection::Incoming => "<-",
+        dbgjs::service_api::HeapTraversalDirection::Outgoing => "->",
+        dbgjs::service_api::HeapTraversalDirection::Incoming => "<-",
     };
     let label = step
         .name
@@ -1828,7 +1828,7 @@ fn print_target_tree(
 }
 
 fn target_tree_selector(entry: &TargetListEntry) -> String {
-    cdp_client::target_selector::qualified_target_selector(
+    dbgjs::target_selector::qualified_target_selector(
         &entry.connection_id,
         &entry.target.target_id,
         entry.connection_generation,
@@ -2754,7 +2754,7 @@ impl HumanOutput for ValueSnapshot {
         if let Some(promise) = &self.promise {
             println!("Promise <{}>", promise_state_name(promise.state));
             if let Some(settlement) = &promise.settlement {
-                let label = if promise.state == cdp_client::service_api::PromiseState::Rejected {
+                let label = if promise.state == dbgjs::service_api::PromiseState::Rejected {
                     "reason"
                 } else {
                     "value"
@@ -3163,7 +3163,7 @@ fn render_heap_classes_human(
         return output;
     }
     for diagnostic in &snapshot.analysis.script_mappings {
-        if diagnostic.status != cdp_client::service_api::HeapMappingStatus::Mapped
+        if diagnostic.status != dbgjs::service_api::HeapMappingStatus::Mapped
             && output.len() < maximum_lines.saturating_sub(1) {
             output.push(format!("Mapping script:{} ({}): {}{}",
                 diagnostic.script_id, diagnostic.url, heap_mapping_status_label(&diagnostic.status),
@@ -3218,8 +3218,8 @@ fn render_heap_classes_human(
     output
 }
 
-fn heap_mapping_status_label(status: &cdp_client::service_api::HeapMappingStatus) -> &'static str {
-    use cdp_client::service_api::HeapMappingStatus;
+fn heap_mapping_status_label(status: &dbgjs::service_api::HeapMappingStatus) -> &'static str {
+    use dbgjs::service_api::HeapMappingStatus;
     match status {
         HeapMappingStatus::NotAttempted => "not attempted (metadata unavailable)",
         HeapMappingStatus::NoMapSupplied => "no map supplied",
@@ -3384,7 +3384,7 @@ fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSn
     for source in &mut filtered.sources {
         let generated_url = normalize_source_path(&source.generated_url);
         for function in &mut source.functions {
-            let matches = |range: &cdp_client::service_api::CoverageRangeSnapshot| {
+            let matches = |range: &dbgjs::service_api::CoverageRangeSnapshot| {
                 range.authored_start.as_ref().is_some_and(|location| {
                     normalize_source_path(&location.source_url).starts_with(&prefix)
                 }) || (range.authored_start.is_none() && generated_url.starts_with(&prefix))
@@ -3593,8 +3593,8 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
 }
 
 fn format_generated_location(
-    source: &cdp_client::service_api::CoverageSourceSnapshot,
-    function: &cdp_client::service_api::CoverageFunctionSnapshot,
+    source: &dbgjs::service_api::CoverageSourceSnapshot,
+    function: &dbgjs::service_api::CoverageFunctionSnapshot,
 ) -> String {
     match &function.generated_location {
         Some(location) => {
@@ -3946,7 +3946,7 @@ fn print_source_excerpt(label: &str, source: &SourceExcerpt) {
     }
 }
 
-fn runtime_location(location: &cdp_client::service_api::SourceLocation) -> String {
+fn runtime_location(location: &dbgjs::service_api::SourceLocation) -> String {
     if location.source_url.is_empty() {
         format!(
             "runtime (anonymous script):{}:{}",
@@ -3992,7 +3992,7 @@ fn render_value_snapshot(value: &ValueSnapshot) -> String {
 }
 
 fn render_value_preview_with_reference(
-    value: &cdp_client::service_api::ValuePreviewSnapshot,
+    value: &dbgjs::service_api::ValuePreviewSnapshot,
 ) -> String {
     let preview = render_value_preview(value);
     let reference = value
@@ -4003,7 +4003,7 @@ fn render_value_preview_with_reference(
     format!("{preview}{reference}")
 }
 
-fn render_value_preview(value: &cdp_client::service_api::ValuePreviewSnapshot) -> String {
+fn render_value_preview(value: &dbgjs::service_api::ValuePreviewSnapshot) -> String {
     let preview = value.preview.as_deref().unwrap_or(&value.kind);
     let truncated = if value.truncated { "..." } else { "" };
     format!("{}{truncated}", terminal_text(preview))
@@ -4068,8 +4068,8 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
         } => format!(
             "CDP over stdio from {command} ({})",
             match topology {
-                cdp_client::service_api::CdpStdioTopology::Browser => "browser",
-                cdp_client::service_api::CdpStdioTopology::Target => "target",
+                dbgjs::service_api::CdpStdioTopology::Browser => "browser",
+                dbgjs::service_api::CdpStdioTopology::Target => "target",
             }
         ),
     }
@@ -4193,7 +4193,7 @@ fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &st
 }
 
 fn print_target_breakpoint_explanation(
-    breakpoint: &cdp_client::service_api::TargetBreakpointSnapshot,
+    breakpoint: &dbgjs::service_api::TargetBreakpointSnapshot,
 ) {
     match &breakpoint.status {
         TargetBreakpointStatus::WaitingForScript => {
@@ -4255,7 +4255,7 @@ mod tests {
         source_search_incomplete_message, source_tree_lines, style_process_label,
         style_session_label, target_tree_selector, terminal_text,
     };
-    use cdp_client::service_api::{
+    use dbgjs::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
         CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
         CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
@@ -4870,13 +4870,13 @@ mod tests {
             &root, &browser, &renderer, &renderer_iframe, &page, &page_iframe,
         ] {
             assert_eq!(
-                cdp_client::target_selector::match_target_selector(
+                dbgjs::target_selector::match_target_selector(
                     &entry.target,
                     &entry.connection_id,
                     entry.connection_generation,
                     &target_tree_selector(entry),
                 ),
-                Some(cdp_client::target_selector::TargetSelectorMatch::Qualified),
+                Some(dbgjs::target_selector::TargetSelectorMatch::Qualified),
             );
         }
     }
@@ -4888,7 +4888,7 @@ mod tests {
             internal_id: "internal-1".to_owned(),
             chat_uri: Some("copilotcli:/chat-1".to_owned()),
             title: Some("Add extension launch config".to_owned()),
-            working_directories: vec!["file:///d%3A/dev/hediet/cdp-client".to_owned()],
+            working_directories: vec!["file:///d%3A/dev/hediet/dbgjs".to_owned()],
             disconnected: Some(false),
         }];
         let tree = ProcessTreeSnapshot {
@@ -5385,7 +5385,7 @@ mod tests {
 
     #[test]
     fn log_empty_reports_capture_status_not_absence_of_errors() {
-        use cdp_client::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
+        use dbgjs::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
         let mut snapshot = TargetLogSnapshot {
             context_id: "context".into(),
             connection_id: "browser".into(),

@@ -1,7 +1,7 @@
 {
-  "name": "jsdbg-vscode",
-  "displayName": "jsdbg",
-  "description": "Prototype VS Code client for the jsdbg CDP debugger daemon.",
+  "name": "dbgjs-vscode",
+  "displayName": "dbgjs",
+  "description": "Prototype VS Code client for the dbgjs CDP debugger daemon.",
   "version": "0.0.1",
   "private": true,
   "publisher": "hediet",
@@ -15,57 +15,57 @@
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "onStartupFinished",
-    "onDebugResolve:jsdbg",
-    "onView:jsdbg.targets",
-    "onCommand:jsdbg.refreshTargets"
+    "onDebugResolve:dbgjs",
+    "onView:dbgjs.targets",
+    "onCommand:dbgjs.refreshTargets"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "jsdbg.refreshTargets",
-        "title": "jsdbg: Refresh Targets",
+        "command": "dbgjs.refreshTargets",
+        "title": "dbgjs: Refresh Targets",
         "icon": "$(refresh)"
       },
       {
-        "command": "jsdbg.copyContextId",
-        "title": "jsdbg: Copy Workspace Context ID"
+        "command": "dbgjs.copyContextId",
+        "title": "dbgjs: Copy Workspace Context ID"
       }
     ],
     "configuration": {
-      "title": "jsdbg",
+      "title": "dbgjs",
       "properties": {
-        "jsdbg.serviceStatePath": {
+        "dbgjs.serviceStatePath": {
           "type": "string",
-          "description": "Path to the jsdbg-service endpoint state file. Defaults to JSDBG_SERVICE_STATE or the platform jsdbg cache location."
+          "description": "Path to the dbgjs-service endpoint state file. Defaults to DBGJS_SERVICE_STATE or the platform dbgjs cache location."
         },
-        "jsdbg.serviceExecutable": {
+        "dbgjs.serviceExecutable": {
           "type": "string",
-          "description": "Path to jsdbg-service. Defaults to JSDBG_SERVICE_EXE, the extension's bundled binary, or the repository development build."
+          "description": "Path to dbgjs-service. Defaults to DBGJS_SERVICE_EXE, the extension's bundled binary, or the repository development build."
         }
       }
     },
     "views": {
       "explorer": [
         {
-          "id": "jsdbg.targets",
-          "name": "jsdbg Targets",
-          "contextualTitle": "jsdbg"
+          "id": "dbgjs.targets",
+          "name": "dbgjs Targets",
+          "contextualTitle": "dbgjs"
         }
       ]
     },
     "menus": {
       "view/title": [
         {
-          "command": "jsdbg.refreshTargets",
-          "when": "view == jsdbg.targets",
+          "command": "dbgjs.refreshTargets",
+          "when": "view == dbgjs.targets",
           "group": "navigation"
         }
       ]
     },
     "debuggers": [
       {
-        "type": "jsdbg",
-        "label": "jsdbg Context",
+        "type": "dbgjs",
+        "label": "dbgjs Context",
         "languages": [
           "javascript",
           "typescript",
@@ -178,7 +178,7 @@
                   "target"
                 ],
                 "default": "context",
-                "description": "Expose targets already attached to the workspace jsdbg context."
+                "description": "Expose targets already attached to the workspace dbgjs context."
               },
               "contextId": {
                 "type": "string",
@@ -202,31 +202,31 @@
         },
         "initialConfigurations": [
           {
-            "type": "jsdbg",
+            "type": "dbgjs",
             "request": "launch",
-            "name": "Launch Node.js with jsdbg",
+            "name": "Launch Node.js with dbgjs",
             "runtime": "node",
             "program": "${workspaceFolder}/index.js"
           },
           {
-            "type": "jsdbg",
+            "type": "dbgjs",
             "request": "launch",
-            "name": "Launch Playwright with jsdbg",
+            "name": "Launch Playwright with dbgjs",
             "runtime": "playwright",
             "url": "http://localhost:3000",
             "headless": true
           },
           {
-            "type": "jsdbg",
+            "type": "dbgjs",
             "request": "launch",
-            "name": "Launch Chrome with jsdbg",
+            "name": "Launch Chrome with dbgjs",
             "runtime": "chrome",
             "url": "http://localhost:3000"
           },
           {
-            "type": "jsdbg",
+            "type": "dbgjs",
             "request": "attach",
-            "name": "Attach to jsdbg workspace context",
+            "name": "Attach to dbgjs workspace context",
             "runtime": "context"
           }
         ]

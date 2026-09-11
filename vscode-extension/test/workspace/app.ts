@@ -1,1 +1,1 @@
-export const message = "jsdbg VS Code prototype";
+export const message = "dbgjs VS Code prototype";

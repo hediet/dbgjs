@@ -15,13 +15,13 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/release/jsdbg${executableSuffix}`);
-const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/dbgjs${executableSuffix}`);
+const service = resolve(`target/release/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-heap-classes.md");
 const expectedDurationMs = 120_000;
 const hardTimeoutMs = 180_000;
 const commandTimeoutMs = 120_000;
-const heapMarker = "jsdbg-vscode-heap-golden-marker";
+const heapMarker = "dbgjs-vscode-heap-golden-marker";
 let stepNumber = 0;
 
 test("compares vscode.dev editor buffers with infrastructure objects", async () => {
@@ -43,14 +43,14 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 			`- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout: ${hardTimeoutMs / 1000}s\n`,
 	);
 
-	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-heap-"));
+	const stateDirectory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-heap-"));
 	const stateFile = join(stateDirectory, "service.json");
-	const sourceMapCache = join(tmpdir(), "jsdbg-vscode-source-map-cache");
+	const sourceMapCache = join(tmpdir(), "dbgjs-vscode-source-map-cache");
 	await mkdir(sourceMapCache, { recursive: true });
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
-		JSDBG_SOURCE_MAP_CACHE: sourceMapCache,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
+		DBGJS_SOURCE_MAP_CACHE: sourceMapCache,
 	};
 
 	try {
@@ -104,7 +104,7 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 			[
 				"target",
 				"eval",
-				`globalThis.__jsdbgHeapGolden = { title: ${JSON.stringify(heapMarker)}, payload: { kind: "golden", values: [1, 2, 3] } }; ${JSON.stringify(heapMarker)}`,
+				`globalThis.__dbgjsHeapGolden = { title: ${JSON.stringify(heapMarker)}, payload: { kind: "golden", values: [1, 2, 3] } }; ${JSON.stringify(heapMarker)}`,
 			],
 			environment,
 		);
@@ -387,7 +387,7 @@ async function findStringReferencedByProperty(selection, property, environment) 
 
 async function recordCompleted(explanation, arguments_, result) {
 	stepNumber += 1;
-	const command = ["jsdbg", ...arguments_].map(quoteArgument).join(" ");
+	const command = ["dbgjs", ...arguments_].map(quoteArgument).join(" ");
 	const output = result.output.endsWith("\n")
 		? result.output
 		: `${result.output}\n`;

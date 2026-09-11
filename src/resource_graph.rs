@@ -1,6 +1,6 @@
 //! The faceted resource graph.
 //!
-//! Everything jsdbg can observe - an OS process, a browser, a page, a frame, a debug session -
+//! Everything dbgjs can observe - an OS process, a browser, a page, a frame, a debug session -
 //! is one *resource* identified by an opaque [`ResourceId`]. A resource is not owned by a single
 //! provider: every provider contributes a *facet* (descriptive facts, callable capabilities and
 //! discovery frontier states) under its own [`SourceId`], and the graph presents the union of all

@@ -51,7 +51,7 @@ type VariablesBinding =
 		readonly objectId: string;
 	};
 
-export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable {
+export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable {
 	private static readonly threadId = 1;
 	private sequence = 1;
 	private nextFrameId = 1;
@@ -124,7 +124,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		this.disposed = true;
 		this.cancelTargetObservers();
 		for (const pending of this.pendingRequests.values()) {
-			pending.reject(new Error("jsdbg debug adapter was disposed"));
+			pending.reject(new Error("dbgjs debug adapter was disposed"));
 		}
 		this.pendingRequests.clear();
 		for (const subscription of this.subscriptions) {
@@ -234,7 +234,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 
 	private async startLaunch(request: DebugProtocol.LaunchRequest): Promise<void> {
 		if (this.launchTask !== undefined) {
-			throw new Error("A jsdbg runtime launch is already in progress");
+			throw new Error("A dbgjs runtime launch is already in progress");
 		}
 		const task = this.configureLaunch(request);
 		this.launchTask = task;
@@ -256,7 +256,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	private async configureLaunch(request: DebugProtocol.LaunchRequest): Promise<void> {
 		const launch = await resolveLaunch(request.arguments, this.debugSession.id);
 		if (this.disposed) {
-			throw new Error("jsdbg debug session was disposed during launch");
+			throw new Error("dbgjs debug session was disposed during launch");
 		}
 		if (launch.target !== undefined) {
 			await this.bindTarget(launch.target);
@@ -269,7 +269,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		}
 		const connectionId = launch.connectionId;
 		if (connectionId === undefined) {
-			throw new Error("jsdbg runtime launch did not produce a connection ID");
+			throw new Error("dbgjs runtime launch did not produce a connection ID");
 		}
 		this.ownedConnectionId = connectionId;
 		let snapshot = await this.controller.client.putConnection(
@@ -279,7 +279,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		);
 		this.controller.adoptSnapshot(snapshot);
 		if (this.disposed) {
-			throw new Error("jsdbg debug session was disposed during launch");
+			throw new Error("dbgjs debug session was disposed during launch");
 		}
 		snapshot = await this.controller.client.connectConnection(
 			this.controller.contextId,
@@ -287,7 +287,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		);
 		this.controller.adoptSnapshot(snapshot);
 		if (this.disposed) {
-			throw new Error("jsdbg debug session was disposed during launch");
+			throw new Error("dbgjs debug session was disposed during launch");
 		}
 		const connection = snapshot.connections.find(
 			(candidate) => candidate.id === connectionId,
@@ -296,7 +296,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			throw new Error(
 				typeof connection.status.message === "string"
 					? connection.status.message
-					: `jsdbg connection '${connectionId}' failed`,
+					: `dbgjs connection '${connectionId}' failed`,
 			);
 		}
 		const root = await this.waitForRootTarget(connectionId);
@@ -326,20 +326,20 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				throw new Error(
 					typeof connection.status.message === "string"
 						? connection.status.message
-						: `jsdbg connection '${connectionId}' failed`,
+						: `dbgjs connection '${connectionId}' failed`,
 				);
 			}
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
 		throw new Error(connectionId === undefined
-			? "Timed out waiting for a jsdbg root target"
-			: `Timed out waiting for jsdbg connection '${connectionId}' to expose a root target`);
+			? "Timed out waiting for a dbgjs root target"
+			: `Timed out waiting for dbgjs connection '${connectionId}' to expose a root target`);
 	}
 
 	private async bindTarget(reference: TargetReference): Promise<void> {
 		if (reference.contextId !== this.controller.contextId) {
 			throw new Error(
-				`jsdbg target belongs to context '${reference.contextId}', `
+				`dbgjs target belongs to context '${reference.contextId}', `
 				+ `not workspace context '${this.controller.contextId}'`,
 			);
 		}
@@ -350,7 +350,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		);
 		if (node === undefined) {
 			throw new Error(
-				`jsdbg target '${reference.targetId}' generation ${reference.connectionGeneration} does not exist`,
+				`dbgjs target '${reference.targetId}' generation ${reference.connectionGeneration} does not exist`,
 			);
 		}
 		await this.controller.client.attachTarget(
@@ -370,12 +370,12 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		);
 		this.sendEvent("thread", {
 			reason: "started",
-			threadId: JsdbgDebugAdapter.threadId,
+			threadId: DbgjsDebugAdapter.threadId,
 		});
 		const observer = { cancelled: false };
 		this.targetObserver = observer;
 		void this.observeTarget(
-			JsdbgDebugAdapter.threadId,
+			DbgjsDebugAdapter.threadId,
 			this.targetBinding,
 			observer,
 		).catch((error: unknown) => {
@@ -434,7 +434,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		const threads = binding === undefined
 			? []
 			: [{
-				id: JsdbgDebugAdapter.threadId,
+				id: DbgjsDebugAdapter.threadId,
 				name: binding.target.title
 					|| binding.target.url
 					|| `${binding.target.targetType} ${binding.target.targetId}`,
@@ -484,7 +484,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	private async handleScopes(request: DebugProtocol.ScopesRequest): Promise<void> {
 		const frame = this.frameBindings.get(request.arguments.frameId);
 		if (frame === undefined) {
-			throw new Error(`Unknown or stale jsdbg frame ${request.arguments.frameId}`);
+			throw new Error(`Unknown or stale dbgjs frame ${request.arguments.frameId}`);
 		}
 		const scopes = frame.frame.scopes.map((scope) => ({
 			name: scope.name ?? scopeName(scope.kind),
@@ -503,7 +503,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		const binding = this.variablesBindings.get(request.arguments.variablesReference);
 		if (binding === undefined) {
 			throw new Error(
-				`Unknown or stale jsdbg variables reference ${request.arguments.variablesReference}`,
+				`Unknown or stale dbgjs variables reference ${request.arguments.variablesReference}`,
 			);
 		}
 		const variables = binding.kind === "scope"
@@ -692,7 +692,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				this.reconciler.targetEnded(this.debugSession.id);
 				this.sendEvent("thread", {
 					reason: "exited",
-					threadId: JsdbgDebugAdapter.threadId,
+					threadId: DbgjsDebugAdapter.threadId,
 				});
 				this.sendEvent("terminated");
 				return;
@@ -902,15 +902,15 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 	}
 
 	private requireTarget(threadId: number): TargetBinding {
-		if (threadId !== JsdbgDebugAdapter.threadId) {
-			throw new Error(`Unknown jsdbg thread ${threadId}`);
+		if (threadId !== DbgjsDebugAdapter.threadId) {
+			throw new Error(`Unknown dbgjs thread ${threadId}`);
 		}
 		return this.requireBoundTarget();
 	}
 
 	private requireBoundTarget(): TargetBinding {
 		if (this.targetBinding === undefined) {
-			throw new Error("No jsdbg target is bound to this debug session");
+			throw new Error("No dbgjs target is bound to this debug session");
 		}
 		return this.targetBinding;
 	}
@@ -996,7 +996,7 @@ export class JsdbgDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 		const message = error instanceof Error ? error.message : String(error);
 		this.sendEvent("output", {
 			category: "stderr",
-			output: `jsdbg adapter: ${message}\n`,
+			output: `dbgjs adapter: ${message}\n`,
 		});
 	}
 }
@@ -1010,7 +1010,7 @@ function toDapBreakpoint(
 			verified: false,
 			line: requested.line,
 			...(requested.column === undefined ? {} : { column: requested.column }),
-			message: "jsdbg did not return breakpoint state",
+			message: "dbgjs did not return breakpoint state",
 		};
 	}
 	const verified = breakpoint.status.kind === "bound"
@@ -1032,7 +1032,7 @@ function breakpointStatusMessage(breakpoint: BreakpointSnapshot): string {
 	if (breakpoint.status.kind === "failed" && typeof breakpoint.status.message === "string") {
 		return breakpoint.status.message;
 	}
-	return `jsdbg breakpoint is ${breakpoint.status.kind}`;
+	return `dbgjs breakpoint is ${breakpoint.status.kind}`;
 }
 
 function requirePauseEpoch(target: TargetDebuggerSnapshot): number {

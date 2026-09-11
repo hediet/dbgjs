@@ -29,7 +29,7 @@ type Socket = WebSocketStream<TcpStream>;
 
 /// A raw CDP-over-WebSocket server transport for one accepted, authenticated loopback client.
 /// Speaks the same [`CdpEnvelope`] wire format as `CdpWebSocketTransport`/`CdpStdioTransport`, so
-/// the `jsdbg context relay`/`jsdbg target relay` CLI can bridge it to stdio verbatim, without
+/// the `dbgjs context relay`/`dbgjs target relay` CLI can bridge it to stdio verbatim, without
 /// any protocol translation of its own.
 pub struct RelayServerTransport {
     sender: Mutex<SplitSink<Socket, Message>>,

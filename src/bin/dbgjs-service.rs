@@ -3,13 +3,13 @@
 use std::env;
 use std::path::PathBuf;
 
-use cdp_client::local_rpc::{default_state_file, ensure_service, serve_local, write_startup_error};
+use dbgjs::local_rpc::{default_state_file, ensure_service, serve_local, write_startup_error};
 use tokio::sync::watch;
 
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("jsdbg-service: {error}");
+        eprintln!("dbgjs-service: {error}");
         std::process::exit(1);
     }
 }

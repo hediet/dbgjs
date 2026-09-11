@@ -180,7 +180,7 @@ pub trait DebugCapability: Capability {
     }
 }
 
-/// An OS process that jsdbg can inspect and control.
+/// An OS process that dbgjs can inspect and control.
 #[async_trait]
 pub trait ProcessCapability: Capability {
     fn pid(&self) -> u32;

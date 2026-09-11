@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use cdp_client::service_api::{
+use dbgjs::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, DebuggerServiceApiClient, FrameProjectionSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
@@ -158,7 +158,7 @@ async fn wait_for_change(
             let _ = client
                 .observe_context(
                     context_id,
-                    cdp_client::service_api::ObservationCursor::After { revision },
+                    dbgjs::service_api::ObservationCursor::After { revision },
                     VIEW_OBSERVE_TIMEOUT_MS,
                 )
                 .await;
@@ -193,7 +193,7 @@ pub fn render(contexts: &[ContextView], all_contexts: bool) -> String {
             .map(|context| format!("context {}", inline(&context.snapshot.id, 80)))
             .unwrap_or_else(|| "current context".to_owned())
     };
-    writeln!(output, "jsdbg daemon view — {scope}").unwrap();
+    writeln!(output, "dbgjs daemon view — {scope}").unwrap();
     writeln!(
         output,
         "breakpoints per target: i=installed p=pending f=failed"
@@ -359,7 +359,7 @@ fn pause_location(debugger: &TargetDebuggerSnapshot) -> String {
     }
 }
 
-fn source_location(location: &cdp_client::service_api::SourceLocation) -> String {
+fn source_location(location: &dbgjs::service_api::SourceLocation) -> String {
     format!(
         "{}:{}:{}",
         inline(&location.source_url, 80),
@@ -460,7 +460,7 @@ fn rpc_error(error: hubrpc::prelude::JsonRpcError) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cdp_client::service_api::{
+    use dbgjs::service_api::{
         BreakpointSnapshot, ContextSnapshot, FrameSnapshot, PauseSnapshot, ScopeSnapshot,
         SourceLocation, TargetAttachmentState, TargetBreakpointSnapshot, TargetNodeSnapshot,
     };
@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(
             actual,
             concat!(
-                "jsdbg daemon view — context shop\n",
+                "dbgjs daemon view — context shop\n",
                 "breakpoints per target: i=installed p=pending f=failed\n",
                 "Context shop \"Shop\" rev=12 connections=1 breakpoints=0\n",
                 "  Connection browser connected gen=7 targets=1 kind=direct-cdp\n",
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(
             actual,
             concat!(
-                "jsdbg daemon view — all contexts\n",
+                "dbgjs daemon view — all contexts\n",
                 "breakpoints per target: i=installed p=pending f=failed\n",
                 "Context workers\\u{1b}[2J \"Workers\\u{7}\" rev=4 connections=1 breakpoints=1\n",
                 "  Connection runtime\\u{1b} connecting gen=2 targets=1 kind=node-inspector\n",

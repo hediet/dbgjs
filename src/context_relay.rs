@@ -2,8 +2,8 @@
 //! ([`start_context_relay`]), and a direct-root passthrough exposing exactly one target
 //! ([`start_target_relay`]). Both speak [`crate::session_transport::CdpEnvelope`] over an
 //! accepted [`crate::relay_transport::RelayServerTransport`] and reuse the existing
-//! [`CdpSessionMux`]/`Channel` machinery that `CdpConnection` uses when jsdbg is itself the CDP
-//! client, just with the roles reversed: here jsdbg is the CDP server.
+//! [`CdpSessionMux`]/`Channel` machinery that `CdpConnection` uses when dbgjs is itself the CDP
+//! client, just with the roles reversed: here dbgjs is the CDP server.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -762,9 +762,9 @@ impl ContextRelayState {
         match method.as_str() {
             "Browser.getVersion" => to_json(BrowserGetVersionResult {
                 protocol_version: "1.3".to_owned(),
-                product: format!("jsdbg-context-relay/{}", env!("CARGO_PKG_VERSION")),
+                product: format!("dbgjs-context-relay/{}", env!("CARGO_PKG_VERSION")),
                 revision: String::new(),
-                user_agent: "jsdbg-context-relay".to_owned(),
+                user_agent: "dbgjs-context-relay".to_owned(),
                 js_version: String::new(),
             }),
             "Target.getTargets" => {
@@ -837,7 +837,7 @@ impl ContextRelayState {
             }
             "Target.attachToTarget" => {
                 let notify_attached = params
-                    .get("__jsdbgAutoAttach")
+                    .get("__dbgjsAutoAttach")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let request: TargetAttachToTargetParams = from_json(params)?;
@@ -886,7 +886,7 @@ impl ContextRelayState {
             _ => Err(JsonRpcError::new(
                 error_codes::METHOD_NOT_FOUND,
                 format!(
-                    "jsdbg context relay's virtual root does not implement '{method}'; attach to a target and send target-scoped commands instead"
+                    "dbgjs context relay's virtual root does not implement '{method}'; attach to a target and send target-scoped commands instead"
                 ),
             )),
         }

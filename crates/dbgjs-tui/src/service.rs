@@ -3,11 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cdp_client::context_identity::{
+use dbgjs::context_identity::{
     normalize_absolute_path, path_and_parents, resolve_context_expression,
 };
-use cdp_client::local_rpc::{default_state_file, ensure_service};
-use cdp_client::service_api::{
+use dbgjs::local_rpc::{default_state_file, ensure_service};
+use dbgjs::service_api::{
     ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApiClient, MutationOptions,
     ObservationCursor, ObservationResult, ProcessTreeSnapshot, ResourceGraphSnapshot,
     SourceContentSnapshot, SourceDisplayOptions, SourceTreeKind, SourceTreeSnapshot,
@@ -42,7 +42,7 @@ impl Bootstrap {
             .map_err(rpc_error)?;
         if contexts.is_empty() {
             return Err(
-                "no debugger contexts exist; create one with `jsdbg context create`".to_owned(),
+                "no debugger contexts exist; create one with `dbgjs context create`".to_owned(),
             );
         }
         let configured_context = if context_expression.is_none() {
@@ -67,7 +67,7 @@ impl Bootstrap {
                 .position(|context| context.id == context_id)
                 .ok_or_else(|| {
                     format!(
-                        "configured context '{context_id}' does not exist; select another context with `jsdbg set context --context <expression>`"
+                        "configured context '{context_id}' does not exist; select another context with `dbgjs set context --context <expression>`"
                     )
                 })?
         } else {
@@ -103,7 +103,7 @@ pub enum Data {
     Processes(Vec<ProcessTreeSnapshot>),
     Resources(ResourceGraphSnapshot),
     Sources(SourceTreeSnapshot),
-    Captures(Vec<cdp_client::service_api::CaptureSnapshot>),
+    Captures(Vec<dbgjs::service_api::CaptureSnapshot>),
 }
 
 pub enum ServiceEvent {
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn configured_context_uses_the_nearest_cli_cwd_binding() {
         let path =
-            std::env::temp_dir().join(format!("jsdbg-tui-selection-{}.json", std::process::id()));
+            std::env::temp_dir().join(format!("dbgjs-tui-selection-{}.json", std::process::id()));
         std::fs::write(
             &path,
             br#"{

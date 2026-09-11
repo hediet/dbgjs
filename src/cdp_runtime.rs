@@ -1330,27 +1330,27 @@ fn resolve_source_map_url(
 }
 
 fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBuf> {
-    let directory = if let Some(path) = env::var_os("JSDBG_SOURCE_MAP_CACHE") {
+    let directory = if let Some(path) = env::var_os("DBGJS_SOURCE_MAP_CACHE") {
         PathBuf::from(path)
-    } else if let Some(state_file) = env::var_os("JSDBG_SERVICE_STATE") {
+    } else if let Some(state_file) = env::var_os("DBGJS_SERVICE_STATE") {
         PathBuf::from(state_file)
             .parent()
             .map(|parent| parent.join("source-map-cache"))?
     } else if let Some(path) = env::var_os("LOCALAPPDATA") {
         PathBuf::from(path)
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("source-map-cache")
     } else if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path)
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("source-map-cache")
     } else if let Some(path) = env::var_os("HOME") {
         PathBuf::from(path)
             .join(".cache")
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("source-map-cache")
     } else {
         return None;
@@ -1363,7 +1363,7 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
 }
 
 async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    const MAGIC: &[u8] = b"jsdbg-source-map-v1\n";
+    const MAGIC: &[u8] = b"dbgjs-source-map-v1\n";
     static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
     let Some(parent) = path.parent() else {
         return Err(std::io::Error::new(
@@ -1494,7 +1494,7 @@ async fn cleanup_source_map_cache(directory: &Path) {
 }
 
 fn decode_source_map_cache(bytes: &[u8]) -> Option<Vec<u8>> {
-    const MAGIC: &[u8] = b"jsdbg-source-map-v1\n";
+    const MAGIC: &[u8] = b"dbgjs-source-map-v1\n";
     let remainder = bytes.strip_prefix(MAGIC)?;
     let newline = remainder.iter().position(|byte| *byte == b'\n')?;
     let expected = std::str::from_utf8(&remainder[..newline]).ok()?;
@@ -1676,7 +1676,7 @@ mod tests {
     #[tokio::test]
     async fn loads_source_maps_directly_from_file_urls() {
         let path = std::env::temp_dir().join(format!(
-            "jsdbg-direct-source-map-{}.map",
+            "dbgjs-direct-source-map-{}.map",
             std::process::id()
         ));
         let source_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
@@ -1705,7 +1705,7 @@ mod tests {
     #[test]
     fn source_map_cache_payload_is_content_verified() {
         let source_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
-        let mut cached = b"jsdbg-source-map-v1\n".to_vec();
+        let mut cached = b"dbgjs-source-map-v1\n".to_vec();
         cached.extend(format!("{:x}\n", Sha256::digest(source_map)).as_bytes());
         cached.extend(source_map);
         assert_eq!(
@@ -1716,7 +1716,7 @@ mod tests {
         assert!(decode_source_map_cache(&cached).is_none());
 
         let invalid = b"<html>temporary CDN error</html>";
-        let mut cached = b"jsdbg-source-map-v1\n".to_vec();
+        let mut cached = b"dbgjs-source-map-v1\n".to_vec();
         cached.extend(format!("{:x}\n", Sha256::digest(invalid)).as_bytes());
         cached.extend(invalid);
         assert!(decode_source_map_cache(&cached).is_none());
@@ -1725,7 +1725,7 @@ mod tests {
     #[tokio::test]
     async fn source_map_cache_cleanup_bounds_retained_hashes() {
         let directory = std::env::temp_dir().join(format!(
-            "jsdbg-source-map-cache-test-{}-{}",
+            "dbgjs-source-map-cache-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1759,7 +1759,7 @@ mod tests {
     #[tokio::test]
     async fn heap_snapshot_replacement_preserves_complete_new_content() {
         let directory = std::env::temp_dir().join(format!(
-            "jsdbg-heap-replace-test-{}-{}",
+            "dbgjs-heap-replace-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1782,7 +1782,7 @@ mod tests {
     #[tokio::test]
     async fn heap_snapshot_notifications_stream_to_disk_and_report_progress() {
         let path = std::env::temp_dir().join(format!(
-            "jsdbg-heap-stream-{}-{}.tmp",
+            "dbgjs-heap-stream-{}-{}.tmp",
             std::process::id(),
             AtomicU64::new(1).fetch_add(1, Ordering::Relaxed)
         ));

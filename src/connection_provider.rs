@@ -67,7 +67,7 @@ pub struct DirectDebuggerAttachment {
     pub stole_external_owner: bool,
 }
 
-/// The session opened for one target, plus whether a debugger jsdbg does not own was evicted.
+/// The session opened for one target, plus whether a debugger dbgjs does not own was evicted.
 pub struct TargetAttachment {
     pub session_id: String,
     pub stole_external_owner: bool,
@@ -327,8 +327,8 @@ impl ConnectionRuntime {
                     "process",
                     true,
                     [
-                        ("JSDBG_PROCESS_ROOT_PID", process_id.to_string()),
-                        ("JSDBG_PROCESS_MODE", "single".to_owned()),
+                        ("DBGJS_PROCESS_ROOT_PID", process_id.to_string()),
+                        ("DBGJS_PROCESS_MODE", "single".to_owned()),
                     ],
                 )
                 .await?;
@@ -363,18 +363,18 @@ impl ConnectionRuntime {
                     "Chrome",
                     false,
                     [
-                        ("JSDBG_PROVIDER_URL", url.clone()),
-                        ("JSDBG_CHROME_EXECUTABLE", executable.clone()),
+                        ("DBGJS_PROVIDER_URL", url.clone()),
+                        ("DBGJS_CHROME_EXECUTABLE", executable.clone()),
                         (
-                            "JSDBG_PROVIDER_MODE",
+                            "DBGJS_PROVIDER_MODE",
                             if *headless { "headless" } else { "headed" }.to_owned(),
                         ),
                         (
-                            "JSDBG_CHROME_USER_DATA_DIR",
+                            "DBGJS_CHROME_USER_DATA_DIR",
                             user_data_dir.clone().unwrap_or_default(),
                         ),
                         (
-                            "JSDBG_CHROME_ARGS",
+                            "DBGJS_CHROME_ARGS",
                             serde_json::to_string(args).expect("Chrome arguments always serialize"),
                         ),
                     ],
@@ -395,21 +395,21 @@ impl ConnectionRuntime {
                     "Node.js",
                     true,
                     [
-                        ("JSDBG_NODE_PROGRAM", program.clone()),
+                        ("DBGJS_NODE_PROGRAM", program.clone()),
                         (
-                            "JSDBG_NODE_ARGS",
+                            "DBGJS_NODE_ARGS",
                             serde_json::to_string(args)
                                 .expect("Node.js arguments always serialize"),
                         ),
-                        ("JSDBG_NODE_CWD", cwd.clone()),
-                        ("JSDBG_NODE_EXECUTABLE", runtime_executable.clone()),
+                        ("DBGJS_NODE_CWD", cwd.clone()),
+                        ("DBGJS_NODE_EXECUTABLE", runtime_executable.clone()),
                         (
-                            "JSDBG_NODE_RUNTIME_ARGS",
+                            "DBGJS_NODE_RUNTIME_ARGS",
                             serde_json::to_string(runtime_args)
                                 .expect("Node.js runtime arguments always serialize"),
                         ),
                         (
-                            "JSDBG_NODE_ENV",
+                            "DBGJS_NODE_ENV",
                             serde_json::to_string(env)
                                 .expect("Node.js environment always serializes"),
                         ),
@@ -476,8 +476,8 @@ impl ConnectionRuntime {
             "process tree",
             true,
             [
-                ("JSDBG_PROCESS_ROOT_PID", root_pid.to_string()),
-                ("JSDBG_PROCESS_MODE", "tree".to_owned()),
+                ("DBGJS_PROCESS_ROOT_PID", root_pid.to_string()),
+                ("DBGJS_PROCESS_MODE", "tree".to_owned()),
             ],
         )
         .await?;
@@ -709,7 +709,7 @@ impl ConnectionRuntime {
         self.direct_debugger
     }
 
-    /// True when the CDP root of this connection is jsdbg's own virtual browser root rather than
+    /// True when the CDP root of this connection is dbgjs's own virtual browser root rather than
     /// a real browser.
     pub fn is_virtual_root(&self) -> bool {
         self.virtual_root.is_some()
@@ -748,7 +748,7 @@ impl ConnectionRuntime {
 
     /// Attaches to a target through the connection's `Target` domain. Virtual roots are called
     /// in process because CDP has no way to express "evict the debugger that owns this target",
-    /// which jsdbg needs for `force`.
+    /// which dbgjs needs for `force`.
     pub async fn attach_to_target(
         &self,
         target_id: &str,
@@ -1107,21 +1107,21 @@ async fn launch_playwright(
         }
         None => find_playwright_package()?,
     };
-    let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
+    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
         .arg("--eval")
         .arg(PLAYWRIGHT_HELPER)
-        .env("JSDBG_PLAYWRIGHT_PACKAGE", playwright_package)
-        .env("JSDBG_PROVIDER_URL", url)
-        .env("JSDBG_PROVIDER_CHANNEL", playwright_channel(channel))
+        .env("DBGJS_PLAYWRIGHT_PACKAGE", playwright_package)
+        .env("DBGJS_PROVIDER_URL", url)
+        .env("DBGJS_PROVIDER_CHANNEL", playwright_channel(channel))
         .env(
-            "JSDBG_PROVIDER_MODE",
+            "DBGJS_PROVIDER_MODE",
             if headless { "headless" } else { "headed" },
         )
         .env(
-            "JSDBG_PROVIDER_IGNORE_HTTPS_ERRORS",
+            "DBGJS_PROVIDER_IGNORE_HTTPS_ERRORS",
             if ignore_https_errors { "true" } else { "false" },
         )
         .stdin(Stdio::piped())
@@ -1188,7 +1188,7 @@ async fn launch_provider<const N: usize>(
     capture_events: bool,
     environment: [(&str, String); N],
 ) -> Result<ProviderLaunch, ConnectionProviderError> {
-    let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
+    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
@@ -1276,7 +1276,7 @@ async fn launch_provider<const N: usize>(
 }
 
 pub fn find_playwright_package() -> Result<PathBuf, ConnectionProviderError> {
-    if let Some(path) = env::var_os("JSDBG_PLAYWRIGHT_PACKAGE") {
+    if let Some(path) = env::var_os("DBGJS_PLAYWRIGHT_PACKAGE") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Ok(path);
@@ -1453,7 +1453,7 @@ pub enum ConnectionProviderError {
         source: std::io::Error,
     },
     #[error(
-        "Playwright package entrypoint was not found at {0}; install dependencies or set JSDBG_PLAYWRIGHT_PACKAGE"
+        "Playwright package entrypoint was not found at {0}; install dependencies or set DBGJS_PLAYWRIGHT_PACKAGE"
     )]
     PlaywrightPackageNotFound(PathBuf),
     #[error("Playwright provider did not expose stdout")]

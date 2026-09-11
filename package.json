@@ -1,5 +1,5 @@
 {
-  "name": "cdp-client-prototypes",
+  "name": "dbgjs",
   "private": true,
   "type": "module",
   "scripts": {

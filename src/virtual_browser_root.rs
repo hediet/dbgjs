@@ -1,6 +1,6 @@
 //! A provider-neutral virtual browser root.
 //!
-//! Chrome exposes a process tree of targets through the CDP `Target` domain; jsdbg uses the same
+//! Chrome exposes a process tree of targets through the CDP `Target` domain; dbgjs uses the same
 //! shape for every host that can host more than one debuggable target (today: an OS process tree,
 //! possibly an Electron application). A [`TargetSource`] discovers targets and hands out one CDP
 //! transport per target; [`VirtualBrowserRoot`] turns that into a browser-shaped CDP endpoint that
@@ -61,7 +61,7 @@ pub enum TargetSourceEvent {
 /// The result of attaching to one target through a [`TargetSource`].
 pub struct TargetAttachment {
     pub endpoint: Arc<TargetEndpoint>,
-    /// Whether a debugger that jsdbg does not own had to be evicted to get this attachment.
+    /// Whether a debugger that dbgjs does not own had to be evicted to get this attachment.
     pub stole_external_owner: bool,
 }
 
@@ -374,7 +374,7 @@ impl VirtualBrowserRoot {
     }
 
     /// Attaches to one target, in-process. CDP's `Target.attachToTarget` has no way to express
-    /// "evict a debugger jsdbg does not own", so the debugger service - which sits on the other
+    /// "evict a debugger dbgjs does not own", so the debugger service - which sits on the other
     /// end of this transport anyway - asks for a forced attachment directly instead of inventing
     /// a non-standard protocol extension that external CDP clients would not understand.
     pub async fn attach_target(
@@ -761,7 +761,7 @@ impl VirtualRootState {
                 protocol_version: "1.3".to_owned(),
                 product: self.source.product(),
                 revision: String::new(),
-                user_agent: format!("jsdbg-virtual-browser-root/{}", env!("CARGO_PKG_VERSION")),
+                user_agent: format!("dbgjs-virtual-browser-root/{}", env!("CARGO_PKG_VERSION")),
                 js_version: String::new(),
             }),
             "Target.getTargets" => {
@@ -826,7 +826,7 @@ impl VirtualRootState {
             _ => Err(JsonRpcError::new(
                 error_codes::METHOD_NOT_FOUND,
                 format!(
-                    "jsdbg's virtual browser root does not implement '{method}'; attach to a target and send target-scoped commands instead"
+                    "dbgjs's virtual browser root does not implement '{method}'; attach to a target and send target-scoped commands instead"
                 ),
             )),
         }

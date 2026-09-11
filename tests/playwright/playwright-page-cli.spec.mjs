@@ -11,11 +11,11 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
+const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/playwright-page-cli.md");
 
-test("selected page runs bounded Playwright programs through jsdbg", async () => {
+test("selected page runs bounded Playwright programs through dbgjs", async () => {
 	test.setTimeout(300_000);
 	const build = await run("cargo", ["build", "--bins"], {});
 	expect(build.code, build.output).toBe(0);
@@ -26,7 +26,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		"# Playwright against a selected `jsdbg` page\n\nThis is a real Chromium/Playwright E2E run. The daemon control plane uses authenticated local IPC; Playwright receives a one-shot, capability-URL WebSocket bound only to loopback.\n",
+		"# Playwright against a selected `dbgjs` page\n\nThis is a real Chromium/Playwright E2E run. The daemon control plane uses authenticated local IPC; Playwright receives a one-shot, capability-URL WebSocket bound only to loopback.\n",
 	);
 	const fixture = await startFixture();
 	const debuggingPort = await allocatePort();
@@ -49,8 +49,8 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 	const unrelatedPage = await browserContext.newPage();
 	const stateFile = join(stateDirectory, "service.json");
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 
 	try {
@@ -124,7 +124,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			],
 			environment,
 		);
-		expect(JSON.parse(inline)).toEqual({ title: "jsdbg Playwright E2E", scrollY: 800 });
+		expect(JSON.parse(inline)).toEqual({ title: "dbgjs Playwright E2E", scrollY: 800 });
 
 		const stdinProgram =
 			'return { url: page.url(), marker: await page.locator("#marker").textContent() };';
@@ -137,7 +137,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			url: `${fixture.origin}/`,
 			marker: "selected page",
 		});
-		expect(await page.title()).toBe("jsdbg Playwright E2E");
+		expect(await page.title()).toBe("dbgjs Playwright E2E");
 		const oopif = await runCli(
 			[
 				"page",
@@ -165,7 +165,7 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 		);
 		expect(JSON.parse(fileChooser)).toEqual({
 			multiple: false,
-			title: "jsdbg Playwright E2E",
+			title: "dbgjs Playwright E2E",
 		});
 		const opaqueHeader = await runCli(
 			[
@@ -206,8 +206,8 @@ test("selected page runs bounded Playwright programs through jsdbg", async () =>
 			environment,
 		);
 		expect(JSON.parse(detachedSession)).toEqual({
-			auxiliarySessionTitle: "jsdbg Playwright E2E",
-			pageTitleAfterDetach: "jsdbg Playwright E2E",
+			auxiliarySessionTitle: "dbgjs Playwright E2E",
+			pageTitleAfterDetach: "dbgjs Playwright E2E",
 		});
 		const rejected = JSON.parse(
 			await runCli(
@@ -281,7 +281,7 @@ async function runCli(args, environment, input) {
 }
 
 async function appendTranscriptCommand(args, output, input) {
-	const command = `jsdbg ${args.map(shellQuote).join(" ")}`;
+	const command = `dbgjs ${args.map(shellQuote).join(" ")}`;
 	const stableOutput = output.replaceAll(process.cwd(), "<worktree>");
 	await appendFile(
 		transcriptPath,
@@ -308,7 +308,7 @@ async function startFixture() {
 	const server = createServer((request, response) => {
 		response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 		response.end(`<!doctype html>
-<title>jsdbg Playwright E2E</title>
+<title>dbgjs Playwright E2E</title>
 <style>body { margin: 0 } main { height: 3000px; padding: 16px }</style>
 <main>
 	<strong id="marker">selected page</strong>

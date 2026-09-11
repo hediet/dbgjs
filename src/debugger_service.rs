@@ -830,7 +830,7 @@ struct PlaywrightProxyRegistration {
     closed: watch::Receiver<bool>,
 }
 
-/// Tracks one open `jsdbg context relay` or `jsdbg target relay`. Its mere presence for a
+/// Tracks one open `dbgjs context relay` or `dbgjs target relay`. Its mere presence for a
 /// context is what makes relay ownership exclusive: see `ensure_context_not_relayed`.
 #[derive(Clone)]
 struct RelayRegistration {
@@ -848,7 +848,7 @@ fn ensure_context_not_relayed(state: &ServiceState, context_id: &str) -> Result<
         .any(|registration| registration.context_id == context_id)
     {
         return Err(invalid_state(&format!(
-            "context '{context_id}' is exclusively owned by an active relay (jsdbg context relay or jsdbg target relay); local target debugging commands are unavailable until the relay closes"
+            "context '{context_id}' is exclusively owned by an active relay (dbgjs context relay or dbgjs target relay); local target debugging commands are unavailable until the relay closes"
         )));
     }
     Ok(())
@@ -900,7 +900,7 @@ fn ownership_conflict(owner: &(String, String, String)) -> JsonRpcError {
 
 fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
     if message.contains("already attached by another debugger")
-        || message.contains("already has a jsdbg client")
+        || message.contains("already has a dbgjs client")
     {
         invalid_state(&format!(
             "target ownership conflict: {message}{}",
@@ -6398,7 +6398,7 @@ fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> Str
     }
 }
 
-/// Inverse of [`canonicalize_synthetic_target_id`]: maps the id jsdbg exposes back to the id the
+/// Inverse of [`canonicalize_synthetic_target_id`]: maps the id dbgjs exposes back to the id the
 /// connection's `Target` domain uses.
 fn runtime_target_id(target_id: &str, connection_id: &str) -> String {
     if target_id == synthetic_node_target_id(connection_id) {
@@ -10815,7 +10815,7 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!(
-                "jsdbg-persistence-v1-{}-{}.json",
+                "dbgjs-persistence-v1-{}-{}.json",
                 std::process::id(),
                 random_instance_id().unwrap()
             ));
@@ -10859,7 +10859,7 @@ mod tests {
             .unwrap()
             .join("target")
             .join(format!(
-                "jsdbg-persistence-v4-{}-{}.json",
+                "dbgjs-persistence-v4-{}-{}.json",
                 std::process::id(),
                 random_instance_id().unwrap()
             ));

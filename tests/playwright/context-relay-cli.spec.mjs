@@ -10,12 +10,12 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
+const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/context-relay-cli-transcript.md");
 let stepNumber = 0;
 
-test("one jsdbg context relays two browser connections with two targets each", async () => {
+test("one dbgjs context relays two browser connections with two targets each", async () => {
 	test.setTimeout(300_000);
 	const build = await run("cargo", ["build", "--bins"], {});
 	expect(build.code, build.output).toBe(0);
@@ -34,8 +34,8 @@ test("one jsdbg context relays two browser connections with two targets each", a
 
 	await writeFile(
 		transcriptPath,
-		"# Chaining two `jsdbg` contexts over CDP stdio\n\n" +
-			"This live E2E scenario starts two independent Chromium connections with two pages each. A source `jsdbg` context owns both connections. A second `jsdbg` imports the entire source context through `jsdbg context relay --stdio`, discovers all four targets and their sources, installs target-scoped breakpoints, and observes each breakpoint being hit.\n",
+		"# Chaining two `dbgjs` contexts over CDP stdio\n\n" +
+			"This live E2E scenario starts two independent Chromium connections with two pages each. A source `dbgjs` context owns both connections. A second `dbgjs` imports the entire source context through `dbgjs context relay --stdio`, discovers all four targets and their sources, installs target-scoped breakpoints, and observes each breakpoint being hit.\n",
 	);
 
 	try {
@@ -89,9 +89,9 @@ test("one jsdbg context relays two browser connections with two targets each", a
 				"--topology",
 				"browser",
 				"--env",
-				`JSDBG_SERVICE_STATE=${sourceState}`,
+				`DBGJS_SERVICE_STATE=${sourceState}`,
 				"--env",
-				`JSDBG_SERVICE_EXE=${service}`,
+				`DBGJS_SERVICE_EXE=${service}`,
 				"--connect",
 				"--",
 				cli,
@@ -226,7 +226,7 @@ test("one jsdbg context relays two browser connections with two targets each", a
 			}, { timeout: 30_000 })
 			.toBe(0);
 		await runCli(
-			"After the relay ends, the source jsdbg instance can debug its context again.",
+			"After the relay ends, the source dbgjs instance can debug its context again.",
 			[
 				"target",
 				"show",
@@ -260,8 +260,8 @@ test("one jsdbg context relays two browser connections with two targets each", a
 
 function serviceEnvironment(stateFile) {
 	return {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 }
 
@@ -369,7 +369,7 @@ async function waitForPageTargets(environment, count) {
 async function runCli(explanation, arguments_, environment) {
 	stepNumber += 1;
 	await emitTranscript(
-		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("jsdbg", arguments_)}\n\`\`\`\n\n`,
+		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("dbgjs", arguments_)}\n\`\`\`\n\n`,
 	);
 	const result = await run(cli, arguments_, environment);
 	const output = result.output.endsWith("\n") ? result.output : `${result.output}\n`;
@@ -381,7 +381,7 @@ async function runCli(explanation, arguments_, environment) {
 async function runCliFailure(explanation, arguments_, environment) {
 	stepNumber += 1;
 	await emitTranscript(
-		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("jsdbg", arguments_)}\n\`\`\`\n\n`,
+		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("dbgjs", arguments_)}\n\`\`\`\n\n`,
 	);
 	const result = await run(cli, arguments_, environment);
 	const output = result.output.endsWith("\n") ? result.output : `${result.output}\n`;

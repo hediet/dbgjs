@@ -1,5 +1,5 @@
-//! Shared helpers for the two places where jsdbg *implements* the CDP `Target` domain instead of
-//! consuming it: the context relay (jsdbg as a CDP server for external clients) and the virtual
+//! Shared helpers for the two places where dbgjs *implements* the CDP `Target` domain instead of
+//! consuming it: the context relay (dbgjs as a CDP server for external clients) and the virtual
 //! browser root that fronts a process tree ([`crate::virtual_browser_root`]).
 
 use hubrpc::prelude::{JsonRpcError, error_codes};

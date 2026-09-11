@@ -16,8 +16,8 @@ import {
 
 const fixtureDirectory = resolve("tests/fixtures/typescript-browser");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
+const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/typescript-cli-transcript.md");
 let stepNumber = 0;
 
@@ -35,19 +35,19 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		"# Debugging authored TypeScript with `jsdbg`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
+		"# Debugging authored TypeScript with `dbgjs`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
 	);
 
 	const stateDirectory = resolve(
 		"artifacts",
-		`.jsdbg-typescript-e2e-${process.pid}`,
+		`.dbgjs-typescript-e2e-${process.pid}`,
 	);
 	await mkdir(stateDirectory, { recursive: true });
 	const stateFile = join(stateDirectory, "service.json");
 	const fixtureServer = await startFixtureServer();
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 	let serviceStarted = false;
 
@@ -66,7 +66,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			environment,
 		);
 		const connected = await runCli(
-			"We describe how to launch the debuggee by giving jsdbg a pasteable page URL. The native Chrome provider starts installed Chrome, opens the page, discovers CDP, and connects immediately.",
+			"We describe how to launch the debuggee by giving dbgjs a pasteable page URL. The native Chrome provider starts installed Chrome, opens the page, discovers CDP, and connects immediately.",
 			[
 				"connection",
 				"add",
@@ -238,7 +238,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 			"\n> The wait is active. We now trigger checkout in Chromium.\n\n",
 		);
 		await runCli(
-			"We perform a real CDP click: jsdbg resolves the button's DOM box and dispatches mouse press/release input events.",
+			"We perform a real CDP click: dbgjs resolves the button's DOM box and dispatches mouse press/release input events.",
 			["target", "click", "#run"],
 			environment,
 		);
@@ -324,7 +324,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 		expect(afterOut).toMatch(/>\s+10 \|/);
 		expect(afterOut).toContain("items.length: 3");
 		await runCli(
-			"We resume without spelling an epoch; jsdbg safely uses the current pause.",
+			"We resume without spelling an epoch; dbgjs safely uses the current pause.",
 			["target", "resume"],
 			environment,
 		);
@@ -473,7 +473,7 @@ async function runJsonSilent(arguments_, environment) {
 async function runCliResult(explanation, arguments_, environment) {
 	stepNumber += 1;
 	await emitTranscript(
-		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("jsdbg", arguments_)}\n\`\`\`\n\n`,
+		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("dbgjs", arguments_)}\n\`\`\`\n\n`,
 	);
 	const result = await run(cli, arguments_, environment);
 	const output = result.output.endsWith("\n") ? result.output : `${result.output}\n`;

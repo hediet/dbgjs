@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { run } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
+const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const fixtureProgram = resolve("tests/playwright/process-tree-browser-fixture.mjs");
 const artifactsDirectory = resolve("artifacts");
 const processTreeTranscriptPath = join(artifactsDirectory, "process-tree-browser-cli.md");
@@ -40,8 +40,8 @@ export async function generateProcessTreeBrowserTranscript(options = {}) {
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 	let serviceStarted = false;
 
@@ -170,8 +170,8 @@ export async function generateVscodeIframeTranscript(options = {}) {
 	await mkdir(root, { recursive: true });
 
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 	const transcript = new Transcript(
 		vscodeTranscriptPath,
@@ -388,7 +388,7 @@ class Transcript {
 		const content =
 			`\n## Step ${this.stepNumber} — ${explanation}\n\n` +
 			`_Timing: ${formatDuration(gapMs)} passed since the previous step; the command took ${formatDuration(result.durationMs)}; ${formatDuration(finishedAt - this.startedAt)} elapsed since the transcript started._\n\n` +
-			`${markdownFence}console\n$ ${formatCommand("jsdbg", arguments_)}\n${markdownFence}\n\n` +
+			`${markdownFence}console\n$ ${formatCommand("dbgjs", arguments_)}\n${markdownFence}\n\n` +
 			`${markdownFence}text\n${output.endsWith("\n") ? output : `${output}\n`}${markdownFence}\n`;
 		this.sections.push(content);
 		process.stdout.write(content);
@@ -425,7 +425,7 @@ class Transcript {
 }
 
 async function buildBinaries() {
-	if (process.env.JSDBG_SKIP_BUILD === "1") {
+	if (process.env.DBGJS_SKIP_BUILD === "1") {
 		return;
 	}
 	const result = await run("cargo", ["build", "--bins"], {});
@@ -443,7 +443,7 @@ async function selectCurrentVscodeTree() {
 	const trees = JSON.parse(result.output);
 	assert.ok(trees.length > 0, "no running VS Code process trees were found");
 
-	const explicitRoot = Number(process.env.JSDBG_VSCODE_ROOT_PID);
+	const explicitRoot = Number(process.env.DBGJS_VSCODE_ROOT_PID);
 	if (Number.isSafeInteger(explicitRoot) && explicitRoot > 0) {
 		const explicitTree = trees.find((tree) => tree.rootProcessId === explicitRoot);
 		assert.ok(explicitTree, `VS Code process tree ${explicitRoot} was not found`);

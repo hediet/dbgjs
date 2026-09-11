@@ -12,22 +12,22 @@ main().catch((error) => {
 });
 
 async function main() {
-	const url = process.env.JSDBG_PROVIDER_URL;
-	const requestedChannel = process.env.JSDBG_PROVIDER_CHANNEL;
-	const mode = process.env.JSDBG_PROVIDER_MODE;
-	const playwrightPackage = process.env.JSDBG_PLAYWRIGHT_PACKAGE;
+	const url = process.env.DBGJS_PROVIDER_URL;
+	const requestedChannel = process.env.DBGJS_PROVIDER_CHANNEL;
+	const mode = process.env.DBGJS_PROVIDER_MODE;
+	const playwrightPackage = process.env.DBGJS_PLAYWRIGHT_PACKAGE;
 	const ignoreHTTPSErrors =
-		process.env.JSDBG_PROVIDER_IGNORE_HTTPS_ERRORS === "true";
+		process.env.DBGJS_PROVIDER_IGNORE_HTTPS_ERRORS === "true";
 	if (!url || !requestedChannel || !mode) {
 		throw new Error("Playwright provider configuration is incomplete");
 	}
 	if (!playwrightPackage) {
-		throw new Error("JSDBG_PLAYWRIGHT_PACKAGE is not set");
+		throw new Error("DBGJS_PLAYWRIGHT_PACKAGE is not set");
 	}
 	const { chromium } = await import(pathToFileURL(playwrightPackage));
 
 	const port = await allocatePort();
-	const userDataDir = await mkdtemp(join(tmpdir(), "jsdbg-playwright-"));
+	const userDataDir = await mkdtemp(join(tmpdir(), "dbgjs-playwright-"));
 	let context;
 	try {
 		context = await chromium.launchPersistentContext(userDataDir, {

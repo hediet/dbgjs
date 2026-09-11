@@ -12,7 +12,7 @@ test("documentation-only changes do not start Rust or packaging jobs", () => {
 			"README.md",
 			"plan.md",
 			"docs/cli-design.md",
-			"todo/jsdbg-heap-and-source-debugging.md",
+			"todo/dbgjs-heap-and-source-debugging.md",
 			"external/README.md",
 			".github/skills/orthogonal-primitives/SKILL.md",
 		]),
@@ -28,7 +28,7 @@ test("all native build inputs invalidate both jobs", () => {
 		".cargo/config.toml",
 		"package.json",
 		"package-lock.json",
-		"src/bin/jsdbg.rs",
+		"src/bin/dbgjs.rs",
 		"src/providers/node.mjs",
 		"src/embedded-help.md",
 		"crates/cdp-protocol/build.rs",
@@ -43,7 +43,7 @@ test("all native build inputs invalidate both jobs", () => {
 });
 
 test("npm-only changes package binaries without running Rust unit tests", () => {
-	for (const path of ["npm/jsdbg/package.json", "npm/jsdbg/README.md", "scripts/npm-pack.mjs"]) {
+	for (const path of ["npm/dbgjs/package.json", "npm/dbgjs/README.md", "scripts/npm-pack.mjs"]) {
 		assert.deepEqual(classifyChanges([path]), { rust: false, packages: true }, path);
 	}
 });
@@ -51,8 +51,8 @@ test("npm-only changes package binaries without running Rust unit tests", () => 
 test("mixed changes retain required jobs regardless of order", () => {
 	for (const paths of [
 		["src/lib.rs", "docs/cli-design.md"],
-		["npm/jsdbg/README.md", "src/lib.rs"],
-		["docs/cli-design.md", "npm/jsdbg/package.json"],
+		["npm/dbgjs/README.md", "src/lib.rs"],
+		["docs/cli-design.md", "npm/dbgjs/package.json"],
 	]) {
 		const expected = paths.includes("src/lib.rs")
 			? { rust: true, packages: true }
@@ -71,7 +71,7 @@ test("empty and extension-only changes skip the native pipeline", () => {
 });
 
 test("Git diffs handle docs-only commits, initial runs, and renamed build inputs", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "jsdbg-ci-changes-"));
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-ci-changes-"));
 	const git = (...args) =>
 		execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
 	const commit = () => {

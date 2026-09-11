@@ -30,7 +30,7 @@ fn render_summary(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .filter(|connection| {
                     matches!(
                         connection.status,
-                        cdp_client::service_api::ConnectionStatus::Connected { .. }
+                        dbgjs::service_api::ConnectionStatus::Connected { .. }
                     )
                 })
                 .count(),
@@ -39,7 +39,7 @@ fn render_summary(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .target_forest
                 .iter()
                 .filter(|target| {
-                    target.attachment == cdp_client::service_api::TargetAttachmentState::Debugger
+                    target.attachment == dbgjs::service_api::TargetAttachmentState::Debugger
                 })
                 .count(),
         )
@@ -289,7 +289,7 @@ fn render_detail(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn render_source(
     frame: &mut Frame<'_>,
     app: &mut App,
-    source: &cdp_client::service_api::SourceContentSnapshot,
+    source: &dbgjs::service_api::SourceContentSnapshot,
     area: Rect,
 ) {
     app.set_source_viewport(usize::from(area.height.saturating_sub(2)));
@@ -429,8 +429,8 @@ fn tone_style(tone: Tone) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use cdp_client::context_identity::ContextKind;
-    use cdp_client::service_api::{
+    use dbgjs::context_identity::ContextKind;
+    use dbgjs::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
         ContextSummary, SourceFormattingSettings,
     };

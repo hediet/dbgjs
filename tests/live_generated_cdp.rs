@@ -2,21 +2,21 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cdp_client::cdp::{
+use dbgjs::cdp::{
     HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
     InputDispatchKeyEventParamsType, InputInsertTextParams, RuntimeEvaluateParams,
     RuntimeRemoteObjectType, TargetAttachToTargetParams, TargetCloseTargetParams,
     TargetCreateTargetParams,
 };
-use cdp_client::cdp_runtime::CdpConnection;
-use cdp_client::context_source_model::ContextSourceModel;
-use cdp_client::debugger_driver::{DebuggerDriver, DebuggerRecording};
-use cdp_client::debugger_engine::{
+use dbgjs::cdp_runtime::CdpConnection;
+use dbgjs::context_source_model::ContextSourceModel;
+use dbgjs::debugger_driver::{DebuggerDriver, DebuggerRecording};
+use dbgjs::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptSourceState,
     SessionKey, SessionPhase,
 };
-use cdp_client::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
-use cdp_client::source_view::Position;
+use dbgjs::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
+use dbgjs::source_view::Position;
 use serde_json::json;
 use sourcemap::SourceMapBuilder;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -255,7 +255,7 @@ async fn run_heap_snapshot_scenario() {
         })
         .expect("child session opens");
     let destination = env::temp_dir().join(format!(
-        "jsdbg-live-heap-{}-{}.heapsnapshot",
+        "dbgjs-live-heap-{}-{}.heapsnapshot",
         std::process::id(),
         created.target_id
     ));
@@ -482,7 +482,7 @@ async fn run_vscode_dev_scenario() {
 }
 
 async fn dispatch_ctrl_n(
-    client: &cdp_client::cdp::CdpClient<hubrpc::connection::channel::Channel>,
+    client: &dbgjs::cdp::CdpClient<hubrpc::connection::channel::Channel>,
 ) {
     let mut key_down =
         InputDispatchKeyEventParams::new(InputDispatchKeyEventParamsType::RawKeyDown);

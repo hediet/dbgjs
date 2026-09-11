@@ -291,8 +291,8 @@ by hand, always reproducible, and verified in CI.
 - [ ] Migrate root and target-session call sites without changing wire traffic.
 - [ ] Replace event-name helper methods with the standard generated event
       contract.
-- [ ] Preserve the public `cdp_client::cdp` re-export during migration.
-- [ ] Decide whether `cdp_client::protocol_schema` remains public tooling or
+- [ ] Preserve the public `dbgjs::cdp` re-export during migration.
+- [ ] Decide whether `dbgjs::protocol_schema` remains public tooling or
       moves entirely behind the generation command.
 - [ ] Remove `client_name: Some("CdpClient")` and the standalone client writer
       after all call sites use the standard generated client.
@@ -307,8 +307,8 @@ ordinary test workflow needs.
 
 ### Binaries
 
-- [ ] Keep `jsdbg` as the user-facing CLI.
-- [ ] Keep `jsdbg-service` as the daemon used by the CLI and VS Code extension.
+- [ ] Keep `dbgjs` as the user-facing CLI.
+- [ ] Keep `dbgjs-service` as the daemon used by the CLI and VS Code extension.
 - [ ] Replace `cdp_codegen` with the explicit standard generation workflow.
 - [ ] Move `source_memory` to a benchmark, an opt-in tooling crate, or remove it
       after its investigation is complete.
@@ -338,11 +338,11 @@ One possible command split is:
 ```text
 test:rust
   cargo test --workspace --lib
-  cargo test -p cdp_client --test generated_cdp_client
-  cargo test -p cdp_client --test cli_service
+  cargo test -p dbgjs --test generated_cdp_client
+  cargo test -p dbgjs --test cli_service
 
 test:rust:live
-  cargo test -p cdp_client --features live-cdp \
+  cargo test -p dbgjs --features live-cdp \
     --test live_generated_cdp -- --ignored
 ```
 

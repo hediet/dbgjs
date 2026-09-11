@@ -10,11 +10,12 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "Compile jsdbg binaries",
+			"label": "Compile dbgjs binaries",
 			"type": "process",
 			"command": "cargo",
 			"args": [
 				"build",
+				"--workspace",
 				"--bins"
 			],
 			"group": "build",
@@ -25,7 +26,7 @@
 			"dependsOrder": "parallel",
 			"dependsOn": [
 				"Compile VS Code Extension",
-				"Compile jsdbg binaries"
+				"Compile dbgjs binaries"
 			],
 			"problemMatcher": []
 		}

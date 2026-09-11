@@ -9,8 +9,8 @@ use hubrpc::protocol::jsonrpc::{JsonRpcRequest, RequestId, ResponsePayload};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-const OWNER_PARAM: &str = "__jsdbgSourceMapOwner";
-const CLOSE_PREFIX: &str = "__jsdbgSourceMapClose/";
+const OWNER_PARAM: &str = "__dbgjsSourceMapOwner";
+const CLOSE_PREFIX: &str = "__dbgjsSourceMapClose/";
 const MAX_OUTSTANDING_LOADS: usize = 4;
 const CLOSE_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 

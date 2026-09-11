@@ -1,5 +1,5 @@
 {
-	"name": "jsdbg-vscode-examples",
+	"name": "dbgjs-vscode-examples",
 	"private": true,
 	"type": "module",
 	"scripts": {
@@ -10,6 +10,6 @@
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
-		"cdp-client-prototypes": "file:../../.."
+		"dbgjs": "file:../../.."
 	}
 }

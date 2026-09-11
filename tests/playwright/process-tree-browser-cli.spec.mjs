@@ -6,7 +6,7 @@ test("process tree composes a descendant browser root and its targets", async ()
 	test.setTimeout(300_000);
 
 	await generateProcessTreeBrowserTranscript({
-		build: process.env.JSDBG_SKIP_BUILD !== "1",
+		build: process.env.DBGJS_SKIP_BUILD !== "1",
 		write: false,
 	});
 });

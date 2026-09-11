@@ -94,8 +94,8 @@ more reviewed commits and replace this note with real `commit:<sha>` links.
 
 Every milestone must add at least one black-box test that:
 
-- launches the real `jsdbg` executable;
-- lets the CLI discover or spawn the real `jsdbg-service`;
+- launches the real `dbgjs` executable;
+- lets the CLI discover or spawn the real `dbgjs-service`;
 - communicates over the platform-native named pipe or Unix socket;
 - uses the generated HubRPC client rather than calling service methods directly;
 - uses a real Chromium/Node runtime or an explicitly named deterministic fake
@@ -154,14 +154,14 @@ make the current service state harder to replace.
   Run a deterministic fake CDP endpoint that pauses `Browser.getVersion`, then:
 
   ```text
-  jsdbg context create --context race "Race context"
-  jsdbg connection add ws://<fake-cdp> --context race --connection browser
-  jsdbg connection connect --context race --connection browser       # process A, remains pending
-  jsdbg connection disconnect --context race --connection browser    # process B
+  dbgjs context create --context race "Race context"
+  dbgjs connection add ws://<fake-cdp> --context race --connection browser
+  dbgjs connection connect --context race --connection browser       # process A, remains pending
+  dbgjs connection disconnect --context race --connection browser    # process B
   <fixture releases Browser.getVersion>
-  jsdbg context show --context race
-  jsdbg service stop
-  jsdbg context show --context race                # restarts service
+  dbgjs context show --context race
+  dbgjs service stop
+  dbgjs context show --context race                # restarts service
   ```
 
   Assert that process B succeeds; process A fails with structured
@@ -214,10 +214,10 @@ make the current service state harder to replace.
   Create context `observe` with one breakpoint, start:
 
   ```text
-  jsdbg state watch --context observe --output jsonl                    # process A
-  jsdbg breakpoint set bp-2 file:///b.ts 2 --column 1 --context observe # process B
-  jsdbg connection add ws://<cdp> --context observe --connection browser # process C
-  jsdbg connection connect --context observe --connection browser       # process C
+  dbgjs state watch --context observe --output jsonl                    # process A
+  dbgjs breakpoint set bp-2 file:///b.ts 2 --column 1 --context observe # process B
+  dbgjs connection add ws://<cdp> --context observe --connection browser # process C
+  dbgjs connection connect --context observe --connection browser       # process C
   ```
 
   Wait for process A to acknowledge its initial item before mutations. Assert
@@ -230,13 +230,13 @@ make the current service state harder to replace.
   create a new page, and assert process B observes it. A later unary
   `state get` must contain the page, and the service remains responsive.
 - [ ] **CLI E2E: `wait_is_race_free_for_current_and_future_state`.** With one
-  page already present, `jsdbg wait observe target --type page --timeout 5s`
+  page already present, `dbgjs wait observe target --type page --timeout 5s`
   returns immediately with that target. Start a second wait for
   `--type worker`, create a worker after subscription acknowledgement, and
   assert it returns exactly that worker without polling.
 - [ ] **CLI E2E: `expired_revision_reports_history_gap`.** Overflow a
   deliberately small test history, run
-  `jsdbg events observe --after-revision <expired> --output jsonl`, and assert a
+  `dbgjs events observe --after-revision <expired> --output jsonl`, and assert a
   non-zero exit with structured `historyGap`, `requestedRevision`,
   `oldestAvailableRevision`, and `currentRevision`.
 
@@ -274,10 +274,10 @@ explicit, generation-safe attachments.
   browser-level Chromium endpoint and start:
 
   ```text
-  jsdbg context create --context topology
-  jsdbg connection add ws://<browser-cdp> --context topology --connection browser
-  jsdbg target watch --context topology --connection browser --output jsonl
-  jsdbg connection connect --context topology --connection browser
+  dbgjs context create --context topology
+  dbgjs connection add ws://<browser-cdp> --context topology --connection browser
+  dbgjs target watch --context topology --connection browser --output jsonl
+  dbgjs connection connect --context topology --connection browser
   ```
 
   Through Playwright create page A, rename/navigate it, create a dedicated
@@ -336,14 +336,14 @@ one shared graph.
   browser bundle, and source maps:
 
   ```text
-  jsdbg context create --context sources --workspace <fixture>
-  jsdbg source resolve src/shared/validation.ts --context sources --output json
-  jsdbg source map src/shared/validation.ts:41:1 --to generated --context sources --output json
-  jsdbg connection add ws://<node-cdp> --context sources --connection server
-  jsdbg connection add ws://<browser-cdp> --context sources --connection browser
-  jsdbg connection connect --context sources --connection server
-  jsdbg connection connect --context sources --connection browser
-  jsdbg source endpoints src/shared/validation.ts --context sources --output json
+  dbgjs context create --context sources --workspace <fixture>
+  dbgjs source resolve src/shared/validation.ts --context sources --output json
+  dbgjs source map src/shared/validation.ts:41:1 --to generated --context sources --output json
+  dbgjs connection add ws://<node-cdp> --context sources --connection server
+  dbgjs connection add ws://<browser-cdp> --context sources --connection browser
+  dbgjs connection connect --context sources --connection server
+  dbgjs connection connect --context sources --connection browser
+  dbgjs source endpoints src/shared/validation.ts --context sources --output json
   ```
 
   Before connecting, assert exact workspace/authored and both generated snapshot
@@ -397,14 +397,14 @@ breakpoint across several runtime connections.
   shared-source fixture with both runtimes paused before application code:
 
   ```text
-  jsdbg context create --context fullstack --workspace <fixture>
-  jsdbg breakpoint set validate src/shared/validation.ts 41 --column 1 --context fullstack
-  jsdbg connection add ws://<node-cdp> --context fullstack --connection server
-  jsdbg connection add ws://<browser-cdp> --context fullstack --connection browser
-  jsdbg connection connect --context fullstack --connection server
-  jsdbg connection connect --context fullstack --connection browser
-  jsdbg wait fullstack breakpoint --id validate --status fully-bound --timeout 10s
-  jsdbg breakpoint show validate --context fullstack --output json
+  dbgjs context create --context fullstack --workspace <fixture>
+  dbgjs breakpoint set validate src/shared/validation.ts 41 --column 1 --context fullstack
+  dbgjs connection add ws://<node-cdp> --context fullstack --connection server
+  dbgjs connection add ws://<browser-cdp> --context fullstack --connection browser
+  dbgjs connection connect --context fullstack --connection server
+  dbgjs connection connect --context fullstack --connection browser
+  dbgjs wait fullstack breakpoint --id validate --status fully-bound --timeout 10s
+  dbgjs breakpoint show validate --context fullstack --output json
   ```
 
   Assert one logical specification at the exact requested TypeScript location,
@@ -412,7 +412,7 @@ breakpoint across several runtime connections.
   distinct runtime breakpoint identities, and no duplicate physical location
   within one attachment.
 - [ ] Trigger the shared function independently through HTTP and page input.
-  `jsdbg events fullstack --type debugger.paused --after-revision <r>` must
+  `dbgjs events fullstack --type debugger.paused --after-revision <r>` must
   report two pauses at the requested authored location, one from each
   connection.
 - [ ] **CLI E2E: `breakpoint_survives_partial_disconnect_and_rebinds`.**
@@ -458,12 +458,12 @@ compose into a useful authored-source debugging session.
   fixture and a mapped breakpoint:
 
   ```text
-  jsdbg wait app paused --breakpoint validate --timeout 10s
-  jsdbg stack app --output json
-  jsdbg scopes app --frame <top-frame> --output json
-  jsdbg evaluate app "user.id" --frame <top-frame> --output json
-  jsdbg step over app --settle 1s --output json
-  jsdbg continue app --settle 1s --output json
+  dbgjs wait app paused --breakpoint validate --timeout 10s
+  dbgjs stack app --output json
+  dbgjs scopes app --frame <top-frame> --output json
+  dbgjs evaluate app "user.id" --frame <top-frame> --output json
+  dbgjs step over app --settle 1s --output json
+  dbgjs continue app --settle 1s --output json
   ```
 
   Assert the pause, top frame, and source excerpt point to the authored
@@ -512,10 +512,10 @@ runtime behavior.
   pause, evaluate, inject connection loss during step-over, then stop recording:
 
   ```text
-  jsdbg record start reliability --output <bundle>
+  dbgjs record start reliability --output <bundle>
   <run failure workflow>
-  jsdbg record stop reliability
-  jsdbg replay <bundle> --output jsonl
+  dbgjs record stop reliability
+  dbgjs replay <bundle> --output jsonl
   ```
 
   Assert replay opens no CDP sockets and reproduces the same ordered revisions,
@@ -566,9 +566,9 @@ source knowledge directly useful.
   content and source-map projections:
 
   ```text
-  jsdbg source grep "validateUser" --context scale --output json
-  jsdbg source cache evict --context scale --memory-only
-  jsdbg source grep "validateUser" --context scale --output json
+  dbgjs source grep "validateUser" --context scale --output json
+  dbgjs source cache evict --context scale --memory-only
+  dbgjs source grep "validateUser" --context scale --output json
   ```
 
   Assert byte-equivalent normalized match sets before and after eviction:

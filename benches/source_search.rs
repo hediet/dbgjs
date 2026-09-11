@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cdp_client::content_store::ContentHash;
-use cdp_client::source_search::{
+use dbgjs::content_store::ContentHash;
+use dbgjs::source_search::{
     SearchControl, SearchDocument, SearchQuery, SourceIdentity, search,
 };
 

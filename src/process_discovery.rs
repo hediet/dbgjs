@@ -335,7 +335,7 @@ async fn query_agent_sessions_on_large_stack(
     let runtime = tokio::runtime::Handle::current();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::Builder::new()
-        .name("jsdbg-agent-session-discovery".to_owned())
+        .name("dbgjs-agent-session-discovery".to_owned())
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let result = runtime.block_on(query_agent_sessions(
@@ -360,9 +360,9 @@ async fn query_agent_sessions(
     command
         .args(["--input-type=module", "--eval", AGENT_SESSIONS_HELPER])
         .env("ELECTRON_RUN_AS_NODE", "1")
-        .env("JSDBG_AGENT_HOST_PID", agent_host_pid.to_string())
+        .env("DBGJS_AGENT_HOST_PID", agent_host_pid.to_string())
         .env(
-            "JSDBG_COPILOT_PIDS",
+            "DBGJS_COPILOT_PIDS",
             serde_json::to_string(&copilot_pids).expect("process ids always serialize"),
         )
         .kill_on_drop(true);
@@ -534,7 +534,7 @@ async fn query_vscode_main_ipc(
     .map_err(|_| ProcessDiscoveryError::Ipc("connection timed out".into()))?
     .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
 
-    write_ipc_frame(&mut pipe, &serialize_ipc_string("jsdbg"))
+    write_ipc_frame(&mut pipe, &serialize_ipc_string("dbgjs"))
         .await
         .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
     let initialize = read_regular_ipc_frame(&mut pipe)
@@ -1295,11 +1295,11 @@ mod tests {
     #[test]
     fn parses_vscode_window_and_utility_ownership() {
         assert_eq!(
-            parse_vscode_status_label("window [3] (cdp-client - out.txt)"),
+            parse_vscode_status_label("window [3] (dbgjs - out.txt)"),
             (
                 "renderer".into(),
                 Some(3),
-                Some("cdp-client - out.txt".into())
+                Some("dbgjs - out.txt".into())
             )
         );
         assert_eq!(

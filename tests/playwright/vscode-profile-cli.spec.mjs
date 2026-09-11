@@ -15,8 +15,8 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/release/jsdbg${executableSuffix}`);
-const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/dbgjs${executableSuffix}`);
+const service = resolve(`target/release/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-editor-profile.md");
 const exportedProfilePath = resolve("artifacts/vscode-editor.cpuprofile");
 const commandTimeoutMs = 180_000;
@@ -37,17 +37,17 @@ test("profiles vscode.dev editor creation and text insertion", async () => {
 	await writeFile(
 		transcriptPath,
 		"# Where does vscode.dev spend CPU time while creating and populating an editor?\n\n" +
-			"This scenario records a real V8 sampling CPU profile through jsdbg, projects generated frames through source maps, renders bounded hotspots, and exports the original DevTools-compatible profile.\n",
+			"This scenario records a real V8 sampling CPU profile through dbgjs, projects generated frames through source maps, renders bounded hotspots, and exports the original DevTools-compatible profile.\n",
 	);
 
-	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-profile-"));
+	const stateDirectory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-profile-"));
 	const stateFile = join(stateDirectory, "service.json");
-	const sourceMapCache = join(tmpdir(), "jsdbg-vscode-source-map-cache");
+	const sourceMapCache = join(tmpdir(), "dbgjs-vscode-source-map-cache");
 	await mkdir(sourceMapCache, { recursive: true });
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
-		JSDBG_SOURCE_MAP_CACHE: sourceMapCache,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
+		DBGJS_SOURCE_MAP_CACHE: sourceMapCache,
 	};
 
 	try {
@@ -252,7 +252,7 @@ async function runJson(explanation, arguments_, environment) {
 
 async function recordCompleted(explanation, arguments_, result) {
 	stepNumber += 1;
-	const command = ["jsdbg", ...arguments_].map(quoteArgument).join(" ");
+	const command = ["dbgjs", ...arguments_].map(quoteArgument).join(" ");
 	const output = result.output.endsWith("\n")
 		? result.output
 		: `${result.output}\n`;

@@ -49,14 +49,14 @@ Windows normally prevents replacing an executable while a process is running
 from it. Cargo cannot disable that protection.
 
 Do not run long-lived services directly from the directory Cargo writes to.
-After building, copy `jsdbg.exe` and `jsdbg-service.exe` together (and
-`jsdbg-tui.exe` if used) into a separate, uniquely named run directory, and
+After building, copy `dbgjs.exe` and `dbgjs-service.exe` together (and
+`dbgjs-tui.exe` if used) into a separate, uniquely named run directory, and
 launch that copy. Keep the CLI and service together because service discovery
 is relative to the CLI executable. Run a new build from a new run directory
 rather than overwriting a running copy.
 
-For independent development instances, set `JSDBG_SERVICE_STATE` to a unique
-state-file path and ensure `JSDBG_SERVICE_EXE` does not point back into Cargo's
+For independent development instances, set `DBGJS_SERVICE_STATE` to a unique
+state-file path and ensure `DBGJS_SERVICE_EXE` does not point back into Cargo's
 output directory. An npm-installed copy similarly separates runtime binaries
 from local build outputs, although replacing that installed copy while it is
 running can still encounter the Windows lock.

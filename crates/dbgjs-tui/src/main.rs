@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("jsdbg-tui: {error}");
+        eprintln!("dbgjs-tui: {error}");
         std::process::exit(1);
     }
 }
@@ -367,7 +367,7 @@ impl Arguments {
 }
 
 fn usage() -> &'static str {
-    "usage: jsdbg-tui [--context <path|:id>]
+    "usage: dbgjs-tui [--context <path|:id>]
 
 keys:
   Tab / Shift+Tab, 1-2  switch Runtime / Debug

@@ -7,10 +7,10 @@ async (token) => {
 	}
 	const { app, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
-	const registryKey = Symbol.for("hediet.jsdbg.rendererBridge");
+	const registryKey = Symbol.for("hediet.dbgjs.rendererBridge");
 	const previous = globalThis[registryKey];
-	if (previous?.owner === "jsdbg" && typeof previous.bridge?.dispose === "function") {
-		await previous.bridge.dispose("replaced by a new jsdbg bridge");
+	if (previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
+		await previous.bridge.dispose("replaced by a new dbgjs bridge");
 	}
 
 	const maxMessageBytes = 128 * 1024 * 1024;
@@ -59,7 +59,7 @@ async (token) => {
 			return undefined;
 		}
 	};
-	// A bridge-owned startup block is jsdbg's own pre-attachment, not a foreign debugger.
+	// A bridge-owned startup block is dbgjs's own pre-attachment, not a foreign debugger.
 	const isAttached = (contents) => {
 		try {
 			return contents.debugger.isAttached() && !startupBlocks.has(contents.id);
@@ -321,7 +321,7 @@ async (token) => {
 		}
 		const previousClient = rendererClients.get(webContentsId);
 		if (previousClient && !force) {
-			throw new Error(`Electron webContents ${webContentsId} already has a jsdbg client`);
+			throw new Error(`Electron webContents ${webContentsId} already has a dbgjs client`);
 		}
 		let stolen = false;
 		if (previousClient) {
@@ -586,7 +586,7 @@ async (token) => {
 		watch(contents);
 	}
 	app.on("web-contents-created", onAppWebContentsCreated);
-	globalThis[registryKey] = { owner: "jsdbg", token, bridge };
+	globalThis[registryKey] = { owner: "dbgjs", token, bridge };
 	controlTimer = setTimeout(() => {
 		if (!controlSocket) {
 			void bridge.dispose("renderer bridge control handshake timed out");

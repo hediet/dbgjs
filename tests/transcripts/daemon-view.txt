@@ -1,5 +1,5 @@
-$ jsdbg daemon view --context live-browser
-jsdbg daemon view — context live-browser
+$ dbgjs daemon view --context live-browser
+dbgjs daemon view — context live-browser
 breakpoints per target: i=installed p=pending f=failed
 Context live-browser "live-browser" rev=<revision> connections=1 breakpoints=0
   Connection browser connected gen=1 targets=<target-count> kind=direct-cdp

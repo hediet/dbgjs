@@ -7,7 +7,7 @@ import test from "node:test";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseObservationResult, parseTargetDebuggerSnapshot } from "../apiTypes.js";
-import { DaemonClient, parseEndpointFile } from "../daemonClient.js";
+import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../daemonClient.js";
 import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
@@ -17,6 +17,21 @@ import {
 	targetKey,
 	targetReference,
 } from "../model.js";
+
+test("daemon state uses the dbgjs namespace on every platform", () => {
+	assert.equal(defaultServiceStateFile({
+		DBGJS_SERVICE_STATE: "custom-service.json",
+		LOCALAPPDATA: "local",
+	}), "custom-service.json");
+	assert.equal(defaultServiceStateFile({ LOCALAPPDATA: "local" }),
+		join("local", "hediet", "dbgjs", "service.json"));
+	assert.equal(defaultServiceStateFile({ XDG_RUNTIME_DIR: "runtime" }),
+		join("runtime", "hediet-dbgjs", "service.json"));
+	assert.equal(defaultServiceStateFile({ HOME: "home" }),
+		join("home", ".cache", "hediet", "dbgjs", "service.json"));
+	assert.equal(defaultServiceStateFile({}),
+		join(tmpdir(), `hediet-dbgjs-${process.pid}`, "service.json"));
+});
 
 test("workspace context identity uses lexical lowercase absolute paths", () => {
 	assert.equal(normalizeContextPath("/Work/Shop/../Store"), "/work/store");
@@ -183,7 +198,7 @@ test("DAP breakpoint IDs are stable daemon identifiers", () => {
 });
 
 test("installed Chrome discovery searches PATH", async () => {
-	const directory = await mkdtemp(join(process.cwd(), ".jsdbg-chrome-test-"));
+	const directory = await mkdtemp(join(process.cwd(), ".dbgjs-chrome-test-"));
 	const executable = join(directory, "google-chrome");
 	try {
 		await writeFile(executable, "#!/bin/sh\nexit 0\n");
@@ -198,11 +213,11 @@ test("installed Chrome discovery searches PATH", async () => {
 });
 
 test("daemon discovery prefers the extension's bundled executable", async () => {
-	const directory = await mkdtemp(join(process.cwd(), ".jsdbg-daemon-test-"));
+	const directory = await mkdtemp(join(process.cwd(), ".dbgjs-daemon-test-"));
 	const executable = join(
 		directory,
 		"bin",
-		process.platform === "win32" ? "jsdbg-service.exe" : "jsdbg-service",
+		process.platform === "win32" ? "dbgjs-service.exe" : "dbgjs-service",
 	);
 	try {
 		await mkdir(join(directory, "bin"));
@@ -225,22 +240,22 @@ test("daemon endpoint parsing accepts the Rust named-pipe shape", () => {
 			process_id: 42,
 			transport: {
 				kind: "namedPipe",
-				pipe_name: "\\\\.\\pipe\\jsdbg-test",
+				pipe_name: "\\\\.\\pipe\\dbgjs-test",
 			},
 			token: "test-token",
 		}),
 		{
-			address: "\\\\.\\pipe\\jsdbg-test",
+			address: "\\\\.\\pipe\\dbgjs-test",
 			token: "test-token",
 		},
 	);
 });
 
 test("long polls do not block command RPCs", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "jsdbg-rpc-test-"));
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-rpc-test-"));
 	const stateFile = join(directory, "service.json");
 	const endpoint = process.platform === "win32"
-		? `\\\\.\\pipe\\jsdbg-test-${randomUUID()}`
+		? `\\\\.\\pipe\\dbgjs-test-${randomUUID()}`
 		: join(directory, "service.sock");
 	const sockets = new Set<Socket>();
 	let observationReceivedResolve!: () => void;

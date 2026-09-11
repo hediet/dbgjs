@@ -12,8 +12,8 @@ import { expect, test } from "@playwright/test";
 import { run } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/release/jsdbg${executableSuffix}`);
-const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/dbgjs${executableSuffix}`);
+const service = resolve(`target/release/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-extension-host-coverage.md");
 const commandTimeoutMs = 120_000;
 let stepNumber = 0;
@@ -35,14 +35,14 @@ test("captures coverage from a running VS Code extension host", async () => {
 			"This golden scenario discovers an already-running VS Code forest, selects an attachable extension host, activates its Node inspector, captures precise coverage, and renders the immutable source-mapped result.\n",
 	);
 
-	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-extension-host-coverage-"));
+	const stateDirectory = await mkdtemp(join(tmpdir(), "dbgjs-extension-host-coverage-"));
 	const stateFile = join(stateDirectory, "service.json");
-	const sourceMapCache = join(tmpdir(), "jsdbg-vscode-source-map-cache");
+	const sourceMapCache = join(tmpdir(), "dbgjs-vscode-source-map-cache");
 	await mkdir(sourceMapCache, { recursive: true });
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
-		JSDBG_SOURCE_MAP_CACHE: sourceMapCache,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
+		DBGJS_SOURCE_MAP_CACHE: sourceMapCache,
 	};
 
 	try {
@@ -61,7 +61,7 @@ test("captures coverage from a running VS Code extension host", async () => {
 		expect(extensionHosts.length).toBeGreaterThan(0);
 		const extensionHost =
 			extensionHosts.find((process_) =>
-				process_.windowTitle?.toLowerCase().includes("cdp-client"),
+				process_.windowTitle?.toLowerCase().includes("dbgjs"),
 			) ?? extensionHosts[0];
 		const processId = String(extensionHost.processId);
 		const connectionId = `process-${processId}`;
@@ -152,7 +152,7 @@ test("captures coverage from a running VS Code extension host", async () => {
 		expect(ranges.some((range) => range.count > 0)).toBe(true);
 
 		await emitTranscript(
-			`\n## Finding\n\nThe selected extension host was PID **${processId}** for **${extensionHost.windowTitle ?? "an unlabelled window"}**. The coverage capture contains **${coverage.sources.length}** scripts and **${ranges.filter((range) => range.count > 0).length}** hit ranges, proving that jsdbg attached to and observed a live extension-host runtime.\n`,
+			`\n## Finding\n\nThe selected extension host was PID **${processId}** for **${extensionHost.windowTitle ?? "an unlabelled window"}**. The coverage capture contains **${coverage.sources.length}** scripts and **${ranges.filter((range) => range.count > 0).length}** hit ranges, proving that dbgjs attached to and observed a live extension-host runtime.\n`,
 		);
 		await runCli(
 			"Disconnect without terminating the existing VS Code extension host.",
@@ -257,7 +257,7 @@ async function runJson(
 
 async function recordCompleted(explanation, arguments_, output) {
 	stepNumber += 1;
-	const command = ["jsdbg", ...arguments_].map(quoteArgument).join(" ");
+	const command = ["dbgjs", ...arguments_].map(quoteArgument).join(" ");
 	const text = `\n## Step ${stepNumber} - ${explanation}\n\n\`\`\`console\n$ ${command}\n\`\`\`\n\n\`\`\`text\n${output}\`\`\`\n`;
 	await emitTranscript(text);
 	return output;

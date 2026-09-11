@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use cdp_client::protocol_schema::import_typed_cdp_protocol;
+use dbgjs::protocol_schema::import_typed_cdp_protocol;
 use hubrpc::prelude::{GenerateRustOptions, generate_rust_interface};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

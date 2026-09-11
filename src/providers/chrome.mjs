@@ -7,14 +7,14 @@ import { join } from "node:path";
 main().catch(reportError);
 
 async function main() {
-	const executable = required("JSDBG_CHROME_EXECUTABLE");
-	const url = required("JSDBG_PROVIDER_URL");
-	const headless = required("JSDBG_PROVIDER_MODE") === "headless";
-	const configuredDataDir = process.env.JSDBG_CHROME_USER_DATA_DIR;
-	const userDataDir = configuredDataDir || await mkdtemp(join(tmpdir(), "jsdbg-chrome-"));
+	const executable = required("DBGJS_CHROME_EXECUTABLE");
+	const url = required("DBGJS_PROVIDER_URL");
+	const headless = required("DBGJS_PROVIDER_MODE") === "headless";
+	const configuredDataDir = process.env.DBGJS_CHROME_USER_DATA_DIR;
+	const userDataDir = configuredDataDir || await mkdtemp(join(tmpdir(), "dbgjs-chrome-"));
 	const removeDataDir = !configuredDataDir;
 	const port = await allocatePort();
-	const extraArgs = parseJson("JSDBG_CHROME_ARGS", []);
+	const extraArgs = parseJson("DBGJS_CHROME_ARGS", []);
 	const child = spawn(executable, [
 		`--remote-debugging-port=${port}`,
 		"--remote-debugging-address=127.0.0.1",

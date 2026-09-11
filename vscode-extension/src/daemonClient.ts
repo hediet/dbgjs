@@ -379,19 +379,19 @@ function connectionConfigurationJson(
 }
 
 export function defaultServiceStateFile(environment: NodeJS.ProcessEnv = process.env): string {
-	if (environment.JSDBG_SERVICE_STATE !== undefined) {
-		return environment.JSDBG_SERVICE_STATE;
+	if (environment.DBGJS_SERVICE_STATE !== undefined) {
+		return environment.DBGJS_SERVICE_STATE;
 	}
 	if (environment.LOCALAPPDATA !== undefined) {
-		return join(environment.LOCALAPPDATA, "hediet", "cdp-client", "service.json");
+		return join(environment.LOCALAPPDATA, "hediet", "dbgjs", "service.json");
 	}
 	if (environment.XDG_RUNTIME_DIR !== undefined) {
-		return join(environment.XDG_RUNTIME_DIR, "hediet-cdp-client", "service.json");
+		return join(environment.XDG_RUNTIME_DIR, "hediet-dbgjs", "service.json");
 	}
 	if (environment.HOME !== undefined) {
-		return join(environment.HOME, ".cache", "hediet", "cdp-client", "service.json");
+		return join(environment.HOME, ".cache", "hediet", "dbgjs", "service.json");
 	}
-	return join(tmpdir(), `hediet-cdp-client-${process.pid}`, "service.json");
+	return join(tmpdir(), `hediet-dbgjs-${process.pid}`, "service.json");
 }
 
 export async function ensureStateDirectory(stateFile: string): Promise<void> {
@@ -420,7 +420,7 @@ async function connectDaemonHub(
 
 export function parseEndpointFile(value: unknown): EndpointFile {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error("Invalid jsdbg service endpoint file");
+		throw new Error("Invalid dbgjs service endpoint file");
 	}
 	const endpoint = value as Record<string, unknown>;
 	const token = endpoint.token;
@@ -429,14 +429,14 @@ export function parseEndpointFile(value: unknown): EndpointFile {
 		|| typeof transport !== "object"
 		|| transport === null
 		|| Array.isArray(transport)) {
-		throw new Error("Invalid jsdbg service endpoint");
+		throw new Error("Invalid dbgjs service endpoint");
 	}
 	const transportRecord = transport as Record<string, unknown>;
 	const address = transportRecord.path
 		?? transportRecord.pipeName
 		?? transportRecord.pipe_name;
 	if (typeof address !== "string") {
-		throw new Error("Unsupported jsdbg service transport");
+		throw new Error("Unsupported dbgjs service transport");
 	}
 	return { address, token };
 }

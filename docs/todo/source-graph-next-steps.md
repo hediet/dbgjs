@@ -17,8 +17,8 @@ The current implementation includes:
 - compacted and uncompacted graph dumps;
 - corresponding-path and exclusive source-map fan-out compaction;
 - loaded-source and terminal-resolved-source URI trees;
-- source-level graph traversal through `jsdbg source resolve`;
-- position-level traversal through `jsdbg source map`;
+- source-level graph traversal through `dbgjs source resolve`;
+- position-level traversal through `dbgjs source map`;
 - runtime scripts without source maps as first-class loaded snapshots.
 
 ## Next milestone: lazy projection rules
@@ -120,7 +120,7 @@ or contribution lifetime semantics.
 
 ## Inspection follow-up
 
-`jsdbg source resolve <uri>` currently returns the selected concrete subgraph
+`dbgjs source resolve <uri>` currently returns the selected concrete subgraph
 using the uncompacted graph renderer. A dedicated route-oriented human view
 could make individual resolution chains easier to read, while JSON should
 continue to expose the complete selected subgraph.

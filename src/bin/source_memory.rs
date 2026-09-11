@@ -4,8 +4,8 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Instant;
 
-use cdp_client::context_source_model::{ContextSourceModel, SourceContributionId};
-use cdp_client::source_view::{
+use dbgjs::context_source_model::{ContextSourceModel, SourceContributionId};
+use dbgjs::source_view::{
     GeneratedSourceInput, Position, ResolutionPolicy, ResolvedSourceView,
 };
 use sourcemap::SourceMapBuilder;

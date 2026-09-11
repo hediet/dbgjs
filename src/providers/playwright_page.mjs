@@ -5,8 +5,8 @@ const MAX_RESULT_BYTES = 1024 * 1024;
 main().catch((error) => finish({ ok: false, error: formatError(error) }, 1));
 
 async function main() {
-	const endpoint = process.env.JSDBG_PLAYWRIGHT_ENDPOINT;
-	const packagePath = process.env.JSDBG_PLAYWRIGHT_PACKAGE;
+	const endpoint = process.env.DBGJS_PLAYWRIGHT_ENDPOINT;
+	const packagePath = process.env.DBGJS_PLAYWRIGHT_PACKAGE;
 	if (!endpoint || !packagePath) {
 		throw new Error("Playwright execution configuration is incomplete");
 	}

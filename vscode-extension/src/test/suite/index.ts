@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import type { TargetSnapshot } from "../../apiTypes.js";
-import type { JsdbgExtensionApi } from "../../extension.js";
+import type { DbgjsExtensionApi } from "../../extension.js";
 
 export async function run(): Promise<void> {
-	const extension = vscode.extensions.getExtension<JsdbgExtensionApi>("hediet.jsdbg-vscode");
-	assert.ok(extension, "jsdbg prototype extension is installed");
+	const extension = vscode.extensions.getExtension<DbgjsExtensionApi>("hediet.dbgjs-vscode");
+	assert.ok(extension, "dbgjs prototype extension is installed");
 	await waitForActivation(extension);
 	const api = extension.exports;
-	assert.ok(api, "automatically activated jsdbg extension exported its API");
+	assert.ok(api, "automatically activated dbgjs extension exported its API");
 	await api.ready;
 
 	const snapshot = api.getSnapshot();
@@ -26,9 +26,9 @@ export async function run(): Promise<void> {
 		nodeTargets = await launchAndAssert(
 			api,
 			{
-				type: "jsdbg",
+				type: "dbgjs",
 				request: "launch",
-				name: "jsdbg Node.js integration",
+				name: "dbgjs Node.js integration",
 				runtime: "node",
 				program: "${workspaceFolder}/node-app.js",
 			},
@@ -60,7 +60,7 @@ export async function run(): Promise<void> {
 	} finally {
 		vscode.debug.removeBreakpoints([nodeBreakpoint]);
 	}
-	if (process.env.JSDBG_TEST_NODE_ONLY === "1") {
+	if (process.env.DBGJS_TEST_NODE_ONLY === "1") {
 		return;
 	}
 	const childTarget = nodeTargets.find(
@@ -74,34 +74,34 @@ export async function run(): Promise<void> {
 	assert.equal(childTarget.parentId, rootTarget.targetId);
 	assert.equal(childTarget.attached, true);
 	await launchAndAssert(api, {
-		type: "jsdbg",
+		type: "dbgjs",
 		request: "launch",
-		name: "jsdbg compiled TypeScript integration",
+		name: "dbgjs compiled TypeScript integration",
 		runtime: "node",
 		program: "${workspaceFolder}/dist/tsc-app.js",
 	});
 	await launchAndAssert(api, {
-		type: "jsdbg",
+		type: "dbgjs",
 		request: "launch",
-		name: "jsdbg tsx TypeScript integration",
+		name: "dbgjs tsx TypeScript integration",
 		runtime: "node",
 		runtimeArgs: ["--import", "tsx"],
 		program: "${workspaceFolder}/tsx-app.ts",
 	});
 	await launchAndAssert(api, {
-		type: "jsdbg",
+		type: "dbgjs",
 		request: "launch",
-		name: "jsdbg Playwright integration",
+		name: "dbgjs Playwright integration",
 		runtime: "playwright",
 		url: vscode.Uri.joinPath(workspaceFolder(), "index.html").toString(),
 		headless: true,
 	});
-	const chrome = process.env.JSDBG_TEST_CHROME;
+	const chrome = process.env.DBGJS_TEST_CHROME;
 	assert.ok(chrome, "integration test received a Chrome executable path");
 	await launchAndAssert(api, {
-		type: "jsdbg",
+		type: "dbgjs",
 		request: "launch",
-		name: "jsdbg Chrome integration",
+		name: "dbgjs Chrome integration",
 		runtime: "chrome",
 		url: vscode.Uri.joinPath(workspaceFolder(), "index.html").toString(),
 		executablePath: chrome,
@@ -168,7 +168,7 @@ async function assertVariablesAndWatch(session: vscode.DebugSession): Promise<vo
 }
 
 async function waitForActivation(
-	extension: vscode.Extension<JsdbgExtensionApi>,
+	extension: vscode.Extension<DbgjsExtensionApi>,
 ): Promise<void> {
 	const deadline = Date.now() + 10_000;
 	while (!extension.isActive && Date.now() < deadline) {
@@ -177,12 +177,12 @@ async function waitForActivation(
 	assert.equal(
 		extension.isActive,
 		true,
-		"jsdbg extension activated through its manifest activation events",
+		"dbgjs extension activated through its manifest activation events",
 	);
 }
 
 async function launchAndAssert(
-	api: JsdbgExtensionApi,
+	api: DbgjsExtensionApi,
 	configuration: vscode.DebugConfiguration,
 	minimumThreads = 1,
 	verify?: (
@@ -193,7 +193,7 @@ async function launchAndAssert(
 	const before = new Set(api.getSnapshot()?.connections.map((connection) => connection.id));
 	const startedSessions: vscode.DebugSession[] = [];
 	const sessionSubscription = vscode.debug.onDidStartDebugSession((session) => {
-		if (session.type === "jsdbg") {
+		if (session.type === "dbgjs") {
 			startedSessions.push(session);
 		}
 	});
@@ -220,7 +220,7 @@ async function launchAndAssert(
 async function waitForChildSession(
 	parent: vscode.DebugSession,
 	startedSessions: readonly vscode.DebugSession[],
-	api: JsdbgExtensionApi,
+	api: DbgjsExtensionApi,
 ): Promise<vscode.DebugSession> {
 	const deadline = Date.now() + 30_000;
 	while (Date.now() < deadline) {
@@ -246,14 +246,14 @@ async function waitForChildSession(
 
 async function assertSingleThread(
 	session: vscode.DebugSession,
-	api: JsdbgExtensionApi,
+	api: DbgjsExtensionApi,
 ): Promise<void> {
 	const response = await session.customRequest("threads") as unknown;
 	assertThreadResponse(response, 1, api);
 	assert.equal(
 		threadCount(response),
 		1,
-		`${session.name} must represent exactly one jsdbg target`,
+		`${session.name} must represent exactly one dbgjs target`,
 	);
 }
 
@@ -309,7 +309,7 @@ function samePath(left: unknown, right: string): boolean {
 async function waitForThreadCount(
 	session: vscode.DebugSession,
 	minimumThreads: number,
-	api: JsdbgExtensionApi,
+	api: DbgjsExtensionApi,
 ): Promise<void> {
 	const deadline = Date.now() + 30_000;
 	let last: unknown;
@@ -327,10 +327,10 @@ function waitForDebugSession(name: string): Promise<vscode.DebugSession> {
 	return new Promise((resolve, reject) => {
 		const timeout = setTimeout(() => {
 			subscription.dispose();
-			reject(new Error("Timed out waiting for jsdbg debug session"));
+			reject(new Error("Timed out waiting for dbgjs debug session"));
 		}, 60_000);
 		const subscription = vscode.debug.onDidStartDebugSession((session) => {
-			if (session.type === "jsdbg" && session.name === name) {
+			if (session.type === "dbgjs" && session.name === name) {
 				clearTimeout(timeout);
 				subscription.dispose();
 				resolve(session);
@@ -340,7 +340,7 @@ function waitForDebugSession(name: string): Promise<vscode.DebugSession> {
 }
 
 async function waitForConnectionCleanup(
-	api: JsdbgExtensionApi,
+	api: DbgjsExtensionApi,
 	expected: ReadonlySet<string | undefined>,
 ): Promise<void> {
 	const deadline = Date.now() + 15_000;
@@ -353,7 +353,7 @@ async function waitForConnectionCleanup(
 		await delay(50);
 	}
 	throw new Error(
-		`Timed out waiting for launched jsdbg connection cleanup; remaining: ${
+		`Timed out waiting for launched dbgjs connection cleanup; remaining: ${
 			(api.getSnapshot()?.connections.map((connection) =>
 				`${connection.id}:${connection.status.kind}`) ?? []).join(", ")
 		}`,
@@ -363,7 +363,7 @@ async function waitForConnectionCleanup(
 function assertThreadResponse(
 	value: unknown,
 	minimumThreads = 1,
-	api?: JsdbgExtensionApi,
+	api?: DbgjsExtensionApi,
 ): void {
 	assert.ok(typeof value === "object" && value !== null);
 	assert.ok("threads" in value && Array.isArray(value.threads));

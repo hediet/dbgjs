@@ -13,8 +13,8 @@ import { expect, test } from "@playwright/test";
 import { run } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/jsdbg${executableSuffix}`);
-const service = resolve(`target/debug/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
+const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/minified-node-cli-transcript.md");
 let stepNumber = 0;
 
@@ -23,10 +23,10 @@ test("CLI debugs a bundled minified Node.js source without a source map", async 
 	const buildBins = await run("cargo", ["build", "--bins"], {});
 	expect(buildBins.code, buildBins.output).toBe(0);
 
-	const fixtureDirectory = await mkdtemp(join(tmpdir(), "jsdbg-minified-node-"));
+	const fixtureDirectory = await mkdtemp(join(tmpdir(), "dbgjs-minified-node-"));
 	const stateDirectory = resolve(
 		"artifacts",
-		`.jsdbg-minified-node-e2e-${process.pid}`,
+		`.dbgjs-minified-node-e2e-${process.pid}`,
 	);
 	await mkdir(stateDirectory, { recursive: true });
 	await mkdir(resolve("artifacts"), { recursive: true });
@@ -34,8 +34,8 @@ test("CLI debugs a bundled minified Node.js source without a source map", async 
 	const entryPath = join(fixtureDirectory, "invoice.js");
 	const bundlePath = join(fixtureDirectory, "invoice.bundle.min.cjs");
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
 	};
 	let serviceStarted = false;
 
@@ -73,7 +73,7 @@ setInterval(() => {}, 1000);
 
 	await writeFile(
 		transcriptPath,
-		"# Debugging a minified Node.js bundle with `jsdbg`\n\n" +
+		"# Debugging a minified Node.js bundle with `dbgjs`\n\n" +
 			"This scenario bundles a small application with esbuild using full minification and no source map, starts Node.js under the Inspector, and debugs the derived formatted projection while the runtime executes the original one-line bundle.\n\n" +
 			"```text\n" +
 			"bundle: true\n" +
@@ -95,7 +95,7 @@ setInterval(() => {}, 1000);
 			environment,
 		);
 		await runCli(
-			"Launch the bundle as a Node.js connection. jsdbg starts it under the Inspector and attaches before releasing startup.",
+			"Launch the bundle as a Node.js connection. dbgjs starts it under the Inspector and attaches before releasing startup.",
 			[
 				"connection",
 				"add",
@@ -168,7 +168,7 @@ setInterval(() => {}, 1000);
 		const formattedUrl = `${sourceUrl}?formatted`;
 
 		const breakpoint = await runCli(
-			"Set a breakpoint on the readable formatted line. jsdbg maps it back to a physical offset in the one-line runtime bundle.",
+			"Set a breakpoint on the readable formatted line. dbgjs maps it back to a physical offset in the one-line runtime bundle.",
 			[
 				"breakpoint",
 				"set",
@@ -228,7 +228,7 @@ setInterval(() => {}, 1000);
 async function runCli(explanation, arguments_, environment) {
 	stepNumber += 1;
 	await emitTranscript(
-		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("jsdbg", arguments_)}\n\`\`\`\n\n`,
+		`\n## Step ${stepNumber} — ${explanation}\n\n\`\`\`console\n$ ${formatCommand("dbgjs", arguments_)}\n\`\`\`\n\n`,
 	);
 	const result = await run(cli, arguments_, environment);
 	const output = result.output.endsWith("\n") ? result.output : `${result.output}\n`;

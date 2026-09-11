@@ -10,8 +10,8 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/release/jsdbg${executableSuffix}`);
-const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/dbgjs${executableSuffix}`);
+const service = resolve(`target/release/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-source-map-graph.md");
 const commandTimeoutMs = 300_000;
 let stepNumber = 0;
@@ -42,7 +42,7 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 
 	const setup = await recordOperation("Launch the instrumented browser.", async () => {
 		const stateDirectory = await mkdtemp(
-			join(tmpdir(), "jsdbg-vscode-source-graph-"),
+			join(tmpdir(), "dbgjs-vscode-source-graph-"),
 		);
 		const userDataDirectory = await mkdtemp(
 			join(tmpdir(), "cdp-vscode-source-graph-"),
@@ -62,9 +62,9 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 	});
 	const { browser, debuggingPort, stateDirectory, userDataDirectory } = setup;
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: join(stateDirectory, "service.json"),
-		JSDBG_SOURCE_MAP_CACHE: join(tmpdir(), "jsdbg-vscode-source-map-cache"),
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: join(stateDirectory, "service.json"),
+		DBGJS_SOURCE_MAP_CACHE: join(tmpdir(), "dbgjs-vscode-source-map-cache"),
 	};
 	try {
 		const endpoint = await recordOperation("Load vscode.dev.", async () => {
@@ -84,7 +84,7 @@ test("renders the context-wide vscode.dev source-map graph", async () => {
 			environment,
 		);
 		await runCli(
-			"Attach jsdbg to the Playwright-launched browser and its vscode.dev page.",
+			"Attach dbgjs to the Playwright-launched browser and its vscode.dev page.",
 			[
 				"connection",
 				"add",
@@ -198,7 +198,7 @@ async function retryCli(explanation, arguments_, environment, timeoutMs) {
 		});
 		if (last.code === 0) {
 			last.durationMs = performance.now() - startedAt;
-			return recordCompleted(explanation, ["jsdbg", ...arguments_], last);
+			return recordCompleted(explanation, ["dbgjs", ...arguments_], last);
 		}
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
 	}
@@ -210,7 +210,7 @@ async function runCli(explanation, arguments_, environment) {
 		timeoutMs: commandTimeoutMs,
 	});
 	expect(result.code, `${arguments_.join(" ")}\n${result.output}`).toBe(0);
-	return recordCompleted(explanation, ["jsdbg", ...arguments_], result);
+	return recordCompleted(explanation, ["dbgjs", ...arguments_], result);
 }
 
 async function recordCompleted(explanation, arguments_, result) {

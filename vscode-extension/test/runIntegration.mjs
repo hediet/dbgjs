@@ -15,7 +15,7 @@ if (build.status !== 0) {
 	throw new Error(`cargo build failed with status ${build.status}`);
 }
 
-const temporaryDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-test-"));
+const temporaryDirectory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-test-"));
 const stateFile = join(temporaryDirectory, "service.json");
 const workspacePath = join(temporaryDirectory, "workspace");
 await cp(join(extensionRoot, "test", "workspace"), workspacePath, { recursive: true });
@@ -72,7 +72,7 @@ const executable = join(
 	repositoryRoot,
 	"target",
 	"debug",
-	process.platform === "win32" ? "jsdbg-service.exe" : "jsdbg-service",
+	process.platform === "win32" ? "dbgjs-service.exe" : "dbgjs-service",
 );
 try {
 	await runTests({
@@ -85,22 +85,22 @@ try {
 			"--disable-workspace-trust",
 		],
 		extensionTestsEnv: {
-			JSDBG_SERVICE_STATE: stateFile,
-			JSDBG_SERVICE_EXE: executable,
-			JSDBG_TEST_CHROME: chromium.executablePath(),
-			JSDBG_TEST_NODE_ONLY: process.env.JSDBG_TEST_NODE_ONLY ?? "",
-			JSDBG_TEST_LOG_STDOUT: process.env.JSDBG_TEST_LOG_STDOUT ?? "",
+			DBGJS_SERVICE_STATE: stateFile,
+			DBGJS_SERVICE_EXE: executable,
+			DBGJS_TEST_CHROME: chromium.executablePath(),
+			DBGJS_TEST_NODE_ONLY: process.env.DBGJS_TEST_NODE_ONLY ?? "",
+			DBGJS_TEST_LOG_STDOUT: process.env.DBGJS_TEST_LOG_STDOUT ?? "",
 		},
 	});
 	const endpoint = JSON.parse(await readFile(stateFile, "utf8"));
 	if (!Number.isInteger(endpoint.processId)) {
-		throw new Error("jsdbg-service endpoint does not contain a process ID");
+		throw new Error("dbgjs-service endpoint does not contain a process ID");
 	}
 	try {
 		process.kill(endpoint.processId, 0);
 	} catch (error) {
 		throw new Error(
-			`jsdbg-service process ${endpoint.processId} did not survive the VS Code window`,
+			`dbgjs-service process ${endpoint.processId} did not survive the VS Code window`,
 			{ cause: error },
 		);
 	}
@@ -110,11 +110,11 @@ try {
 			repositoryRoot,
 			"target",
 			"debug",
-			process.platform === "win32" ? "jsdbg.exe" : "jsdbg",
+			process.platform === "win32" ? "dbgjs.exe" : "dbgjs",
 		),
 		["service", "stop"],
 		{
-			env: { ...process.env, JSDBG_SERVICE_STATE: stateFile },
+			env: { ...process.env, DBGJS_SERVICE_STATE: stateFile },
 			stdio: "ignore",
 		},
 	);

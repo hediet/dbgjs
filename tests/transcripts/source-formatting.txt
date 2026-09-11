@@ -1,19 +1,19 @@
-$ jsdbg source formatting get
+$ dbgjs source formatting get
 DEFAULT  off
-$ jsdbg source formatting set auto
+$ dbgjs source formatting set auto
 DEFAULT  auto
-$ jsdbg source formatting rule add --mode off --url '**/vendor/**'
+$ dbgjs source formatting rule add --mode off --url '**/vendor/**'
 DEFAULT  auto
 
 RULE    MODE  TARGET  URL
 fmt-1   off   *       **/vendor/**
-$ jsdbg source formatting rule add --mode on --target 'page-*' --url '**/*.min.js'
+$ dbgjs source formatting rule add --mode on --target 'page-*' --url '**/*.min.js'
 DEFAULT  auto
 
 RULE    MODE  TARGET  URL
 fmt-1   off   *       **/vendor/**
 fmt-2   on    page-*  **/*.min.js
-$ jsdbg source formatting rule remove fmt-1
+$ dbgjs source formatting rule remove fmt-1
 DEFAULT  auto
 
 RULE    MODE  TARGET  URL

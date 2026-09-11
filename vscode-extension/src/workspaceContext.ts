@@ -4,7 +4,7 @@ import { DaemonClient, defaultServiceStateFile } from "./daemonClient.js";
 import { ensureDaemonProcess } from "./daemonProcess.js";
 import { normalizeContextPath } from "./model.js";
 
-const contextIdStateKey = "jsdbg.workspaceContextId";
+const contextIdStateKey = "dbgjs.workspaceContextId";
 
 export class WorkspaceContextController implements vscode.Disposable {
 	private clientValue: DaemonClient | undefined;
@@ -37,7 +37,7 @@ export class WorkspaceContextController implements vscode.Disposable {
 
 	public get client(): DaemonClient {
 		if (this.clientValue === undefined) {
-			throw this.errorValue ?? new Error("jsdbg daemon is not connected");
+			throw this.errorValue ?? new Error("dbgjs daemon is not connected");
 		}
 		return this.clientValue;
 	}
@@ -106,10 +106,10 @@ export class WorkspaceContextController implements vscode.Disposable {
 		try {
 			this.clientValue?.close();
 			const configured = vscode.workspace
-				.getConfiguration("jsdbg")
+				.getConfiguration("dbgjs")
 				.get<string>("serviceStatePath");
 			const configuredExecutable = vscode.workspace
-				.getConfiguration("jsdbg")
+				.getConfiguration("dbgjs")
 				.get<string>("serviceExecutable");
 			const stateFile = configured?.trim() || defaultServiceStateFile();
 			await ensureDaemonProcess({
@@ -123,7 +123,7 @@ export class WorkspaceContextController implements vscode.Disposable {
 			client.onClose(() => {
 				if (!this.disposed) {
 					this.clientValue = undefined;
-					this.setError(new Error("jsdbg daemon connection closed"));
+					this.setError(new Error("dbgjs daemon connection closed"));
 				}
 			});
 			this.adoptSnapshot(await client.putContext(this.contextId, "path", this.displayName));
@@ -176,7 +176,7 @@ export class WorkspaceContextController implements vscode.Disposable {
 function singleFolderContextId(): string {
 	const folders = vscode.workspace.workspaceFolders;
 	if (folders?.length !== 1) {
-		throw new Error("jsdbg requires exactly one workspace folder; multi-root and untitled workspace context selection is not yet defined");
+		throw new Error("dbgjs requires exactly one workspace folder; multi-root and untitled workspace context selection is not yet defined");
 	}
 	return normalizeContextPath(folders[0]!.uri.fsPath);
 }

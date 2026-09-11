@@ -1,9 +1,9 @@
-$ jsdbg target eval globalThis.__jsdbgConsistentValue
+$ dbgjs target eval globalThis.__dbgjsConsistentValue
 Object
   short: ok
   long: <120 x characters>...
   nested: Object
-$ jsdbg value globalThis.__jsdbgConsistentValue
+$ dbgjs value globalThis.__dbgjsConsistentValue
 Object
   short: ok
   long: <120 x characters>...

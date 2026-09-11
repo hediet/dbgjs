@@ -123,7 +123,7 @@ jobs:
           key: ${{ matrix.target }}-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build distribution binaries
-        run: cargo build --locked --release --workspace --bin jsdbg --bin jsdbg-service --bin jsdbg-tui
+        run: cargo build --locked --release --workspace --bin dbgjs --bin dbgjs-service --bin dbgjs-tui
       - name: Test npm packaging
         run: node --test scripts/npm-platform.test.mjs
       - name: Pack npm tarballs

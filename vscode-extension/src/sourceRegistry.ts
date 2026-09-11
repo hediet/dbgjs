@@ -29,7 +29,7 @@ export class SourceRegistry {
 	public async content(sourceReference: number): Promise<{ content: string; mimeType?: string }> {
 		const path = this.referenceToPath.get(sourceReference);
 		if (path === undefined) {
-			throw new Error(`Unknown jsdbg source reference ${sourceReference}`);
+			throw new Error(`Unknown dbgjs source reference ${sourceReference}`);
 		}
 		const source = await this.controller.client.showSource(this.controller.contextId, path);
 		return {

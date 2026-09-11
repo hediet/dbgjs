@@ -34,7 +34,7 @@ export async function ensureDaemonProcess(options: DaemonProcessOptions): Promis
 	if (exitCode !== 0) {
 		const detail = stderr.trim();
 		throw new Error(
-			`Failed to start jsdbg-service (exit code ${exitCode})${detail ? `: ${detail}` : ""}`,
+			`Failed to start dbgjs-service (exit code ${exitCode})${detail ? `: ${detail}` : ""}`,
 		);
 	}
 }
@@ -43,14 +43,14 @@ export async function resolveDaemonExecutable(
 	options: Pick<DaemonProcessOptions, "extensionPath" | "configuredExecutable" | "environment">,
 ): Promise<string> {
 	const environment = options.environment ?? process.env;
-	const explicit = options.configuredExecutable?.trim() || environment.JSDBG_SERVICE_EXE?.trim();
+	const explicit = options.configuredExecutable?.trim() || environment.DBGJS_SERVICE_EXE?.trim();
 	if (explicit) {
 		const executable = resolve(explicit);
 		await requireExecutable(executable);
 		return executable;
 	}
 
-	const name = process.platform === "win32" ? "jsdbg-service.exe" : "jsdbg-service";
+	const name = process.platform === "win32" ? "dbgjs-service.exe" : "dbgjs-service";
 	const candidates = [
 		join(options.extensionPath, "bin", name),
 		resolve(options.extensionPath, "..", "target", "debug", name),
@@ -65,8 +65,8 @@ export async function resolveDaemonExecutable(
 		}
 	}
 	throw new Error(
-		`Could not find jsdbg-service. Build it with 'cargo build --bin jsdbg-service' `
-			+ `or configure 'jsdbg.serviceExecutable'. Searched: ${candidates.join(", ")}`,
+		`Could not find dbgjs-service. Build it with 'cargo build --bin dbgjs-service' `
+			+ `or configure 'dbgjs.serviceExecutable'. Searched: ${candidates.join(", ")}`,
 	);
 }
 
@@ -74,7 +74,7 @@ async function requireExecutable(path: string): Promise<void> {
 	try {
 		await access(path);
 	} catch (error) {
-		throw new Error(`Configured jsdbg-service executable does not exist: ${path}`, {
+		throw new Error(`Configured dbgjs-service executable does not exist: ${path}`, {
 			cause: error,
 		});
 	}
@@ -87,7 +87,7 @@ function waitForExit(
 	return new Promise((resolvePromise, reject) => {
 		const timer = setTimeout(() => {
 			child.kill();
-			reject(new Error(`Timed out after ${timeoutMs} ms while starting jsdbg-service`));
+			reject(new Error(`Timed out after ${timeoutMs} ms while starting dbgjs-service`));
 		}, timeoutMs);
 		child.once("error", (error) => {
 			clearTimeout(timer);

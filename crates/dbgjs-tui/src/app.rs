@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use cdp_client::service_api::{
+use dbgjs::service_api::{
     BreakpointApplicationStatus, BreakpointStatus, CaptureKind, CaptureSnapshot,
     ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot, ContextSummary,
     FrameProjectionSnapshot, ProcessSnapshot, ProcessTreeSnapshot, ResourceGraphSnapshot,
@@ -121,7 +121,7 @@ pub struct ConnectionPathRef {
     pub outline_key: String,
     pub root_process_id: u32,
     pub process_id: u32,
-    pub role: cdp_client::service_api::ProcessRole,
+    pub role: dbgjs::service_api::ProcessRole,
     pub debug_target_id: Option<String>,
 }
 
@@ -864,7 +864,7 @@ impl App {
             .filter(|tree| {
                 (!self.is_section_collapsed(Section::Connections)
                     && tree.processes.iter().any(|process| {
-                        process.role == cdp_client::service_api::ProcessRole::Renderer
+                        process.role == dbgjs::service_api::ProcessRole::Renderer
                     }))
                     || tree.processes.iter().any(|process| {
                         self.expanded.contains(&format!(
@@ -1795,7 +1795,7 @@ impl App {
                             .iter()
                             .copied()
                             .find(|candidate| {
-                                candidate.role == cdp_client::service_api::ProcessRole::Renderer
+                                candidate.role == dbgjs::service_api::ProcessRole::Renderer
                                     && candidate.attachable
                             })
                             .or_else(|| {
@@ -1895,8 +1895,8 @@ impl App {
     fn append_process_target_row(
         &self,
         tree: &ProcessTreeSnapshot,
-        target: &cdp_client::service_api::ProcessTargetSnapshot,
-        targets: &[&cdp_client::service_api::ProcessTargetSnapshot],
+        target: &dbgjs::service_api::ProcessTargetSnapshot,
+        targets: &[&dbgjs::service_api::ProcessTargetSnapshot],
         depth: usize,
         visited: &mut BTreeSet<String>,
         rows: &mut Vec<OutlineRow>,
@@ -1986,7 +1986,7 @@ impl App {
                     key: key.clone(),
                     depth: 1,
                     label: process_path(tree, process.process_id),
-                    state: if process.role == cdp_client::service_api::ProcessRole::Renderer
+                    state: if process.role == dbgjs::service_api::ProcessRole::Renderer
                         && self
                             .renderer_target(tree.root_process_id, process.process_id)
                             .is_none()
@@ -2816,7 +2816,7 @@ impl App {
         if !process.attachable {
             return Err(format!("process {process_id} is not attachable"));
         }
-        if process.role == cdp_client::service_api::ProcessRole::Renderer
+        if process.role == dbgjs::service_api::ProcessRole::Renderer
             && self.renderer_target(root_pid, process_id).is_none()
         {
             return Err(
@@ -2974,7 +2974,7 @@ impl App {
         &self,
         root_pid: u32,
         process_id: u32,
-    ) -> Option<&cdp_client::service_api::ProcessTargetSnapshot> {
+    ) -> Option<&dbgjs::service_api::ProcessTargetSnapshot> {
         self.processes
             .iter()
             .find(|tree| tree.root_process_id == root_pid)
@@ -3908,7 +3908,7 @@ fn unavailable_inspector(title: &str) -> Inspector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cdp_client::service_api::{
+    use dbgjs::service_api::{
         ConnectionConfiguration, ProcessRole, ProcessRootKind, SourceFormattingSettings,
         TargetSnapshot,
     };
@@ -4085,7 +4085,7 @@ mod tests {
             memory_bytes: None,
             agent_sessions: Vec::new(),
         });
-        tree.targets = vec![cdp_client::service_api::ProcessTargetSnapshot {
+        tree.targets = vec![dbgjs::service_api::ProcessTargetSnapshot {
             process_id: Some(200),
             target: TargetSnapshot {
                 target_id: "renderer-7".to_owned(),
@@ -4154,11 +4154,11 @@ mod tests {
             window_title: None,
             cpu_percent: None,
             memory_bytes: None,
-            agent_sessions: vec![cdp_client::service_api::AgentSessionSnapshot {
+            agent_sessions: vec![dbgjs::service_api::AgentSessionSnapshot {
                 internal_id: "session-1".to_owned(),
                 chat_uri: Some("agent-host-session://session-1".to_owned()),
                 title: Some("Review pull request".to_owned()),
-                working_directories: vec!["D:\\dev\\hediet\\cdp-client".to_owned()],
+                working_directories: vec!["D:\\dev\\hediet\\dbgjs".to_owned()],
                 disconnected: Some(false),
             }],
         });
@@ -4271,7 +4271,7 @@ mod tests {
             TargetAttachmentState::Detached,
         );
         app.set_tab(Tab::Debug);
-        let source = |id, uri: &str| cdp_client::service_api::UncompactedSourceNodeSnapshot {
+        let source = |id, uri: &str| dbgjs::service_api::UncompactedSourceNodeSnapshot {
             id,
             uri: uri.to_owned(),
             revision: UncompactedSourceRevisionSnapshot::Version {
@@ -4351,7 +4351,7 @@ mod tests {
             kind: SourceTreeKind::SourceMapped,
             sources: (0..4_282)
                 .map(
-                    |id| cdp_client::service_api::UncompactedSourceNodeSnapshot {
+                    |id| dbgjs::service_api::UncompactedSourceNodeSnapshot {
                         id,
                         uri: format!("https://example.test/src/folder-{}/file-{id}.ts", id / 100),
                         revision: UncompactedSourceRevisionSnapshot::Version {
@@ -4863,7 +4863,7 @@ mod tests {
             vec![ContextSummary {
                 agent_instance_id: "agent".to_owned(),
                 id: "ctx".to_owned(),
-                kind: cdp_client::context_identity::ContextKind::Named,
+                kind: dbgjs::context_identity::ContextKind::Named,
                 path_distance: None,
                 path_ancestor: None,
                 display_name: "Context".to_owned(),

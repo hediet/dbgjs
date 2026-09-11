@@ -245,7 +245,7 @@ async fn bridge(
                             "params": {
                                 "targetId": scope.page.target_id,
                                 "flatten": true,
-                                "__jsdbgAutoAttach": true
+                                "__dbgjsAutoAttach": true
                             }
                         }))?).await?;
                     }

@@ -39,7 +39,7 @@ export class DebugSessionReconciler implements vscode.Disposable {
 			controller.onDidChangeSnapshot(() => this.scheduleReconcile()),
 			vscode.debug.onDidStartDebugSession((session) => {
 				this.sessions.set(session.id, session);
-				if (session.type === "jsdbg") {
+				if (session.type === "dbgjs") {
 					const target = targetReferenceFromConfiguration(session.configuration);
 					if (target !== undefined) {
 						this.bindings.set(session.id, target);
@@ -49,7 +49,7 @@ export class DebugSessionReconciler implements vscode.Disposable {
 			}),
 			vscode.debug.onDidTerminateDebugSession((session) => {
 				this.sessions.delete(session.id);
-				if (session.type === "jsdbg") {
+				if (session.type === "dbgjs") {
 					this.sessionTerminated(session);
 				}
 			}),
@@ -177,7 +177,7 @@ export class DebugSessionReconciler implements vscode.Disposable {
 		);
 		for (const session of this.sessions.values()) {
 			const target = targetReferenceFromConfiguration(session.configuration);
-			if (session.type === "jsdbg" && target !== undefined) {
+			if (session.type === "dbgjs" && target !== undefined) {
 				active.add(targetKey(target));
 			}
 		}

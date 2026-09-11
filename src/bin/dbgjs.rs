@@ -10,15 +10,15 @@ use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
-use cdp_client::context_identity::{
+use dbgjs::context_identity::{
     ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
 };
-use cdp_client::local_rpc::{connect_existing, default_state_file, ensure_service};
-use cdp_client::promise_debugging::{
+use dbgjs::local_rpc::{connect_existing, default_state_file, ensure_service};
+use dbgjs::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
 };
-use cdp_client::service_api::{
+use dbgjs::service_api::{
     BreakpointSpec, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
     ContextSummary, CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot,
     HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
@@ -34,11 +34,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::mpsc;
 
-#[path = "jsdbg/bounded_tree.rs"]
+#[path = "dbgjs/bounded_tree.rs"]
 mod bounded_tree;
-#[path = "jsdbg/daemon_view.rs"]
+#[path = "dbgjs/daemon_view.rs"]
 mod daemon_view;
-#[path = "jsdbg/output.rs"]
+#[path = "dbgjs/output.rs"]
 mod output;
 
 use output::{
@@ -56,21 +56,21 @@ const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.
 
 fn main() {
     let thread = std::thread::Builder::new()
-        .name("jsdbg-main".to_owned())
+        .name("dbgjs-main".to_owned())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .expect("failed to create the jsdbg runtime");
+                .expect("failed to create the dbgjs runtime");
             if let Err(error) = runtime.block_on(run()) {
-                eprintln!("jsdbg: {error}");
+                eprintln!("dbgjs: {error}");
                 std::process::exit(1);
             }
         })
-        .expect("failed to start the jsdbg main thread");
+        .expect("failed to start the dbgjs main thread");
     if thread.join().is_err() {
-        eprintln!("jsdbg: main thread panicked");
+        eprintln!("dbgjs: main thread panicked");
         std::process::exit(1);
     }
 }
@@ -733,7 +733,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             rpc(client.supply_stored_heap_source_map(context, capture.clone(),
-                cdp_client::service_api::HeapSourceMapSupply {
+                dbgjs::service_api::HeapSourceMapSupply {
                     script_id: script.clone(), script_hash: hash.clone(), source_map_url, source_map,
                 }).await)?;
             output.print_heap_map_supplied(capture, script)?;
@@ -1104,13 +1104,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let mut trees = cdp_client::process_discovery::discover_process_trees(
+            let mut trees = dbgjs::process_discovery::discover_process_trees(
                 options.root_kind,
                 options.stats,
             )
             .await?;
             if options.full {
-                cdp_client::process_discovery::populate_process_tree_targets(&mut trees).await;
+                dbgjs::process_discovery::populate_process_tree_targets(&mut trees).await;
             }
             output.print_process_trees(
                 &trees,
@@ -1132,9 +1132,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ProcessAttachLocator::VscodeProcess { .. }
                     | ProcessAttachLocator::VscodeWindow { .. }
             ) {
-                cdp_client::process_discovery::discover_vscode_process_trees(false).await?
+                dbgjs::process_discovery::discover_vscode_process_trees(false).await?
             } else {
-                cdp_client::process_discovery::discover_recognized_process_trees().await?
+                dbgjs::process_discovery::discover_recognized_process_trees().await?
             };
             let (process_id, process_tree_root_pid) = match options.locator {
                 ProcessAttachLocator::Process(process_id) => (process_id, None),
@@ -2317,11 +2317,11 @@ fn target_list_output(
                 .is_none_or(|connection| node.connection_id == connection)
         })
         .collect::<Vec<_>>();
-    let targets = cdp_client::target_selector::select_target_matches(
+    let targets = dbgjs::target_selector::select_target_matches(
         &candidates,
         snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
         scope.target.as_deref(),
-        |node| cdp_client::target_selector::TargetSelectorCandidate {
+        |node| dbgjs::target_selector::TargetSelectorCandidate {
             target: &node.target,
             connection_id: &node.connection_id,
             generation: node.connection_generation,
@@ -2350,12 +2350,12 @@ fn target_list_output(
             selected: selection_applies
                 && selection.connection.as_deref() == Some(node.connection_id.as_str())
                 && selection.target.as_deref().is_some_and(|selector| {
-                    cdp_client::target_selector::match_target_selector(
+                    dbgjs::target_selector::match_target_selector(
                         &node.target,
                         &node.connection_id,
                         node.connection_generation,
                         selector,
-                    ).is_some_and(|rank| rank >= cdp_client::target_selector::TargetSelectorMatch::Canonical)
+                    ).is_some_and(|rank| rank >= dbgjs::target_selector::TargetSelectorMatch::Canonical)
                 }),
             parent_target_id: node.parent_target_id.clone(),
             target: node.target.clone(),
@@ -2678,7 +2678,7 @@ fn log_scope(
     scope: &ResolvedScope,
     target_id: &str,
     connection_generation: u64,
-    capture: &cdp_client::service_api::LogCaptureSnapshot,
+    capture: &dbgjs::service_api::LogCaptureSnapshot,
 ) -> String {
     format!(
         "{}\0{}\0{}\0{}\0{}",
@@ -2890,7 +2890,7 @@ fn parse_raw_cdp_options(arguments: &[String]) -> Result<RawCdpOptions, io::Erro
     })
 }
 
-/// `jsdbg context relay --stdio` and `jsdbg target relay --stdio` currently support only the
+/// `dbgjs context relay --stdio` and `dbgjs target relay --stdio` currently support only the
 /// stdio transport, so `--stdio` is a required literal rather than an optional flag.
 fn parse_relay_options(arguments: &[String]) -> Result<(), io::Error> {
     match arguments {
@@ -2996,7 +2996,7 @@ fn select_implicit_context(
             return Ok(context.clone());
         }
         return Err(io::Error::other(format!(
-            "stale context binding at '{binding}' refers to missing context '{context}'; replace it with 'jsdbg set context --context <expression>' from that directory"
+            "stale context binding at '{binding}' refers to missing context '{context}'; replace it with 'dbgjs set context --context <expression>' from that directory"
         ))
         .into());
     }
@@ -3129,7 +3129,7 @@ fn default_screenshot_path() -> std::path::PathBuf {
         .unwrap_or_default()
         .as_millis();
     std::env::temp_dir()
-        .join("jsdbg-screenshots")
+        .join("dbgjs-screenshots")
         .join(format!("screenshot-{}-{timestamp}.png", std::process::id()))
 }
 
@@ -3246,7 +3246,7 @@ async fn resolve_scope(
             .await)?;
         return Ok(ResolvedScope {
             context,
-            target: cdp_client::target_selector::resolved_target_selector(
+            target: dbgjs::target_selector::resolved_target_selector(
                 &target.connection_id,
                 &target.target_id,
                 target.connection_generation,
@@ -3296,7 +3296,7 @@ async fn resolve_offline_scope(
 
 fn resolve_target_scope(
     context: String,
-    snapshot: &cdp_client::service_api::ContextSnapshot,
+    snapshot: &dbgjs::service_api::ContextSnapshot,
     selection: &CliSelection,
     options: &ScopeOptions,
 ) -> Result<ResolvedScope, io::Error> {
@@ -3313,7 +3313,7 @@ fn resolve_target_scope(
         .filter(|connection| {
             matches!(
                 connection.status,
-                cdp_client::service_api::ConnectionStatus::Connected { .. }
+                dbgjs::service_api::ConnectionStatus::Connected { .. }
             )
         })
         .collect::<Vec<_>>();
@@ -3346,11 +3346,11 @@ fn resolve_target_scope(
             connection.targets.iter().map(|target| (*connection, target))
         })
         .collect::<Vec<_>>();
-    let candidates = cdp_client::target_selector::select_target_matches(
+    let candidates = dbgjs::target_selector::select_target_matches(
         &candidates,
         snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
         requested_target.map(String::as_str),
-        |(connection, target)| cdp_client::target_selector::TargetSelectorCandidate {
+        |(connection, target)| dbgjs::target_selector::TargetSelectorCandidate {
             target,
             connection_id: &connection.id,
             generation: connection.generation,
@@ -3360,7 +3360,7 @@ fn resolve_target_scope(
         [(connection, target)] => {
             (
                 connection.id.clone(),
-                cdp_client::target_selector::resolved_target_selector(
+                dbgjs::target_selector::resolved_target_selector(
                     &connection.id,
                     &target.target_id,
                     connection.generation,
@@ -3391,7 +3391,7 @@ fn resolve_target_scope(
             let details = candidates
                 .iter()
                 .map(|(connection, target)| {
-                    let qualified = cdp_client::target_selector::qualified_target_selector(
+                    let qualified = dbgjs::target_selector::qualified_target_selector(
                         &connection.id, &target.target_id, connection.generation,
                     );
                     format!(
@@ -3459,7 +3459,7 @@ async fn evaluate_watches(
                     unserializable_value: None,
                     description: Some("unavailable in this frame".to_owned()),
                     object_id: None,
-                    preview: cdp_client::service_api::ValuePreviewSnapshot {
+                    preview: dbgjs::service_api::ValuePreviewSnapshot {
                         kind: "error".to_owned(),
                         preview: Some("unavailable in this frame".to_owned()),
                         truncated: false,
@@ -3480,7 +3480,7 @@ fn pause_epoch(snapshot: &TargetDebuggerSnapshot) -> Option<u64> {
 }
 
 async fn resolve_pause_epoch(
-    client: &cdp_client::service_api::DebuggerServiceApiClient,
+    client: &dbgjs::service_api::DebuggerServiceApiClient,
     context_id: &str,
     connection_id: &str,
     target_id: &str,
@@ -3503,7 +3503,7 @@ async fn resolve_pause_epoch(
 }
 
 fn current_pause_epoch(
-    snapshot: &cdp_client::service_api::TargetDebuggerSnapshot,
+    snapshot: &dbgjs::service_api::TargetDebuggerSnapshot,
 ) -> Result<u64, io::Error> {
     match snapshot.phase {
         TargetDebuggerPhase::Paused { epoch } => Ok(epoch),
@@ -5391,7 +5391,7 @@ async fn resolve_renderer_target_id(
                     candidates
                         .iter()
                         .map(|target_id| format!(
-                            "  jsdbg target attach --context \":{context_id}\" --target \"{connection_id}/{target_id}\""
+                            "  dbgjs target attach --context \":{context_id}\" --target \"{connection_id}/{target_id}\""
                         ))
                         .collect::<Vec<_>>()
                         .join("\n")
@@ -5710,7 +5710,7 @@ fn parse_stdio_options(options: &[String]) -> Result<StdioOptions, io::Error> {
 fn parse_node_options(options: &[String]) -> Result<NodeOptions, io::Error> {
     let mut parsed = NodeOptions {
         cwd: env::current_dir()?.to_string_lossy().into_owned(),
-        runtime_executable: env::var("JSDBG_NODE").unwrap_or_else(|_| "node".to_owned()),
+        runtime_executable: env::var("DBGJS_NODE").unwrap_or_else(|_| "node".to_owned()),
         args: Vec::new(),
         runtime_args: Vec::new(),
         env: BTreeMap::new(),
@@ -6126,12 +6126,12 @@ fn read_playwright_program(
 
 /// Bridges the current process's stdin/stdout (compact newline-delimited CDP JSON, matching
 /// `stdio_transport`'s framing) to the relay's authenticated loopback WebSocket. Both transports
-/// already speak the same `CdpEnvelope` wire format, so this is pure message pass-through: jsdbg
+/// already speak the same `CdpEnvelope` wire format, so this is pure message pass-through: dbgjs
 /// does not interpret CDP itself here, it only relays bytes between the two connections.
 async fn run_relay_stdio(websocket_url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use cdp_client::cdp_transport::ManagedCdpTransport;
-    use cdp_client::stdio_transport::CdpStdioTransport;
-    use cdp_client::websocket_transport::CdpWebSocketTransport;
+    use dbgjs::cdp_transport::ManagedCdpTransport;
+    use dbgjs::stdio_transport::CdpStdioTransport;
+    use dbgjs::websocket_transport::CdpWebSocketTransport;
     use hubrpc::prelude::MessageTransport;
 
     let websocket = CdpWebSocketTransport::connect(websocket_url).await?;
@@ -6175,14 +6175,14 @@ async fn run_playwright_program(
     endpoint: &str,
     program: &str,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let playwright_package = cdp_client::connection_provider::find_playwright_package()?;
-    let node = env::var_os("JSDBG_NODE").unwrap_or_else(|| "node".into());
+    let playwright_package = dbgjs::connection_provider::find_playwright_package()?;
+    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
     let mut child = TokioCommand::new(&node)
         .arg("--input-type=module")
         .arg("--eval")
         .arg(PLAYWRIGHT_PAGE_HELPER)
-        .env("JSDBG_PLAYWRIGHT_ENDPOINT", endpoint)
-        .env("JSDBG_PLAYWRIGHT_PACKAGE", playwright_package)
+        .env("DBGJS_PLAYWRIGHT_ENDPOINT", endpoint)
+        .env("DBGJS_PLAYWRIGHT_PACKAGE", playwright_package)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -6426,103 +6426,103 @@ fn rpc<T>(result: Result<T, hubrpc::prelude::JsonRpcError>) -> Result<T, io::Err
 }
 
 fn usage() -> &'static str {
-    "usage: jsdbg [--json] <command>
+    "usage: dbgjs [--json] <command>
 
 commands:
-  jsdbg daemon view [--context <id> | --all-contexts]
-  jsdbg service status|stop
-  jsdbg process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  jsdbg process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  jsdbg process attach <process-reference> [--context <id>] [--set] [--force]
-  jsdbg context list
-  jsdbg context create <path|:id> [display-name] [--set]
-  jsdbg context show [--context <path|:id>]
-  jsdbg context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg context relay --stdio [--context <id>]
-  jsdbg state get [--context <id>]
-  jsdbg state watch [--context <id>] [--after-revision <revision>]
-  jsdbg events --after-revision <revision> [--context <id>]
-  jsdbg set context --context <id>
-  jsdbg set target --target <selector> [--context <id>] [--connection <id>]
-  jsdbg connection list [--status <status>] [--kind <kind>] [--context <id>] [--connection <id>]
-  jsdbg connection add <ws-endpoint> --connection <id> [--context <id>] [--connect]
-  jsdbg connection add --node-inspector <ws-endpoint> --connection <id> [--context <id>] --connect
-  jsdbg connection add --node <program> --connection <id> [--context <id>] [--cwd <path>] [--runtime-executable <path>] [--runtime-arg <value>]... [--arg <value>]... [--env <name=value>]... [--connect] [--set]
-  jsdbg connection add --stdio --connection <id> [--context <id>] [--cwd <path>] [--env <name=value>]... [--topology target|browser] [--connect] [--set] -- <command> [args...]
-  jsdbg connection add --process <process-id> --connection <id> [--context <id>] --connect
-  jsdbg connection add --process-tree <root-pid> --connection <id> [--context <id>] --connect
-  jsdbg connection add --playwright <url> --connection <id> [--context <id>] [--channel <channel>] [--headed] [--ignore-https-errors] [--connect] [--set]
-  jsdbg connection add --chrome <url> --connection <id> [--context <id>] --executable <path> [--headed] [--user-data-dir <path>] [--arg <value>]... [--connect] [--set]
-  jsdbg connection connect|disconnect [--context <id>] [--connection <id>]
-  jsdbg connection pause-future on|off [--context <id>] [--connection <id>]
-  jsdbg connection delete [--context <id>] [--connection <id>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
-  jsdbg breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
-  jsdbg source formatting get|set <off|auto|on> [--context <id>]
-  jsdbg source formatting rule list [--context <id>]
-  jsdbg source formatting rule add --mode <off|auto|on> [--target <glob>] [--url <glob>] [--context <id>]
-  jsdbg source formatting rule remove <rule-id> [--context <id>]
-  jsdbg source list [--path <substring>] [--context <id>]
-  jsdbg source resolve|endpoints|explain <path> [--context <id>]
-  jsdbg source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
-  jsdbg source graph [--uncompacted] [--context <id>]
-  jsdbg source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
-  jsdbg source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
-  jsdbg source map <path> <line> <column> [--context <id>]
-  jsdbg source cache evict [--context <id>]
-  jsdbg source export <destination> [--context <id>]
-  jsdbg target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
-  jsdbg target graph [--context <id>]
-  jsdbg target show [target scope]
-  jsdbg target attach [target scope] [--set] [--force]
-  jsdbg target release [target scope]
-  jsdbg target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
-  jsdbg target wait paused <after-epoch> [timeout-ms] [target scope]
-  jsdbg target wait running [target scope]
-  jsdbg target resume [--epoch <epoch>] [target scope]
-  jsdbg target step into|over|out [--epoch <epoch>] [target scope]
-  jsdbg target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
+  dbgjs daemon view [--context <id> | --all-contexts]
+  dbgjs service status|stop
+  dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process attach <process-reference> [--context <id>] [--set] [--force]
+  dbgjs context list
+  dbgjs context create <path|:id> [display-name] [--set]
+  dbgjs context show [--context <path|:id>]
+  dbgjs context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
+  dbgjs context relay --stdio [--context <id>]
+  dbgjs state get [--context <id>]
+  dbgjs state watch [--context <id>] [--after-revision <revision>]
+  dbgjs events --after-revision <revision> [--context <id>]
+  dbgjs set context --context <id>
+  dbgjs set target --target <selector> [--context <id>] [--connection <id>]
+  dbgjs connection list [--status <status>] [--kind <kind>] [--context <id>] [--connection <id>]
+  dbgjs connection add <ws-endpoint> --connection <id> [--context <id>] [--connect]
+  dbgjs connection add --node-inspector <ws-endpoint> --connection <id> [--context <id>] --connect
+  dbgjs connection add --node <program> --connection <id> [--context <id>] [--cwd <path>] [--runtime-executable <path>] [--runtime-arg <value>]... [--arg <value>]... [--env <name=value>]... [--connect] [--set]
+  dbgjs connection add --stdio --connection <id> [--context <id>] [--cwd <path>] [--env <name=value>]... [--topology target|browser] [--connect] [--set] -- <command> [args...]
+  dbgjs connection add --process <process-id> --connection <id> [--context <id>] --connect
+  dbgjs connection add --process-tree <root-pid> --connection <id> [--context <id>] --connect
+  dbgjs connection add --playwright <url> --connection <id> [--context <id>] [--channel <channel>] [--headed] [--ignore-https-errors] [--connect] [--set]
+  dbgjs connection add --chrome <url> --connection <id> [--context <id>] --executable <path> [--headed] [--user-data-dir <path>] [--arg <value>]... [--connect] [--set]
+  dbgjs connection connect|disconnect [--context <id>] [--connection <id>]
+  dbgjs connection pause-future on|off [--context <id>] [--connection <id>]
+  dbgjs connection delete [--context <id>] [--connection <id>] [--expected-revision <revision>] [--request-id <id>]
+  dbgjs breakpoint set <breakpoint-id> <source-url> <line> [--column <column>] [--context <id>]
+  dbgjs breakpoint configure <breakpoint-id> <source-url> <line> <column> [--context <id>] [--disabled] [--condition <expression>] [--target <target>] [--expected-revision <revision>] [--request-id <id>]
+  dbgjs breakpoint delete <breakpoint-id> [--context <id>] [--expected-revision <revision>] [--request-id <id>]
+  dbgjs source formatting get|set <off|auto|on> [--context <id>]
+  dbgjs source formatting rule list [--context <id>]
+  dbgjs source formatting rule add --mode <off|auto|on> [--target <glob>] [--url <glob>] [--context <id>]
+  dbgjs source formatting rule remove <rule-id> [--context <id>]
+  dbgjs source list [--path <substring>] [--context <id>]
+  dbgjs source resolve|endpoints|explain <path> [--context <id>]
+  dbgjs source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
+  dbgjs source graph [--uncompacted] [--context <id>]
+  dbgjs source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
+  dbgjs source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
+  dbgjs source map <path> <line> <column> [--context <id>]
+  dbgjs source cache evict [--context <id>]
+  dbgjs source export <destination> [--context <id>]
+  dbgjs target list [--type <type>] [--title <substring>] [--url <substring>] [--attached|--unattached] [target scope]
+  dbgjs target graph [--context <id>]
+  dbgjs target show [target scope]
+  dbgjs target attach [target scope] [--set] [--force]
+  dbgjs target release [target scope]
+  dbgjs target wait breakpoint-installed <breakpoint-id> [timeout-ms] [target scope]
+  dbgjs target wait paused <after-epoch> [timeout-ms] [target scope]
+  dbgjs target wait running [target scope]
+  dbgjs target resume [--epoch <epoch>] [target scope]
+  dbgjs target step into|over|out [--epoch <epoch>] [target scope]
+  dbgjs target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
     '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
-  jsdbg page playwright - [target scope]
-  jsdbg page playwright --eval <program> [target scope]
-  jsdbg target watch <expression> [target scope]
-  jsdbg target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
-  jsdbg target relay --stdio [target scope]
-  jsdbg value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
-  jsdbg value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
-  jsdbg target logpoint <id> <source> <line> <column> <expression> [target scope]
-  jsdbg target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
-  jsdbg log [--after <cursor>] [--limit <count>] [target scope]
+  dbgjs page playwright - [target scope]
+  dbgjs page playwright --eval <program> [target scope]
+  dbgjs target watch <expression> [target scope]
+  dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
+  dbgjs target relay --stdio [target scope]
+  dbgjs value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
+  dbgjs value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
+  dbgjs target logpoint <id> <source> <line> <column> <expression> [target scope]
+  dbgjs target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
+  dbgjs log [--after <cursor>] [--limit <count>] [target scope]
     reports target-local console capture coverage, not browser/network diagnostics; does not attach
-  jsdbg target click <css-selector> [target scope]
-  jsdbg target key <ctrl+n|ctrl+k,ctrl+m|ctrl+k,n|enter|accept|arrowup> [target scope]
-  jsdbg target type <text> [target scope]
-  jsdbg screenshot capture [--output <path>] [target scope]
-  jsdbg coverage start [target scope]
-  jsdbg coverage capture [--id <name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
-  jsdbg coverage stop [--exclude <name>] [target scope]
-  jsdbg coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
-  jsdbg profile start [--sampling-interval <duration>] [target scope]
-  jsdbg profile stop [--id <name>] [target scope]
-  jsdbg profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [--context <id>]
-  jsdbg profile export [<name>] --output <path> [--context <id>]
-  jsdbg heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
-  jsdbg capture list [--context <id>]
-  jsdbg capture show <name> [--context <id>]
-  jsdbg capture delete <name> [--context <id>]
-  jsdbg promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
-  jsdbg heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
-  jsdbg heap supply-map <capture> <script-id> <captured-script-hash> <map-file>
-  jsdbg heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
-  jsdbg heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
-  jsdbg heap show <capture#heap-object-id> [--limit <count>|--all] [--full-strings]
-  jsdbg heap refs <capture#heap-object-id> [--incoming|--outgoing|--both] [--all-edges] [--limit <count>]
-  jsdbg heap path <from-ref> <to-ref> [--direction <outgoing|incoming|either>] [--all-edges] [--readable]
-  jsdbg heap root-path|retainer-path|dominators <capture#heap-object-id>
-  jsdbg heap aggregate [<capture>] [--by <type|name|string>] [--limit <count>] [--full-strings]
-  jsdbg heap diff <older-capture> <newer-capture> [--by <type|name|string>] [--limit <count>] [--full-strings]
-  jsdbg heap snapshot <path> [--capture-numeric-value] [--expose-internals] [target scope]
+  dbgjs target click <css-selector> [target scope]
+  dbgjs target key <ctrl+n|ctrl+k,ctrl+m|ctrl+k,n|enter|accept|arrowup> [target scope]
+  dbgjs target type <text> [target scope]
+  dbgjs screenshot capture [--output <path>] [target scope]
+  dbgjs coverage start [target scope]
+  dbgjs coverage capture [--id <name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+  dbgjs coverage stop [--exclude <name>] [target scope]
+  dbgjs coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
+  dbgjs profile start [--sampling-interval <duration>] [target scope]
+  dbgjs profile stop [--id <name>] [target scope]
+  dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [--context <id>]
+  dbgjs profile export [<name>] --output <path> [--context <id>]
+  dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
+  dbgjs capture list [--context <id>]
+  dbgjs capture show <name> [--context <id>]
+  dbgjs capture delete <name> [--context <id>]
+  dbgjs promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
+  dbgjs heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]
+  dbgjs heap supply-map <capture> <script-id> <captured-script-hash> <map-file>
+  dbgjs heap select [<capture>] [--id <heap-object-id>] [--type <kind>] [--name <text>|--name-regex <regex>] [--string-grep <text>|--string-regex <regex>] [--min-size <bytes>] [--max-size <bytes>] [--limit <count>] [--dominators] [--full-strings]
+  dbgjs heap strings (--grep <text>|--regex <regex>) [--capture <name>] [--limit <count>] [--full-strings]
+  dbgjs heap show <capture#heap-object-id> [--limit <count>|--all] [--full-strings]
+  dbgjs heap refs <capture#heap-object-id> [--incoming|--outgoing|--both] [--all-edges] [--limit <count>]
+  dbgjs heap path <from-ref> <to-ref> [--direction <outgoing|incoming|either>] [--all-edges] [--readable]
+  dbgjs heap root-path|retainer-path|dominators <capture#heap-object-id>
+  dbgjs heap aggregate [<capture>] [--by <type|name|string>] [--limit <count>] [--full-strings]
+  dbgjs heap diff <older-capture> <newer-capture> [--by <type|name|string>] [--limit <count>] [--full-strings]
+  dbgjs heap snapshot <path> [--capture-numeric-value] [--expose-internals] [target scope]
 
 target scope:
   [--context <id>] [--target <selector>] [--connection <id>]
@@ -6562,8 +6562,8 @@ mod tests {
         resolve_target_scope,
         select_implicit_context, split_heap_reference_cli, target_list_output,
     };
-    use cdp_client::context_identity::ContextKind;
-    use cdp_client::service_api::{
+    use dbgjs::context_identity::ContextKind;
+    use dbgjs::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
         ProcessRootKind, PromiseState, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
@@ -6822,20 +6822,20 @@ mod tests {
         let (kind, options) =
             parse_source_tree_options(&arguments(&["resolved", "--max-lines", "42", "--no-trim"]))
                 .unwrap();
-        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Resolved);
+        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Resolved);
         assert_eq!(options.max_lines, 42);
         assert!(!options.all);
         assert!(!options.trim_width);
 
         let (kind, options) = parse_source_tree_options(&arguments(&["loaded", "--all"])).unwrap();
-        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Loaded);
+        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Loaded);
         assert!(options.all);
         assert!(options.trim_width);
 
         let (kind, _) = parse_source_tree_options(&arguments(&["source-mapped"])).unwrap();
-        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::SourceMapped);
+        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::SourceMapped);
         let (kind, _) = parse_source_tree_options(&arguments(&["formatted"])).unwrap();
-        assert_eq!(kind, cdp_client::service_api::SourceTreeKind::Formatted);
+        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Formatted);
 
         assert!(parse_source_tree_options(&arguments(&["loaded", "--max-lines", "0"])).is_err());
         assert!(parse_source_tree_options(&arguments(&["unknown"])).is_err());
@@ -7038,7 +7038,7 @@ mod tests {
         assert_eq!(targets.targets[0].target.target_id, "page-1");
         assert!(targets.targets[0].selected);
         let entry = &targets.targets[0];
-        let qualified = cdp_client::target_selector::qualified_target_selector(
+        let qualified = dbgjs::target_selector::qualified_target_selector(
             &entry.connection_id,
             &entry.target.target_id,
             entry.connection_generation,
@@ -7187,7 +7187,7 @@ mod tests {
 
     #[test]
     fn log_cursor_scope_changes_on_reconnect_and_reattachment() {
-        use cdp_client::service_api::LogCaptureSnapshot;
+        use dbgjs::service_api::LogCaptureSnapshot;
         let scope = ResolvedScope {
             context: "ctx".into(),
             connection: "browser".into(),
@@ -7490,7 +7490,7 @@ mod tests {
             "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
             "--headed",
             "--user-data-dir",
-            "C:\\tmp\\jsdbg-chrome",
+            "C:\\tmp\\dbgjs-chrome",
             "--arg",
             "--disable-extensions",
             "--arg",
@@ -7508,7 +7508,7 @@ mod tests {
         assert!(options.set_default);
         assert_eq!(
             options.user_data_dir.as_deref(),
-            Some("C:\\tmp\\jsdbg-chrome")
+            Some("C:\\tmp\\dbgjs-chrome")
         );
         assert_eq!(
             options.args,
@@ -7672,7 +7672,7 @@ mod tests {
     #[test]
     fn legacy_global_selection_migrates_to_the_current_cwd_only() {
         let path = std::env::temp_dir().join(format!(
-            "jsdbg-selection-migration-{}-{}.json",
+            "dbgjs-selection-migration-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -7700,7 +7700,7 @@ mod tests {
     #[test]
     fn activating_an_explicit_context_preserves_separate_view_state() {
         let path = std::env::temp_dir().join(format!(
-            "jsdbg-selection-scope-{}-{}.json",
+            "dbgjs-selection-scope-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

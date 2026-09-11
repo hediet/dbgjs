@@ -51,7 +51,7 @@ class LegacyNdjsonTransport implements IMessageTransport<JsonRpcMessage, JsonRpc
 
 	public send(message: JsonRpcMessage): void {
 		if (this.closed) {
-			throw new Error("jsdbg HubRPC transport is closed");
+			throw new Error("dbgjs HubRPC transport is closed");
 		}
 		const line = JSON.stringify(message);
 		this.log?.(`extension -> daemon ${line}`);

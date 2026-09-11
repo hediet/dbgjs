@@ -41,29 +41,29 @@ pub enum LocalTransportEndpoint {
 }
 
 pub fn default_state_file() -> PathBuf {
-    if let Some(path) = env::var_os("JSDBG_SERVICE_STATE") {
+    if let Some(path) = env::var_os("DBGJS_SERVICE_STATE") {
         return PathBuf::from(path);
     }
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         return PathBuf::from(local_app_data)
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("service.json");
     }
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir)
-            .join("hediet-cdp-client")
+            .join("hediet-dbgjs")
             .join("service.json");
     }
     if let Some(home) = env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".cache")
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("service.json");
     }
     env::temp_dir()
-        .join(format!("hediet-cdp-client-{}", std::process::id()))
+        .join(format!("hediet-dbgjs-{}", std::process::id()))
         .join("service.json")
 }
 
@@ -128,7 +128,7 @@ async fn serve_named_pipe(
     )?);
     let token = random_token()?;
     let pipe_id = random_token()?;
-    let pipe_name = format!(r"\\.\pipe\hediet-cdp-client-{}", &pipe_id[..32]);
+    let pipe_name = format!(r"\\.\pipe\hediet-dbgjs-{}", &pipe_id[..32]);
     let mut server = create_server(&pipe_name, true)?;
     let endpoint = LocalServiceEndpoint {
         process_id: std::process::id(),
@@ -226,7 +226,7 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
 
     const CONSERVATIVE_SUN_PATH_LIMIT: usize = 100;
     let token = random_token()?;
-    let directory_name = format!("jsdbg-{}", &token[..16]);
+    let directory_name = format!("dbgjs-{}", &token[..16]);
     let candidates = [
         env::temp_dir().join(&directory_name).join("service.sock"),
         Path::new("/tmp").join(directory_name).join("service.sock"),
@@ -520,14 +520,14 @@ fn remove_endpoint_if_owned(path: &Path, endpoint: &LocalServiceEndpoint) {
 }
 
 fn spawn_service(state_file: &Path) -> Result<PathBuf, LocalRpcError> {
-    let executable = match env::var_os("JSDBG_SERVICE_EXE") {
+    let executable = match env::var_os("DBGJS_SERVICE_EXE") {
         Some(path) => PathBuf::from(path),
         None => {
             let mut path = env::current_exe()?;
             path.set_file_name(if cfg!(windows) {
-                "jsdbg-service.exe"
+                "dbgjs-service.exe"
             } else {
-                "jsdbg-service"
+                "dbgjs-service"
             });
             path
         }
@@ -604,7 +604,7 @@ pub enum LocalRpcError {
     #[error(
         "spawned service {executable} exposes incompatible HubRPC interface '{interface_id}' \
          (service has {actual}, client expects {expected}); rebuild it with \
-         `cargo build --bin jsdbg-service`"
+         `cargo build --bin dbgjs-service`"
     )]
     SpawnedServiceInterfaceMismatch {
         executable: String,
@@ -651,7 +651,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let root = env::temp_dir().join(format!(
-            "jsdbg-directory-permissions-{}-{}",
+            "dbgjs-directory-permissions-{}-{}",
             std::process::id(),
             random_token().unwrap()
         ));
@@ -673,22 +673,22 @@ mod tests {
     #[test]
     fn spawned_service_mismatch_reports_the_rebuild_command() {
         let error = LocalRpcError::SpawnedServiceInterfaceMismatch {
-            executable: "target/debug/jsdbg-service".to_owned(),
+            executable: "target/debug/dbgjs-service".to_owned(),
             interface_id: "debugger".to_owned(),
             expected: "new".to_owned(),
             actual: "old".to_owned(),
         };
 
         let message = error.to_string();
-        assert!(message.contains("target/debug/jsdbg-service"));
+        assert!(message.contains("target/debug/dbgjs-service"));
         assert!(message.contains("service has old, client expects new"));
-        assert!(message.contains("cargo build --bin jsdbg-service"));
+        assert!(message.contains("cargo build --bin dbgjs-service"));
     }
 
     #[tokio::test]
     async fn typed_context_state_round_trips_over_native_local_ipc() {
         let state_file = env::temp_dir().join(format!(
-            "jsdbg-local-rpc-{}-{}.json",
+            "dbgjs-local-rpc-{}-{}.json",
             std::process::id(),
             random_token().unwrap()
         ));

@@ -9,7 +9,7 @@ export const platforms = {
 export function platformKey(os, arch, glibc) {
 	const key = `${os}-${arch}${os === "linux" ? "-gnu" : ""}`;
 	if (!platforms[key] || (os === "linux" && !glibc)) {
-		throw new Error(`Unsupported jsdbg platform: ${os}/${arch}${os === "linux" && !glibc ? " (musl)" : ""}. Supported: ${Object.keys(platforms).join(", ")}.`);
+		throw new Error(`Unsupported dbgjs platform: ${os}/${arch}${os === "linux" && !glibc ? " (musl)" : ""}. Supported: ${Object.keys(platforms).join(", ")}.`);
 	}
 	return key;
 }

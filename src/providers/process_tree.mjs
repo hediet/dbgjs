@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
-const rootPid = Number(required("JSDBG_PROCESS_ROOT_PID"));
-const processMode = process.env.JSDBG_PROCESS_MODE || "tree";
+const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));
+const processMode = process.env.DBGJS_PROCESS_MODE || "tree";
 const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
@@ -346,7 +346,7 @@ async function activateInspector(pid) {
 		return activatedEndpoint;
 	}
 
-	const marker = join(tmpdir(), `jsdbg-inspector-${pid}-${randomUUID()}.json`);
+	const marker = join(tmpdir(), `dbgjs-inspector-${pid}-${randomUUID()}.json`);
 	const token = randomUUID();
 	const expression = `(() => {
 		const fs = process.getBuiltinModule("fs");

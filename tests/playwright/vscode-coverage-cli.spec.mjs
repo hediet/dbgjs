@@ -16,8 +16,8 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/release/jsdbg${executableSuffix}`);
-const service = resolve(`target/release/jsdbg-service${executableSuffix}`);
+const cli = resolve(`target/release/dbgjs${executableSuffix}`);
+const service = resolve(`target/release/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/vscode-typing-coverage.md");
 const expectedDurationMs = 120_000;
 const hardTimeoutMs = Math.ceil(expectedDurationMs * 1.2);
@@ -33,17 +33,17 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real jsdbg/HubRPC/Chrome/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
+		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real dbgjs/HubRPC/Chrome/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
 	);
 
-	const stateDirectory = await mkdtemp(join(tmpdir(), "jsdbg-vscode-coverage-"));
+	const stateDirectory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-coverage-"));
 	const stateFile = join(stateDirectory, "service.json");
-	const sourceMapCache = join(tmpdir(), "jsdbg-vscode-source-map-cache");
+	const sourceMapCache = join(tmpdir(), "dbgjs-vscode-source-map-cache");
 	await mkdir(sourceMapCache, { recursive: true });
 	const environment = {
-		JSDBG_SERVICE_EXE: service,
-		JSDBG_SERVICE_STATE: stateFile,
-		JSDBG_SOURCE_MAP_CACHE: sourceMapCache,
+		DBGJS_SERVICE_EXE: service,
+		DBGJS_SERVICE_STATE: stateFile,
+		DBGJS_SOURCE_MAP_CACHE: sourceMapCache,
 	};
 	try {
 		await runCli(
@@ -593,7 +593,7 @@ async function emitTranscript(text) {
 }
 
 function cliName() {
-	return "jsdbg";
+	return "dbgjs";
 }
 
 function quoteArgument(argument) {

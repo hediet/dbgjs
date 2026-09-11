@@ -8,16 +8,16 @@ history, provenance, and policy design below remains exploratory.
 The implementation deliberately consists of generic live-value inspection and
 a heap observer:
 
-- `jsdbg value <expression>` evaluates without side effects by default, then
+- `dbgjs value <expression>` evaluates without side effects by default, then
   renders engine-confirmed promises with their current state and bounded
   settlement. `--allow-side-effects` opts into effectful evaluation, while
-  `jsdbg value --object-id <remote-object-id>` inspects an existing reference.
+  `dbgjs value --object-id <remote-object-id>` inspects an existing reference.
   Recognized V8
   `[[PromiseState]]`/`[[PromiseStatus]]` evidence yields `pending`,
   `fulfilled`, or `rejected`; missing or unfamiliar evidence yields `unknown`.
   Fulfillment values and rejection reasons use a bounded preview and retain an
   existing remote-object reference when one is available.
-- `jsdbg promise list [<capture>] [--state <state>]` scans an existing immutable
+- `dbgjs promise list [<capture>] [--state <state>]` scans an existing immutable
   heap capture for exact promise-like V8 node names. It reports only nodes
   strongly reachable from the snapshot root, reuses capture-scoped heap
   references, and reads state/result edges only when the snapshot explicitly

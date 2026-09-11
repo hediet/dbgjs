@@ -3,7 +3,7 @@
 ## Goal
 
 Offer an optional JavaScript API for Playwright-style page automation on a
-browser target already selected and owned by `jsdbg`.
+browser target already selected and owned by `dbgjs`.
 
 ## Capabilities
 
@@ -61,8 +61,8 @@ rules.
 
 ## Initial implementation
 
-`jsdbg page playwright -` reads one program from stdin, while
-`jsdbg page playwright --eval <program>` executes inline source. The program
+`dbgjs page playwright -` reads one program from stdin, while
+`dbgjs page playwright --eval <program>` executes inline source. The program
 receives `page` in global scope and can return one JSON value.
 
 The control plane remains on the daemon's authenticated Unix socket (Unix) or

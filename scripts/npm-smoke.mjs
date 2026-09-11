@@ -7,17 +7,17 @@ import { createInterface } from "node:readline";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import { platformKey } from "../npm/jsdbg/lib/platform.mjs";
+import { platformKey } from "../npm/dbgjs/lib/platform.mjs";
 import { npm } from "./npm-tools.mjs";
 
 const { values } = parseArgs({ options: { platform: { type: "string" }, artifacts: { type: "string" } } });
 const host = platformKey(process.platform, process.arch, process.platform === "linux" ? process.report.getReport().header.glibcVersionRuntime : undefined);
 assert.equal(values.platform, host, "Smoke tests must run natively on the packaged platform.");
 if (!values.artifacts) throw new Error("--artifacts must point to the tarball directory.");
-const manifest = JSON.parse(await readFile(new URL("../npm/jsdbg/package.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(new URL("../npm/dbgjs/package.json", import.meta.url), "utf8"));
 const tarballs = [
-	resolve(values.artifacts, `hediet-jsdbg-${host}-${manifest.version}.tgz`),
-	resolve(values.artifacts, `hediet-jsdbg-${manifest.version}.tgz`),
+	resolve(values.artifacts, `hediet-dbgjs-${host}-${manifest.version}.tgz`),
+	resolve(values.artifacts, `hediet-dbgjs-${manifest.version}.tgz`),
 ];
 
 async function runProcess(command, args, options) {
@@ -37,27 +37,27 @@ async function runProcess(command, args, options) {
 	return stdout;
 }
 
-const directory = await mkdtemp(join(tmpdir(), "jsdbg-installed-"));
+const directory = await mkdtemp(join(tmpdir(), "dbgjs-installed-"));
 try {
 	for (const global of [false, true]) {
 		const prefix = join(directory, global ? "global" : "local");
 		await mkdir(prefix);
 		npm(["install", ...(global ? ["--global"] : []), "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], { cwd: directory, stdio: "pipe", timeout: 180_000 });
 		const modules = global && process.platform !== "win32" ? join(prefix, "lib", "node_modules") : join(prefix, "node_modules");
-		const launcher = join(modules, "@hediet", "jsdbg", "bin", "jsdbg.mjs");
-		const env = { ...process.env, JSDBG_SERVICE_STATE: join(prefix, "service.json") };
-		delete env.JSDBG_SERVICE_EXE;
-		delete env.JSDBG_PLAYWRIGHT_PACKAGE;
-		delete env.JSDBG_NODE;
+		const launcher = join(modules, "@hediet", "dbgjs", "bin", "dbgjs.mjs");
+		const env = { ...process.env, DBGJS_SERVICE_STATE: join(prefix, "service.json") };
+		delete env.DBGJS_SERVICE_EXE;
+		delete env.DBGJS_PLAYWRIGHT_PACKAGE;
+		delete env.DBGJS_NODE;
 		const run = (...args) => runProcess(process.execPath, [launcher, ...args], { cwd: prefix, env });
-		assert.match(await run("--help"), /jsdbg/);
+		assert.match(await run("--help"), /dbgjs/);
 		await assert.rejects(() => run("not-a-real-command"), /exited with/);
 		const shim = global
-			? join(prefix, ...(process.platform === "win32" ? ["jsdbg.cmd"] : ["bin", "jsdbg"]))
-			: join(prefix, "node_modules", ".bin", process.platform === "win32" ? "jsdbg.cmd" : "jsdbg");
+			? join(prefix, ...(process.platform === "win32" ? ["dbgjs.cmd"] : ["bin", "dbgjs"]))
+			: join(prefix, "node_modules", ".bin", process.platform === "win32" ? "dbgjs.cmd" : "dbgjs");
 		assert.match(await runProcess(shim, ["--help"], {
 			cwd: prefix, env, shell: process.platform === "win32",
-		}), /jsdbg/);
+		}), /dbgjs/);
 		const node = spawn(process.execPath, ["-e", "const i=require('node:inspector');i.open(0,'127.0.0.1');console.log(i.url());setInterval(()=>{},1000)"], { stdio: ["ignore", "pipe", "pipe"] });
 		const exited = once(node, "exit");
 		const lines = createInterface({ input: node.stdout });

@@ -1586,7 +1586,7 @@ async fn run_target(
                 response,
             })) => {
                 let object_group =
-                    (!options.retain_references).then(|| "jsdbg-ephemeral-value".to_owned());
+                    (!options.retain_references).then(|| "dbgjs-ephemeral-value".to_owned());
                 let result = inspect_value(
                     &driver,
                     &session_key,
@@ -2664,27 +2664,27 @@ fn publish_snapshot(
 
 fn temporary_heap_snapshot_path() -> PathBuf {
     static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
-    let directory = if let Some(state_file) = std::env::var_os("JSDBG_SERVICE_STATE") {
+    let directory = if let Some(state_file) = std::env::var_os("DBGJS_SERVICE_STATE") {
         PathBuf::from(state_file)
             .parent()
             .map(|parent| parent.join("heap-captures"))
-            .unwrap_or_else(|| std::env::temp_dir().join("jsdbg-heap-captures"))
+            .unwrap_or_else(|| std::env::temp_dir().join("dbgjs-heap-captures"))
     } else if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
         PathBuf::from(local_app_data)
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("heap-captures")
     } else if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home)
             .join(".cache")
             .join("hediet")
-            .join("cdp-client")
+            .join("dbgjs")
             .join("heap-captures")
     } else {
-        std::env::temp_dir().join(format!("jsdbg-heap-captures-{}", std::process::id()))
+        std::env::temp_dir().join(format!("dbgjs-heap-captures-{}", std::process::id()))
     };
     directory.join(format!(
-        "jsdbg-heap-{}-{}.heapsnapshot",
+        "dbgjs-heap-{}-{}.heapsnapshot",
         std::process::id(),
         TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
     ))
@@ -4511,7 +4511,7 @@ async fn evaluate(
     frame_index: u32,
     expression: String,
 ) -> Result<EvaluationSnapshot, TargetDebuggerError> {
-    const OBJECT_GROUP: &str = "jsdbg-ephemeral-evaluation";
+    const OBJECT_GROUP: &str = "dbgjs-ephemeral-evaluation";
     let result = evaluate_remote(
         driver,
         session_key,
@@ -4660,7 +4660,7 @@ async fn evaluate_remote(
 fn evaluation_container_expression(expression: &str) -> String {
     format!(
         r#"({{
-  __jsdbgValue: (
+  __dbgjsValue: (
 {expression}
   )
 }})"#
@@ -4670,63 +4670,63 @@ fn evaluation_container_expression(expression: &str) -> String {
 fn bounded_projection_function(max_preview_length: u32) -> String {
     format!(
         r#"function() {{
-  const __jsdbgValue = this.__jsdbgValue;
-  const __jsdbgMaxLength = {max_preview_length};
-  const __jsdbgKind = typeof __jsdbgValue;
-  let __jsdbgText;
-  if (__jsdbgKind === "string") {{
-    __jsdbgText = __jsdbgValue;
-  }} else if (__jsdbgKind === "bigint") {{
-    __jsdbgText = `${{__jsdbgValue}}n`;
-  }} else if (__jsdbgKind === "symbol") {{
+  const __dbgjsValue = this.__dbgjsValue;
+  const __dbgjsMaxLength = {max_preview_length};
+  const __dbgjsKind = typeof __dbgjsValue;
+  let __dbgjsText;
+  if (__dbgjsKind === "string") {{
+    __dbgjsText = __dbgjsValue;
+  }} else if (__dbgjsKind === "bigint") {{
+    __dbgjsText = `${{__dbgjsValue}}n`;
+  }} else if (__dbgjsKind === "symbol") {{
     // A Symbol description is only exposed through a mutable prototype getter.
-    return {{ __jsdbgKind, __jsdbgTruncated: true }};
-  }} else if (__jsdbgKind === "number" && __jsdbgValue !== __jsdbgValue) {{
-    __jsdbgText = "NaN";
-  }} else if (__jsdbgKind === "number" && __jsdbgValue === 1 / 0) {{
-    __jsdbgText = "Infinity";
-  }} else if (__jsdbgKind === "number" && __jsdbgValue === -1 / 0) {{
-    __jsdbgText = "-Infinity";
+    return {{ __dbgjsKind, __dbgjsTruncated: true }};
+  }} else if (__dbgjsKind === "number" && __dbgjsValue !== __dbgjsValue) {{
+    __dbgjsText = "NaN";
+  }} else if (__dbgjsKind === "number" && __dbgjsValue === 1 / 0) {{
+    __dbgjsText = "Infinity";
+  }} else if (__dbgjsKind === "number" && __dbgjsValue === -1 / 0) {{
+    __dbgjsText = "-Infinity";
   }} else if (
-    __jsdbgKind === "number"
-    && __jsdbgValue === 0
-    && 1 / __jsdbgValue === -1 / 0
+    __dbgjsKind === "number"
+    && __dbgjsValue === 0
+    && 1 / __dbgjsValue === -1 / 0
   ) {{
-    __jsdbgText = "-0";
+    __dbgjsText = "-0";
   }} else {{
-    return {{ __jsdbgKind: "remote", __jsdbgValue }};
+    return {{ __dbgjsKind: "remote", __dbgjsValue }};
   }}
-  if (__jsdbgMaxLength >= __jsdbgText.length) {{
-    return {{ __jsdbgKind, __jsdbgText, __jsdbgTruncated: false }};
+  if (__dbgjsMaxLength >= __dbgjsText.length) {{
+    return {{ __dbgjsKind, __dbgjsText, __dbgjsTruncated: false }};
   }}
-  let __jsdbgPreview = "";
-  let __jsdbgLength = 0;
-  let __jsdbgOffset = 0;
+  let __dbgjsPreview = "";
+  let __dbgjsLength = 0;
+  let __dbgjsOffset = 0;
   // In-range string index and length reads use own exotic data, not prototype hooks.
   while (
-    __jsdbgOffset < __jsdbgText.length
-    && __jsdbgLength < __jsdbgMaxLength
+    __dbgjsOffset < __dbgjsText.length
+    && __dbgjsLength < __dbgjsMaxLength
   ) {{
-    const __jsdbgFirst = __jsdbgText[__jsdbgOffset];
-    __jsdbgPreview += __jsdbgFirst;
-    __jsdbgOffset++;
+    const __dbgjsFirst = __dbgjsText[__dbgjsOffset];
+    __dbgjsPreview += __dbgjsFirst;
+    __dbgjsOffset++;
     if (
-      __jsdbgFirst >= "\uD800"
-      && __jsdbgFirst <= "\uDBFF"
-      && __jsdbgOffset < __jsdbgText.length
+      __dbgjsFirst >= "\uD800"
+      && __dbgjsFirst <= "\uDBFF"
+      && __dbgjsOffset < __dbgjsText.length
     ) {{
-      const __jsdbgSecond = __jsdbgText[__jsdbgOffset];
-      if (__jsdbgSecond >= "\uDC00" && __jsdbgSecond <= "\uDFFF") {{
-        __jsdbgPreview += __jsdbgSecond;
-        __jsdbgOffset++;
+      const __dbgjsSecond = __dbgjsText[__dbgjsOffset];
+      if (__dbgjsSecond >= "\uDC00" && __dbgjsSecond <= "\uDFFF") {{
+        __dbgjsPreview += __dbgjsSecond;
+        __dbgjsOffset++;
       }}
     }}
-    __jsdbgLength++;
+    __dbgjsLength++;
   }}
   return {{
-    __jsdbgKind,
-    __jsdbgText: __jsdbgPreview,
-    __jsdbgTruncated: __jsdbgOffset < __jsdbgText.length
+    __dbgjsKind,
+    __dbgjsText: __dbgjsPreview,
+    __dbgjsTruncated: __dbgjsOffset < __dbgjsText.length
   }};
 }}"#
     )
@@ -4759,7 +4759,7 @@ fn evaluated_remote_from_envelope(
             .find(|property| property.name == name)
             .and_then(|property| property.value.as_ref())
     };
-    let kind = property("__jsdbgKind")
+    let kind = property("__dbgjsKind")
         .and_then(|value| value.value.as_ref())
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| {
@@ -4768,7 +4768,7 @@ fn evaluated_remote_from_envelope(
             )
         })?;
     if kind == "remote" {
-        let value = property("__jsdbgValue").ok_or_else(|| {
+        let value = property("__dbgjsValue").ok_or_else(|| {
             TargetDebuggerError::Evaluation(
                 "target bounded evaluation envelope omitted its value".to_owned(),
             )
@@ -4789,7 +4789,7 @@ fn evaluated_remote_from_envelope(
             )));
         }
     };
-    let preview = property("__jsdbgText")
+    let preview = property("__dbgjsText")
         .and_then(|value| value.value.as_ref())
         .and_then(serde_json::Value::as_str);
     if kind != "symbol" && preview.is_none() {
@@ -4818,7 +4818,7 @@ fn evaluated_remote_from_envelope(
     }
     Ok(EvaluatedRemote {
         remote,
-        preview_truncated: property("__jsdbgTruncated")
+        preview_truncated: property("__dbgjsTruncated")
             .and_then(|value| value.value.as_ref())
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
@@ -6106,12 +6106,12 @@ mod tests {
         ];
         for (kind, expected_type, value, unserializable, description) in cases {
             let projection = evaluated_remote_from_envelope(&[
-                envelope_property("__jsdbgKind", serde_json::json!(kind)),
+                envelope_property("__dbgjsKind", serde_json::json!(kind)),
                 envelope_property(
-                    "__jsdbgText",
+                    "__dbgjsText",
                     serde_json::json!(value.or(unserializable).or(description).unwrap()),
                 ),
-                envelope_property("__jsdbgTruncated", serde_json::json!(true)),
+                envelope_property("__dbgjsTruncated", serde_json::json!(true)),
             ])
             .unwrap();
             assert_eq!(projection.remote.r#type, expected_type);
@@ -6135,8 +6135,8 @@ mod tests {
     #[test]
     fn bounded_symbol_envelope_omits_untrusted_description() {
         let projection = evaluated_remote_from_envelope(&[
-            envelope_property("__jsdbgKind", serde_json::json!("symbol")),
-            envelope_property("__jsdbgTruncated", serde_json::json!(true)),
+            envelope_property("__dbgjsKind", serde_json::json!("symbol")),
+            envelope_property("__dbgjsTruncated", serde_json::json!(true)),
         ])
         .unwrap();
         assert_eq!(projection.remote.r#type, RuntimeRemoteObjectType::Symbol);
@@ -6154,7 +6154,7 @@ mod tests {
         assert!(!source.contains(".charCodeAt"));
         assert!(!source.contains(".codePointAt"));
         assert!(!source.contains(".slice"));
-        assert!(source.contains("__jsdbgText[__jsdbgOffset]"));
+        assert!(source.contains("__dbgjsText[__dbgjsOffset]"));
         assert!(source.contains(r#""\uD800""#));
         assert!(source.contains(r#""\uDC00""#));
     }
@@ -6162,8 +6162,8 @@ mod tests {
     #[test]
     fn remote_envelope_preserves_safe_primitive_payload() {
         let projection = evaluated_remote_from_envelope(&[
-            envelope_property("__jsdbgKind", serde_json::json!("remote")),
-            envelope_property("__jsdbgValue", serde_json::json!(true)),
+            envelope_property("__dbgjsKind", serde_json::json!("remote")),
+            envelope_property("__dbgjsValue", serde_json::json!(true)),
         ])
         .unwrap();
         assert_eq!(projection.remote.r#type, RuntimeRemoteObjectType::Boolean);
@@ -6678,13 +6678,13 @@ mod tests {
             assert_eq!(frame_value.preview.preview.as_deref(), Some("42"));
             debugger.resume(pause_epoch).await.expect("target resumes");
 
-            inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount = 0", true)
+            inspect_live(&debugger, "globalThis.__dbgjsEvaluationCount = 0", true)
                 .await
                 .expect("counter initializes");
             transport.reset_largest_received_message_size();
             let huge = inspect_live(
                 &debugger,
-                "(globalThis.__jsdbgEvaluationCount++, 'x'.repeat(16 * 1024 * 1024))",
+                "(globalThis.__dbgjsEvaluationCount++, 'x'.repeat(16 * 1024 * 1024))",
                 true,
             )
             .await
@@ -6700,18 +6700,18 @@ mod tests {
             assert!(transport.largest_received_message_size() < 64 * 1024);
             assert!(serde_json::to_vec(&huge).unwrap().len() < 2_048);
             assert_no_references(&huge);
-            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+            let count = inspect_live(&debugger, "globalThis.__dbgjsEvaluationCount", true)
                 .await
                 .expect("counter reads");
             assert_eq!(count.preview.preview.as_deref(), Some("1"));
 
-            inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount = 0", true)
+            inspect_live(&debugger, "globalThis.__dbgjsEvaluationCount = 0", true)
                 .await
                 .expect("counter resets");
             transport.reset_largest_received_message_size();
             let huge_bigint = inspect_live(
                 &debugger,
-                "(globalThis.__jsdbgEvaluationCount++, BigInt('9'.repeat(1_000_000)))",
+                "(globalThis.__dbgjsEvaluationCount++, BigInt('9'.repeat(1_000_000)))",
                 true,
             )
             .await
@@ -6726,7 +6726,7 @@ mod tests {
             assert!(transport.largest_received_message_size() < 64 * 1024);
             assert!(serde_json::to_vec(&huge_bigint).unwrap().len() < 2_048);
             assert_no_references(&huge_bigint);
-            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+            let count = inspect_live(&debugger, "globalThis.__dbgjsEvaluationCount", true)
                 .await
                 .expect("counter reads");
             assert_eq!(count.preview.preview.as_deref(), Some("1"));
@@ -6778,7 +6778,7 @@ mod tests {
             assert!(
                 inspect_live(
                     &debugger,
-                    "globalThis.__jsdbgForbiddenSideEffect = true",
+                    "globalThis.__dbgjsForbiddenSideEffect = true",
                     false,
                 )
                 .await
@@ -6788,10 +6788,10 @@ mod tests {
             inspect_live(
                 &debugger,
                 r#"(() => {
-  globalThis.__jsdbgEvaluationCount = 0;
-  globalThis.__jsdbgPoisonedUnicode = "😀".repeat(1_000_000);
-  globalThis.__jsdbgPoisonedBigInt = BigInt("8".repeat(1_000_000));
-  globalThis.__jsdbgPoisonedSymbol = Symbol("z".repeat(1_000_000));
+  globalThis.__dbgjsEvaluationCount = 0;
+  globalThis.__dbgjsPoisonedUnicode = "😀".repeat(1_000_000);
+  globalThis.__dbgjsPoisonedBigInt = BigInt("8".repeat(1_000_000));
+  globalThis.__dbgjsPoisonedSymbol = Symbol("z".repeat(1_000_000));
   const poison = function() { for (;;) {} };
   for (const name of [
     "charAt", "charCodeAt", "codePointAt", "slice", "substring", "substr",
@@ -6846,7 +6846,7 @@ mod tests {
             transport.reset_largest_received_message_size();
             let poisoned_unicode = inspect_live(
                 &debugger,
-                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedUnicode)",
+                "(globalThis.__dbgjsEvaluationCount++, globalThis.__dbgjsPoisonedUnicode)",
                 true,
             )
             .await
@@ -6863,7 +6863,7 @@ mod tests {
             transport.reset_largest_received_message_size();
             let poisoned_bigint = inspect_live(
                 &debugger,
-                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedBigInt)",
+                "(globalThis.__dbgjsEvaluationCount++, globalThis.__dbgjsPoisonedBigInt)",
                 true,
             )
             .await
@@ -6880,7 +6880,7 @@ mod tests {
             transport.reset_largest_received_message_size();
             let poisoned_symbol = inspect_live(
                 &debugger,
-                "(globalThis.__jsdbgEvaluationCount++, globalThis.__jsdbgPoisonedSymbol)",
+                "(globalThis.__dbgjsEvaluationCount++, globalThis.__dbgjsPoisonedSymbol)",
                 true,
             )
             .await
@@ -6891,7 +6891,7 @@ mod tests {
             assert!(transport.largest_received_message_size() < 64 * 1024);
             assert!(serde_json::to_vec(&poisoned_symbol).unwrap().len() < 2_048);
 
-            let count = inspect_live(&debugger, "globalThis.__jsdbgEvaluationCount", true)
+            let count = inspect_live(&debugger, "globalThis.__dbgjsEvaluationCount", true)
                 .await
                 .expect("poisoned evaluation count reads");
             assert_eq!(count.preview.preview.as_deref(), Some("3"));

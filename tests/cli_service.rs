@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use cdp_client::local_rpc::{
+use dbgjs::local_rpc::{
     LocalTransportEndpoint, persistent_state_file, read_endpoint, startup_error_file,
 };
 
@@ -38,15 +38,15 @@ fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() 
 #[test]
 fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
     let root = std::env::temp_dir().join(format!(
-        "jsdbg-context-resolution-{}-{}",
+        "dbgjs-context-resolution-{}-{}",
         std::process::id(),
         unique_suffix()
     ));
     let child = root.join("packages").join("ui");
     fs::create_dir_all(&child).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     let root_context = run_json_in(
@@ -120,14 +120,14 @@ fn cli_resolves_cwd_contexts_with_binding_precedence_and_ranked_listing() {
 #[test]
 fn cli_connects_to_a_target_over_mcp_style_stdio() {
     let root = std::env::temp_dir().join(format!(
-        "jsdbg-stdio-{}-{}",
+        "dbgjs-stdio-{}-{}",
         std::process::id(),
         unique_suffix()
     ));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json_in(
@@ -231,8 +231,8 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
         .join(format!("log-coverage-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
     let run = |arguments: &[&str]| run_json_in(&cli, &service, &state_file, &root, arguments);
     run(&["context", "create", ":log-coverage", "Logs", "--set"]);
@@ -309,8 +309,8 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
         .join(format!("selector-roundtrip-{}", unique_suffix()));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests").join("fixtures").join("selector_browser.mjs");
@@ -415,14 +415,14 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
 #[test]
 fn target_relay_forwards_cdp_and_enforces_exclusive_context_ownership() {
     let root = std::env::temp_dir().join(format!(
-        "jsdbg-target-relay-{}-{}",
+        "dbgjs-target-relay-{}-{}",
         std::process::id(),
         unique_suffix()
     ));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json_in(
@@ -576,14 +576,14 @@ fn target_relay_forwards_cdp_and_enforces_exclusive_context_ownership() {
 #[test]
 fn context_relay_exposes_virtual_browser_root_and_enforces_exclusivity() {
     let root = std::env::temp_dir().join(format!(
-        "jsdbg-context-relay-{}-{}",
+        "dbgjs-context-relay-{}-{}",
         std::process::id(),
         unique_suffix()
     ));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json_in(
@@ -760,12 +760,12 @@ fn context_relay_exposes_virtual_browser_root_and_enforces_exclusivity() {
 #[test]
 fn cli_spawns_service_and_manages_shared_context_state() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-cli-service-{}-{}.json",
+        "dbgjs-cli-service-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     let created = run_json(
@@ -869,7 +869,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
         &current_view.2,
     );
     let current_view = String::from_utf8(current_view.1).unwrap();
-    assert!(current_view.contains("jsdbg daemon view — context shop"));
+    assert!(current_view.contains("dbgjs daemon view — context shop"));
     assert!(current_view.contains("Connection browser disconnected"));
     assert!(current_view.contains("Connection server disconnected"));
 
@@ -889,7 +889,7 @@ fn cli_spawns_service_and_manages_shared_context_state() {
     assert!(
         String::from_utf8(all_view.1)
             .unwrap()
-            .contains("jsdbg daemon view — all contexts")
+            .contains("dbgjs daemon view — all contexts")
     );
 
     let conflicting_scope = run_human_in(
@@ -917,12 +917,12 @@ fn cli_spawns_service_and_manages_shared_context_state() {
 #[test]
 fn cli_persists_ordered_source_formatting_rules() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-source-formatting-{}-{}.json",
+        "dbgjs-source-formatting-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
     run_json(
         &cli,
@@ -935,11 +935,11 @@ fn cli_persists_ordered_source_formatting_rules() {
     let commands: &[(&[&str], &str)] = &[
         (
             &["source", "formatting", "get"],
-            "jsdbg source formatting get",
+            "dbgjs source formatting get",
         ),
         (
             &["source", "formatting", "set", "auto"],
-            "jsdbg source formatting set auto",
+            "dbgjs source formatting set auto",
         ),
         (
             &[
@@ -952,7 +952,7 @@ fn cli_persists_ordered_source_formatting_rules() {
                 "--url",
                 "**/vendor/**",
             ],
-            "jsdbg source formatting rule add --mode off --url '**/vendor/**'",
+            "dbgjs source formatting rule add --mode off --url '**/vendor/**'",
         ),
         (
             &[
@@ -967,11 +967,11 @@ fn cli_persists_ordered_source_formatting_rules() {
                 "--url",
                 "**/*.min.js",
             ],
-            "jsdbg source formatting rule add --mode on --target 'page-*' --url '**/*.min.js'",
+            "dbgjs source formatting rule add --mode on --target 'page-*' --url '**/*.min.js'",
         ),
         (
             &["source", "formatting", "rule", "remove", "fmt-1"],
-            "jsdbg source formatting rule remove fmt-1",
+            "dbgjs source formatting rule remove fmt-1",
         ),
     ];
     for (arguments, rendered) in commands {
@@ -994,12 +994,12 @@ fn cli_persists_ordered_source_formatting_rules() {
 #[test]
 fn service_ensure_starts_the_shared_daemon() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-service-ensure-{}-{}.json",
+        "dbgjs-service-ensure-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     let status = Command::new(&service)
@@ -1009,7 +1009,7 @@ fn service_ensure_starts_the_shared_daemon() {
         .unwrap();
     assert!(
         status.success(),
-        "jsdbg-service --ensure failed with {status}"
+        "dbgjs-service --ensure failed with {status}"
     );
     assert!(read_endpoint(&state_file).is_ok());
 
@@ -1022,7 +1022,7 @@ fn service_ensure_starts_the_shared_daemon() {
 #[test]
 fn cli_manages_lifecycle_concurrency_and_sources() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-cli-management-{}-{}.json",
+        "dbgjs-cli-management-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
@@ -1032,8 +1032,8 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
         "export const validationValue = 42;\nconsole.log(validationValue);\nvoid validationValue;\n",
     )
     .unwrap();
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json(
@@ -1235,12 +1235,12 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
 #[test]
 fn context_intent_survives_service_restart() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-cli-restart-{}-{}.json",
+        "dbgjs-cli-restart-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     let created = run_json(
@@ -1317,18 +1317,18 @@ fn context_intent_survives_service_restart() {
 #[test]
 fn corrupt_persistence_reports_an_actionable_startup_error() {
     let state_file = std::env::temp_dir().join(format!(
-        "jsdbg-cli-corrupt-{}-{}.json",
+        "dbgjs-cli-corrupt-{}-{}.json",
         std::process::id(),
         unique_suffix()
     ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     fs::write(persistent_state_file(&state_file), b"{not-json").unwrap();
 
     let output = Command::new(&cli)
         .args(["context", "list"])
-        .env("JSDBG_SERVICE_EXE", &service)
-        .env("JSDBG_SERVICE_STATE", &state_file)
+        .env("DBGJS_SERVICE_EXE", &service)
+        .env("DBGJS_SERVICE_STATE", &state_file)
         .output()
         .unwrap();
 
@@ -1401,9 +1401,9 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     let state_file = std::env::current_dir()
         .unwrap()
         .join("target")
-        .join(format!("jsdbg-identity-e2e-{suffix}.json"));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+        .join(format!("dbgjs-identity-e2e-{suffix}.json"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json(
@@ -1835,24 +1835,24 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     assert!(!heap_files[0].exists());
 
     let transcript = "\
-$ jsdbg target show --context <context> --target node
+$ dbgjs target show --context <context> --target node
 error: target selector 'node' is ambiguous: runtime-a/<node-a>@1, runtime-b/<node-b>@1
-$ jsdbg target eval '6 * 7' --context <context> --target <canonical-id>
+$ dbgjs target eval '6 * 7' --context <context> --target <canonical-id>
 42
-$ jsdbg profile stop --id offline-profile --context <context> --target <canonical-id>
+$ dbgjs profile stop --id offline-profile --context <context> --target <canonical-id>
 capture registered context-wide; payload externalized from service state
-$ jsdbg coverage capture --id offline-profile --context <context> --target <canonical-id>
+$ dbgjs coverage capture --id offline-profile --context <context> --target <canonical-id>
 error: capture 'offline-profile' already exists in context
-$ jsdbg heap capture --id offline-heap --context <context> --target <node-b>
+$ dbgjs heap capture --id offline-heap --context <context> --target <node-b>
 capture reserved before storage
-$ jsdbg connection disconnect --context <context> --connection runtime-a
-$ jsdbg connection disconnect --context <context> --connection runtime-b
-$ jsdbg service stop
-$ jsdbg capture show offline-profile --context <context>
+$ dbgjs connection disconnect --context <context> --connection runtime-a
+$ dbgjs connection disconnect --context <context> --connection runtime-b
+$ dbgjs service stop
+$ dbgjs capture show offline-profile --context <context>
 kind=cpuProfile owner=runtime-a/<node-a>@1
-$ jsdbg profile show offline-profile --context <context>
+$ dbgjs profile show offline-profile --context <context>
 offline query succeeded
-$ jsdbg capture delete offline-heap --context <context>
+$ dbgjs capture delete offline-heap --context <context>
 catalog persisted, then immutable heap storage removed
 ";
     print!("{transcript}");
@@ -1877,12 +1877,12 @@ fn cli_service_connects_to_live_cdp() {
         .unwrap()
         .join("target")
         .join(format!(
-            "jsdbg-cli-live-{}-{}.json",
+            "dbgjs-cli-live-{}-{}.json",
             std::process::id(),
             unique_suffix()
         ));
-    let cli = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg"));
-    let service = PathBuf::from(env!("CARGO_BIN_EXE_jsdbg-service"));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
 
     run_json(
@@ -2045,7 +2045,7 @@ fn cli_service_connects_to_live_cdp() {
         &resolved_context_id,
         &target_id,
     );
-    let daemon_transcript = format!("$ jsdbg daemon view --context live-browser\n{daemon_view}");
+    let daemon_transcript = format!("$ dbgjs daemon view --context live-browser\n{daemon_view}");
     print!("{daemon_transcript}");
     assert_eq!(
         daemon_transcript,
@@ -2075,7 +2075,7 @@ fn cli_service_connects_to_live_cdp() {
 
     let long_value = "x".repeat(140);
     let setup_expression = format!(
-        "globalThis.__jsdbgConsistentValue = {{ short: 'ok', long: '{long_value}', nested: {{ answer: 42 }} }}"
+        "globalThis.__dbgjsConsistentValue = {{ short: 'ok', long: '{long_value}', nested: {{ answer: 42 }} }}"
     );
     let eval_json = run_json(
         &cli,
@@ -2099,7 +2099,7 @@ fn cli_service_connects_to_live_cdp() {
         &state_file,
         &[
             "value",
-            "globalThis.__jsdbgConsistentValue",
+            "globalThis.__dbgjsConsistentValue",
             "--context",
             "live-browser",
             "--connection",
@@ -2137,7 +2137,7 @@ fn cli_service_connects_to_live_cdp() {
         &[
             "target",
             "eval",
-            "globalThis.__jsdbgConsistentValue",
+            "globalThis.__dbgjsConsistentValue",
             "--context",
             "live-browser",
             "--connection",
@@ -2147,7 +2147,7 @@ fn cli_service_connects_to_live_cdp() {
         ],
     );
     assert_success(
-        &["target", "eval", "globalThis.__jsdbgConsistentValue"],
+        &["target", "eval", "globalThis.__dbgjsConsistentValue"],
         eval_human.0,
         &eval_human.1,
         &eval_human.2,
@@ -2159,7 +2159,7 @@ fn cli_service_connects_to_live_cdp() {
         &std::env::current_dir().unwrap(),
         &[
             "value",
-            "globalThis.__jsdbgConsistentValue",
+            "globalThis.__dbgjsConsistentValue",
             "--context",
             "live-browser",
             "--connection",
@@ -2169,7 +2169,7 @@ fn cli_service_connects_to_live_cdp() {
         ],
     );
     assert_success(
-        &["value", "globalThis.__jsdbgConsistentValue"],
+        &["value", "globalThis.__dbgjsConsistentValue"],
         value_human.0,
         &value_human.1,
         &value_human.2,
@@ -2178,8 +2178,8 @@ fn cli_service_connects_to_live_cdp() {
     let value_rendering = normalize_value_rendering(&String::from_utf8(value_human.1).unwrap());
     assert_eq!(eval_rendering, value_rendering);
     let transcript = format!(
-        "$ jsdbg target eval globalThis.__jsdbgConsistentValue\n{eval_rendering}\
-         $ jsdbg value globalThis.__jsdbgConsistentValue\n{value_rendering}\
+        "$ dbgjs target eval globalThis.__dbgjsConsistentValue\n{eval_rendering}\
+         $ dbgjs value globalThis.__dbgjsConsistentValue\n{value_rendering}\
          equivalent bounded rendering: yes\n\
          target eval raw references exposed: no\n"
     );
@@ -2547,8 +2547,8 @@ fn spawn_stdio(
     let mut child = Command::new(cli)
         .current_dir(cwd)
         .args(arguments)
-        .env("JSDBG_SERVICE_EXE", service)
-        .env("JSDBG_SERVICE_STATE", state_file)
+        .env("DBGJS_SERVICE_EXE", service)
+        .env("DBGJS_SERVICE_STATE", state_file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2604,8 +2604,8 @@ fn run_json_with_stdin(
     let mut child = Command::new(cli)
         .arg("--json")
         .args(arguments)
-        .env("JSDBG_SERVICE_EXE", service)
-        .env("JSDBG_SERVICE_STATE", state_file)
+        .env("DBGJS_SERVICE_EXE", service)
+        .env("DBGJS_SERVICE_STATE", state_file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2668,8 +2668,8 @@ fn run_in_with_format(
     }
     let status = command
         .args(arguments)
-        .env("JSDBG_SERVICE_EXE", service)
-        .env("JSDBG_SERVICE_STATE", state_file)
+        .env("DBGJS_SERVICE_EXE", service)
+        .env("DBGJS_SERVICE_STATE", state_file)
         .stdout(Stdio::from(File::create(&stdout_path).unwrap()))
         .stderr(Stdio::from(File::create(&stderr_path).unwrap()))
         .status()
@@ -2778,8 +2778,8 @@ impl Drop for ServiceCleanup {
         }
         let _ = Command::new(&self.cli)
             .args(["service", "stop"])
-            .env("JSDBG_SERVICE_EXE", &self.service)
-            .env("JSDBG_SERVICE_STATE", &self.state_file)
+            .env("DBGJS_SERVICE_EXE", &self.service)
+            .env("DBGJS_SERVICE_STATE", &self.state_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

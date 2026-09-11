@@ -72,7 +72,7 @@ export async function readCdpEndpoint(port) {
 }
 
 export async function findChromeExecutable() {
-	const explicit = process.env.JSDBG_CHROME_EXECUTABLE;
+	const explicit = process.env.DBGJS_CHROME_EXECUTABLE;
 	const candidates = explicit ? [explicit] : chromeCandidates();
 	for (const candidate of candidates) {
 		try {

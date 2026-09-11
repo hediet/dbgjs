@@ -392,8 +392,8 @@ pub struct PlaywrightProxyEndpoint {
     pub connection_generation: u64,
 }
 
-/// A short-lived, authenticated loopback CDP endpoint exposed by `jsdbg context relay` or
-/// `jsdbg target relay`. `id` identifies the relay for `close_relay`; `websocket_url` carries
+/// A short-lived, authenticated loopback CDP endpoint exposed by `dbgjs context relay` or
+/// `dbgjs target relay`. `id` identifies the relay for `close_relay`; `websocket_url` carries
 /// its own random capability token and must not be reused once the relay closes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

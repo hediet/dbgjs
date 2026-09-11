@@ -1,10 +1,10 @@
 [workspace]
-members = ["crates/cdp-protocol", "crates/cdp-tui"]
+members = ["crates/cdp-protocol", "crates/dbgjs-tui"]
 exclude = ["external/hubrpc-rust"]
 resolver = "3"
 
 [package]
-name = "cdp_client"
+name = "dbgjs"
 version = "0.1.0"
 edition = "2024"
 

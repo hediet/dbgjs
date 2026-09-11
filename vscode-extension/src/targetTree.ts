@@ -132,7 +132,7 @@ function targetTreeItem(target: TargetSnapshot, hasChildren: boolean): vscode.Tr
 		target.parentId === undefined ? undefined : `Parent: ${target.parentId}`,
 		target.openerId === undefined ? undefined : `Opener: ${target.openerId}`,
 	].filter((value): value is string => value !== undefined).join("\n");
-	item.contextValue = target.attached ? "jsdbg.attachedTarget" : "jsdbg.target";
+	item.contextValue = target.attached ? "dbgjs.attachedTarget" : "dbgjs.target";
 	item.iconPath = new vscode.ThemeIcon(targetIcon(target.targetType));
 	return item;
 }

@@ -1,11 +1,11 @@
-# jsdbg VS Code prototype
+# dbgjs VS Code prototype
 
 This extension is an architectural prototype for a lightweight TypeScript DAP
-projection over the long-lived Rust `jsdbg-service`.
+projection over the long-lived Rust `dbgjs-service`.
 
 ## Implemented
 
-- One path-identified jsdbg context per single-folder VS Code workspace, shared
+- One path-identified dbgjs context per single-folder VS Code workspace, shared
   with terminal commands run from that folder.
 - Automatic startup and direct HubRPC connection to the daemon's authenticated
   local endpoint.
@@ -14,7 +14,7 @@ projection over the long-lived Rust `jsdbg-service`.
 - An inline DAP adapter with stack traces, stepping, resume, breakpoints,
   loaded sources, virtual source content, expandable frame scopes, Variables,
   and Watch/Debug Console evaluation.
-- One VS Code debug session per jsdbg target, with descendant targets represented
+- One VS Code debug session per dbgjs target, with descendant targets represented
   as nested debug sessions. Each concrete session exposes one synthetic DAP thread.
 - Launch configurations for:
   - Node.js programs, using a daemon-owned inspector process and a
@@ -30,14 +30,14 @@ projection over the long-lived Rust `jsdbg-service`.
 - Current-editor overlay tracking with immutable document versions and
   UTF-16 `LengthEdit` records.
 - Unit tests and an Electron integration test that activates the extension
-  against a real `jsdbg-service`.
+  against a real `dbgjs-service`.
 
 The daemon publishes the authoritative target forest. The extension reconciles
 root sessions for the workspace, while each DAP adapter starts nested sessions
 for its direct descendants.
 
 On activation, the extension requires exactly one workspace folder, ensures that
-`jsdbg-service` is running, and creates or retrieves the context whose identity
+`dbgjs-service` is running, and creates or retrieves the context whose identity
 is that folder's lexically normalized, lowercased absolute path. It does not
 query filesystem identity or resolve symlinks. Multi-root and untitled workspace
 selection is intentionally deferred and reported as an error. The
@@ -46,7 +46,7 @@ transport and authentication token.
 
 ## Diagnostics
 
-Select **jsdbg** in VS Code's **Output** panel to inspect daemon startup,
+Select **dbgjs** in VS Code's **Output** panel to inspect daemon startup,
 transport lifecycle, and raw HubRPC messages in both directions. The
 authentication preamble is intentionally excluded. Request and response payloads
 may include evaluated expressions or source content.
@@ -55,7 +55,7 @@ may include evaluated expressions or source content.
 
 ```jsonc
 {
-  "type": "jsdbg",
+  "type": "dbgjs",
   "request": "launch",
   "name": "Node.js",
   "runtime": "node",
@@ -68,7 +68,7 @@ may include evaluated expressions or source content.
 
 ```jsonc
 {
-  "type": "jsdbg",
+  "type": "dbgjs",
   "request": "launch",
   "name": "Compiled TypeScript",
   "runtime": "node",
@@ -79,7 +79,7 @@ may include evaluated expressions or source content.
 
 ```jsonc
 {
-  "type": "jsdbg",
+  "type": "dbgjs",
   "request": "launch",
   "name": "TypeScript with tsx",
   "runtime": "node",
@@ -90,7 +90,7 @@ may include evaluated expressions or source content.
 
 ```jsonc
 {
-  "type": "jsdbg",
+  "type": "dbgjs",
   "request": "launch",
   "name": "Playwright",
   "runtime": "playwright",
@@ -101,7 +101,7 @@ may include evaluated expressions or source content.
 
 ```jsonc
 {
-  "type": "jsdbg",
+  "type": "dbgjs",
   "request": "launch",
   "name": "Chrome",
   "runtime": "chrome",
@@ -132,8 +132,8 @@ An already-running Node-compatible inspector can be added to a context without
 launching another process:
 
 ```powershell
-jsdbg connection add --node-inspector <ws-endpoint> --context <context> --connection <connection> --connect
-jsdbg target attach --context <context> --connection <connection> --target node
+dbgjs connection add --node-inspector <ws-endpoint> --context <context> --connection <connection> --connect
+dbgjs target attach --context <context> --connection <connection> --target node
 ```
 
 Attachments have one owner. A second attach reports an ownership conflict;
@@ -148,12 +148,12 @@ Running VS Code instances can first be discovered from OS process metadata,
 without creating a debugger context or opening any inspector:
 
 ```powershell
-jsdbg process list --vscode
-jsdbg process list --vscode --no-cmd-line
-jsdbg process list --vscode --stats
-jsdbg process list --vscode --filter "window 3"
-jsdbg process list --vscode --no-trim
-jsdbg --json process list --vscode
+dbgjs process list --vscode
+dbgjs process list --vscode --no-cmd-line
+dbgjs process list --vscode --stats
+dbgjs process list --vscode --filter "window 3"
+dbgjs process list --vscode --no-trim
+dbgjs --json process list --vscode
 ```
 
 The result is a snapshot of every detected VS Code root and all of its
@@ -173,7 +173,7 @@ The older process-tree connection imports one selected VS Code instance into a
 debugger context:
 
 ```powershell
-jsdbg connection add --process-tree <electron-main-pid> --context <context> --connection vscode --connect
+dbgjs connection add --process-tree <electron-main-pid> --context <context> --connection vscode --connect
 ```
 
 Unlike `process list`, this connection currently activates every compatible

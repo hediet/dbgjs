@@ -1,5 +1,25 @@
 # JavaScript Debugger CLI Design
 
+## Project and command names
+
+The project and primary Rust crate are `dbgjs`. The npm distribution is
+`@hediet/dbgjs`, with matching `@hediet/dbgjs-<platform>` native packages.
+The executables are `dbgjs`, `dbgjs-service`, and `dbgjs-tui`; the terminal
+client crate is `dbgjs-tui`. The protocol-specific crate remains `cdp-protocol`.
+
+This replaces the prototype names `cdp-client`, `cdp_client`, and `jsdbg`.
+Update shell commands, `JSDBG_*` environment variables to `DBGJS_*`, and
+VS Code settings and launch configurations from `jsdbg` to `dbgjs`.
+There are no old-name aliases.
+
+The renamed tool deliberately starts with fresh state: on Windows it uses
+`%LOCALAPPDATA%\hediet\dbgjs\service.json`; on Unix it uses
+`$XDG_RUNTIME_DIR/hediet-dbgjs/service.json` or
+`$HOME/.cache/hediet/dbgjs/service.json`. `DBGJS_SERVICE_STATE` overrides
+the endpoint path. Saved contexts and captures in the old state location are
+not migrated or deleted. Stop the old service using the old CLI if it is still
+running.
+
 ## Status
 
 This document defines the architecture, terminology, and required behavior of a
@@ -10,7 +30,7 @@ The shared immutable state semantics are defined in
 [Debugger Data Model](./debugger-data-model.md). This document derives CLI
 workflows and presentation from that model rather than defining a second one.
 For operational steps against live VS Code processes, see
-[Debugging VS Code Processes with jsdbg](./debugging-vscode-processes.md).
+[Debugging VS Code Processes with dbgjs](./debugging-vscode-processes.md).
 
 The CLI supports unary commands, ordered result feeds, and an interactive
 redrawn daemon-state view. The view uses the same debugger service observation
@@ -31,7 +51,7 @@ stated as a requirement, exact command names and flags are not yet fixed.
 
 The first executable vertical slice now validates:
 
-- `jsdbg` discovering or spawning a long-lived `jsdbg-service`;
+- `dbgjs` discovering or spawning a long-lived `dbgjs-service`;
 - generated typed HubRPC requests over authenticated NDJSON on a Windows named
   pipe or Unix domain socket;
 - multiple contexts and multiple named connection configurations per context;
@@ -46,7 +66,7 @@ The first executable vertical slice now validates:
   retained connection/generation provenance;
 - a context-wide immutable capture catalog for coverage, CPU profiles, and heap
   snapshots, including offline queries after disconnect or daemon restart;
-- `jsdbg daemon view`, which redraws one selected context or `--all-contexts`
+- `dbgjs daemon view`, which redraws one selected context or `--all-contexts`
   while observing context and target debugger revisions. When stdout is not a
   terminal it emits one deterministic snapshot and exits.
 
@@ -61,15 +81,15 @@ one line and must not contain embedded newlines. Stdout is protocol-only;
 adapter diagnostics belong on stderr.
 
 ```console
-jsdbg connection add --stdio --connection custom --connect -- \
+dbgjs connection add --stdio --connection custom --connect -- \
   ./my-cdp-adapter --foobar
 ```
 
 The command and all of its arguments follow `--`, so adapter options cannot be
-mistaken for jsdbg options. Connection options precede it:
+mistaken for dbgjs options. Connection options precede it:
 
 ```console
-jsdbg connection add --stdio --connection browser \
+dbgjs connection add --stdio --connection browser \
   --cwd ./adapter --env TOKEN=secret --topology browser --connect -- \
   node ./adapter.mjs --remote production
 ```
@@ -82,15 +102,15 @@ still require a WebSocket CDP endpoint.
 
 ## Relay
 
-`jsdbg context relay --stdio [--context <id>]` and
-`jsdbg target relay --stdio [target scope]` expose a context or a single
+`dbgjs context relay --stdio [--context <id>]` and
+`dbgjs target relay --stdio [target scope]` expose a context or a single
 target as CDP over the same compact newline-delimited JSON framing described
 above, so any external CDP consumer (Playwright, Puppeteer, an MCP-style tool)
-can drive `jsdbg`-managed targets directly instead of through `jsdbg` commands.
+can drive `dbgjs`-managed targets directly instead of through `dbgjs` commands.
 
 ```console
-jsdbg context relay --stdio --context :shop
-jsdbg target relay --stdio --target page
+dbgjs context relay --stdio --context :shop
+dbgjs target relay --stdio --target page
 ```
 
 Internally, the service opens a short-lived authenticated loopback WebSocket
@@ -141,9 +161,9 @@ policy and is not used as a synonym for a feed or view.
 Representative spellings are:
 
 ```text
-jsdbg state get             # command
-jsdbg events feed           # feed
-jsdbg daemon view           # view
+dbgjs state get             # command
+dbgjs events feed           # feed
+dbgjs daemon view           # view
 ```
 
 Convenience aliases may preserve older `watch` or `follow` spellings, but new
@@ -626,13 +646,13 @@ A path context can be created without connecting:
 
 ```text
 cd <path>
-jsdbg context create .
-jsdbg status
+dbgjs context create .
+dbgjs status
 ```
 
 Paths are resolved lexically, lowercased, and made absolute without requiring
 filesystem existence or resolving symlinks. A named non-path context uses
-explicit colon syntax, for example `jsdbg context create :incident-42`.
+explicit colon syntax, for example `dbgjs context create :incident-42`.
 Resolution precedence is:
 
 1. Resolve an explicit `--context <path|:id>` expression.
@@ -649,7 +669,7 @@ it is the only registered context.
 Conceptually:
 
 ```text
-jsdbg --context shop connection connect browser http://127.0.0.1:9222
+dbgjs --context shop connection connect browser http://127.0.0.1:9222
 ```
 
 For an HTTP discovery endpoint, the agent discovers and connects to the relevant
@@ -675,8 +695,8 @@ recipe.
 Examples:
 
 ```text
-jsdbg --context shop connection launch server node --break -- app.js
-jsdbg --context shop connection launch browser chrome --url http://localhost:5173/
+dbgjs --context shop connection launch server node --break -- app.js
+dbgjs --context shop connection launch browser chrome --url http://localhost:5173/
 ```
 
 The agent owns the launched process unless the launch request explicitly selects
@@ -691,7 +711,7 @@ The debugger should try to discover or activate debugging for an existing
 process:
 
 ```text
-jsdbg --context shop connection connect server --pid 1234
+dbgjs --context shop connection connect server --pid 1234
 ```
 
 Activation is implemented by runtime- and platform-specific providers. A
@@ -789,8 +809,8 @@ constraint or when the connection itself is the command's subject.
 Interactive focus can be changed explicitly:
 
 ```text
-jsdbg focus set --connection browser --target page-1
-jsdbg focus set --connection browser --target worker-checkout
+dbgjs focus set --connection browser --target page-1
+dbgjs focus set --connection browser --target worker-checkout
 ```
 
 Changing focus affects later target-local requests only. It does not alter
@@ -891,9 +911,9 @@ another process.
 The target-scoped raw CDP escape hatch is core functionality:
 
 ```text
-jsdbg cdp Runtime.evaluate --params <json> [--target <target>]
-jsdbg cdp DOM.getDocument --params <json> [--target <target>]
-jsdbg cdp Page.captureScreenshot --params <json> [--target <target>]
+dbgjs cdp Runtime.evaluate --params <json> [--target <target>]
+dbgjs cdp DOM.getDocument --params <json> [--target <target>]
+dbgjs cdp Page.captureScreenshot --params <json> [--target <target>]
 ```
 
 It uses the same target selection, session routing, JSON contract, event
@@ -914,12 +934,12 @@ viewport metrics, element clipping, and artifact storage are cumbersome to
 compose manually:
 
 ```text
-jsdbg screenshot capture
-jsdbg screenshot capture --output page.png
-jsdbg screenshot capture --selector "#checkout" --output checkout.png
+dbgjs screenshot capture
+dbgjs screenshot capture --output page.png
+dbgjs screenshot capture --selector "#checkout" --output checkout.png
 ```
 
-Without `--output`, jsdbg stores the image in its temporary screenshot
+Without `--output`, dbgjs stores the image in its temporary screenshot
 directory and returns the generated path.
 
 It supports viewport, full-page, and DOM-element capture where the selected
@@ -994,13 +1014,13 @@ specification and JSON, not inferred anew from later focus changes.
 Conceptual commands:
 
 ```text
-jsdbg watch add "user.id" --name user-id
-jsdbg watch list
-jsdbg watch show watch-1
-jsdbg watch enable watch-1
-jsdbg watch disable watch-1
-jsdbg watch remove watch-1
-jsdbg watch evaluate
+dbgjs watch add "user.id" --name user-id
+dbgjs watch list
+dbgjs watch show watch-1
+dbgjs watch enable watch-1
+dbgjs watch disable watch-1
+dbgjs watch remove watch-1
+dbgjs watch evaluate
 ```
 
 On each applicable pause:
@@ -1067,10 +1087,10 @@ observe a partially applied revision.
 Conceptual queries:
 
 ```text
-jsdbg events
-jsdbg events --since-revision 120
-jsdbg events --type debugger.paused,target.created
-jsdbg events --target t-worker
+dbgjs events
+dbgjs events --since-revision 120
+dbgjs events --type debugger.paused,target.created
+dbgjs events --target t-worker
 ```
 
 Clients should be able to resume consumption from a known revision. If requested
@@ -1082,8 +1102,8 @@ and a current state snapshot or revision from which to continue.
 Continuous event output uses a streaming response:
 
 ```text
-jsdbg events --follow
-jsdbg events --follow --type debugger.paused,console.message
+dbgjs events --follow
+dbgjs events --follow --type debugger.paused,console.message
 ```
 
 JSON streaming uses one JSON object per line. Cancellation must unsubscribe the
@@ -1095,10 +1115,10 @@ client without stopping target observation or the debugger agent.
 stream:
 
 ```text
-jsdbg wait paused --timeout 30s
-jsdbg wait target-created --type worker
-jsdbg wait breakpoint-resolved --breakpoint bp-3
-jsdbg wait process-exited
+dbgjs wait paused --timeout 30s
+dbgjs wait target-created --type worker
+dbgjs wait breakpoint-resolved --breakpoint bp-3
+dbgjs wait process-exited
 ```
 
 To avoid races, a wait request atomically:
@@ -1114,11 +1134,11 @@ Continuous state watching is distinct from event history and watch expressions.
 It reruns a query when relevant context revisions occur:
 
 ```text
-jsdbg state get
-jsdbg state watch
-jsdbg status --watch
-jsdbg stack --watch
-jsdbg watch list --follow
+dbgjs state get
+dbgjs state watch
+dbgjs status --watch
+dbgjs stack --watch
+dbgjs watch list --follow
 ```
 
 This is a client convenience built on context snapshots plus revisioned events.
@@ -1170,9 +1190,9 @@ where they are live. Target applicability is a separate query over runtime
 endpoints. Commands can therefore:
 
 ```text
-jsdbg source resolve src/shared/validation.ts
-jsdbg source map src/shared/validation.ts:41 --to generated
-jsdbg source endpoints src/shared/validation.ts --connection browser
+dbgjs source resolve src/shared/validation.ts
+dbgjs source map src/shared/validation.ts:41 --to generated
+dbgjs source endpoints src/shared/validation.ts --connection browser
 ```
 
 The first two can work while disconnected. The last intentionally asks which
@@ -1196,10 +1216,10 @@ may match canonical target IDs and source URLs with glob patterns. Rules are
 evaluated in displayed order and the last matching rule wins:
 
 ```text
-jsdbg source formatting set auto
-jsdbg source formatting rule add --mode off --url "**/vendor/**"
-jsdbg source formatting rule add --mode on --target "page-*" --url "**/*.min.js"
-jsdbg source formatting get
+dbgjs source formatting set auto
+dbgjs source formatting rule add --mode off --url "**/vendor/**"
+dbgjs source formatting rule add --mode on --target "page-*" --url "**/*.min.js"
+dbgjs source formatting get
 ```
 
 `auto` deterministically recognizes conventional `.min.js` names and
@@ -1212,9 +1232,9 @@ Source display and search use the effective context policy by default. A
 one-command override does not change that policy:
 
 ```text
-jsdbg source show app.js --view original
-jsdbg source show app.js --view formatted
-jsdbg source grep checkout --view formatted
+dbgjs source show app.js --view original
+dbgjs source show app.js --view formatted
+dbgjs source grep checkout --view formatted
 ```
 
 There is intentionally no `--view policy`; omitting `--view` is the policy
@@ -1245,9 +1265,9 @@ after 30 seconds, and abandoned-stream close dispatch has a five-second bound.
 No background task waits indefinitely for a late resource-load response.
 
 ```text
-jsdbg source grep "validateUser"
-jsdbg source grep "class\s+\w+Controller" --regex
-jsdbg source grep "TODO" --glob "**/*.ts"
+dbgjs source grep "validateUser"
+dbgjs source grep "class\s+\w+Controller" --regex
+dbgjs source grep "TODO" --glob "**/*.ts"
 ```
 
 The search model supports:
@@ -1326,10 +1346,10 @@ is not a chronological statement trace.
 The core lifecycle is:
 
 ```text
-jsdbg coverage start
-jsdbg coverage capture [--id before-click]
-jsdbg coverage capture [--id after-click]
-jsdbg coverage stop [--id final]
+dbgjs coverage start
+dbgjs coverage capture [--id before-click]
+dbgjs coverage capture [--id after-click]
+dbgjs coverage stop [--id final]
 ```
 
 `start` resets runtime coverage counters and starts accumulation. It does not
@@ -1378,7 +1398,7 @@ for relative selectors. Reading past the available history fails explicitly.
 Explicit IDs remain available for durable scripts:
 
 ```text
-jsdbg coverage print --id before-click --style functions
+dbgjs coverage print --id before-click --style functions
 ```
 
 ### 14.4 Exclusion
@@ -1387,7 +1407,7 @@ Coverage exclusion derives a view containing execution represented by the
 selected object but not represented by the excluded baseline:
 
 ```text
-jsdbg coverage print --id . --exclude .. --style blocks
+dbgjs coverage print --id . --exclude .. --style blocks
 ```
 
 For counted coverage, exclusion subtracts aligned execution counts and clamps
@@ -1413,7 +1433,7 @@ to the result of the preceding one.
 `print` is the single presentation operation:
 
 ```text
-jsdbg coverage print [--id <selector>] [--exclude <selector>] \
+dbgjs coverage print [--id <selector>] [--exclude <selector>] \
   --style files|functions|blocks
 ```
 
@@ -1544,7 +1564,7 @@ explicit input source.
 Conceptually:
 
 ```text
-jsdbg breakpoint set --input json --output json
+dbgjs breakpoint set --input json --output json
 ```
 
 Command-specific positional or flag parameters and JSON parameters should not be
@@ -1627,7 +1647,7 @@ The final command names, aliases, and flag placement remain open. A likely shape
 is:
 
 ```text
-jsdbg [--context <id>] [--output text|json|jsonl] <command>
+dbgjs [--context <id>] [--output text|json|jsonl] <command>
 ```
 
 Potential command groups:
@@ -1890,10 +1910,10 @@ available:
 
 ```text
 > cd D:\src\shop
-> jsdbg context create .
+> dbgjs context create .
 Created context d:\src\shop (disconnected)
 
-> jsdbg breakpoint set src/shared/validation.ts:41
+> dbgjs breakpoint set src/shared/validation.ts:41
 Created bp-1 [pending]
 Scope: all eligible targets in context d:\src\shop
 Source: workspace:src/shared/validation.ts@sha256:8ab4...
@@ -1907,12 +1927,12 @@ binding takes precedence.
 The API and browser are then added as independent connections:
 
 ```text
-> jsdbg -c shop connection connect server --pid 18420
+> dbgjs -c shop connection connect server --pid 18420
 + Connected server to Node.js server.js (PID 18420)
   Target: server/node-18420
   bp-1: bound dist/shared/validation.js:63:3
 
-> jsdbg -c shop connection connect browser http://127.0.0.1:9222 \
+> dbgjs -c shop connection connect browser http://127.0.0.1:9222 \
     --target-url http://localhost:5173/
 + Connected browser to Chrome
   Focus: browser/page-1
@@ -1923,14 +1943,14 @@ The source graph explains both bindings without making either target the source
 identity:
 
 ```text
-> jsdbg -c shop source resolve src/shared/validation.ts:41
+> dbgjs -c shop source resolve src/shared/validation.ts:41
 workspace:src/shared/validation.ts@sha256:8ab4...:41:1
 ├─ source-map -> runtime:server/script-27@sha256:97c1...:63:3
 │  endpoint: server/node-18420 attachment a-server
 └─ source-map -> runtime:browser/script-913@sha256:42ef...:1884:17
    endpoint: browser/page-1 attachment a-page
 
-> jsdbg -c shop breakpoint show bp-1
+> dbgjs -c shop breakpoint show bp-1
 Requested: src/shared/validation.ts:41:1
 Scope:     all eligible targets in context shop
 Bindings:
@@ -1941,12 +1961,12 @@ Bindings:
 Target-local commands still use focus or explicit selection:
 
 ```text
-> jsdbg -c shop eval "document.title"
+> dbgjs -c shop eval "document.title"
 Connection: browser
 Target: page-1
 "Checkout"
 
-> jsdbg -c shop eval "process.version" \
+> dbgjs -c shop eval "process.version" \
     --target server/node-18420
 Connection: server
 Target: node-18420
@@ -1958,7 +1978,7 @@ Changing focus to the server would affect an unqualified `eval`, `step`, or
 facts disappear:
 
 ```text
-> jsdbg -c shop connection disconnect browser
+> dbgjs -c shop connection disconnect browser
 Disconnected browser
 Removed live endpoints: 37
 Removed breakpoint bindings: bp-1 on browser/page-1
@@ -1983,7 +2003,7 @@ The user finds its PID and asks the debugger to activate or discover the Node
 inspector:
 
 ```text
-> jsdbg -c api connection connect server --pid 18420
+> dbgjs -c api connection connect server --pid 18420
 Detected Node.js 24 in process 18420
 Activated inspector at ws://127.0.0.1:9229/7f4c...
 + Connected server to node server.js (PID 18420)
@@ -1998,7 +2018,7 @@ usable; inspecting WebSocket and CDP details is an advanced diagnostic workflow.
 They set a breakpoint in an authored TypeScript source and add watches:
 
 ```text
-> jsdbg -c api breakpoint set src/routes/orders.ts:48
+> dbgjs -c api breakpoint set src/routes/orders.ts:48
 Created bp-1
 Requested: src/routes/orders.ts:48:1
 Resolved:  dist/routes/orders.js:71:3
@@ -2011,10 +2031,10 @@ Resolved:  dist/routes/orders.js:71:3
   49 |   res.status(201).json(result);
   50 | });
 
-> jsdbg -c api watch add "req.body" --name request-body
+> dbgjs -c api watch add "req.body" --name request-body
 Created watch-1
 
-> jsdbg -c api watch add "req.user?.id" --name user-id
+> dbgjs -c api watch add "req.user?.id" --name user-id
 Created watch-2
 ```
 
@@ -2025,7 +2045,7 @@ snapshot.
 In one shell, the user waits for the request:
 
 ```text
-> jsdbg -c api wait paused --timeout 60s
+> dbgjs -c api wait paused --timeout 60s
 ```
 
 In another shell:
@@ -2051,19 +2071,19 @@ Watches:
 The user examines the stack and scopes:
 
 ```text
-> jsdbg -c api stack
+> dbgjs -c api stack
 0  router.post callback       src/routes/orders.ts:48:3
 1  Layer.handleRequest        node_modules/router/lib/layer.js:152:17
 2  next                       node_modules/router/lib/route.js:157:13
 
-> jsdbg -c api scopes --frame 0
+> dbgjs -c api scopes --frame 0
 Local
   req     = Object { ... }
   res     = ServerResponse { ... }
   order   = { sku: "keyboard", quantity: 2 }
   user    = undefined
 
-> jsdbg -c api eval "req.headers.authorization" --frame 0
+> dbgjs -c api eval "req.headers.authorization" --frame 0
 undefined
 ```
 
@@ -2071,7 +2091,7 @@ The missing authenticated user explains the failure. The user steps into the
 order submission to inspect its defensive path:
 
 ```text
-> jsdbg -c api step into
+> dbgjs -c api step into
 Paused: step
 At: src/services/orders.ts:19:1
 
@@ -2080,11 +2100,11 @@ At: src/services/orders.ts:19:1
   20 |   if (!user) {
   21 |     throw new AuthenticationError();
 
-> jsdbg -c api stack
+> dbgjs -c api stack
 0  submitOrder                src/services/orders.ts:19:1
 1  router.post callback       src/routes/orders.ts:48:24
 
-> jsdbg -c api step over
+> dbgjs -c api step over
 Paused: step
 At: src/services/orders.ts:20:3
 
@@ -2093,14 +2113,14 @@ At: src/services/orders.ts:20:3
      |   ^^^^^^^^^^^
   21 |     throw new AuthenticationError();
 
-> jsdbg -c api eval "user"
+> dbgjs -c api eval "user"
 undefined
 ```
 
 They can resume without removing the breakpoint or watches:
 
 ```text
-> jsdbg -c api continue
+> dbgjs -c api continue
 Resumed node-18420
 ```
 
@@ -2113,10 +2133,10 @@ First, start coverage and capture a baseline after incidental background work
 has settled:
 
 ```text
-> jsdbg -c api coverage start
+> dbgjs -c api coverage start
 Coverage recording started on node-18420
 
-> jsdbg -c api coverage capture --id before-request
+> dbgjs -c api coverage capture --id before-request
 Captured before-request
 ```
 
@@ -2131,7 +2151,7 @@ Send the request:
 Stop coverage. With no explicit ID, the context generates the next name:
 
 ```text
-> jsdbg -c api coverage stop
+> dbgjs -c api coverage stop
 Captured cov-1
 Coverage recording stopped
 ```
@@ -2139,7 +2159,7 @@ Coverage recording stopped
 Print only files that gained coverage since the baseline:
 
 ```text
-> jsdbg -c api coverage print --exclude before-request --style files
+> dbgjs -c api coverage print --exclude before-request --style files
 src/routes/orders.ts
 src/services/orders.ts
 src/db/orders.ts
@@ -2151,7 +2171,7 @@ The omitted `--id` selects the latest object, equivalent to `--id .`.
 Print covered functions:
 
 ```text
-> jsdbg -c api coverage print --id . --exclude before-request \
+> dbgjs -c api coverage print --id . --exclude before-request \
     --style functions
 src/routes/orders.ts
   router.post callback(req, res)       x1
@@ -2168,7 +2188,7 @@ src/db/orders.ts
 Print covered blocks as projected, syntax-highlighted source:
 
 ```text
-> jsdbg -c api coverage print --id . --exclude before-request \
+> dbgjs -c api coverage print --id . --exclude before-request \
     --style blocks
 src/services/orders.ts
 
@@ -2192,7 +2212,7 @@ website page, so connecting focuses it and automatically attaches
 its related service worker:
 
 ```text
-> jsdbg -c frontend connection connect browser http://127.0.0.1:9222
+> dbgjs -c frontend connection connect browser http://127.0.0.1:9222
 + Connected browser to http://localhost:5173/
   Focus: browser/page-1
   Also attached: service-worker-1
@@ -2201,7 +2221,7 @@ its related service worker:
 The browser connection still exposes both targets when needed:
 
 ```text
-> jsdbg -c frontend target list
+> dbgjs -c frontend target list
 CONNECTION  TARGET             TYPE             FOCUSED  URL
 browser     page-1             page             yes      http://localhost:5173/
 browser     service-worker-1   service_worker   no       http://localhost:5173/sw.js
@@ -2211,13 +2231,13 @@ Target selection matters for globals. Evaluation identifies the selected target
 and execution context instead of silently trying another realm:
 
 ```text
-> jsdbg -c frontend eval "document.title" --target service-worker-1
+> dbgjs -c frontend eval "document.title" --target service-worker-1
 Target:  service-worker-1 (service_worker)
 Realm:   default worker realm
 ReferenceError: document is not defined
 Hint: browser/page-1 is a page target and is currently focused.
 
-> jsdbg -c frontend eval "document.title"
+> dbgjs -c frontend eval "document.title"
 Target:  page-1 (page)
 Realm:   main frame
 "Checkout"
@@ -2227,15 +2247,15 @@ Before debugging code, the user explores the rendered button through the CDP
 escape hatch:
 
 ```text
-> jsdbg -c frontend cdp DOM.getDocument \
+> dbgjs -c frontend cdp DOM.getDocument \
     --params '{"depth":2,"pierce":true}'
 root.nodeId = 1
 
-> jsdbg -c frontend cdp DOM.querySelector \
+> dbgjs -c frontend cdp DOM.querySelector \
     --params '{"nodeId":1,"selector":"button[data-testid=checkout]"}'
 nodeId = 42
 
-> jsdbg -c frontend cdp DOM.describeNode \
+> dbgjs -c frontend cdp DOM.describeNode \
     --params '{"nodeId":42,"depth":1}'
 BUTTON data-testid="checkout" disabled=false
   #text "Checkout"
@@ -2245,7 +2265,7 @@ The high-level screenshot convenience uses the same focused target and stores
 the clipped image:
 
 ```text
-> jsdbg -c frontend screenshot capture \
+> dbgjs -c frontend screenshot capture \
     --selector "button[data-testid=checkout]" \
     --output checkout-before.png
 Captured checkout-before.png (164 x 38, target page-1)
@@ -2255,7 +2275,7 @@ The button is rendered by `CheckoutButton.tsx`, but activating it does nothing.
 The user searches projected source contents:
 
 ```text
-> jsdbg -c frontend source grep "onCheckout" --glob "src/**/*.{ts,tsx}"
+> dbgjs -c frontend source grep "onCheckout" --glob "src/**/*.{ts,tsx}"
 src/components/CheckoutButton.tsx
   27 | export function CheckoutButton({ cart }: Props) {
 > 28 |   const onCheckout = () => submitCheckout(cart);
@@ -2269,12 +2289,12 @@ src/checkout/submitCheckout.ts
 They place a breakpoint on the handler and a logpoint further downstream:
 
 ```text
-> jsdbg -c frontend breakpoint set \
+> dbgjs -c frontend breakpoint set \
     src/components/CheckoutButton.tsx:28
 Created bp-1 [verified on browser/page-1; pending on browser/service-worker-1]
 Scope: all eligible targets in context frontend
 
-> jsdbg -c frontend breakpoint set \
+> dbgjs -c frontend breakpoint set \
     src/checkout/submitCheckout.ts:18 \
     --log '"submitting cart", cart.id, cart.items.length'
 Created bp-2 [logpoint, verified on browser/page-1]
@@ -2284,7 +2304,7 @@ A breakpoint accidentally scoped to the service worker remains explicit rather
 than moving itself to the page:
 
 ```text
-> jsdbg -c frontend breakpoint set \
+> dbgjs -c frontend breakpoint set \
     src/components/CheckoutButton.tsx:28 \
     --target service-worker-1
 Created bp-3 [pending]
@@ -2299,10 +2319,10 @@ event and resumes automatically. Its exact expression syntax is deferred.
 The user watches relevant state and follows events:
 
 ```text
-> jsdbg -c frontend watch add "cart.items.length" --name item-count
+> dbgjs -c frontend watch add "cart.items.length" --name item-count
 Created watch-1
 
-> jsdbg -c frontend coverage start
+> dbgjs -c frontend coverage start
 Coverage recording started on page-1 and related attachments
 ```
 
@@ -2312,7 +2332,7 @@ command observes the resulting pause within its short settling period and prints
 the new state directly:
 
 ```text
-> jsdbg -c frontend cdp Runtime.evaluate --params '{
+> dbgjs -c frontend cdp Runtime.evaluate --params '{
     "expression": "setTimeout(() => document.querySelector(\"button[data-testid=checkout]\").click(), 0)",
     "returnByValue": true
   }' --settle 330ms
@@ -2334,17 +2354,17 @@ pauses again within the settling period, `continue` prints that pause directly;
 otherwise it reports the lasting running state:
 
 ```text
-> jsdbg -c frontend continue
+> dbgjs -c frontend continue
 Running: page-1
 
-> jsdbg -c frontend coverage stop --id after-handler
+> dbgjs -c frontend coverage stop --id after-handler
 Captured after-handler
 ```
 
 The covered functions reveal that validation returns before the logpoint:
 
 ```text
-> jsdbg -c frontend coverage print --id after-handler --style functions
+> dbgjs -c frontend coverage print --id after-handler --style functions
 src/checkout/submitCheckout.ts
   submitCheckout(cart)                 x1
   validateCart(cart)                   x1
@@ -2356,7 +2376,7 @@ src/checkout/messages.ts
 Covered block source makes the branch visible:
 
 ```text
-> jsdbg -c frontend coverage print --id after-handler --style blocks
+> dbgjs -c frontend coverage print --id after-handler --style blocks
 src/checkout/submitCheckout.ts
 
 submitCheckout(cart) x1
@@ -2380,14 +2400,14 @@ The user wants to compare a failing click with a successful click after entering
 an address:
 
 ```text
-> jsdbg -c frontend coverage start
+> dbgjs -c frontend coverage start
 
 # Click without an address.
-> jsdbg -c frontend coverage capture
+> dbgjs -c frontend coverage capture
 Captured cov-2
 
 # Enter an address and click again.
-> jsdbg -c frontend coverage stop
+> dbgjs -c frontend coverage stop
 Captured cov-3
 ```
 
@@ -2395,7 +2415,7 @@ The most recent interaction is represented by the latest cumulative object
 excluding the preceding cumulative object:
 
 ```text
-> jsdbg -c frontend coverage print --id . --exclude .. \
+> dbgjs -c frontend coverage print --id . --exclude .. \
     --style functions
 src/checkout/submitCheckout.ts
   submitCheckout(cart)                 x1
@@ -2412,8 +2432,8 @@ The same comparison can be printed as files or source blocks without recording
 again:
 
 ```text
-> jsdbg -c frontend coverage print --id . --exclude .. --style files
-> jsdbg -c frontend coverage print --id . --exclude .. --style blocks
+> dbgjs -c frontend coverage print --id . --exclude .. --style files
+> dbgjs -c frontend coverage print --id . --exclude .. --style blocks
 ```
 
 The relative selectors are convenient for exploration. A script should normally
@@ -2424,7 +2444,7 @@ use explicit IDs if later captures could change what `.` and `..` select.
 A test runner is launched under the debugger and held before user code starts:
 
 ```text
-> jsdbg -c tests connection launch runner node --break -- \
+> dbgjs -c tests connection launch runner node --break -- \
     node_modules/vitest/vitest.mjs run tests/shortest-path.test.ts
 Launched runner (PID 20916)
 Focus: runner/node-20916
@@ -2435,14 +2455,14 @@ The user sets a normal breakpoint at the algorithm entry and logpoints inside
 the loop:
 
 ```text
-> jsdbg -c tests breakpoint set src/graph/dijkstra.ts:12
+> dbgjs -c tests breakpoint set src/graph/dijkstra.ts:12
 Created bp-1 [verified]
 
-> jsdbg -c tests breakpoint set src/graph/dijkstra.ts:24 \
+> dbgjs -c tests breakpoint set src/graph/dijkstra.ts:24 \
     --log '"visit", current.id, "distance", distances.get(current.id)'
 Created bp-2 [logpoint, verified]
 
-> jsdbg -c tests breakpoint set src/graph/dijkstra.ts:31 \
+> dbgjs -c tests breakpoint set src/graph/dijkstra.ts:31 \
     --condition 'candidate < distances.get(neighbor.id)' \
     --log '"relax", current.id, "->", neighbor.id, candidate'
 Created bp-3 [conditional logpoint, verified]
@@ -2453,7 +2473,7 @@ default settling period to load, so the user extends the same command's settling
 policy rather than issuing a separate wait:
 
 ```text
-> jsdbg -c tests continue --settle 30s
+> dbgjs -c tests continue --settle 30s
 Paused: breakpoint bp-1
 At: src/graph/dijkstra.ts:12:1
 
@@ -2467,24 +2487,24 @@ At: src/graph/dijkstra.ts:12:1
 Add watches and step through initialization:
 
 ```text
-> jsdbg -c tests watch add "start.id" --name start
+> dbgjs -c tests watch add "start.id" --name start
 Created watch-1
 
-> jsdbg -c tests watch add "queue.size" --name queue-size
+> dbgjs -c tests watch add "queue.size" --name queue-size
 Created watch-2
 
-> jsdbg -c tests watch add "[...distances.entries()]" --name distances
+> dbgjs -c tests watch add "[...distances.entries()]" --name distances
 Created watch-3
 
-> jsdbg -c tests watch list
+> dbgjs -c tests watch list
 start       = "A"
 queue-size  = 1
 distances   = [["A", 0], ["B", Infinity], ["C", Infinity]]
 
-> jsdbg -c tests step over
+> dbgjs -c tests step over
 Paused: step at src/graph/dijkstra.ts:15:3
 
-> jsdbg -c tests watch list
+> dbgjs -c tests watch list
 start       = "A"
 queue-size  = 1
 distances   = [["A", 0], ["B", Infinity], ["C", Infinity]]
@@ -2494,8 +2514,8 @@ The user now lets the algorithm run. Logpoints observe the loop without
 repeatedly stopping it:
 
 ```text
-> jsdbg -c tests events --follow --type logpoint,test.finished
-> jsdbg -c tests continue
+> dbgjs -c tests events --follow --type logpoint,test.finished
+> dbgjs -c tests continue
 
 logpoint bp-2  visit A distance 0
 logpoint bp-3  relax A -> B 4
@@ -2510,14 +2530,14 @@ The trace suggests that path relaxation works, so the user records coverage for
 the failing test to see whether reconstruction executes:
 
 ```text
-> jsdbg -c tests connection launch runner node --replace --break -- \
+> dbgjs -c tests connection launch runner node --replace --break -- \
     node_modules/vitest/vitest.mjs run tests/shortest-path.test.ts
-> jsdbg -c tests coverage start
-> jsdbg -c tests continue
-> jsdbg -c tests wait process-exited --timeout 30s
-> jsdbg -c tests coverage stop --id failing-test
+> dbgjs -c tests coverage start
+> dbgjs -c tests continue
+> dbgjs -c tests wait process-exited --timeout 30s
+> dbgjs -c tests coverage stop --id failing-test
 
-> jsdbg -c tests coverage print --id failing-test --style functions
+> dbgjs -c tests coverage print --id failing-test --style functions
 src/graph/dijkstra.ts
   shortestPath(graph, start, end)       x1
   reconstructPath(previous, end)        x1
@@ -2530,23 +2550,23 @@ the important behavior is that incomplete coverage is reported explicitly.
 The user places a breakpoint in reconstruction and reruns:
 
 ```text
-> jsdbg -c tests breakpoint set src/graph/dijkstra.ts:52
+> dbgjs -c tests breakpoint set src/graph/dijkstra.ts:52
 Created bp-4 [verified for future matching scripts]
 
-> jsdbg -c tests connection launch runner node --replace --break -- \
+> dbgjs -c tests connection launch runner node --replace --break -- \
     node_modules/vitest/vitest.mjs run tests/shortest-path.test.ts
 
-> jsdbg -c tests continue --settle 30s
+> dbgjs -c tests continue --settle 30s
 Paused: breakpoint bp-4
 At: src/graph/dijkstra.ts:52:3
 
-> jsdbg -c tests eval "previous"
+> dbgjs -c tests eval "previous"
 Map(2) { "B" => "C", "C" => "A" }
 
-> jsdbg -c tests step over
+> dbgjs -c tests step over
 Paused: step at src/graph/dijkstra.ts:53:3
 
-> jsdbg -c tests eval "path"
+> dbgjs -c tests eval "path"
 ["B"]
 ```
 
@@ -2560,14 +2580,14 @@ script starts coverage:
 
 ```text
 > echo '{"context":"frontend","command":"coverage.start","params":{}}' |
-    jsdbg rpc --input json --output json
+    dbgjs rpc --input json --output json
 ```
 
 After performing an interaction, it stops coverage without choosing an ID:
 
 ```text
 > echo '{"context":"frontend","command":"coverage.stop","params":{}}' |
-    jsdbg rpc --input json --output json
+    dbgjs rpc --input json --output json
 {
   "ok": true,
   "context": "frontend",
@@ -2589,7 +2609,7 @@ It then prints newly covered functions relative to the preceding object:
       "exclude": [".."],
       "style": "functions"
     }
-  }' | jsdbg rpc --input json --output json
+  }' | dbgjs rpc --input json --output json
 ```
 
 The response contains structured source identities, function ranges, execution
@@ -2602,11 +2622,11 @@ A race-free debugger script first inspects the execution command result. If
 location. Only a `running` result needs a longer wait:
 
 ```text
-jsdbg -c api continue --output json
+dbgjs -c api continue --output json
 # Only if the returned state is "running":
-jsdbg -c api wait paused --timeout 30s --output json
-jsdbg -c api stack --output json
-jsdbg -c api watch list --output json
+dbgjs -c api wait paused --timeout 30s --output json
+dbgjs -c api stack --output json
+dbgjs -c api watch list --output json
 ```
 
 The returned context revision and per-scope connection generation let the script
