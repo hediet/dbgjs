@@ -3336,6 +3336,19 @@ fn begin_type_text(
 }
 
 async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerError> {
+    for event in key_events(chord)? {
+        driver
+            .client()
+            .input_dispatch_key_event(event)
+            .await
+            .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+    }
+    Ok(())
+}
+
+fn key_events(
+    chord: &str,
+) -> Result<Vec<InputDispatchKeyEventParams>, TargetDebuggerError> {
     let keys = match chord.to_ascii_lowercase().as_str() {
         "ctrl+n" | "control+n" => vec![(2, "KeyN", "n", 78, None)],
         "ctrl+k,ctrl+m" | "control+k,control+m" => {
@@ -3346,9 +3359,11 @@ async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerE
         }
         "enter" => vec![(0, "Enter", "Enter", 13, Some("\r"))],
         "accept" => vec![(0, "Enter", "Enter", 13, None)],
+        "escape" => vec![(0, "Escape", "Escape", 27, None)],
         "arrowup" | "up" => vec![(0, "ArrowUp", "ArrowUp", 38, None)],
         _ => return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned())),
     };
+    let mut events = Vec::new();
     for (modifiers, code, key, virtual_key, text) in keys {
         let mut event_types = vec![InputDispatchKeyEventParamsType::RawKeyDown];
         if text.is_some() {
@@ -3368,14 +3383,10 @@ async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerE
                 event.text = text.map(str::to_owned);
                 event.unmodified_text = text.map(str::to_owned);
             }
-            driver
-                .client()
-                .input_dispatch_key_event(event)
-                .await
-                .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
+            events.push(event);
         }
     }
-    Ok(())
+    Ok(events)
 }
 
 async fn start_coverage(
@@ -6006,8 +6017,8 @@ mod tests {
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
         complete_source_search_batch, effective_coverage_ranges, evaluated_remote_from_envelope,
-        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
-        window_highlighted_line,
+        heap_class_display_name, key_events, predicate_matches, publish_snapshot, snapshot,
+        source_excerpt, window_highlighted_line,
     };
     use crate::cdp::{
         RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
@@ -6032,6 +6043,28 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[test]
+    fn escape_key_events_use_the_cdp_escape_identity() {
+        let events = key_events("escape").unwrap();
+        let events = events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "rawKeyDown");
+        assert_eq!(events[1]["type"], "keyUp");
+        for event in events {
+            assert_eq!(event["modifiers"], 0);
+            assert_eq!(event["code"], "Escape");
+            assert_eq!(event["key"], "Escape");
+            assert_eq!(event["windowsVirtualKeyCode"], 27);
+            assert_eq!(event["nativeVirtualKeyCode"], 27);
+            assert!(event["text"].is_null());
+            assert!(event["unmodifiedText"].is_null());
+        }
+    }
 
     #[test]
     fn rejects_non_retained_existing_remote_object_inspection() {
