@@ -105,9 +105,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 
 		const wheel = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				"await page.mouse.wheel(0, 800)",
 				...scope,
 			],
@@ -116,9 +114,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		expect(wheel).toBe("");
 		const inline = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				"return { title: await page.title(), scrollY: await page.evaluate(() => scrollY) };",
 				...scope,
 			],
@@ -129,7 +125,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		const stdinProgram =
 			'return { url: page.url(), marker: await page.locator("#marker").textContent() };';
 		const fromStdin = await runCli(
-			["page", "playwright", "-", ...scope],
+			["playwright", "-", ...scope],
 			environment,
 			stdinProgram,
 		);
@@ -140,9 +136,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		expect(await page.title()).toBe("dbgjs Playwright E2E");
 		const oopif = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				'return { text: await page.frameLocator("#oopif").locator("#oopif-marker").textContent() };',
 				...scope,
 			],
@@ -151,9 +145,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		expect(JSON.parse(oopif)).toEqual({ text: "cross-origin iframe" });
 		const fileChooser = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				`const [chooser] = await Promise.all([
 					page.waitForEvent("filechooser"),
 					page.locator("#file").click(),
@@ -169,9 +161,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		});
 		const opaqueHeader = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				`await page.setExtraHTTPHeaders({ targetId: "opaque-header-value" });
 				await page.goto(${JSON.stringify(`${fixture.origin}/opaque-header`)});
 				return {
@@ -188,9 +178,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		});
 		const detachedSession = await runCli(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				`const session = await page.context().newCDPSession(page);
 				const evaluation = await session.send("Runtime.evaluate", {
 					expression: "document.title",
@@ -212,9 +200,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		const rejected = JSON.parse(
 			await runCli(
 				[
-					"page",
 					"playwright",
-					"--eval",
 					`async function rejection(operation) {
 						try { await operation(); return null; } catch (error) { return error.message; }
 					}
@@ -235,9 +221,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		expect(await unrelatedPage.locator("#unrelated").textContent()).toBe("untouched");
 
 		const destruction = run(cli, [
-			"page",
 			"playwright",
-			"--eval",
 			`await page.evaluate(() => {
 				document.title = "proxy command pending";
 				return new Promise(() => {});
@@ -249,9 +233,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		const destroyed = await destruction;
 		await appendTranscriptCommand(
 			[
-				"page",
 				"playwright",
-				"--eval",
 				"<pending page.evaluate>",
 				...scope,
 			],

@@ -61,9 +61,9 @@ rules.
 
 ## Initial implementation
 
-`dbgjs page playwright -` reads one program from stdin, while
-`dbgjs page playwright --eval <program>` executes inline source. The program
-receives `page` in global scope and can return one JSON value.
+`dbgjs playwright -` reads one program from stdin, while
+`dbgjs playwright <program>` executes inline source. The program receives
+`page` in global scope and can return one JSON value.
 
 The control plane remains on the daemon's authenticated Unix socket (Unix) or
 named pipe (Windows). Playwright's public `connectOverCDP` API accepts HTTP or

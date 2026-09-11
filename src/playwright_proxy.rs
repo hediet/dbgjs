@@ -763,14 +763,6 @@ fn upstream_message(
         let target_info = params
             .get("targetInfo")
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        if target_info.get("type").and_then(Value::as_str) == Some("browser") {
-            if parent_session_id.is_some() {
-                return Ok(UpstreamAction::Detach(session_id.to_owned()));
-            }
-            scope.sessions.insert(session_id.to_owned());
-            scope.browser_broker_sessions.insert(session_id.to_owned());
-            return Ok(UpstreamAction::Drop);
-        }
         let target_id = target_info_id(target_info)
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?
             .to_owned();
@@ -782,7 +774,31 @@ fn upstream_message(
             }
             validate_target_info(target_info, &scope.page, &target_id)?;
             scope.register_page_session(session_id, &target_id);
+            let target_info = object
+                .get_mut("params")
+                .and_then(|params| params.get_mut("targetInfo"))
+                .and_then(Value::as_object_mut)
+                .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+            if target_info.get("type").and_then(Value::as_str) == Some("other") {
+                target_info.insert("type".to_owned(), Value::String("page".to_owned()));
+            }
+            if !target_info.contains_key("browserContextId")
+                && let Some(context_id) = &scope.page.browser_context_id
+            {
+                target_info.insert(
+                    "browserContextId".to_owned(),
+                    Value::String(context_id.clone()),
+                );
+            }
             return Ok(UpstreamAction::Forward(json_message(value)?));
+        }
+        if is_browser_broker_target_info(target_info) {
+            if parent_session_id.is_some() {
+                return Ok(UpstreamAction::Detach(session_id.to_owned()));
+            }
+            scope.sessions.insert(session_id.to_owned());
+            scope.browser_broker_sessions.insert(session_id.to_owned());
+            return Ok(UpstreamAction::Drop);
         }
         let verified_parent = parent_session_id
             .and_then(|parent| scope.session_target_ids.get(parent))
@@ -906,16 +922,28 @@ fn validate_target_info(
             ScopeViolation::TargetId,
         ));
     }
-    let context = target_info
+    if target_info
         .get("browserContextId")
         .and_then(Value::as_str)
-        .map(str::to_owned);
-    if context != page.browser_context_id {
+        .is_some_and(|context| page.browser_context_id.as_deref() != Some(context))
+    {
         return Err(PlaywrightProxyError::ScopeViolation(
             ScopeViolation::BrowserContextId,
         ));
     }
     Ok(())
+}
+
+fn is_browser_broker_target_info(target_info: &Value) -> bool {
+    match target_info.get("type").and_then(Value::as_str) {
+        Some("browser") => true,
+        Some("other") => {
+            target_info.get("title").and_then(Value::as_str) == Some("")
+                && target_info.get("url").and_then(Value::as_str) == Some("")
+                && target_info.get("browserContextId").is_none()
+        }
+        _ => false,
+    }
 }
 
 fn validate_descendant_target_info(
@@ -1139,6 +1167,34 @@ mod tests {
         scope.register_page_session("selected-session", "selected");
         scope.primary_session_id = Some("selected-session".to_owned());
         scope
+    }
+
+    #[test]
+    fn target_info_may_omit_its_known_browser_context() {
+        validate_target_info(
+            &json!({
+                "targetId": "selected",
+                "type": "page",
+                "title": "selected",
+                "url": "http://selected.test/"
+            }),
+            &page(),
+            "selected",
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_target_info(
+                &json!({
+                    "targetId": "selected",
+                    "browserContextId": "other-context"
+                }),
+                &page(),
+                "selected",
+            ),
+            Err(PlaywrightProxyError::ScopeViolation(
+                ScopeViolation::BrowserContextId
+            ))
+        ));
     }
 
     fn text(value: Value) -> Message {
@@ -1682,15 +1738,45 @@ mod tests {
 
     #[test]
     fn browser_broker_attachment_is_hidden_from_the_client() {
-        let mut scope = scope();
+        for target_type in ["browser", "other"] {
+            let mut scope = scope();
+            let action = upstream_message(
+                text(json!({
+                    "method": "Target.attachedToTarget",
+                    "params": {
+                        "sessionId": "browser-broker",
+                        "targetInfo": {
+                            "targetId": "browser-target",
+                            "type": target_type,
+                            "title": "",
+                            "url": ""
+                        },
+                        "waitingForDebugger": false
+                    }
+                })),
+                &mut scope,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+
+            assert!(matches!(action, UpstreamAction::Drop));
+            assert!(scope.sessions.contains("browser-broker"));
+            assert!(scope.browser_broker_sessions.contains("browser-broker"));
+        }
+    }
+
+    #[test]
+    fn selected_page_attachment_normalizes_current_chromium_target_type() {
+        let mut scope = ActiveScope::new(page());
         let action = upstream_message(
             text(json!({
                 "method": "Target.attachedToTarget",
                 "params": {
-                    "sessionId": "browser-broker",
+                    "sessionId": "selected-session",
                     "targetInfo": {
-                        "targetId": "browser-target",
-                        "type": "browser",
+                        "targetId": "selected",
+                        "type": "other",
                         "title": "",
                         "url": ""
                     },
@@ -1703,9 +1789,17 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(action, UpstreamAction::Drop));
-        assert!(scope.sessions.contains("browser-broker"));
-        assert!(scope.browser_broker_sessions.contains("browser-broker"));
+        let UpstreamAction::Forward(Message::Text(message)) = action else {
+            panic!("selected page attachment was not forwarded");
+        };
+        let message = serde_json::from_str::<Value>(&message).unwrap();
+        assert_eq!(message["params"]["targetInfo"]["type"], "page");
+        assert_eq!(
+            message["params"]["targetInfo"]["browserContextId"],
+            "selected-context"
+        );
+        assert!(scope.sessions.contains("selected-session"));
+        assert!(!scope.browser_broker_sessions.contains("selected-session"));
     }
 
     #[tokio::test]

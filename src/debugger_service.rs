@@ -4166,22 +4166,6 @@ impl DebuggerServiceApi for DebuggerService {
         Ok(true)
     }
 
-    async fn key_target(
-        &self,
-        _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
-        chord: String,
-    ) -> Result<bool, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .key(chord)
-            .await
-            .map_err(target_debugger_rpc_error)?;
-        Ok(true)
-    }
-
     async fn type_target(
         &self,
         _ctx: &CallCtx,
@@ -8632,7 +8616,6 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::ScopeNotFound(_)
         | TargetDebuggerError::SelectorNotFound(_)
-        | TargetDebuggerError::UnsupportedKeyChord(_)
         | TargetDebuggerError::CoverageAlreadyActive
         | TargetDebuggerError::CoverageNotActive
         | TargetDebuggerError::CoverageCaptureNotFound(_)

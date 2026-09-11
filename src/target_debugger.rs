@@ -10,8 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::cdp::{
     DebuggerEvaluateOnCallFrameParams, DomGetBoxModelParams, DomGetDocumentParams,
-    DomQuerySelectorParams, HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
-    InputDispatchKeyEventParamsType, InputDispatchMouseEventParams,
+    DomQuerySelectorParams, HeapProfilerTakeHeapSnapshotParams, InputDispatchMouseEventParams,
     InputDispatchMouseEventParamsType, InputInsertTextParams, InputMouseButton,
     PageCaptureScreenshotParams, PageCaptureScreenshotParamsFormat, ProfilerEnableParams,
     ProfilerProfile, ProfilerScriptCoverage, ProfilerSetSamplingIntervalParams,
@@ -459,15 +458,6 @@ impl TargetDebuggerHandle {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::Click { selector, response })
-            .await
-            .map_err(|_| TargetDebuggerError::Stopped)?;
-        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
-    }
-
-    pub async fn key(&self, chord: String) -> Result<(), TargetDebuggerError> {
-        let (response, receiver) = oneshot::channel();
-        self.commands
-            .send(TargetCommand::Key { chord, response })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
@@ -1040,10 +1030,6 @@ enum TargetCommand {
     },
     Click {
         selector: String,
-        response: oneshot::Sender<Result<(), TargetDebuggerError>>,
-    },
-    Key {
-        chord: String,
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
     TypeText {
@@ -1662,9 +1648,6 @@ async fn run_target(
                     },
                 };
                 let _ = response.send(result);
-            }
-            Next::Command(Some(TargetCommand::Key { chord, response })) => {
-                let _ = response.send(key(&driver, &chord).await);
             }
             Next::Command(Some(TargetCommand::TypeText { text, response })) => {
                 let prior_epoch = driver
@@ -3334,290 +3317,6 @@ fn begin_type_text(
             .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))
     })
 }
-
-async fn key(driver: &DebuggerDriver, chord: &str) -> Result<(), TargetDebuggerError> {
-    for event in key_events(chord)? {
-        driver
-            .client()
-            .input_dispatch_key_event(event)
-            .await
-            .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
-    }
-    Ok(())
-}
-
-fn key_events(
-    chord: &str,
-) -> Result<Vec<InputDispatchKeyEventParams>, TargetDebuggerError> {
-    let chord_parts = chord.split(',').collect::<Vec<_>>();
-    if chord_parts.iter().any(|part| part.trim().is_empty()) {
-        return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned()));
-    }
-    let emit_text = chord_parts.len() == 1;
-    let mut events = Vec::new();
-    for chord_part in chord_parts {
-        let stroke = parse_key_stroke(chord, chord_part, emit_text)?;
-        let mut event_types = vec![InputDispatchKeyEventParamsType::RawKeyDown];
-        if stroke.text.is_some() {
-            event_types.push(InputDispatchKeyEventParamsType::Char);
-        }
-        event_types.push(InputDispatchKeyEventParamsType::KeyUp);
-        for kind in event_types {
-            let is_key_down = kind == InputDispatchKeyEventParamsType::RawKeyDown;
-            let is_char = kind == InputDispatchKeyEventParamsType::Char;
-            let mut event = InputDispatchKeyEventParams::new(kind);
-            event.modifiers = Some(stroke.modifiers);
-            event.code = Some(stroke.definition.code.clone());
-            event.key = Some(stroke.definition.key.clone());
-            event.windows_virtual_key_code = Some(stroke.definition.virtual_key);
-            event.native_virtual_key_code = Some(stroke.definition.virtual_key);
-            if is_key_down || is_char {
-                event.text = stroke.text.clone();
-                event.unmodified_text = stroke.text.clone();
-            }
-            events.push(event);
-        }
-    }
-    Ok(events)
-}
-
-struct KeyStroke {
-    modifiers: i64,
-    definition: KeyDefinition,
-    text: Option<String>,
-}
-
-struct KeyDefinition {
-    code: String,
-    key: String,
-    virtual_key: i64,
-    text: Option<String>,
-}
-
-fn parse_key_stroke(
-    chord: &str,
-    chord_part: &str,
-    emit_text: bool,
-) -> Result<KeyStroke, TargetDebuggerError> {
-    let parts = chord_part.split('+').map(str::trim).collect::<Vec<_>>();
-    let Some((key_name, modifiers)) = parts.split_last() else {
-        return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned()));
-    };
-    if key_name.is_empty() {
-        return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned()));
-    }
-    let mut modifier_bits = 0;
-    for modifier in modifiers {
-        modifier_bits |= match modifier.to_ascii_lowercase().as_str() {
-            "alt" => 1,
-            "ctrl" | "control" => 2,
-            "meta" | "cmd" | "command" => 4,
-            "shift" => 8,
-            _ => return Err(TargetDebuggerError::UnsupportedKeyChord(chord.to_owned())),
-        };
-    }
-    let mut definition = resolve_key_definition(key_name, modifier_bits & 8 != 0)
-        .ok_or_else(|| TargetDebuggerError::UnsupportedKeyChord(chord.to_owned()))?;
-    if key_name.eq_ignore_ascii_case("accept") {
-        definition.text = None;
-    }
-    let text = if emit_text && modifier_bits & 7 == 0 {
-        definition.text.clone()
-    } else {
-        None
-    };
-    Ok(KeyStroke {
-        modifiers: modifier_bits,
-        definition,
-        text,
-    })
-}
-
-fn resolve_key_definition(name: &str, shifted: bool) -> Option<KeyDefinition> {
-    let normalized = match name.to_ascii_lowercase().as_str() {
-        "accept" | "return" => "enter",
-        "esc" => "escape",
-        "del" => "delete",
-        "spacebar" => "space",
-        "up" => "arrowup",
-        "down" => "arrowdown",
-        "left" => "arrowleft",
-        "right" => "arrowright",
-        _ => return resolve_key_definition_without_alias(name, shifted),
-    };
-    resolve_key_definition_without_alias(normalized, shifted)
-}
-
-fn resolve_key_definition_without_alias(name: &str, shifted: bool) -> Option<KeyDefinition> {
-    let normalized = name.to_ascii_lowercase();
-    if let Some(letter) = normalized.strip_prefix("key").filter(|value| value.len() == 1) {
-        return resolve_ascii_letter(letter.as_bytes()[0], shifted);
-    }
-    if normalized.len() == 1 && normalized.as_bytes()[0].is_ascii_alphabetic() {
-        return resolve_ascii_letter(normalized.as_bytes()[0], shifted);
-    }
-    if let Some(digit) = normalized.strip_prefix("digit").filter(|value| value.len() == 1) {
-        return resolve_ascii_digit(digit.as_bytes()[0], shifted);
-    }
-    if normalized.len() == 1 && normalized.as_bytes()[0].is_ascii_digit() {
-        return resolve_ascii_digit(normalized.as_bytes()[0], shifted);
-    }
-    if let Some(number) = normalized.strip_prefix('f').and_then(|value| value.parse::<i64>().ok())
-        && (1..=24).contains(&number)
-    {
-        let name = format!("F{number}");
-        return Some(key_definition(name.clone(), name, 111 + number, None));
-    }
-    if let Some(number) = normalized
-        .strip_prefix("numpad")
-        .and_then(|value| value.parse::<i64>().ok())
-        && (0..=9).contains(&number)
-    {
-        let digit = char::from_digit(number as u32, 10)?;
-        return Some(key_definition(
-            format!("Numpad{number}"),
-            digit.to_string(),
-            96 + number,
-            Some(digit.to_string()),
-        ));
-    }
-    if let Some(definition) = resolve_symbol_key(&normalized, shifted) {
-        return Some(definition);
-    }
-    NAMED_KEYS
-        .iter()
-        .find(|definition| definition.name == normalized)
-        .map(|definition| {
-            key_definition(
-                definition.code,
-                definition.key,
-                definition.virtual_key,
-                definition.text.map(str::to_owned),
-            )
-        })
-}
-
-fn resolve_ascii_letter(letter: u8, shifted: bool) -> Option<KeyDefinition> {
-    let uppercase = letter.to_ascii_uppercase();
-    let key = if shifted {
-        char::from(uppercase)
-    } else {
-        char::from(uppercase.to_ascii_lowercase())
-    };
-    Some(key_definition(
-        format!("Key{}", char::from(uppercase)),
-        key.to_string(),
-        i64::from(uppercase),
-        Some(key.to_string()),
-    ))
-}
-
-fn resolve_ascii_digit(digit: u8, shifted: bool) -> Option<KeyDefinition> {
-    if !digit.is_ascii_digit() {
-        return None;
-    }
-    let index = usize::from(digit - b'0');
-    let key = if shifted {
-        [')', '!', '@', '#', '$', '%', '^', '&', '*', '('][index]
-    } else {
-        char::from(digit)
-    };
-    Some(key_definition(
-        format!("Digit{}", char::from(digit)),
-        key.to_string(),
-        i64::from(digit),
-        Some(key.to_string()),
-    ))
-}
-
-fn resolve_symbol_key(name: &str, shifted: bool) -> Option<KeyDefinition> {
-    const SYMBOL_KEYS: &[(&str, &str, char, char, i64)] = &[
-        ("backquote", "Backquote", '`', '~', 192),
-        ("minus", "Minus", '-', '_', 189),
-        ("equal", "Equal", '=', '+', 187),
-        ("bracketleft", "BracketLeft", '[', '{', 219),
-        ("bracketright", "BracketRight", ']', '}', 221),
-        ("backslash", "Backslash", '\\', '|', 220),
-        ("semicolon", "Semicolon", ';', ':', 186),
-        ("quote", "Quote", '\'', '"', 222),
-        ("comma", "Comma", ',', '<', 188),
-        ("period", "Period", '.', '>', 190),
-        ("slash", "Slash", '/', '?', 191),
-    ];
-    SYMBOL_KEYS
-        .iter()
-        .find(|(code_name, _, unshifted, shifted_symbol, _)| {
-            name == *code_name
-                || (name.len() == 1
-                    && (name.starts_with(*unshifted) || name.starts_with(*shifted_symbol)))
-        })
-        .map(|(_, code, unshifted, shifted_symbol, virtual_key)| {
-            let key = if shifted || name.starts_with(*shifted_symbol) {
-                *shifted_symbol
-            } else {
-                *unshifted
-            };
-            key_definition(*code, key.to_string(), *virtual_key, Some(key.to_string()))
-        })
-}
-
-fn key_definition(
-    code: impl Into<String>,
-    key: impl Into<String>,
-    virtual_key: i64,
-    text: Option<String>,
-) -> KeyDefinition {
-    KeyDefinition {
-        code: code.into(),
-        key: key.into(),
-        virtual_key,
-        text,
-    }
-}
-
-struct NamedKeyDefinition {
-    name: &'static str,
-    code: &'static str,
-    key: &'static str,
-    virtual_key: i64,
-    text: Option<&'static str>,
-}
-
-const NAMED_KEYS: &[NamedKeyDefinition] = &[
-    NamedKeyDefinition { name: "escape", code: "Escape", key: "Escape", virtual_key: 27, text: None },
-    NamedKeyDefinition { name: "tab", code: "Tab", key: "Tab", virtual_key: 9, text: None },
-    NamedKeyDefinition { name: "backspace", code: "Backspace", key: "Backspace", virtual_key: 8, text: None },
-    NamedKeyDefinition { name: "enter", code: "Enter", key: "Enter", virtual_key: 13, text: Some("\r") },
-    NamedKeyDefinition { name: "space", code: "Space", key: " ", virtual_key: 32, text: Some(" ") },
-    NamedKeyDefinition { name: "pageup", code: "PageUp", key: "PageUp", virtual_key: 33, text: None },
-    NamedKeyDefinition { name: "pagedown", code: "PageDown", key: "PageDown", virtual_key: 34, text: None },
-    NamedKeyDefinition { name: "end", code: "End", key: "End", virtual_key: 35, text: None },
-    NamedKeyDefinition { name: "home", code: "Home", key: "Home", virtual_key: 36, text: None },
-    NamedKeyDefinition { name: "arrowleft", code: "ArrowLeft", key: "ArrowLeft", virtual_key: 37, text: None },
-    NamedKeyDefinition { name: "arrowup", code: "ArrowUp", key: "ArrowUp", virtual_key: 38, text: None },
-    NamedKeyDefinition { name: "arrowright", code: "ArrowRight", key: "ArrowRight", virtual_key: 39, text: None },
-    NamedKeyDefinition { name: "arrowdown", code: "ArrowDown", key: "ArrowDown", virtual_key: 40, text: None },
-    NamedKeyDefinition { name: "insert", code: "Insert", key: "Insert", virtual_key: 45, text: None },
-    NamedKeyDefinition { name: "delete", code: "Delete", key: "Delete", virtual_key: 46, text: None },
-    NamedKeyDefinition { name: "pause", code: "Pause", key: "Pause", virtual_key: 19, text: None },
-    NamedKeyDefinition { name: "printscreen", code: "PrintScreen", key: "PrintScreen", virtual_key: 44, text: None },
-    NamedKeyDefinition { name: "capslock", code: "CapsLock", key: "CapsLock", virtual_key: 20, text: None },
-    NamedKeyDefinition { name: "numlock", code: "NumLock", key: "NumLock", virtual_key: 144, text: None },
-    NamedKeyDefinition { name: "scrolllock", code: "ScrollLock", key: "ScrollLock", virtual_key: 145, text: None },
-    NamedKeyDefinition { name: "contextmenu", code: "ContextMenu", key: "ContextMenu", virtual_key: 93, text: None },
-    NamedKeyDefinition { name: "audiovolumemute", code: "AudioVolumeMute", key: "AudioVolumeMute", virtual_key: 173, text: None },
-    NamedKeyDefinition { name: "audiovolumedown", code: "AudioVolumeDown", key: "AudioVolumeDown", virtual_key: 174, text: None },
-    NamedKeyDefinition { name: "audiovolumeup", code: "AudioVolumeUp", key: "AudioVolumeUp", virtual_key: 175, text: None },
-    NamedKeyDefinition { name: "mediatracknext", code: "MediaTrackNext", key: "MediaTrackNext", virtual_key: 176, text: None },
-    NamedKeyDefinition { name: "mediatrackprevious", code: "MediaTrackPrevious", key: "MediaTrackPrevious", virtual_key: 177, text: None },
-    NamedKeyDefinition { name: "mediaplaypause", code: "MediaPlayPause", key: "MediaPlayPause", virtual_key: 179, text: None },
-    NamedKeyDefinition { name: "numpaddivide", code: "NumpadDivide", key: "/", virtual_key: 111, text: Some("/") },
-    NamedKeyDefinition { name: "numpadmultiply", code: "NumpadMultiply", key: "*", virtual_key: 106, text: Some("*") },
-    NamedKeyDefinition { name: "numpadsubtract", code: "NumpadSubtract", key: "-", virtual_key: 109, text: Some("-") },
-    NamedKeyDefinition { name: "numpadadd", code: "NumpadAdd", key: "+", virtual_key: 107, text: Some("+") },
-    NamedKeyDefinition { name: "numpaddecimal", code: "NumpadDecimal", key: ".", virtual_key: 110, text: Some(".") },
-    NamedKeyDefinition { name: "numpadenter", code: "NumpadEnter", key: "Enter", virtual_key: 13, text: Some("\r") },
-];
 
 async fn start_coverage(
     driver: &mut DebuggerDriver,
@@ -6133,8 +5832,6 @@ pub enum TargetDebuggerError {
     Screenshot(String),
     #[error("selector '{0}' did not match an element")]
     SelectorNotFound(String),
-    #[error("unsupported key chord '{0}'")]
-    UnsupportedKeyChord(String),
     #[error("coverage failed: {0}")]
     Coverage(String),
     #[error("heap snapshot failed: {0}")]
@@ -6247,8 +5944,8 @@ mod tests {
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
         complete_source_search_batch, effective_coverage_ranges, evaluated_remote_from_envelope,
-        heap_class_display_name, key_events, predicate_matches, publish_snapshot, snapshot,
-        source_excerpt, window_highlighted_line,
+        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
+        window_highlighted_line,
     };
     use crate::cdp::{
         RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
@@ -6273,54 +5970,6 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
-
-    #[test]
-    fn key_events_resolve_standard_keys_and_chords() {
-        let arrow_right = key_events("ArrowRight")
-            .unwrap()
-            .iter()
-            .map(|event| serde_json::to_value(event).unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(arrow_right.len(), 2);
-        assert_eq!(arrow_right[0]["type"], "rawKeyDown");
-        assert_eq!(arrow_right[1]["type"], "keyUp");
-        for event in arrow_right {
-            assert_eq!(event["modifiers"], 0);
-            assert_eq!(event["code"], "ArrowRight");
-            assert_eq!(event["key"], "ArrowRight");
-            assert_eq!(event["windowsVirtualKeyCode"], 39);
-            assert_eq!(event["nativeVirtualKeyCode"], 39);
-            assert!(event["text"].is_null());
-            assert!(event["unmodifiedText"].is_null());
-        }
-
-        let modified = key_events("ctrl+shift+ArrowRight").unwrap();
-        assert_eq!(modified.len(), 2);
-        assert!(modified.iter().all(|event| event.modifiers == Some(10)));
-
-        let letter = key_events("z").unwrap();
-        assert_eq!(letter.len(), 3);
-        assert_eq!(letter[0].code.as_deref(), Some("KeyZ"));
-        assert_eq!(letter[0].key.as_deref(), Some("z"));
-        assert_eq!(letter[0].windows_virtual_key_code, Some(90));
-        assert_eq!(letter[1].text.as_deref(), Some("z"));
-
-        let function_key = key_events("F12").unwrap();
-        assert_eq!(function_key[0].code.as_deref(), Some("F12"));
-        assert_eq!(function_key[0].windows_virtual_key_code, Some(123));
-
-        let sequence = key_events("ctrl+k,n").unwrap();
-        assert_eq!(sequence.len(), 4);
-        assert!(sequence.iter().all(|event| event.text.is_none()));
-
-        assert_eq!(key_events("enter").unwrap().len(), 3);
-        assert_eq!(key_events("accept").unwrap().len(), 2);
-        assert_eq!(key_events("ctrl+n").unwrap().len(), 2);
-        assert!(matches!(
-            key_events("ctrl+NotAKey"),
-            Err(TargetDebuggerError::UnsupportedKeyChord(_))
-        ));
-    }
 
     #[test]
     fn rejects_non_retained_existing_remote_object_inspection() {

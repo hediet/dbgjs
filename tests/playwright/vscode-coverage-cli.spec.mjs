@@ -114,7 +114,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		);
 		await runCli(
 			"Press Enter as a real key event so VS Code inserts transient auto whitespace.",
-			["target", "key", "enter"],
+			["playwright", "await page.keyboard.press('Enter')"],
 			environment,
 		);
 		const sampledAutoIndent = await readEditorLines(
@@ -124,7 +124,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		expect(sampledAutoIndent).toMatch(/"lines":\s*\[\s*"  foo",\s*"  "\s*\]/);
 		await runCli(
 			"Press ArrowUp to abandon the auto-indented line.",
-			["target", "key", "arrowup"],
+			["playwright", "await page.keyboard.press('ArrowUp')"],
 			environment,
 		);
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
@@ -293,7 +293,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		);
 		await runCli(
 			"Press Enter and leave the cursor on the auto-indented empty line.",
-			["target", "key", "enter"],
+			["playwright", "await page.keyboard.press('Enter')"],
 			environment,
 		);
 		const beforeBreakpoint = await readEditorLines(
@@ -343,7 +343,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		);
 		await runCli(
 			"Dispatch ArrowUp and leave the auto-whitespace candidate pending.",
-			["target", "key", "arrowup"],
+			["playwright", "await page.keyboard.press('ArrowUp')"],
 			environment,
 		);
 		const editCommand = runCli(
@@ -511,7 +511,10 @@ async function runCli(
 async function createUntitledEditor(explanation, environment) {
 	await runCli(
 		explanation,
-		["target", "key", "ctrl+k,n"],
+		[
+			"playwright",
+			"await page.keyboard.press('Control+K'); await page.keyboard.press('n')",
+		],
 		environment,
 	);
 }
@@ -566,7 +569,7 @@ async function setTypeScriptMode(environment) {
 	);
 	await runCli(
 		"Accept TypeScript in the language picker.",
-		["target", "key", "accept"],
+		["playwright", "await page.keyboard.press('Enter')"],
 		environment,
 	);
 	await new Promise((resolve_) => setTimeout(resolve_, 100));

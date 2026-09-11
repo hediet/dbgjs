@@ -222,7 +222,10 @@ async function runCli(explanation, arguments_, environment) {
 async function createUntitledEditor(explanation, environment) {
 	await runCli(
 		explanation,
-		["target", "key", "ctrl+k,n"],
+		[
+			"playwright",
+			"await page.keyboard.press('Control+K'); await page.keyboard.press('n')",
+		],
 		environment,
 	);
 }

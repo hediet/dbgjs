@@ -85,7 +85,10 @@ test("compares vscode.dev editor buffers with infrastructure objects", async () 
 		);
 		await runCli(
 			"Create an editor so its text model and PieceTree buffer are live.",
-			["target", "key", "ctrl+k,n"],
+			[
+				"playwright",
+				"await page.keyboard.press('Control+K'); await page.keyboard.press('n')",
+			],
 			environment,
 		);
 		await retryCli(

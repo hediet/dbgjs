@@ -302,7 +302,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             output.print_eval(&value, options.full)?;
         }
-        [page, playwright, arguments @ ..] if page == "page" && playwright == "playwright" => {
+        [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
             let client = ensure_service(&state_file).await?;
             let scope =
@@ -453,15 +453,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?;
             println!("Clicked {selector}");
-        }
-        [target, key, chord] if target == "target" && key == "key" => {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
-                .key_target(scope.context, scope.connection, scope.target, chord.clone())
-                .await)?;
-            println!("Pressed {chord}");
         }
         [target, type_text, text] if target == "target" && type_text == "type" => {
             let client = ensure_service(&state_file).await?;
@@ -2420,7 +2411,7 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
     match (command, operation) {
         (
             Some(
-                "target" | "page" | "value" | "coverage" | "profile" | "promise" | "heap"
+                "target" | "playwright" | "value" | "coverage" | "profile" | "promise" | "heap"
                 | "screenshot" | "log" | "watch",
             ),
             _,
@@ -6140,7 +6131,7 @@ fn read_playwright_program(
                 )
             })?
         }
-        [eval, program] if eval == "--eval" => {
+        [program] => {
             if program.len() > PLAYWRIGHT_PROGRAM_LIMIT {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -6152,14 +6143,14 @@ fn read_playwright_program(
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "page playwright requires '-' for stdin or --eval <program>",
+                "playwright requires <program> or '-' for stdin",
             ));
         }
     };
     if program.trim().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "page playwright received an empty program",
+            "playwright received an empty program",
         ));
     }
     Ok(program)
@@ -6525,8 +6516,8 @@ commands:
   dbgjs target step into|over|out [--epoch <epoch>] [target scope]
   dbgjs target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
     '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
-  dbgjs page playwright - [target scope]
-  dbgjs page playwright --eval <program> [target scope]
+  dbgjs playwright <program|-> [target scope]
+    exposes the selected target as `page`; '-' reads the program from stdin
   dbgjs target watch <expression> [target scope]
   dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   dbgjs target relay --stdio [target scope]
@@ -6537,8 +6528,6 @@ commands:
   dbgjs log [--after <cursor>] [--limit <count>] [target scope]
     reports target-local console capture coverage, not browser/network diagnostics; does not attach
   dbgjs target click <css-selector> [target scope]
-  dbgjs target key <key-chord[,key-chord...]> [target scope]
-    accepts standard key names and modifier combinations, for example ArrowRight or ctrl+shift+p
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
@@ -6898,13 +6887,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_playwright_program_only_from_explicit_forms() {
+    fn reads_playwright_program_from_argument_or_stdin() {
         assert_eq!(
-            read_playwright_program(
-                &arguments(&["--eval", "return await page.title()"]),
-                "".as_bytes()
-            )
-            .unwrap(),
+            read_playwright_program(&arguments(&["return await page.title()"]), "".as_bytes())
+                .unwrap(),
             "return await page.title()"
         );
         assert_eq!(
@@ -6914,6 +6900,25 @@ mod tests {
         );
         assert!(read_playwright_program(&arguments(&[]), "".as_bytes()).is_err());
         assert!(read_playwright_program(&arguments(&["-"]), " \n".as_bytes()).is_err());
+
+        let mut scoped = arguments(&[
+            "playwright",
+            "await page.keyboard.press('ArrowRight')",
+            "--context",
+            "ctx",
+            "--connection",
+            "browser",
+            "--target",
+            "page",
+        ]);
+        let scope = extract_scope_options(&mut scoped).unwrap();
+        assert_eq!(
+            scoped,
+            arguments(&["playwright", "await page.keyboard.press('ArrowRight')"])
+        );
+        assert_eq!(scope.context.as_deref(), Some("ctx"));
+        assert_eq!(scope.connection.as_deref(), Some("browser"));
+        assert_eq!(scope.target.as_deref(), Some("page"));
     }
 
     #[test]

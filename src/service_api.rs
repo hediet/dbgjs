@@ -2181,13 +2181,6 @@ pub trait DebuggerServiceApi {
         selector: String,
     ) -> Result<bool, JsonRpcError>;
 
-    async fn key_target(
-        context_id: String,
-        connection_id: String,
-        target_id: String,
-        chord: String,
-    ) -> Result<bool, JsonRpcError>;
-
     async fn type_target(
         context_id: String,
         connection_id: String,
