@@ -6537,7 +6537,8 @@ commands:
   dbgjs log [--after <cursor>] [--limit <count>] [target scope]
     reports target-local console capture coverage, not browser/network diagnostics; does not attach
   dbgjs target click <css-selector> [target scope]
-  dbgjs target key <ctrl+n|ctrl+k,ctrl+m|ctrl+k,n|enter|accept|escape|arrowup> [target scope]
+  dbgjs target key <key-chord[,key-chord...]> [target scope]
+    accepts standard key names and modifier combinations, for example ArrowRight or ctrl+shift+p
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
