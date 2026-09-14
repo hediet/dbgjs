@@ -10,14 +10,15 @@ import { parseArgs } from "node:util";
 import { platformKey } from "../npm/dbgjs/lib/platform.mjs";
 import { npm } from "./npm-tools.mjs";
 
-const { values } = parseArgs({ options: { platform: { type: "string" }, artifacts: { type: "string" } } });
+const { values } = parseArgs({ options: { platform: { type: "string" }, artifacts: { type: "string" }, candidate: { type: "boolean", default: false } } });
 const host = platformKey(process.platform, process.arch, process.platform === "linux" ? process.report.getReport().header.glibcVersionRuntime : undefined);
 assert.equal(values.platform, host, "Smoke tests must run natively on the packaged platform.");
 if (!values.artifacts) throw new Error("--artifacts must point to the tarball directory.");
 const manifest = JSON.parse(await readFile(new URL("../npm/dbgjs/package.json", import.meta.url), "utf8"));
+const extension = values.candidate ? "tar.gz" : "tgz";
 const tarballs = [
-	resolve(values.artifacts, `hediet-dbgjs-${host}-${manifest.version}.tgz`),
-	resolve(values.artifacts, `hediet-dbgjs-${manifest.version}.tgz`),
+	resolve(values.artifacts, `hediet-dbgjs-${host}-${manifest.version}.${extension}`),
+	resolve(values.artifacts, `hediet-dbgjs-${manifest.version}.${extension}`),
 ];
 
 async function runProcess(command, args, options) {

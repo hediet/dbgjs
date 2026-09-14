@@ -1,4 +1,4 @@
-import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ const { values } = parseArgs({ options: {
 	platform: { type: "string" },
 	"bin-dir": { type: "string" },
 	output: { type: "string" },
+	candidate: { type: "boolean", default: false },
 } });
 const platform = platforms[values.platform];
 if (!platform || !values["bin-dir"] || !values.output) {
@@ -39,6 +40,7 @@ try {
 	await writeFile(join(native, "package.json"), JSON.stringify({
 		name: `@hediet/dbgjs-${values.platform}`,
 		version: manifest.version,
+		...(values.candidate ? { private: true } : {}),
 		description: `Native binaries for @hediet/dbgjs (${values.platform})`,
 		license: manifest.license,
 		os: [platform.os],
@@ -47,11 +49,21 @@ try {
 		files: ["bin"],
 	}, null, 2) + "\n");
 	await cp(join(root, "npm", "dbgjs"), entry, { recursive: true });
+	if (values.candidate) {
+		await writeFile(join(entry, "package.json"), JSON.stringify({ ...manifest, private: true }, null, 2) + "\n");
+	}
 	for (const name of ["dbgjs", "dbgjs-tui"]) await chmod(join(entry, "bin", `${name}.mjs`), 0o755);
 	for (const directory of [native, entry]) {
 		const packed = JSON.parse(npm(["pack", "--json", "--ignore-scripts", "--pack-destination", output], { cwd: directory }));
 		if (packed.length !== 1 || !packed[0].filename.endsWith(".tgz")) throw new Error("npm pack did not return exactly one tarball.");
-		console.log(join(output, packed[0].filename));
+		const filename = packed[0].filename;
+		if (values.candidate) {
+			const candidate = filename.replace(/\.tgz$/, ".tar.gz");
+			await rename(join(output, filename), join(output, candidate));
+			console.log(join(output, candidate));
+		} else {
+			console.log(join(output, filename));
+		}
 	}
 } finally {
 	await rm(staging, { recursive: true, force: true });

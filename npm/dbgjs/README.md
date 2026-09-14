@@ -8,11 +8,12 @@ use `DBGJS_*`, and the daemon uses a fresh `dbgjs` state location. Existing
 prototype state is left untouched. On Windows the new endpoint is
 `%LOCALAPPDATA%\hediet\dbgjs\service.json`; `DBGJS_SERVICE_STATE` overrides it.
 
-## Install a CI build
+## Install a release build
 
-Download and extract the `npm-<platform>` artifact from the CI run. It contains
-two tarballs: the entry package and its matching native package. Install both
-in the same command, for example on Windows x64:
+Download and extract `npm-stable-dbgjs` and `npm-stable-<platform>` from the
+Release packages workflow. Each artifact contains one tarball. Install the
+entry package and its matching native package in the same command, for example
+on Windows x64:
 
 ```sh
 npm install -g ./hediet-dbgjs-win32-x64-0.1.0.tgz ./hediet-dbgjs-0.1.0.tgz
@@ -20,8 +21,16 @@ dbgjs --help
 ```
 
 For a project-local installation omit `-g` and use `npx --no-install dbgjs`.
-These packages are not yet published to an npm registry; installing only the
-entry tarball will not supply an unpublished native dependency.
+Installing only the entry tarball will not supply an unpublished native
+dependency.
+
+Nightly artifacts are named `npm-nightly-dbgjs` and `npm-nightly-<platform>`.
+Their versions are `X.Y.Z-nightly.<CI-run-id>`. Install both matching nightly
+tarballs together. Release packages carry `publishConfig.tag`: `nightly` for
+nightlies and `latest` for stable packages, for the external npm publisher.
+
+CI itself uploads private `.tar.gz` candidates for smoke testing, not publishable
+`.tgz` releases. Only successful main builds are promoted to release artifacts.
 
 Supported platforms: Windows x64, macOS x64/ARM64, Linux GNU x64/ARM64.
 Linux requires glibc 2.35 or newer and OpenSSL 3. Musl/Alpine and Windows ARM64

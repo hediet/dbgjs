@@ -3,6 +3,9 @@
 [CI](../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, and
 manual dispatch. It does not publish to an npm registry.
 
+Completed work is delivered to `main`; keep the primary checkout on `main` and
+preserve unrelated work when moving or committing changes.
+
 ## Change detection and caches
 
 The small change-detection job always runs. Changes confined to `docs/`, `todo/`,
@@ -32,13 +35,16 @@ Ordinary docs-only changes, including a root `README.md` change, schedule no
 Rust or packaging jobs, so their total Rust compilation and test time is zero.
 Cache misses only affect speed, never correctness.
 
-## Checks and artifacts
+## Checks and candidate artifacts
 
 Windows x64, Linux x64, and macOS ARM64 run workspace builds, Rust tests, and
 offline recording tests. The native package matrix builds Windows x64, Linux
 x64/ARM64 (GNU), and macOS x64/ARM64. Each npm package has its own GitHub
-artifact: `npm-dbgjs` contains the entry-package tarball, while each
-`npm-<platform>` artifact contains only its matching native-package tarball.
+artifact: `npm-dbgjs` contains the entry-package candidate, while each
+`npm-<platform>` artifact contains only its matching native-package candidate.
+Candidates use `.tar.gz` filenames and `private: true` manifests. They can be
+installed for testing but cannot be published by npm, and the external `.tgz`
+scanner does not mistake untested or PR artifacts for releases.
 
 Separate artifact-consumer jobs download the shared entry artifact and matching
 native artifact, install both tarballs, exercise the `dbgjs` and `dbgjs-tui`
@@ -59,6 +65,62 @@ yet.
 Real browser and desktop VS Code scenarios are not part of this initial CI;
 the workspace tests and installed-package smoke tests cover local service and
 Node debugging without depending on a live external website.
+
+## Nightly and stable packages
+
+[Release packages](../.github/workflows/release.yml) runs after successful CI
+on this repository's `main`, including manual CI dispatch on `main`. It rejects
+PRs, forks, other workflows, and failed runs. Documentation-only CI with no
+package artifacts produces no release and still spends zero time on Rust.
+Missing parts of a package set and expired artifacts are errors, not releases.
+
+Every eligible package-producing run creates six nightly packages. When the
+version in `npm/dbgjs/package.json` has no corresponding `vX.Y.Z` tag, it also
+creates six stable packages. Bump the npm entry manifest, its native optional
+dependency versions, and `Cargo.toml` together. A failed bump build does not
+claim the version; a subsequent green package-producing main build can release
+it. There is no strict commit-order queue.
+
+| Channel | Version | `publishConfig.tag` | Artifact names |
+| --- | --- | --- | --- |
+| Nightly | `X.Y.Z-nightly.<CI-run-id>` | `nightly` | `npm-nightly-dbgjs`, `npm-nightly-<platform>` |
+| Stable | `X.Y.Z` | `latest` | `npm-stable-dbgjs`, `npm-stable-<platform>` |
+
+Each release artifact contains one `.tgz`. Version and publication tag are set
+inside every package, and native optional dependencies are rewritten to the
+same exact version. The checked-in manifests are not changed by CI. The tested
+binaries are repacked without rebuilding or changing their contents.
+
+The external publisher should run `npm publish <tarball>`, honoring the embedded
+`publishConfig.tag`, rather than overriding the tag or always updating `latest`.
+It must retry partial sets and skip already-published package versions. This
+workflow only prepares artifacts; it neither needs npm credentials nor confirms
+registry publication.
+
+### Serialization and retry safety
+
+The release workflow has a single `npm-release` concurrency group with
+`cancel-in-progress: false`. It rechecks stable-tag existence inside that
+serialized workflow; the first green build to acquire the lock wins. It is
+separate from cancellable CI builds, so a new main push does not cancel an
+ongoing release. GitHub may replace a pending run; this is not a FIFO queue.
+
+Before exposing a stable artifact set, the coordinator creates an immutable
+annotated `release-candidates/vX.Y.Z` tag recording the chosen commit and source
+CI run. After uploading the complete set, it creates the immutable `vX.Y.Z`
+tag. The candidate tag is retained as a small durable retry record.
+
+If publication is interrupted, rerun the release workflow. A later green build
+with the same base version also resumes the recorded candidate, not its own
+binaries, while still producing its own nightly packages. An expired candidate
+requires operator intervention; it must not silently select different contents
+for an already-exposed npm version. Nightly versions use the source CI run ID
+(not the retry attempt), so retries retain their version.
+
+A stable tag means **the complete stable artifact set was uploaded**, not that
+the external publisher successfully uploaded all packages to npm. Tags are
+never force-updated. The GitHub concurrency lock covers this workflow only,
+not the independent external uploader.
 
 ## Windows executable locks during development
 
