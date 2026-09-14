@@ -73,6 +73,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-debug
+          cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build workspace binaries
         run: cargo build --locked --workspace --bins
@@ -121,6 +122,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-release
+          cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build distribution binaries
         run: cargo build --locked --release --workspace --bin dbgjs --bin dbgjs-service --bin dbgjs-tui

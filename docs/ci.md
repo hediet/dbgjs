@@ -17,16 +17,20 @@ jobs. It accepts intentional skips but fails when a required job fails or is
 cancelled. Manual dispatch runs the full pipeline.
 
 `Swatinem/rust-cache` caches Cargo downloads and compiled dependencies, keyed by
-the Rust environment and the target/profile. Main-branch runs save caches; PRs
-restore them. The Rust version is pinned in
+the Rust environment and the target/profile. It also caches workspace crate
+outputs so unchanged `dbgjs` binaries and tests can be reused. Main-branch runs
+save caches; pull requests and manually dispatched feature branches are
+restore-only, preventing unmerged changes from modifying caches consumed by
+`main`. The Rust version is pinned in
 [rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
 downloads; `npm ci` still installs the locked build dependencies before Cargo
 embeds the protocol schemas.
 
-These are dependency caches, not a cache of completed project binaries.
-An npm-only change skips Rust unit tests but still builds release binaries for
-packing. Ordinary docs-only changes skip compilation entirely. Cache misses
-only affect speed, never correctness.
+An npm-only change skips Rust unit tests but still verifies and packs release
+binaries, reusing unchanged workspace outputs from the trusted `main` cache.
+Ordinary docs-only changes, including a root `README.md` change, schedule no
+Rust or packaging jobs, so their total Rust compilation and test time is zero.
+Cache misses only affect speed, never correctness.
 
 ## Checks and artifacts
 

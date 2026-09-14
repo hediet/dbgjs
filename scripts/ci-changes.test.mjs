@@ -9,7 +9,6 @@ import { changedPaths, classifyChanges } from "./ci-changes.mjs";
 test("documentation-only changes do not start Rust or packaging jobs", () => {
 	assert.deepEqual(
 		classifyChanges([
-			"README.md",
 			"plan.md",
 			"docs/cli-design.md",
 			"todo/dbgjs-heap-and-source-debugging.md",
@@ -18,6 +17,13 @@ test("documentation-only changes do not start Rust or packaging jobs", () => {
 		]),
 		{ rust: false, packages: false },
 	);
+});
+
+test("root README changes run no Rust compilation or tests", () => {
+	assert.deepEqual(classifyChanges(["README.md"]), {
+		rust: false,
+		packages: false,
+	});
 });
 
 test("all native build inputs invalidate both jobs", () => {
