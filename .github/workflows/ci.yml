@@ -25,6 +25,8 @@ jobs:
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
       packages: ${{ steps.changes.outputs.packages }}
+      tests: ${{ steps.changes.outputs.tests }}
+      test_matrix: ${{ steps.changes.outputs.test_matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,17 +47,10 @@ jobs:
   rust:
     name: Test (${{ matrix.target }})
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.tests == 'true'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15
-            target: aarch64-apple-darwin
+      matrix: ${{ fromJSON(needs.changes.outputs.test_matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -247,7 +242,7 @@ jobs:
             throw new Error(`Change detection ${results.changes.result}`);
           }
           const requiredOutputs = {
-            rust: "rust",
+            rust: "tests",
             packages: "packages",
             "package-smoke-linux": "packages",
             "package-smoke-windows-macos": "packages",

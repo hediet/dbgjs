@@ -17,7 +17,8 @@ manifests, and workflow changes conservatively trigger both jobs.
 
 Set **CI result** as the required branch-protection check, not individual matrix
 jobs. It accepts intentional skips but fails when a required job fails or is
-cancelled. Manual dispatch runs the full pipeline.
+cancelled. Manual dispatch forces build inputs to be considered changed, but
+still follows the macOS nightly/stable test policy.
 
 `Swatinem/rust-cache` caches Cargo downloads and compiled dependencies, keyed by
 the Rust environment and the target/profile. It also caches workspace crate
@@ -29,16 +30,23 @@ restore-only, preventing unmerged changes from modifying caches consumed by
 downloads; `npm ci` still installs the locked build dependencies before Cargo
 embeds the protocol schemas.
 
-An npm-only change skips Rust unit tests but still verifies and packs release
-binaries, reusing unchanged workspace outputs from the trusted `main` cache.
+An npm-only change skips Linux/Windows Rust unit tests but still verifies and
+packs release binaries, reusing unchanged workspace outputs from the trusted
+`main` cache. An unreleased main version also requires the full macOS suite.
 Ordinary docs-only changes, including a root `README.md` change, schedule no
 Rust or packaging jobs, so their total Rust compilation and test time is zero.
 Cache misses only affect speed, never correctness.
 
 ## Checks and candidate artifacts
 
-Windows x64, Linux x64, and macOS ARM64 run workspace builds, Rust tests, and
-offline recording tests. The native package matrix builds Windows x64, Linux
+Windows x64 and Linux x64 run workspace builds, Rust tests, and offline recording
+tests for Rust changes. macOS x64/ARM64 normally run only the installed-package
+smoke checks, in addition to building their release binaries. The full macOS
+ARM64 workspace and offline recording suite runs only on trusted `main` builds
+whose package version lacks a stable `vX.Y.Z` tag, including npm-only version
+bumps. PRs and feature-branch dispatches do not run the full macOS suite.
+
+The native package matrix builds Windows x64, Linux
 x64/ARM64 (GNU), and macOS x64/ARM64. Each npm package has its own GitHub
 artifact: `npm-dbgjs` contains the entry-package candidate, while each
 `npm-<platform>` artifact contains only its matching native-package candidate.
@@ -80,6 +88,11 @@ creates six stable packages. Bump the npm entry manifest, its native optional
 dependency versions, and `Cargo.toml` together. A failed bump build does not
 claim the version; a subsequent green package-producing main build can release
 it. There is no strict commit-order queue.
+
+Stable promotion additionally verifies that the selected source CI run passed
+the full macOS workspace suite. If the stable tag disappeared after a
+nightly-only CI run, that run cannot silently become a stable release without
+the full tests. Interrupted stable candidates use their original run's tests.
 
 | Channel | Version | `publishConfig.tag` | Artifact names |
 | --- | --- | --- | --- |

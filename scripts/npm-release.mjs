@@ -37,6 +37,7 @@ export async function prepareRelease({ github, sourceRunId, download, inspect, p
 	const output = join(directory, "release");
 	await pack({ input, output, version: `${baseVersion}-nightly.${run.id}`, tag: "nightly" });
 	if (!released) {
+		await github.requireStableTests(candidate.runId);
 		let stableInput = input;
 		if (candidate.runId !== run.id) {
 			const candidateRun = await github.getRun(candidate.runId);
@@ -105,6 +106,22 @@ class GithubRepository {
 				names.push(artifact.name);
 			}
 			if (result.artifacts.length < 100) return names;
+		}
+	}
+
+	async requireStableTests(id) {
+		for (let page = 1; ; page++) {
+			const result = await this._request(`actions/runs/${id}/jobs?per_page=100&page=${page}`);
+			const macos = result.jobs.find((job) => job.name === "Test (aarch64-apple-darwin)");
+			if (macos) {
+				assert.equal(macos.conclusion, "success", "Stable packages require the full macOS suite.");
+				assert.ok(macos.steps.some((step) => step.name === "Test workspace" && step.conclusion === "success"),
+					"Stable packages require successful macOS workspace tests, not just smoke tests.");
+				return;
+			}
+			if (result.jobs.length < 100) {
+				throw new Error("Stable packages require the full macOS suite on the selected CI run.");
+			}
 		}
 	}
 

@@ -77,6 +77,17 @@ test("failed packaging does not reserve a version", async () => {
 	assert.equal(fixture.tags.size, 0);
 });
 
+test("stable promotion requires full macOS tests but nightly does not", async () => {
+	const fixture = createFixture();
+	fixture.github.requireStableTests = async () => { throw new Error("Full macOS suite missing"); };
+	await assert.rejects(prepareRelease(fixture), /Full macOS suite missing/);
+	assert.equal(fixture.tags.size, 0);
+	fixture.tags.set("v0.2.0", { sha: "b".repeat(40) });
+	const state = await prepareRelease(fixture);
+	assert.equal(state.nightly, true);
+	assert.equal(state.stable, false);
+});
+
 test("unavailable reserved artifacts fail instead of replacing stable contents", async () => {
 	const fixture = createFixture();
 	await prepareRelease(fixture);
@@ -140,6 +151,7 @@ function createFixture() {
 		github: {
 			repository: "hediet/dbgjs",
 			getRun: async () => run,
+			requireStableTests: async () => {},
 			getArtifactNames: async () => ["npm-dbgjs", ...Object.keys(platforms).map((p) => `npm-${p}`)],
 			getTag: async (name) => tags.get(name),
 			createTag: async (name, sha, message) => {
