@@ -31,13 +31,25 @@ only affect speed, never correctness.
 ## Checks and artifacts
 
 Windows x64, Linux x64, and macOS ARM64 run workspace builds, Rust tests, and
-offline recording tests. The native package matrix builds and smoke-tests
-Windows x64, Linux x64/ARM64 (GNU), and macOS x64/ARM64. Each artifact contains
-the entry-package tarball and its matching platform-package tarball.
+offline recording tests. The native package matrix builds Windows x64, Linux
+x64/ARM64 (GNU), and macOS x64/ARM64. Each artifact contains the entry-package
+tarball and its matching platform-package tarball.
+
+Separate artifact-consumer jobs download and install those tarballs, exercise
+the `dbgjs` and `dbgjs-tui` launchers and native executables, start
+`dbgjs-service`, and evaluate an expression in a Node inspector target. This
+ensures the uploaded packages, rather than binaries left in the build tree, are
+tested.
 
 Linux x64 and ARM64 are built on Ubuntu 22.04 (glibc 2.35). These GNU packages
 require compatible glibc and OpenSSL 3
-runtime libraries. Alpine/musl and Windows ARM64 are not supported yet.
+runtime libraries. Their artifact-consumer jobs run in the non-development
+`ubuntu:22.04` container after installing only `ca-certificates` and `libssl3`;
+they also report each executable's dynamic library dependencies and fail on
+unresolved libraries. Windows and macOS packages run in fresh jobs on GitHub's
+hosted development images because GitHub does not provide runtime-only hosted
+images for those platforms. Alpine/musl and Windows ARM64 are not supported
+yet.
 
 Real browser and desktop VS Code scenarios are not part of this initial CI;
 the workspace tests and installed-package smoke tests cover local service and

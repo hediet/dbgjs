@@ -128,8 +128,6 @@ jobs:
         run: node --test scripts/npm-platform.test.mjs
       - name: Pack npm tarballs
         run: node scripts/npm-pack.mjs --platform ${{ matrix.platform }} --bin-dir target/release --output artifacts/npm
-      - name: Test installed npm tarballs
-        run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm
       - name: Upload npm tarballs
         uses: actions/upload-artifact@v4
         with:
@@ -137,10 +135,88 @@ jobs:
           path: artifacts/npm/*.tgz
           if-no-files-found: error
 
+  package-smoke-linux:
+    name: Runtime smoke (${{ matrix.platform }})
+    needs: [changes, packages]
+    if: needs.changes.outputs.packages == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64-gnu
+          - os: ubuntu-22.04-arm
+            platform: linux-arm64-gnu
+    runs-on: ${{ matrix.os }}
+    container: ubuntu:22.04
+    timeout-minutes: 15
+    steps:
+      - name: Install declared system dependencies
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends ca-certificates libssl3
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: artifacts/npm
+      - name: Report native library dependencies
+        shell: bash
+        run: |
+          mkdir artifacts/native-package
+          tar -xzf artifacts/npm/hediet-dbgjs-${{ matrix.platform }}-*.tgz -C artifacts/native-package
+          for executable in artifacts/native-package/package/bin/*; do
+            echo "$executable"
+            dependencies="$(ldd "$executable")"
+            echo "$dependencies"
+            if echo "$dependencies" | grep -q "not found"; then
+              exit 1
+            fi
+          done
+      - name: Test downloaded npm tarballs
+        run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm
+
+  package-smoke-hosted:
+    name: Artifact smoke (${{ matrix.platform }})
+    needs: [changes, packages]
+    if: needs.changes.outputs.packages == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win32-x64
+          - os: macos-15-intel
+            platform: darwin-x64
+          - os: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: artifacts/npm
+      - name: Test downloaded npm tarballs
+        run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm
+
   result:
     name: CI result
     if: always()
-    needs: [changes, rust, packages]
+    needs: [changes, rust, packages, package-smoke-linux, package-smoke-hosted]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -153,8 +229,14 @@ jobs:
           if (results.changes.result !== "success") {
             throw new Error(`Change detection ${results.changes.result}`);
           }
-          for (const name of ["rust", "packages"]) {
-            const required = results.changes.outputs[name] === "true";
+          const requiredOutputs = {
+            rust: "rust",
+            packages: "packages",
+            "package-smoke-linux": "packages",
+            "package-smoke-hosted": "packages",
+          };
+          for (const [name, output] of Object.entries(requiredOutputs)) {
+            const required = results.changes.outputs[output] === "true";
             const expected = required ? "success" : "skipped";
             if (results[name].result !== expected) {
               throw new Error(`${name}: expected ${expected}, got ${results[name].result}`);

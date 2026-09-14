@@ -45,6 +45,7 @@ try {
 		npm(["install", ...(global ? ["--global"] : []), "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], { cwd: directory, stdio: "pipe", timeout: 180_000 });
 		const modules = global && process.platform !== "win32" ? join(prefix, "lib", "node_modules") : join(prefix, "node_modules");
 		const launcher = join(modules, "@hediet", "dbgjs", "bin", "dbgjs.mjs");
+		const nativeBin = join(modules, "@hediet", `dbgjs-${host}`, "bin");
 		const env = { ...process.env, DBGJS_SERVICE_STATE: join(prefix, "service.json") };
 		delete env.DBGJS_SERVICE_EXE;
 		delete env.DBGJS_PLAYWRIGHT_PACKAGE;
@@ -52,12 +53,17 @@ try {
 		const run = (...args) => runProcess(process.execPath, [launcher, ...args], { cwd: prefix, env });
 		assert.match(await run("--help"), /dbgjs/);
 		await assert.rejects(() => run("not-a-real-command"), /exited with/);
-		const shim = global
-			? join(prefix, ...(process.platform === "win32" ? ["dbgjs.cmd"] : ["bin", "dbgjs"]))
-			: join(prefix, "node_modules", ".bin", process.platform === "win32" ? "dbgjs.cmd" : "dbgjs");
-		assert.match(await runProcess(shim, ["--help"], {
-			cwd: prefix, env, shell: process.platform === "win32",
-		}), /dbgjs/);
+		const executable = (name) => join(nativeBin, `${name}${process.platform === "win32" ? ".exe" : ""}`);
+		assert.match(await runProcess(executable("dbgjs"), ["--help"], { cwd: prefix, env }), /dbgjs/);
+		assert.match(await runProcess(executable("dbgjs-tui"), ["--help"], { cwd: prefix, env }), /usage: dbgjs-tui/);
+		for (const name of ["dbgjs", "dbgjs-tui"]) {
+			const shim = global
+				? join(prefix, ...(process.platform === "win32" ? [`${name}.cmd`] : ["bin", name]))
+				: join(prefix, "node_modules", ".bin", process.platform === "win32" ? `${name}.cmd` : name);
+			assert.match(await runProcess(shim, ["--help"], {
+				cwd: prefix, env, shell: process.platform === "win32",
+			}), /dbgjs/);
+		}
 		const node = spawn(process.execPath, ["-e", "const i=require('node:inspector');i.open(0,'127.0.0.1');console.log(i.url());setInterval(()=>{},1000)"], { stdio: ["ignore", "pipe", "pipe"] });
 		const exited = once(node, "exit");
 		const lines = createInterface({ input: node.stdout });
@@ -73,7 +79,7 @@ try {
 			await run("--json", "target", "attach", "--context", "npm-smoke", "--target", "$node-root:runtime");
 			const result = JSON.parse(await run("--json", "target", "eval", "6 * 7", "--context", "npm-smoke", "--target", "$node-root:runtime"));
 			assert.equal(result.preview.preview, "42");
-			console.log(`${global ? "Global" : "Local"} installed tarballs: shim, help, error exit, service startup, and Node evaluation passed.`);
+			console.log(`${global ? "Global" : "Local"} installed tarballs: native binaries, shims, service startup, and Node evaluation passed.`);
 		} finally {
 			lines.close();
 			try {
