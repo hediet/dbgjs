@@ -56,13 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let current = workload
             .lookups
             .iter()
-            .map(|location| {
-                index.breadcrumb(
-                    black_box(&source),
-                    black_box(location.line),
-                    black_box(location.column),
-                )
-            })
+            .map(|location| index.breadcrumb(black_box(location.line), black_box(location.column)))
             .collect::<Vec<_>>();
         lookup_seconds.push(started.elapsed().as_secs_f64());
         if iteration == 0 {
@@ -237,9 +231,6 @@ mod tests {
     fn reuses_the_production_symbol_index() {
         let source = "class Example { method() { return 1; } }";
         let index = SymbolIndex::new("workbench.desktop.main.js", source).unwrap();
-        assert_eq!(
-            index.breadcrumb(source, 1, 30),
-            Some("Example.method".into())
-        );
+        assert_eq!(index.breadcrumb(1, 30), Some("Example.method".into()));
     }
 }

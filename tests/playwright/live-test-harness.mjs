@@ -163,6 +163,8 @@ export function run(command, args, extraEnvironment, options = {}) {
 			child.stdin.end(options.input);
 		}
 		let output = "";
+		let stdout = "";
+		let stderr = "";
 		let timedOut = false;
 		const timer =
 			options.timeoutMs === undefined
@@ -173,9 +175,11 @@ export function run(command, args, extraEnvironment, options = {}) {
 						killProcessTree(child);
 					}, options.timeoutMs);
 		child.stdout.on("data", (chunk) => {
+			stdout += chunk;
 			output += chunk;
 		});
 		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
 			output += chunk;
 		});
 		child.once("error", (error) => {
@@ -187,6 +191,8 @@ export function run(command, args, extraEnvironment, options = {}) {
 			resolve({
 				code,
 				output,
+				stdout,
+				stderr,
 				timedOut,
 				durationMs: performance.now() - startedAt,
 			});

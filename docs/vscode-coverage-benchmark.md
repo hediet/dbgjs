@@ -40,9 +40,11 @@ overrides from its child environment so empty `GIT_CONFIG_VALUE_*` entries canno
 break the Git extension.
 
 The workload is a two-file multi-diff. The runner clicks **Revert Block**, captures
-both unprojected and projected coverage, and checks that `revertRangeMappings`
+both raw (`coverage capture --raw`) and enriched coverage, and checks that `revertRangeMappings`
 executed and has an authored TypeScript location. It also exercises source
-explanation, source display, and position mapping.
+explanation, source display, and position mapping. Raw captures must contain no
+authored locations or breadcrumbs, and enrichment must preserve the measured
+revert function's counts and runtime offsets.
 
 The owned VS Code process and debugger service are stopped, including on failure.
 The runtime directory is deliberately retained for diagnosis; it can be removed
@@ -96,6 +98,26 @@ lookup from browser startup, source-map loading, coverage collection, and output
 serialization. No machine-dependent speed threshold is imposed yet: this is the
 baseline against which an optimization can be developed.
 
+For a collection-only lower bound outside the harness:
+
+```powershell
+dbgjs coverage start
+dbgjs --json coverage capture --raw
+```
+
+`--raw` skips source fetching, source-map lookup, formatting, and symbol
+enrichment for the capture. Runtime script identifiers/URLs, UTF-16 source offsets, and
+execution counts remain available. It composes with `--id`, `--exclude`, and
+generated-source output filters. Omitting it preserves the existing enriched
+live-capture behavior; named captures still retain their existing unprojected
+storage behavior.
+
+Coverage commands that have not completed after 20 seconds print a one-time
+hint on **stderr** describing `coverage capture --raw`. The original operation
+continues; the hint neither restarts nor cancels it. JSON remains on stdout.
+The harness preserves separate stdout/stderr streams so the hint cannot corrupt
+JSON parsing.
+
 Live captures vary with VS Code version and background activity. For controlled
 before/after comparisons, **reuse one frozen workload**. A fresh capture can be
 used to check representativeness, but its timing is not an identical workload.
@@ -131,3 +153,34 @@ x64 with an Intel Core i9-14900K, using the dbgjs debug build:
 These are observations, not performance assertions. The measured artifacts were
 written to `artifacts/vscode-coverage-baseline-20260914-v3`; use a new output
 directory for a new capture.
+
+## Indexed lookup verification
+
+The optimization was compared against the separate, unchanged
+`artifacts/vscode-coverage-baseline-20260914-final` workload from the same VS Code
+build, again using debug binaries:
+
+| Measurement | Baseline | Indexed |
+|---|---:|---:|
+| Frozen lookup results | 646, including two `null` results | All 646 identical |
+| Index construction | 2.051 s | 2.395 s |
+| Complete lookup pass 1 | 52.441 s | 0.317 ms |
+| Complete lookup pass 2 | 46.974 s | 0.099 ms |
+| Complete lookup pass 3 | Not measured | 0.092 ms |
+
+The position index and static interval tree replace repeated source-prefix and
+symbol-list scans. Cached indexes are immutable: the cache-map mutex only
+retrieves a per-source cell, while parsing and breadcrumb lookup run outside it.
+The result comparison preserves original tie-breaking, boundary behavior,
+duplicate positions, and missing breadcrumbs.
+
+A fresh installed-Code capture in `artifacts/vscode-coverage-optimized-20260914`
+measured **0.909 s raw** and **16.356 s enriched**, compared with **0.868 s**
+and **66.216 s** in the final baseline capture. The new capture mapped the
+executed revert function to TypeScript and verified identical raw/enriched
+counts and offsets. Its live workload contained 548 generated-fallback lookups;
+the old capture contained 646, so these live timings are not an identical-event
+comparison. The frozen replay above is the exact before/after comparison.
+
+Index construction, source acquisition, mapping, and other enrichment costs
+remain; sub-millisecond lookup passes do not imply sub-millisecond captures.

@@ -4284,6 +4284,7 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
+        raw: Option<bool>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
@@ -4344,7 +4345,7 @@ impl DebuggerServiceApi for DebuggerService {
             return Ok(snapshot);
         }
         let snapshot = match debugger
-            .take_coverage(capture_id.clone(), exclude_capture_id)
+            .take_coverage(capture_id.clone(), exclude_capture_id, raw.unwrap_or(false))
             .await
             .map_err(target_debugger_rpc_error)
         {

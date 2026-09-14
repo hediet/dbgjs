@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { extractWorkload, installedBundlePath, isolatedEnvironment } from "./vscode-coverage-benchmark.mjs";
+import { run } from "../tests/playwright/live-test-harness.mjs";
 
 test("removes inherited per-process Git configuration without changing the parent environment", () => {
 	const original = { PATH: "path", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "key", GIT_CONFIG_VALUE_0: "", ELECTRON_RUN_AS_NODE: "1", VSCODE_PORTABLE: "portable-data" };
@@ -72,4 +73,12 @@ test("resolves installed bundle URLs but rejects files outside the installation"
 	await writeFile(outside, "outside");
 	await assert.rejects(installedBundlePath(pathToFileURL(outside).href, executable), /must belong/);
 	await assert.rejects(installedBundlePath("https://example.invalid/bundle.js", executable), /local installed/);
+});
+
+test("terminal helper keeps progress stderr separate from machine-readable stdout", async () => {
+	const result = await run(process.execPath, ["-e", 'console.log(JSON.stringify({ count: 1 })); console.error("progress hint");'], {});
+	assert.equal(result.code, 0);
+	assert.deepEqual(JSON.parse(result.stdout), { count: 1 });
+	assert.match(result.stderr, /progress hint/);
+	assert.match(result.output, /progress hint/);
 });

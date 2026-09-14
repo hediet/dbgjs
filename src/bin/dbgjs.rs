@@ -54,6 +54,7 @@ const PLAYWRIGHT_OUTPUT_LIMIT: usize = 1024 * 1024 + 4096;
 const PLAYWRIGHT_ERROR_LIMIT: usize = 64 * 1024;
 const PLAYWRIGHT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.mjs");
+const COVERAGE_HINT_DELAY: Duration = Duration::from_secs(20);
 
 fn main() {
     let thread = std::thread::Builder::new()
@@ -64,7 +65,14 @@ fn main() {
                 .enable_all()
                 .build()
                 .expect("failed to create the dbgjs runtime");
-            if let Err(error) = runtime.block_on(run()) {
+            let hint = coverage_delay_hint(&env::args().skip(1).collect::<Vec<_>>());
+            let result = runtime.block_on(async {
+                match hint {
+                    Some(hint) => with_delayed_hint(run(), COVERAGE_HINT_DELAY, || eprintln!("{hint}")).await,
+                    None => run().await,
+                }
+            });
+            if let Err(error) = result {
                 eprintln!("dbgjs: {error}");
                 std::process::exit(1);
             }
@@ -73,6 +81,35 @@ fn main() {
     if thread.join().is_err() {
         eprintln!("dbgjs: main thread panicked");
         std::process::exit(1);
+    }
+}
+
+fn coverage_delay_hint(arguments: &[String]) -> Option<&'static str> {
+    if !arguments.windows(2).any(|pair| pair[0] == "coverage"
+        && matches!(pair[1].as_str(), "capture" | "take" | "show" | "stop"))
+    {
+        return None;
+    }
+    Some(if arguments.iter().any(|argument| argument == "--raw") {
+        "dbgjs: Still waiting after 20s. Raw coverage already skips source-map lookup and enrichment; the current command is continuing."
+    } else {
+        "dbgjs: Still waiting after 20s. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope. It skips source-map lookup and symbol enrichment. The current command is continuing."
+    })
+}
+
+async fn with_delayed_hint<F: std::future::Future>(
+    operation: F,
+    delay: Duration,
+    hint: impl FnOnce(),
+) -> F::Output {
+    tokio::pin!(operation);
+    tokio::select! {
+        biased;
+        result = &mut operation => result,
+        _ = tokio::time::sleep(delay) => {
+            hint();
+            operation.await
+        }
     }
 }
 
@@ -501,42 +538,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             println!("Coverage recording started.");
         }
-        [coverage, take]
-            if coverage == "coverage" && matches!(take.as_str(), "take" | "capture") =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            output.print(&rpc(client
-                .take_coverage(scope.context, scope.connection, scope.target, None, None)
-                .await)?)?;
-        }
-        [coverage, capture, exclude, capture_id]
-            if coverage == "coverage" && capture == "capture" && exclude == "--exclude" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            output.print_coverage(
-                &rpc(client
-                    .take_coverage(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
-                        None,
-                        Some(capture_id.clone()),
-                    )
-                    .await)?,
-                CoverageOutputOptions {
-                    path: None,
-                    all: false,
-                    max_lines: 300,
-                    trim_width: true,
-                },
-            )?;
-        }
         [coverage, capture, options @ ..]
-            if coverage == "coverage" && capture == "capture" && !options.is_empty() =>
+            if coverage == "coverage" && matches!(capture.as_str(), "capture" | "take") =>
         {
             let options = parse_coverage_capture_options(options)?;
             let client = ensure_service(&state_file).await?;
@@ -548,7 +551,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.connection,
                     scope.target,
                     options.capture_id.clone(),
-                    None,
+                    options.exclude_capture_id,
+                    Some(options.raw),
                 )
                 .await)?;
             if let Some(capture_id) = options.capture_id.as_deref()
@@ -3527,6 +3531,8 @@ struct CoverageShowOptions {
 
 struct CoverageCaptureOptions {
     capture_id: Option<String>,
+    exclude_capture_id: Option<String>,
+    raw: bool,
     path: Option<String>,
     all: bool,
     max_lines: usize,
@@ -4803,20 +4809,30 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
 
 fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOptions, io::Error> {
     let mut capture_id = None;
+    let mut exclude_capture_id = None;
+    let mut raw = false;
     let mut render_values = Vec::with_capacity(values.len());
     let mut index = 0;
     while index < values.len() {
-        if values[index] == "--id" {
+        if matches!(values[index].as_str(), "--id" | "--exclude") {
+            let option = values[index].as_str();
             let value = values.get(index + 1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "--id requires a capture name")
+                io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name"))
             })?;
-            if capture_id.replace(value.clone()).is_some() {
+            if value.starts_with("--") || value.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name")));
+            }
+            let destination = if option == "--id" { &mut capture_id } else { &mut exclude_capture_id };
+            if destination.replace(value.clone()).is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "--id may only be specified once",
+                    format!("{option} may only be specified once"),
                 ));
             }
             index += 2;
+        } else if values[index] == "--raw" {
+            raw = true;
+            index += 1;
         } else {
             render_values.push(values[index].clone());
             index += 1;
@@ -4835,6 +4851,8 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
     }
     Ok(CoverageCaptureOptions {
         capture_id,
+        exclude_capture_id,
+        raw,
         path: options.path,
         all: options.all,
         max_lines: options.max_lines,
@@ -6531,7 +6549,8 @@ commands:
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
-  dbgjs coverage capture [--id <name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+  dbgjs coverage capture [--id <name>] [--exclude <name>] [--raw] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+    --raw collects counts and runtime offsets without source-map lookup or symbol enrichment
   dbgjs coverage stop [--exclude <name>] [target scope]
   dbgjs coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
   dbgjs profile start [--sampling-interval <duration>] [target scope]
@@ -7731,6 +7750,38 @@ mod tests {
         assert!(
             parse_coverage_capture_options(&arguments(&["--id", "one", "--id", "two"])).is_err()
         );
+    }
+
+    #[test]
+    fn parses_raw_coverage_independently_of_storage_exclusion_and_rendering() {
+        let options = parse_coverage_capture_options(&arguments(&[
+            "--raw", "--id", "sample", "--exclude", "baseline", "--max-lines", "5",
+        ])).unwrap();
+        assert!(options.raw);
+        assert_eq!(options.capture_id.as_deref(), Some("sample"));
+        assert_eq!(options.exclude_capture_id.as_deref(), Some("baseline"));
+        assert_eq!(options.max_lines, 5);
+        assert!(!parse_coverage_capture_options(&[]).unwrap().raw);
+        assert!(parse_coverage_capture_options(&arguments(&["--id", "--raw"])).is_err());
+        assert!(parse_coverage_capture_options(&arguments(&["--exclude"])).is_err());
+        assert!(parse_coverage_capture_options(&arguments(&["--exclude", "a", "--exclude", "b"])).is_err());
+    }
+
+    #[tokio::test]
+    async fn coverage_hint_waits_without_restarting_or_cancelling_the_operation() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let result = super::with_delayed_hint(receiver, std::time::Duration::ZERO, || sender.send(42).unwrap()).await;
+        assert_eq!(result.unwrap(), 42);
+        let result = super::with_delayed_hint(
+            std::future::ready(Err::<(), _>("original failure")),
+            std::time::Duration::ZERO,
+            || panic!("a completed operation must not print a hint"),
+        ).await;
+        assert_eq!(result, Err("original failure"));
+        let hint = super::coverage_delay_hint(&arguments(&["--json", "coverage", "capture"])).unwrap();
+        assert!(hint.contains("coverage capture --raw"));
+        assert!(super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"])).unwrap().contains("already skips"));
+        assert!(super::coverage_delay_hint(&arguments(&["source", "show"])).is_none());
     }
 
     #[test]

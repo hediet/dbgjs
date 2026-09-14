@@ -7,13 +7,24 @@ use oxc_ast_visit::{
 use oxc_parser::Parser;
 use oxc_span::{SourceType, Span};
 
+use crate::source_view::{LineIndex, Position};
+
 pub struct SymbolIndex {
-    symbols: Vec<Symbol>,
+    positions: LineIndex,
+    root: Option<Box<SymbolNode>>,
 }
 
 struct Symbol {
     span: Span,
     breadcrumb: String,
+    priority: (usize, u32, usize),
+}
+
+struct SymbolNode {
+    symbol: Symbol,
+    max_end: u32,
+    left: Option<Box<SymbolNode>>,
+    right: Option<Box<SymbolNode>>,
 }
 
 impl SymbolIndex {
@@ -29,28 +40,72 @@ impl SymbolIndex {
             symbols: Vec::new(),
         };
         visitor.visit_program(&parsed.program);
+        visitor.symbols.sort_by_key(|symbol| symbol.span.start);
+        let count = visitor.symbols.len();
         Some(Self {
-            symbols: visitor.symbols,
+            positions: LineIndex::new(source),
+            root: SymbolNode::from_sorted(&mut visitor.symbols.into_iter(), count),
         })
     }
 
-    pub fn breadcrumb(&self, source: &str, line: u32, utf16_column: u32) -> Option<String> {
-        let offset = u32::try_from(utf16_position_to_byte(source, line, utf16_column)?).ok()?;
-        self.symbols
-            .iter()
-            .filter(|symbol| symbol.span.start <= offset && offset <= symbol.span.end)
-            .max_by_key(|symbol| {
-                (
-                    symbol.breadcrumb.matches('.').count(),
-                    u32::MAX - symbol.span.size(),
-                )
-            })
-            .map(|symbol| symbol.breadcrumb.clone())
+    pub fn breadcrumb(&self, line: u32, utf16_column: u32) -> Option<String> {
+        let offset = u32::try_from(self.positions.clamped_byte_offset(Position {
+            line: line.saturating_sub(1),
+            column: utf16_column.saturating_sub(1),
+        })?)
+        .ok()?;
+        let mut best = None;
+        self.root.as_ref()?.find(offset, &mut best);
+        best.map(|symbol| symbol.breadcrumb.clone())
+    }
+}
+
+impl SymbolNode {
+    fn from_sorted(symbols: &mut impl Iterator<Item = Symbol>, count: usize) -> Option<Box<Self>> {
+        if count == 0 {
+            return None;
+        }
+        let left = Self::from_sorted(symbols, count / 2);
+        let symbol = symbols
+            .next()
+            .expect("symbol count matches iterator length");
+        let right = Self::from_sorted(symbols, count - count / 2 - 1);
+        let max_end = symbol
+            .span
+            .end
+            .max(left.as_ref().map_or(0, |node| node.max_end))
+            .max(right.as_ref().map_or(0, |node| node.max_end));
+        Some(Box::new(Self {
+            symbol,
+            max_end,
+            left,
+            right,
+        }))
+    }
+
+    fn find<'a>(&'a self, offset: u32, best: &mut Option<&'a Symbol>) {
+        if offset > self.max_end {
+            return;
+        }
+        if let Some(left) = &self.left {
+            left.find(offset, best);
+        }
+        if self.symbol.span.start > offset {
+            return;
+        }
+        if offset <= self.symbol.span.end
+            && best.is_none_or(|previous| self.symbol.priority > previous.priority)
+        {
+            *best = Some(&self.symbol);
+        }
+        if let Some(right) = &self.right {
+            right.find(offset, best);
+        }
     }
 }
 
 pub fn breadcrumb(source_url: &str, source: &str, line: u32, utf16_column: u32) -> Option<String> {
-    SymbolIndex::new(source_url, source)?.breadcrumb(source, line, utf16_column)
+    SymbolIndex::new(source_url, source)?.breadcrumb(line, utf16_column)
 }
 
 struct SymbolVisitor {
@@ -62,9 +117,15 @@ impl SymbolVisitor {
     fn enter(&mut self, span: Span, name: Option<String>, visit: impl FnOnce(&mut Self)) {
         if let Some(name) = name {
             self.stack.push(name);
+            let breadcrumb = self.stack.join(".");
             self.symbols.push(Symbol {
                 span,
-                breadcrumb: self.stack.join("."),
+                priority: (
+                    breadcrumb.matches('.').count(),
+                    u32::MAX - span.size(),
+                    self.symbols.len(),
+                ),
+                breadcrumb,
             });
             visit(self);
             self.stack.pop();
@@ -99,38 +160,6 @@ impl<'a> Visit<'a> for SymbolVisitor {
     }
 }
 
-fn utf16_position_to_byte(source: &str, line: u32, column: u32) -> Option<usize> {
-    let target_line = line.max(1);
-    let mut current_line = 1;
-    let mut line_start = 0;
-    for (byte, character) in source.char_indices() {
-        if current_line == target_line {
-            break;
-        }
-        if character == '\n' {
-            current_line += 1;
-            line_start = byte + 1;
-        }
-    }
-    if current_line != target_line {
-        return None;
-    }
-    let remainder = &source[line_start..];
-    let line_end = remainder.find('\n').unwrap_or(remainder.len());
-    let line = remainder[..line_end]
-        .strip_suffix('\r')
-        .unwrap_or(&remainder[..line_end]);
-    let target = column.saturating_sub(1) as usize;
-    let mut utf16 = 0;
-    for (byte, character) in line.char_indices() {
-        if utf16 >= target {
-            return Some(line_start + byte);
-        }
-        utf16 += character.len_utf16();
-    }
-    Some(line_start + line.len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,10 +169,7 @@ mod tests {
         let source =
             "class Cart {\n  checkout(items: number[]) {\n    return items.length;\n  }\n}";
         let index = SymbolIndex::new("cart.ts", source).unwrap();
-        assert_eq!(
-            index.breadcrumb(source, 3, 12).as_deref(),
-            Some("Cart.checkout")
-        );
+        assert_eq!(index.breadcrumb(3, 12).as_deref(), Some("Cart.checkout"));
     }
 
     #[test]
@@ -163,5 +189,58 @@ mod tests {
             breadcrumb("cart.ts", source, 3, 12).as_deref(),
             Some("Cart.checkout")
         );
+    }
+
+    #[test]
+    fn indexed_spans_match_linear_selection_including_ties_and_boundaries() {
+        let mut symbols = [
+            (0, 100, "outer"),
+            (4, 80, "outer.inner"),
+            (10, 20, "outer.inner.first"),
+            (20, 30, "outer.inner.second"),
+            (20, 30, "outer.inner.last"),
+            (25, 25, "outer.inner.last.point"),
+            (70, 90, "overlapping"),
+            (100, 110, "adjacent"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(order, (start, end, name))| Symbol {
+            span: Span::new(start, end),
+            breadcrumb: name.to_owned(),
+            priority: (name.matches('.').count(), u32::MAX - (end - start), order),
+        })
+        .collect::<Vec<_>>();
+        let expected = (0..=111)
+            .map(|offset| {
+                symbols
+                    .iter()
+                    .filter(|symbol| symbol.span.start <= offset && offset <= symbol.span.end)
+                    .max_by_key(|symbol| symbol.priority)
+                    .map(|symbol| symbol.breadcrumb.clone())
+            })
+            .collect::<Vec<_>>();
+        symbols.sort_by_key(|symbol| symbol.span.start);
+        let count = symbols.len();
+        let root = SymbolNode::from_sorted(&mut symbols.into_iter(), count).unwrap();
+        for (offset, expected) in expected.into_iter().enumerate() {
+            let mut found = None;
+            root.find(offset as u32, &mut found);
+            assert_eq!(
+                found.map(|symbol| symbol.breadcrumb.clone()),
+                expected,
+                "offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamps_columns_and_rejects_missing_lines() {
+        let source = "function first() {}\r\nfunction second() {}";
+        let index = SymbolIndex::new("fixture.js", source).unwrap();
+        assert_eq!(index.breadcrumb(0, 0).as_deref(), Some("first"));
+        assert_eq!(index.breadcrumb(1, u32::MAX).as_deref(), Some("first"));
+        assert_eq!(index.breadcrumb(2, u32::MAX).as_deref(), Some("second"));
+        assert_eq!(index.breadcrumb(3, 1), None);
     }
 }

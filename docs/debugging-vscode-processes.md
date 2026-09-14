@@ -374,6 +374,8 @@ and agent-host targets:
 ```powershell
 # Precise JavaScript coverage
 dbgjs coverage start
+# Collection-only lower bound: no source/map lookup or symbol enrichment
+dbgjs --json coverage capture --raw
 dbgjs coverage capture --id baseline
 dbgjs coverage stop --exclude baseline
 dbgjs coverage show --all
@@ -394,6 +396,15 @@ dbgjs heap dominators $objectRef
 
 Heap object references are capture-qualified. `.` selects the latest capture,
 so `.#12345` means heap object `12345` in the latest capture.
+
+`coverage capture --raw` retains execution counts and runtime ranges while
+skipping capture-time source acquisition and enrichment. It also accepts
+`--id` and `--exclude`. Coverage operations still pending after 20 seconds print
+a one-time stderr hint about this mode without interrupting the operation or
+mixing progress text into JSON stdout.
+
+For a reproducible installed-VS-Code workload and independent breadcrumb replay,
+see [the coverage benchmark](vscode-coverage-benchmark.md).
 
 Heap captures also retain the observed script URLs and CDP hashes, generated
 source, source-map URLs/content, connection generation, and execution-context

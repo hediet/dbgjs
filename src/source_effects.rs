@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use rayon::prelude::*;
 
@@ -41,8 +41,33 @@ struct RetainedView {
     generated_content: Arc<str>,
     generated_index: GeneratedOffsetIndex,
     projection_cache: Mutex<BTreeMap<u32, Option<ProjectedOffset>>>,
-    symbol_indexes: Mutex<BTreeMap<String, Option<crate::language_intelligence::SymbolIndex>>>,
+    symbol_indexes: SymbolIndexCache,
     view: Arc<ResolvedSourceView>,
+}
+
+type CachedSymbolIndex = Arc<OnceLock<Option<crate::language_intelligence::SymbolIndex>>>;
+
+#[derive(Default)]
+struct SymbolIndexCache {
+    entries: Mutex<BTreeMap<String, CachedSymbolIndex>>,
+}
+
+impl SymbolIndexCache {
+    fn get_or_create(&self, source_url: &str, content: &str) -> CachedSymbolIndex {
+        let index = {
+            let mut indexes = self.entries.lock().unwrap();
+            indexes
+                .entry(source_url.to_owned())
+                .or_insert_with(|| Arc::new(OnceLock::new()))
+                .clone()
+        };
+        index.get_or_init(|| crate::language_intelligence::SymbolIndex::new(source_url, content));
+        index
+    }
+
+    fn clear(&self) {
+        self.entries.lock().unwrap().clear();
+    }
 }
 
 #[derive(Clone)]
@@ -241,7 +266,7 @@ impl SourceEffectInterpreter {
                         generated_content: content.clone(),
                         generated_index: GeneratedOffsetIndex::new(content),
                         projection_cache: Mutex::new(BTreeMap::new()),
-                        symbol_indexes: Mutex::new(BTreeMap::new()),
+                        symbol_indexes: SymbolIndexCache::default(),
                         view: Arc::new(view),
                     },
                 );
@@ -529,17 +554,12 @@ impl SourceEffectInterpreter {
             return None;
         };
         let retained = self.views.get(&source_state.view_id)?;
-        let mut indexes = retained.symbol_indexes.lock().unwrap();
-        if !indexes.contains_key(source_url) {
-            indexes.insert(
-                source_url.to_owned(),
-                crate::language_intelligence::SymbolIndex::new(source_url, content),
-            );
-        }
-        indexes
-            .get(source_url)
+        retained
+            .symbol_indexes
+            .get_or_create(source_url, content)
+            .get()
             .and_then(Option::as_ref)
-            .and_then(|index| index.breadcrumb(content, line, column))
+            .and_then(|index| index.breadcrumb(line, column))
     }
 
     pub fn prepare_breadcrumbs(
@@ -547,45 +567,25 @@ impl SourceEffectInterpreter {
         state: &DebuggerState,
         sources: &[(ScriptKey, String, Arc<str>)],
     ) {
-        let mut missing = BTreeMap::<(EffectId, String), Arc<str>>::new();
+        let mut unique = BTreeMap::<(EffectId, String), Arc<str>>::new();
         for (script, source_url, content) in sources {
             let Some(ScriptSourceState::Resolved(source_state)) =
                 state.scripts.get(script).map(|script| &script.source)
             else {
                 continue;
             };
-            let Some(retained) = self.views.get(&source_state.view_id) else {
-                continue;
-            };
-            if !retained
-                .symbol_indexes
-                .lock()
-                .unwrap()
-                .contains_key(source_url)
-            {
-                missing
-                    .entry((source_state.view_id, source_url.clone()))
-                    .or_insert_with(|| content.clone());
-            }
+            unique
+                .entry((source_state.view_id, source_url.clone()))
+                .or_insert_with(|| content.clone());
         }
 
-        let indexes = missing
+        unique
             .into_par_iter()
-            .map(|((view_id, source_url), content)| {
-                let index = crate::language_intelligence::SymbolIndex::new(&source_url, &content);
-                (view_id, source_url, index)
-            })
-            .collect::<Vec<_>>();
-        for (view_id, source_url, index) in indexes {
-            if let Some(retained) = self.views.get(&view_id) {
-                retained
-                    .symbol_indexes
-                    .lock()
-                    .unwrap()
-                    .entry(source_url)
-                    .or_insert(index);
-            }
-        }
+            .for_each(|((view_id, source_url), content)| {
+                if let Some(retained) = self.views.get(&view_id) {
+                    retained.symbol_indexes.get_or_create(&source_url, &content);
+                }
+            });
     }
 
     pub fn logical_source_content(
@@ -936,7 +936,7 @@ impl SourceEffectInterpreter {
     pub fn clear_caches(&self) {
         for view in self.views.values() {
             view.projection_cache.lock().unwrap().clear();
-            view.symbol_indexes.lock().unwrap().clear();
+            view.symbol_indexes.clear();
         }
     }
 
@@ -1075,6 +1075,47 @@ mod tests {
     use sourcemap::SourceMapBuilder;
 
     use super::*;
+
+    #[test]
+    fn symbol_indexes_are_shared_and_lookups_do_not_hold_the_cache_lock() {
+        let cache = SymbolIndexCache::default();
+        let source = "class Example { method() { return 1; } }";
+        let cells = std::thread::scope(|scope| {
+            let threads = (0..8)
+                .map(|_| scope.spawn(|| cache.get_or_create("fixture.js", source)))
+                .collect::<Vec<_>>();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(cells.iter().all(|cell| Arc::ptr_eq(cell, &cells[0])));
+        let entries = cache.entries.lock().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            cells[0]
+                .get()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .breadcrumb(1, 30)
+                .as_deref(),
+            Some("Example.method")
+        );
+        drop(entries);
+        cache.clear();
+        assert!(cache.entries.lock().unwrap().is_empty());
+        assert_eq!(
+            cells[0]
+                .get()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .breadcrumb(1, 30)
+                .as_deref(),
+            Some("Example.method")
+        );
+    }
 
     #[test]
     fn generated_offset_index_maps_utf16_and_byte_offsets() {

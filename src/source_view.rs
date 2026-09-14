@@ -1026,7 +1026,7 @@ impl FormatProjection {
     }
 }
 
-struct LineIndex {
+pub(crate) struct LineIndex {
     lines: Vec<LineRecord>,
 }
 
@@ -1035,10 +1035,11 @@ struct LineRecord {
     end: usize,
     utf16_len: u32,
     unicode_boundaries: Option<Vec<(u32, usize)>>,
+    trailing_cr: bool,
 }
 
 impl LineIndex {
-    fn new(text: &str) -> Self {
+    pub(crate) fn new(text: &str) -> Self {
         let mut lines = Vec::new();
         let mut start = 0;
         let mut utf16_len = 0;
@@ -1052,6 +1053,7 @@ impl LineIndex {
                     end: index,
                     utf16_len,
                     unicode_boundaries: has_non_ascii.then_some(boundaries),
+                    trailing_cr: index > start && text.as_bytes()[index - 1] == b'\r',
                 });
                 start = index + 1;
                 utf16_len = 0;
@@ -1069,8 +1071,23 @@ impl LineIndex {
             end: text.len(),
             utf16_len,
             unicode_boundaries: has_non_ascii.then_some(boundaries),
+            trailing_cr: text.ends_with('\r'),
         });
         Self { lines }
+    }
+
+    pub(crate) fn clamped_byte_offset(&self, position: Position) -> Option<usize> {
+        let line = self.lines.get(position.line as usize)?;
+        let column = position
+            .column
+            .min(line.utf16_len - u32::from(line.trailing_cr));
+        match &line.unicode_boundaries {
+            Some(boundaries) => {
+                let index = boundaries.partition_point(|(boundary, _)| *boundary < column);
+                Some(boundaries[index].1)
+            }
+            None => Some(line.start + column as usize),
+        }
     }
 
     fn byte_offset(&self, position: Position) -> Option<usize> {
@@ -1556,6 +1573,43 @@ mod tests {
         assert_eq!(index.byte_offset(Position { line: 0, column: 3 }), Some(5));
         assert_eq!(index.position(5), Some(Position { line: 0, column: 3 }));
         assert!(index.estimated_bytes() < "a😀b".len() + 128);
+    }
+
+    #[test]
+    fn clamped_positions_round_surrogates_up_and_exclude_crlf() {
+        let index = LineIndex::new("a😀b\r\nc\r\n");
+        let offsets = (0..=5)
+            .map(|column| index.clamped_byte_offset(Position { line: 0, column }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            offsets,
+            vec![Some(0), Some(1), Some(5), Some(5), Some(6), Some(6)]
+        );
+        assert_eq!(
+            index.clamped_byte_offset(Position {
+                line: 1,
+                column: 99
+            }),
+            Some(9)
+        );
+        assert_eq!(
+            index.clamped_byte_offset(Position {
+                line: 2,
+                column: 99
+            }),
+            Some(11)
+        );
+        assert_eq!(
+            index.clamped_byte_offset(Position { line: 3, column: 0 }),
+            None
+        );
+        assert_eq!(
+            LineIndex::new("").clamped_byte_offset(Position {
+                line: 0,
+                column: 99
+            }),
+            Some(0)
+        );
     }
 
     #[test]

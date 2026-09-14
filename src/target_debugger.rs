@@ -742,12 +742,14 @@ impl TargetDebuggerHandle {
         &self,
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
+        raw: bool,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::TakeCoverage {
                 capture_id,
                 exclude_capture_id,
+                raw,
                 response,
             })
             .await
@@ -1121,6 +1123,7 @@ enum TargetCommand {
     TakeCoverage {
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
+        raw: bool,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
     StopCoverage {
@@ -1721,6 +1724,7 @@ async fn run_target(
             Next::Command(Some(TargetCommand::TakeCoverage {
                 capture_id,
                 exclude_capture_id,
+                raw,
                 response,
             })) => {
                 let result = match coverage.as_mut() {
@@ -1746,7 +1750,7 @@ async fn run_target(
                             None => Ok(snapshot),
                         });
                         let mut snapshot = snapshot;
-                        if capture_id.is_none()
+                        if !raw && capture_id.is_none()
                             && let Ok(snapshot) = &mut snapshot
                             && let Err(error) =
                                 project_coverage(&mut driver, &session_key, snapshot, None, false)

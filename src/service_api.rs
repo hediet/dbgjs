@@ -2206,6 +2206,7 @@ pub trait DebuggerServiceApi {
         target_id: String,
         capture_id: Option<String>,
         exclude_capture_id: Option<String>,
+        raw: Option<bool>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn stop_coverage(

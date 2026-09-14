@@ -48,7 +48,7 @@ export async function main(args = process.argv.slice(2)) {
 		await appendFile(join(output, "commands.jsonl"), `${JSON.stringify(entry)}\n`);
 		console.log(`    ${(result.durationMs / 1000).toFixed(3)}s, exit ${result.code}`);
 		assert.equal(result.code, 0, `${label} failed; see ${join(output, outputFile)}\n${result.output}`);
-		return result.output;
+		return result.stdout;
 	};
 	const metadata = JSON.parse(await command("Cargo metadata", "cargo", ["metadata", "--no-deps", "--format-version", "1"]));
 	const binaryDirectory = join(metadata.target_directory, values.profile);
@@ -152,12 +152,22 @@ export async function main(args = process.argv.slice(2)) {
 			await page.getByRole("button", { name: "Revert Block", exact: true }).last().click();
 		`);
 		const unprojected = JSON.parse(await dbgjs("Capture without projection", [
-			"--json", "coverage", "capture", "--id", "unprojected", ...scope,
+			"--json", "coverage", "capture", "--raw", ...scope,
 		]));
+		assert(unprojected.sources.flatMap((source) => source.functions).every((fn) =>
+			fn.authoredLocation == null && fn.breadcrumb == null && fn.generatedLocation == null &&
+			fn.effectiveRanges.length === 0 &&
+			fn.ranges.every((range) => range.authoredStart == null && range.authoredEnd == null)
+		), "Raw coverage must not perform source lookup or enrichment");
 		const projected = JSON.parse(await dbgjs("Capture with mapping and breadcrumbs", [
 			"--json", "coverage", "capture", ...scope,
 		]));
 		const { source, lookups, revert } = extractWorkload(projected);
+		const rawRevert = unprojected.sources.find((entry) => entry.scriptId === source.scriptId)
+			?.functions.find((fn) => fn.name === revert.name && fn.rootStartOffset === revert.rootStartOffset);
+		assert(rawRevert, "The raw capture must include the same executed revert function");
+		const runtimeRanges = (fn) => fn.ranges.map(({ startOffset, endOffset, count }) => ({ startOffset, endOffset, count }));
+		assert.deepEqual(runtimeRanges(revert), runtimeRanges(rawRevert), "Enrichment must preserve the revert counts and offsets");
 		await dbgjs("Explain mapped source provenance", ["source", "explain", source.generatedUrl, "--context", context]);
 		await dbgjs("Read mapped TypeScript", [
 			"source", "show", revert.authoredLocation.sourceUrl,
