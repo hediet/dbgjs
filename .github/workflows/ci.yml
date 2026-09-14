@@ -132,7 +132,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-${{ matrix.platform }}
-          path: artifacts/npm/*.tgz
+          path: artifacts/npm/hediet-dbgjs-${{ matrix.platform }}-*.tgz
+          if-no-files-found: error
+      - name: Upload npm entry package
+        if: matrix.platform == 'linux-x64-gnu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-dbgjs
+          path: artifacts/npm/hediet-dbgjs-[0-9]*.tgz
           if-no-files-found: error
 
   package-smoke-linux:
@@ -166,6 +173,10 @@ jobs:
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-dbgjs
+          path: artifacts/npm
       - name: Report native library dependencies
         shell: bash
         run: |
@@ -182,8 +193,8 @@ jobs:
       - name: Test downloaded npm tarballs
         run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm
 
-  package-smoke-hosted:
-    name: Artifact smoke (${{ matrix.platform }})
+  package-smoke-windows-macos:
+    name: Windows/macOS smoke (${{ matrix.platform }})
     needs: [changes, packages]
     if: needs.changes.outputs.packages == 'true'
     strategy:
@@ -210,13 +221,17 @@ jobs:
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-dbgjs
+          path: artifacts/npm
       - name: Test downloaded npm tarballs
         run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm
 
   result:
     name: CI result
     if: always()
-    needs: [changes, rust, packages, package-smoke-linux, package-smoke-hosted]
+    needs: [changes, rust, packages, package-smoke-linux, package-smoke-windows-macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -233,7 +248,7 @@ jobs:
             rust: "rust",
             packages: "packages",
             "package-smoke-linux": "packages",
-            "package-smoke-hosted": "packages",
+            "package-smoke-windows-macos": "packages",
           };
           for (const [name, output] of Object.entries(requiredOutputs)) {
             const required = results.changes.outputs[output] === "true";

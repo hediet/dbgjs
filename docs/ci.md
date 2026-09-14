@@ -32,14 +32,15 @@ only affect speed, never correctness.
 
 Windows x64, Linux x64, and macOS ARM64 run workspace builds, Rust tests, and
 offline recording tests. The native package matrix builds Windows x64, Linux
-x64/ARM64 (GNU), and macOS x64/ARM64. Each artifact contains the entry-package
-tarball and its matching platform-package tarball.
+x64/ARM64 (GNU), and macOS x64/ARM64. Each npm package has its own GitHub
+artifact: `npm-dbgjs` contains the entry-package tarball, while each
+`npm-<platform>` artifact contains only its matching native-package tarball.
 
-Separate artifact-consumer jobs download and install those tarballs, exercise
-the `dbgjs` and `dbgjs-tui` launchers and native executables, start
-`dbgjs-service`, and evaluate an expression in a Node inspector target. This
-ensures the uploaded packages, rather than binaries left in the build tree, are
-tested.
+Separate artifact-consumer jobs download the shared entry artifact and matching
+native artifact, install both tarballs, exercise the `dbgjs` and `dbgjs-tui`
+launchers and native executables, start `dbgjs-service`, and evaluate an
+expression in a Node inspector target. This ensures the uploaded packages,
+rather than binaries left in the build tree, are tested.
 
 Linux x64 and ARM64 are built on Ubuntu 22.04 (glibc 2.35). These GNU packages
 require compatible glibc and OpenSSL 3
