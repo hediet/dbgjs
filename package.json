@@ -25,7 +25,9 @@
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",
-    "prototype:memory": "cargo run --bin source_memory"
+    "prototype:memory": "cargo run --bin source_memory",
+    "benchmark:vscode-coverage": "node scripts/vscode-coverage-benchmark.mjs",
+    "test:vscode-coverage-benchmark": "node --test scripts/vscode-coverage-benchmark.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
