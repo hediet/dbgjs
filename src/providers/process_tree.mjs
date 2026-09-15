@@ -1,7 +1,7 @@
 	import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir, readlink, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { open, readFile, readdir, readlink, rm } from "node:fs/promises";
+import { basename, join, posix } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
@@ -328,12 +328,12 @@ async function activateInspector(pid) {
 	}
 	if (process.platform !== "win32") {
 		const candidate = (await listProcesses()).find((candidate) => candidate.pid === pid);
-		if (!candidate || !["node", "nodejs"].includes(candidate.name.toLowerCase())) {
-			throw new Error(
-				`process ${pid} has no inspector; launch VS Code with --inspect-extensions=PORT `
-				+ "for extension hosts and --inspect=PORT for process-tree roots. "
-				+ "Automatic Unix activation is supported only for standalone Node.js processes",
-			);
+		if (!candidate) throw new Error(`process ${pid} no longer exists`);
+		if (!["node", "nodejs"].includes(candidate.name.toLowerCase())) {
+			const executable = process.platform === "linux"
+				? await readlink(`/proc/${pid}/exe`)
+				: candidate.executablePath;
+			await assertElectronInspectorSignalSupported(candidate, electronFusePath(executable));
 		}
 	}
 	await execFile(process.execPath, ["-e", `process._debugProcess(${pid})`], {
@@ -406,6 +406,54 @@ async function activateInspector(pid) {
 	}
 	knownEndpoints.set(pid, rotated.endpoint);
 	return rotated.endpoint;
+}
+
+function electronFusePath(executable, platform = process.platform) {
+	if (!executable?.startsWith("/")) throw new Error("Cannot determine the Electron executable path.");
+	if (platform !== "darwin") return executable;
+	const contents = executable.indexOf(".app/Contents/");
+	if (contents < 0) throw new Error(`Electron executable is not inside an app bundle: ${executable}`);
+	return posix.join(executable.slice(0, contents + ".app/Contents".length),
+		"Frameworks", "Electron Framework.framework", "Electron Framework");
+}
+
+async function assertElectronInspectorSignalSupported(candidate, binary) {
+	const type = /(?:^|\s)--type(?:=|\s+)(\S+)/.exec(candidate.commandLine)?.[1];
+	if (type && !(type === "utility" && candidate.commandLine.includes("node.mojom.NodeService"))) {
+		throw new Error(`Refusing inspector signal for non-Node Electron process ${candidate.pid} (${type}).`);
+	}
+	if (!await electronInspectorFuseEnabled(binary)) {
+		throw new Error(`Refusing inspector signal for process ${candidate.pid}: Electron's NodeCliInspect fuse is not enabled.`);
+	}
+}
+
+async function electronInspectorFuseEnabled(binary) {
+	// Electron disables the SIGUSR1 debug handler when EnableNodeCliInspectArguments is off.
+	// Fuse wire v1: sentinel, version byte, length byte, then ASCII states (option 3 is inspector).
+	const sentinel = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
+	const file = await open(binary, "r");
+	try {
+		const { size } = await file.stat();
+		const chunkSize = 1024 * 1024;
+		const buffer = Buffer.alloc(chunkSize + sentinel.length - 1);
+		let wires = 0;
+		for (let position = 0; position < size; position += chunkSize) {
+			const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
+			const chunk = buffer.subarray(0, bytesRead);
+			for (let index = chunk.indexOf(sentinel); index >= 0 && index < chunkSize;
+				index = chunk.indexOf(sentinel, index + sentinel.length)) {
+				const wire = Buffer.alloc(6);
+				const offset = position + index + sentinel.length;
+				const read = await file.read(wire, 0, wire.length, offset);
+				if (read.bytesRead !== wire.length || wire[0] !== 1 || wire[1] < 4
+					|| offset + 2 + wire[1] > size || wire[5] !== 0x31) return false;
+				wires++;
+			}
+		}
+		return wires >= 1 && wires <= 2;
+	} finally {
+		await file.close();
+	}
 }
 
 async function discoverChromiumTargets(processesInScope, allProcesses, discoveredProcesses, listeners) {
@@ -552,9 +600,9 @@ async function listProcesses() {
 }
 
 function parseUnixProcesses(commands, names) {
-	const executableNames = new Map(names.split(/\r?\n/).flatMap((line) => {
+	const executablePaths = new Map(names.split(/\r?\n/).flatMap((line) => {
 		const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
-		return match ? [[Number(match[1]), match[2].split("/").at(-1)]] : [];
+		return match ? [[Number(match[1]), match[2]]] : [];
 	}));
 	return commands.split(/\r?\n/).flatMap((line) => {
 		const match = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/.exec(line);
@@ -569,7 +617,8 @@ function parseUnixProcesses(commands, names) {
 		return [{
 			pid,
 			parentPid: Number(match[2]),
-			name: executableNames.get(pid) ?? "",
+			name: executablePaths.get(pid)?.split("/").at(-1) ?? "",
+			executablePath: executablePaths.get(pid) ?? "",
 			commandLine: match[4],
 			creationDate: String(Math.floor(started / 1000)).padStart(20, "0"),
 		}];

@@ -46,6 +46,9 @@ Only processes launched by the test are terminated during cleanup.
 
 Neither the main-process nor extension-host inspector is enabled at launch.
 PID attachment must activate debugging on the running VS Code instance.
+On Unix, attachment checks Electron's inspector fuse before sending the debug
+signal; renderer processes and binaries with disabled or unknown fuses are
+rejected rather than risking termination by an unhandled signal.
 On macOS the executable is read from
 the downloaded app's `CFBundleExecutable`, rather than assuming an Electron
 binary name.

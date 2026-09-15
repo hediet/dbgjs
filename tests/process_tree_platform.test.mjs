@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir, readlink, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, posix } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
@@ -14,13 +14,14 @@ const source = (await readFile(new URL("../src/providers/process_tree.mjs", impo
 
 function helper(rootPid = process.pid) {
 	return new Function(
-		"execFileCallback", "randomUUID", "readFile", "readdir", "readlink", "rm",
-		"basename", "join", "tmpdir", "promisify", "testRootPid",
+		"execFileCallback", "randomUUID", "open", "readFile", "readdir", "readlink", "rm",
+		"basename", "join", "posix", "tmpdir", "promisify", "testRootPid",
 		`${source}\nreturn { parseUnixProcesses, parseLsofListeners, parseLinuxTcpListeners,
 			isNodeProcess, listProcesses, listListeners, ensureRootEndpoint, ensureInspector,
-			processInstanceId };`,
-	)(execFileCallback, randomUUID, readFile, readdir, readlink, rm,
-		basename, join, tmpdir, promisify, rootPid);
+			processInstanceId, electronFusePath, electronInspectorFuseEnabled,
+			assertElectronInspectorSignalSupported };`,
+	)(execFileCallback, randomUUID, open, readFile, readdir, readlink, rm,
+		basename, join, posix, tmpdir, promisify, rootPid);
 }
 
 test("Unix ps parsing preserves macOS executable names, arguments and stable start times", () => {
@@ -40,12 +41,60 @@ test("Unix ps parsing preserves macOS executable names, arguments and stable sta
 	assert.equal(processes[0].name, "Electron");
 	assert.equal(processes[0].commandLine.endsWith("--user-data-dir=/Users/test/Code Profile"), true);
 	assert.equal(processes[1].name, "Code Helper (Plugin)");
+	assert.equal(processes[1].executablePath,
+		"/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)");
 	assert.equal(processes[1].parentPid, 10);
 	assert.equal(api.isNodeProcess(processes[1]), true);
 	assert.equal(api.isNodeProcess(processes[2]), true);
 	assert.equal(api.processInstanceId(processes[0]),
 		String(Date.parse("Mon Sep 14 12:34:56 2026") / 1000).padStart(20, "0"));
 	assert.throws(() => api.parseUnixProcesses("10 1 Mon Bad 14 12:34:56 2026 node", ""), /start time/);
+});
+
+test("macOS main and utility processes use the outer app's Electron framework fuses", () => {
+	const api = helper();
+	const app = "/Applications/Visual Studio Code.app/Contents";
+	const expected = `${app}/Frameworks/Electron Framework.framework/Electron Framework`;
+	assert.equal(api.electronFusePath(`${app}/MacOS/Code`, "darwin"), expected);
+	assert.equal(api.electronFusePath(`${app}/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)`, "darwin"), expected);
+	assert.equal(api.electronFusePath("/opt/code/code", "linux"), "/opt/code/code");
+	assert.throws(() => api.electronFusePath("Code", "darwin"), /executable path/);
+});
+
+test("Unix Electron activation requires enabled inspector fuses in every binary slice", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-electron-fuses-"));
+	try {
+		const binary = join(directory, "electron");
+		const api = helper();
+		const sentinel = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
+		const wire = (state) => Buffer.concat([sentinel, Buffer.from([1, 4, 48, 48, 48, state])]);
+		for (const [contents, enabled] of [
+			[wire(49), true],
+			[wire(48), false],
+			[wire(114), false],
+			[Buffer.from("not Electron"), false],
+			[wire(49).subarray(0, -1), false],
+			[Buffer.concat([wire(49), wire(48)]), false],
+			[Buffer.concat([wire(49), wire(49)]), true],
+			[Buffer.concat([Buffer.alloc(1024 * 1024 - 10), wire(49)]), true],
+			[Buffer.concat([sentinel, Buffer.from([2, 4, 48, 48, 48, 49])]), false],
+		]) {
+			await writeFile(binary, contents);
+			assert.equal(await api.electronInspectorFuseEnabled(binary), enabled);
+		}
+		await writeFile(binary, wire(49));
+		await api.assertElectronInspectorSignalSupported({ pid: 42, commandLine: "code" }, binary);
+		await api.assertElectronInspectorSignalSupported({
+			pid: 42, commandLine: "Code Helper --type=utility --utility-sub-type=node.mojom.NodeService",
+		}, binary);
+		await assert.rejects(api.assertElectronInspectorSignalSupported({
+			pid: 42, commandLine: "Code Helper --type=renderer",
+		}, binary), /non-Node/);
+		await writeFile(binary, wire(48));
+		await assert.rejects(api.assertElectronInspectorSignalSupported({ pid: 42, commandLine: "code" }, binary), /not enabled/);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("macOS lsof parsing keeps PID ownership and deduplicates dual-stack sockets", () => {

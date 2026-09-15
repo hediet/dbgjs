@@ -37,7 +37,7 @@ jobs:
           node-version: "22"
           package-manager-cache: false
       - name: Test change detection
-        run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs
+        run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs tests/process_tree_platform.test.mjs
       - name: Detect changes
         id: changes
         env:
