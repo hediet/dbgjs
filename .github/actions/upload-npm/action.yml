@@ -33,12 +33,6 @@ runs:
         overwrite: true
     - uses: actions/upload-artifact@v4
       with:
-        name: npm-${{ inputs.channel }}-darwin-x64
-        path: artifacts/release/npm-${{ inputs.channel }}-darwin-x64/*.tgz
-        if-no-files-found: error
-        overwrite: true
-    - uses: actions/upload-artifact@v4
-      with:
         name: npm-${{ inputs.channel }}-darwin-arm64
         path: artifacts/release/npm-${{ inputs.channel }}-darwin-arm64/*.tgz
         if-no-files-found: error

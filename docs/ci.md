@@ -18,7 +18,7 @@ manifests, and workflow changes conservatively trigger both jobs.
 Set **CI result** as the required branch-protection check, not individual matrix
 jobs. It accepts intentional skips but fails when a required job fails or is
 cancelled. Manual dispatch forces build inputs to be considered changed,
-including both macOS test architectures.
+including macOS ARM64 tests.
 
 `Swatinem/rust-cache` caches Cargo downloads and compiled dependencies, keyed by
 the Rust environment and the target/profile. It also caches workspace crate
@@ -32,7 +32,7 @@ embeds the protocol schemas.
 
 An npm-only change skips Linux/Windows Rust unit tests but still verifies and
 packs release binaries, reusing unchanged workspace outputs from the trusted
-`main` cache. Both macOS architectures run their full suites for npm-only changes.
+`main` cache. macOS ARM64 runs its full suite for npm-only changes.
 Ordinary docs-only changes, including a root `README.md` change, schedule no
 Rust or packaging jobs, so their total Rust compilation and test time is zero.
 Cache misses only affect speed, never correctness.
@@ -40,14 +40,14 @@ Cache misses only affect speed, never correctness.
 ## Checks and candidate artifacts
 
 Windows x64 and Linux x64 run workspace builds, Rust tests, and offline recording
-tests for Rust changes. macOS x64 and ARM64 run workspace builds, Rust tests,
+tests for Rust changes. macOS ARM64 runs workspace builds, Rust tests,
 and offline recording tests on every package-producing CI run, including PRs,
 nightly builds, stable builds, and feature-branch manual dispatches. Stable-tag
 existence no longer gates macOS tests. Installed-package smoke checks remain
-enabled on both macOS architectures as well.
+enabled on macOS ARM64 as well. Intel macOS is not supported or built.
 
 The native package matrix builds Windows x64, Linux
-x64/ARM64 (GNU), and macOS x64/ARM64. Each npm package has its own GitHub
+x64/ARM64 (GNU), and macOS ARM64. Each npm package has its own GitHub
 artifact: `npm-dbgjs` contains the entry-package candidate, while each
 `npm-<platform>` artifact contains only its matching native-package candidate.
 Candidates use `.tar.gz` filenames and `private: true` manifests. They can be
@@ -71,12 +71,12 @@ images for those platforms. Alpine/musl and Windows ARM64 are not supported
 yet.
 
 A focused [desktop VS Code E2E](../tests/vscode-discovery/README.md) runs on all
-five native platforms using downloaded candidate binaries and pinned VS Code.
+four native platforms using downloaded candidate binaries and pinned VS Code.
 It discovers an isolated extension host, attaches by its discovered PID, and
 verifies an authored TypeScript breakpoint, mapped stack location, and local
 evaluation against one deterministic golden transcript. It uses a local fixture,
 not live vscode.dev or a user's existing editor. These sanity checks run in
-addition to the full macOS Rust suites on nightly and stable builds.
+addition to the full macOS ARM64 Rust suite on nightly and stable builds.
 
 ## Nightly and stable packages
 
@@ -86,17 +86,17 @@ PRs, forks, other workflows, and failed runs. Documentation-only CI with no
 package artifacts produces no release and still spends zero time on Rust.
 Missing parts of a package set and expired artifacts are errors, not releases.
 
-Every eligible package-producing run creates six nightly packages. When the
+Every eligible package-producing run creates five nightly packages. When the
 version in `npm/dbgjs/package.json` has no corresponding `vX.Y.Z` tag, it also
-creates six stable packages. Bump the npm entry manifest, its native optional
+creates five stable packages. Bump the npm entry manifest, its native optional
 dependency versions, and `Cargo.toml` together. A failed bump build does not
 claim the version; a subsequent green package-producing main build can release
 it. There is no strict commit-order queue.
 
 Stable promotion additionally verifies that the selected source CI run passed
-the full macOS workspace suite. If the stable tag disappeared after a
-nightly-only CI run, that run cannot silently become a stable release without
-the full tests. Interrupted stable candidates use their original run's tests.
+the full macOS ARM64 workspace suite. Historical smoke-only runs cannot silently
+become stable releases without the full tests. Interrupted stable candidates
+use their original run's tests.
 
 | Channel | Version | `publishConfig.tag` | Artifact names |
 | --- | --- | --- | --- |

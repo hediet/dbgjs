@@ -26,7 +26,7 @@ test("every supported host resolves to its exact optional dependency", async () 
 });
 
 test("unsupported platforms and musl fail explicitly", () => {
-	for (const args of [["win32", "arm64"], ["linux", "x64"], ["linux", "riscv64", "2.35"], ["freebsd", "x64"]]) {
+	for (const args of [["win32", "arm64"], ["darwin", "x64"], ["linux", "x64"], ["linux", "riscv64", "2.35"], ["freebsd", "x64"]]) {
 		assert.throws(() => platformKey(...args), /Unsupported dbgjs platform/);
 	}
 });

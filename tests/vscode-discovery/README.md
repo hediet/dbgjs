@@ -37,7 +37,7 @@ On Linux, run through `xvfb-run -a` when no display is available.
 The supplied directory must contain native `dbgjs` and `dbgjs-service`
 executables. The test does not compile Rust. CI downloads the matching
 candidate artifact and runs on Windows x64, Linux x64/ARM64, and macOS
-x64/ARM64. This is a small routine sanity test, not the full macOS Rust suite.
+ARM64. This is a small routine sanity test, not the full macOS Rust suite.
 
 The downloaded VS Code installation is cached locally under
 `artifacts/vscode-download`. Each run uses separate temporary user data,

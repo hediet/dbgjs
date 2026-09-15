@@ -44,10 +44,7 @@ export function selectTestPlatforms(changes) {
 		);
 	}
 	if (changes.packages) {
-		platforms.push(
-			{ os: "macos-15-intel", target: "x86_64-apple-darwin" },
-			{ os: "macos-15", target: "aarch64-apple-darwin" },
-		);
+		platforms.push({ os: "macos-15", target: "aarch64-apple-darwin" });
 	}
 	return platforms;
 }

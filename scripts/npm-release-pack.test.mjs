@@ -28,13 +28,13 @@ test("candidate packages become stable and nightly tarballs with matching depend
 			}));
 			execFileSync("tar", ["-czf", join(input, `${key}.tar.gz`), "-C", fixture, "package"]);
 		}
-		assert.equal((await inspectCandidatePackages(input)).packages.length, 6);
+		assert.equal((await inspectCandidatePackages(input)).packages.length, 5);
 		for (const [version, tag, channel] of [
 			[entry.version, "latest", "stable"],
 			[`${entry.version}-nightly.123`, "nightly", "nightly"],
 		]) {
 			const result = await prepareReleasePackages({ input, output: join(directory, "output"), version, tag });
-			assert.equal(result.packages.length, 6);
+			assert.equal(result.packages.length, 5);
 			for (const packed of result.packages) {
 				const manifest = JSON.parse(execFileSync("tar", ["-xOzf", packed.path, "package/package.json"], { encoding: "utf8" }));
 				assert.equal(manifest.private, undefined);

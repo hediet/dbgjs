@@ -13,7 +13,6 @@
   "dependencies": { "playwright": "1.62.1" },
   "optionalDependencies": {
     "@hediet/dbgjs-win32-x64": "0.1.0",
-    "@hediet/dbgjs-darwin-x64": "0.1.0",
     "@hediet/dbgjs-darwin-arm64": "0.1.0",
     "@hediet/dbgjs-linux-x64-gnu": "0.1.0",
     "@hediet/dbgjs-linux-arm64-gnu": "0.1.0"

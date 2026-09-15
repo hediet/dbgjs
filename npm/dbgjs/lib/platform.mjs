@@ -1,6 +1,5 @@
 export const platforms = {
 	"win32-x64": { os: "win32", cpu: "x64" },
-	"darwin-x64": { os: "darwin", cpu: "x64" },
 	"darwin-arm64": { os: "darwin", cpu: "arm64" },
 	"linux-x64-gnu": { os: "linux", cpu: "x64", libc: "glibc" },
 	"linux-arm64-gnu": { os: "linux", cpu: "arm64", libc: "glibc" },

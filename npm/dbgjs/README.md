@@ -32,9 +32,9 @@ nightlies and `latest` for stable packages, for the external npm publisher.
 CI itself uploads private `.tar.gz` candidates for smoke testing, not publishable
 `.tgz` releases. Only successful main builds are promoted to release artifacts.
 
-Supported platforms: Windows x64, macOS x64/ARM64, Linux GNU x64/ARM64.
-Linux requires glibc 2.35 or newer and OpenSSL 3. Musl/Alpine and Windows ARM64
-are not supported. Platform dependencies must not be omitted.
+Supported platforms: Windows x64, macOS ARM64, Linux GNU x64/ARM64.
+Linux requires glibc 2.35 or newer and OpenSSL 3. Intel macOS, Musl/Alpine and
+Windows ARM64 are not supported. Platform dependencies must not be omitted.
 
 The package supplies Playwright's JavaScript library, but does not install a
 browser. Browser debugging requires a separately installed browser. `DBGJS_NODE`
