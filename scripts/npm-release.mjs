@@ -35,7 +35,8 @@ export async function prepareRelease({ github, sourceRunId, download, inspect, p
 	}
 
 	const output = join(directory, "release");
-	await pack({ input, output, version: `${baseVersion}-nightly.${run.id}`, tag: "nightly" });
+	const nightlyVersion = await reserveNightlyVersion(github, run, baseVersion);
+	await pack({ input, output, version: nightlyVersion, tag: "next" });
 	if (!released) {
 		await github.requireStableTests(candidate.runId);
 		let stableInput = input;
@@ -55,6 +56,43 @@ export async function prepareRelease({ github, sourceRunId, download, inspect, p
 		}
 	}
 	return { nightly: true, stable: !released, candidate };
+}
+
+export async function reserveNightlyVersion(github, run, baseVersion) {
+	assert.match(run.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+	const timestamp = new Date(run.created_at);
+	assert.equal(timestamp.toISOString(), run.created_at.replace("Z", ".000Z"), "Invalid CI creation date.");
+	const date = timestamp.toISOString().slice(0, 10).replaceAll("-", "");
+	const prefix = `nightly-builds/${date}/`;
+	for (let attempt = 0; attempt < 20; attempt++) {
+		const names = await github.getTagNames(prefix);
+		const claims = await Promise.all(names.map(async (name) => {
+			const index = name.slice(prefix.length);
+			assert.match(index, /^[1-9]\d*$/, "Nightly indices must start at 1.");
+			assert.ok(Number.isSafeInteger(Number(index)));
+			const tag = await github.getTag(name);
+			assert.ok(tag?.message, `Missing nightly reservation: ${name}`);
+			const claim = JSON.parse(tag.message);
+			assert.equal(claim.sha, tag.sha, "Nightly reservation changed commit.");
+			assert.ok(Number.isSafeInteger(claim.runId) && claim.runId > 0);
+			assert.match(claim.version, new RegExp(`^\\d+\\.\\d+\\.\\d+-nightly\\.${date}\\.${index}$`));
+			return { ...claim, index: Number(index) };
+		}));
+		const existing = claims.filter((claim) => claim.runId === run.id);
+		assert.ok(existing.length <= 1, "CI run has multiple nightly reservations.");
+		if (existing.length) {
+			assert.equal(existing[0].sha, run.head_sha, "Reserved nightly run changed identity.");
+			assert.equal(existing[0].version, `${baseVersion}-nightly.${date}.${existing[0].index}`);
+			return existing[0].version;
+		}
+		const index = claims.reduce((max, claim) => Math.max(max, claim.index), 0) + 1;
+		assert.ok(Number.isSafeInteger(index), "Nightly index overflow.");
+		const version = `${baseVersion}-nightly.${date}.${index}`;
+		const created = await github.createTag(`${prefix}${index}`, run.head_sha,
+			JSON.stringify({ version, runId: run.id, sha: run.head_sha }), { allowExisting: true });
+		if (created) return version;
+	}
+	throw new Error("Nightly reservation remained contended after 20 attempts; retry the release.");
 }
 
 export async function finalizeRelease(github, state) {
@@ -85,7 +123,7 @@ export function assertTrustedRun(run, repository) {
 	assert.ok(Number.isSafeInteger(run.id) && run.id > 0);
 }
 
-class GithubRepository {
+export class GithubRepository {
 	constructor(repository, token) {
 		assert.match(repository, /^[\w.-]+\/[\w.-]+$/);
 		assert.ok(token, "GH_TOKEN is required.");
@@ -135,14 +173,25 @@ class GithubRepository {
 		return { sha: tag.object.sha, message: tag.message };
 	}
 
-	async createTag(name, sha, message) {
+	async getTagNames(prefix) {
+		const refs = await this._request(`git/matching-refs/tags/${prefix}`);
+		return refs.map((ref) => {
+			assert.ok(ref.ref.startsWith(`refs/tags/${prefix}`));
+			return ref.ref.slice("refs/tags/".length);
+		});
+	}
+
+	async createTag(name, sha, message, { allowExisting = false } = {}) {
 		const tag = await this._request("git/tags", {
 			body: { tag: name, object: sha, type: "commit", message },
 		});
-		await this._request("git/refs", { body: { ref: `refs/tags/${name}`, sha: tag.sha } });
+		const ref = await this._request("git/refs", {
+			body: { ref: `refs/tags/${name}`, sha: tag.sha }, allowExisting,
+		});
+		return ref !== undefined;
 	}
 
-	async _request(path, { body, allowMissing = false } = {}) {
+	async _request(path, { body, allowMissing = false, allowExisting = false } = {}) {
 		const response = await fetch(`https://api.github.com/repos/${this.repository}/${path}`, {
 			method: body ? "POST" : "GET",
 			headers: {
@@ -156,7 +205,10 @@ class GithubRepository {
 		});
 		if (allowMissing && response.status === 404) return undefined;
 		if (!response.ok) {
-			throw new Error(`GitHub ${path}: ${response.status} ${await response.text()}`);
+			const detail = await response.text();
+			if (allowExisting && response.status === 422 &&
+				JSON.parse(detail).message === "Reference already exists") return undefined;
+			throw new Error(`GitHub ${path}: ${response.status} ${detail}`);
 		}
 		return response.json();
 	}

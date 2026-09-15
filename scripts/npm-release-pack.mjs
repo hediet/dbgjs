@@ -11,7 +11,7 @@ import { npm } from "./npm-tools.mjs";
 export async function prepareReleasePackages({ input, output, version, tag }) {
 	assert.ok(
 		(tag === "latest" && /^\d+\.\d+\.\d+$/.test(version)) ||
-		(tag === "nightly" && /^\d+\.\d+\.\d+-nightly\.[1-9]\d*$/.test(version)),
+		(tag === "next" && /^\d+\.\d+\.\d+-nightly\.[1-9]\d{7}\.[1-9]\d*$/.test(version)),
 		"Release version and publication tag must agree.",
 	);
 	const candidates = await inspectCandidatePackages(input);
@@ -96,6 +96,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 		version: { type: "string" }, tag: { type: "string" },
 	} });
 	assert.ok(values.input && values.output && values.version && values.tag,
-		"Usage: node scripts/npm-release-pack.mjs --input <candidates> --output <packages> --version <version> --tag <nightly|latest>");
+		"Usage: node scripts/npm-release-pack.mjs --input <candidates> --output <packages> --version <version> --tag <next|latest>");
 	console.log(JSON.stringify(await prepareReleasePackages(values)));
 }

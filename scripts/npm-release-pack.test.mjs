@@ -31,7 +31,7 @@ test("candidate packages become stable and nightly tarballs with matching depend
 		assert.equal((await inspectCandidatePackages(input)).packages.length, 5);
 		for (const [version, tag, channel] of [
 			[entry.version, "latest", "stable"],
-			[`${entry.version}-nightly.123`, "nightly", "nightly"],
+			[`${entry.version}-nightly.20260915.1`, "next", "nightly"],
 		]) {
 			const result = await prepareReleasePackages({ input, output: join(directory, "output"), version, tag });
 			assert.equal(result.packages.length, 5);
@@ -48,7 +48,16 @@ test("candidate packages become stable and nightly tarballs with matching depend
 				}
 			}
 		}
-		await assert.rejects(prepareReleasePackages({ input, output: directory, version: entry.version, tag: "nightly" }), /must agree/);
+		for (const [version, tag] of [
+			[entry.version, "next"],
+			[`${entry.version}-nightly.123`, "next"],
+			[`${entry.version}-nightly.20260915.0`, "next"],
+			[`${entry.version}-nightly.20260915.01`, "next"],
+			[`${entry.version}-nightly.20260915.1`, "nightly"],
+			[`${entry.version}-nightly.20260915.1`, "latest"],
+		]) {
+			await assert.rejects(prepareReleasePackages({ input, output: directory, version, tag }), /must agree/);
+		}
 		const [filename] = await readdir(input);
 		await rename(join(input, filename), join(directory, filename));
 		await assert.rejects(inspectCandidatePackages(input), /Missing candidates/);

@@ -100,13 +100,19 @@ use their original run's tests.
 
 | Channel | Version | `publishConfig.tag` | Artifact names |
 | --- | --- | --- | --- |
-| Nightly | `X.Y.Z-nightly.<CI-run-id>` | `nightly` | `npm-nightly-dbgjs`, `npm-nightly-<platform>` |
+| Nightly | `X.Y.Z-nightly.<YYYYMMDD>.<index>` | `next` | `npm-nightly-dbgjs`, `npm-nightly-<platform>` |
 | Stable | `X.Y.Z` | `latest` | `npm-stable-dbgjs`, `npm-stable-<platform>` |
 
 Each release artifact contains one `.tgz`. Version and publication tag are set
 inside every package, and native optional dependencies are rewritten to the
 same exact version. The checked-in manifests are not changed by CI. The tested
 binaries are repacked without rebuilding or changing their contents.
+
+Nightly dates use the source CI run's creation date in UTC, not the release or
+retry time. The daily index starts at **1**, shared across base versions:
+for example, `0.1.0-nightly.20260915.1`, then `0.1.0-nightly.20260915.2`.
+These development builds are published under npm's `next` dist-tag; the
+`nightly` version label and artifact names remain unchanged.
 
 The external publisher should run `npm publish <tarball>`, honoring the embedded
 `publishConfig.tag`, rather than overriding the tag or always updating `latest`.
@@ -131,8 +137,16 @@ If publication is interrupted, rerun the release workflow. A later green build
 with the same base version also resumes the recorded candidate, not its own
 binaries, while still producing its own nightly packages. An expired candidate
 requires operator intervention; it must not silently select different contents
-for an already-exposed npm version. Nightly versions use the source CI run ID
-(not the retry attempt), so retries retain their version.
+for an already-exposed npm version.
+
+Before packing nightlies, an immutable annotated
+`nightly-builds/YYYYMMDD/<index>` tag reserves the version, source CI run ID,
+and commit. Retries find and reuse that run's reservation, even after midnight.
+New runs reserve one more than the day's maximum index. Git ref creation is
+atomic: if another run wins that index, the loser rereads the reservations and
+retries instead of overwriting the tag. Persistent contention and API errors
+fail explicitly. Failed or interrupted releases may leave gaps; reserved
+indices are never recycled. Keep these tags as durable allocation records.
 
 A stable tag means **the complete stable artifact set was uploaded**, not that
 the external publisher successfully uploaded all packages to npm. Tags are
