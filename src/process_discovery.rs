@@ -14,6 +14,7 @@ use crate::service_api::{
     ProcessTargetSnapshot, ProcessTreeSnapshot,
 };
 
+#[cfg(windows)]
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_SESSION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -32,6 +33,8 @@ struct WindowsProcess {
     creation_date: String,
     #[serde(default, deserialize_with = "nullable_string")]
     executable_path: String,
+    #[serde(default)]
+    vscode_process_type: Option<String>,
 }
 
 #[derive(Debug)]
@@ -86,15 +89,13 @@ where
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessDiscoveryError {
-    #[error("process discovery is currently supported only on Windows")]
-    UnsupportedPlatform,
-    #[error("failed to query Windows processes: {0}")]
+    #[error("failed to query processes: {0}")]
     Query(#[source] std::io::Error),
-    #[error("Windows process query failed: {0}")]
+    #[error("process query failed: {0}")]
     QueryFailed(String),
-    #[error("Windows process query timed out")]
+    #[error("process query timed out")]
     QueryTimeout,
-    #[error("Windows returned invalid process data: {0}")]
+    #[error("invalid process data: {0}")]
     InvalidData(#[from] serde_json::Error),
     #[error("VS Code main-process IPC failed: {0}")]
     Ipc(String),
@@ -193,7 +194,11 @@ async fn enrich_process_trees(
             .map(|tree| async move {
                 (
                     tree.root_process_id,
-                    query_vscode_main_diagnostics(&tree).await,
+                    query_vscode_main_diagnostics(
+                        &tree,
+                        process_metadata.get(&tree.root_process_id),
+                    )
+                    .await,
                 )
             }),
     );
@@ -412,6 +417,7 @@ fn apply_process_stats(
 
 async fn query_vscode_main_diagnostics(
     tree: &ProcessTreeSnapshot,
+    root: Option<&WindowsProcess>,
 ) -> Result<VscodeMainDiagnostics, ProcessDiscoveryError> {
     let user_data_path = tree
         .processes
@@ -422,11 +428,63 @@ async fn query_vscode_main_diagnostics(
         .processes
         .iter()
         .find_map(|process| command_argument(&process.command_line, "--app-path"))
+        .map(PathBuf::from)
+        .or_else(|| root.and_then(|root| vscode_app_path(&root.executable_path)))
         .ok_or_else(|| ProcessDiscoveryError::Ipc("missing --app-path".into()))?;
-    let version = vscode_product_version(PathBuf::from(app_path)).await?;
+    let version = vscode_product_version(app_path).await?;
+    let handles = vscode_ipc_handles(
+        &user_data_path,
+        &version,
+        std::env::consts::OS,
+        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
+    );
+    let mut last_error = ProcessDiscoveryError::Ipc("no main IPC handle".into());
+    for handle in handles {
+        match query_vscode_main_ipc(&handle).await {
+            Ok(diagnostics) if diagnostics.main_pid == tree.root_process_id => {
+                return Ok(diagnostics);
+            }
+            Ok(_) => last_error = ProcessDiscoveryError::Ipc("main IPC PID mismatch".into()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+fn vscode_app_path(executable: &str) -> Option<PathBuf> {
+    let executable = PathBuf::from(executable);
+    let directory = executable.parent()?;
+    if directory.file_name().is_some_and(|name| name == "MacOS") {
+        Some(directory.parent()?.join("Resources").join("app"))
+    } else {
+        Some(directory.join("resources").join("app"))
+    }
+}
+
+fn vscode_ipc_handles(
+    user_data_path: &str,
+    version: &str,
+    os: &str,
+    runtime_directory: Option<&str>,
+) -> Vec<String> {
+    // VS Code: src/vs/base/parts/ipc/node/ipc.net.ts, createStaticIPCHandle.
     let scope = format!("{:x}", Sha256::digest(user_data_path.as_bytes()));
-    let pipe_name = format!(r"\\.\pipe\{}-{version}-main-sock", &scope[..8]);
-    query_vscode_main_ipc(&pipe_name).await
+    if os == "windows" {
+        return vec![format!(r"\\.\pipe\{}-{version}-main-sock", &scope[..8])];
+    }
+    let version = version.chars().take(4).collect::<String>();
+    let mut handles = Vec::new();
+    if os != "macos"
+        && let Some(directory) = runtime_directory.filter(|directory| !directory.is_empty())
+    {
+        handles.push(format!(
+            "{directory}/vscode-{}-{version}-main.sock",
+            &scope[..8]
+        ));
+    }
+    // Portable VS Code ignores XDG_RUNTIME_DIR; diagnostics verify the responding main PID.
+    handles.push(format!("{user_data_path}/{version}-main.sock"));
+    handles
 }
 
 async fn vscode_product_version(app_path: PathBuf) -> Result<String, ProcessDiscoveryError> {
@@ -510,7 +568,54 @@ async fn query_windows_process_stats()
 
 #[cfg(not(windows))]
 async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
-    Err(ProcessDiscoveryError::UnsupportedPlatform)
+    tokio::task::spawn_blocking(|| {
+        use sysinfo::{ProcessesToUpdate, System};
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        system
+            .processes()
+            .iter()
+            .map(|(pid, process)| {
+                let executable_path = process
+                    .exe()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let name = process
+                    .exe()
+                    .and_then(|path| path.file_name())
+                    .unwrap_or_else(|| process.name())
+                    .to_string_lossy()
+                    .into_owned();
+                WindowsProcess {
+                    process_id: pid.as_u32(),
+                    parent_process_id: process.parent().map_or(0, |pid| pid.as_u32()),
+                    name,
+                    command_line: process
+                        .cmd()
+                        .iter()
+                        .map(|argument| {
+                            let argument = argument.to_string_lossy();
+                            if argument.contains(char::is_whitespace) {
+                                format!("\"{argument}\"")
+                            } else {
+                                argument.into_owned()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    creation_date: format!("{:020}", process.start_time()),
+                    executable_path,
+                    vscode_process_type: process.environ().iter().find_map(|entry| {
+                        entry.to_str()?
+                            .strip_prefix("VSCODE_CRASH_REPORTER_PROCESS_TYPE=")
+                            .map(str::to_owned)
+                    }),
+                }
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| ProcessDiscoveryError::QueryFailed(error.to_string()))
 }
 
 #[cfg(windows)]
@@ -534,10 +639,19 @@ async fn query_vscode_main_ipc(
     .map_err(|_| ProcessDiscoveryError::Ipc("connection timed out".into()))?
     .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
 
-    write_ipc_frame(&mut pipe, &serialize_ipc_string("dbgjs"))
+    query_vscode_diagnostics_stream(&mut pipe).await
+}
+
+async fn query_vscode_diagnostics_stream<S>(
+    pipe: &mut S,
+) -> Result<VscodeMainDiagnostics, ProcessDiscoveryError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    write_ipc_frame(pipe, &serialize_ipc_string("dbgjs"))
         .await
         .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
-    let initialize = read_regular_ipc_frame(&mut pipe)
+    let initialize = read_regular_ipc_frame(pipe)
         .await
         .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
     let (header, _) = deserialize_ipc_message(&initialize)?;
@@ -556,11 +670,11 @@ async fn query_vscode_main_ipc(
         &serde_json::json!([100, 0, "diagnostics", "getMainDiagnostics"]),
         None,
     )?;
-    write_ipc_frame(&mut pipe, &request)
+    write_ipc_frame(pipe, &request)
         .await
         .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
     loop {
-        let response = read_regular_ipc_frame(&mut pipe)
+        let response = read_regular_ipc_frame(pipe)
             .await
             .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
         let (header, body) = deserialize_ipc_message(&response)?;
@@ -584,11 +698,18 @@ async fn query_vscode_main_ipc(
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 async fn query_vscode_main_ipc(
-    _pipe_name: &str,
+    pipe_name: &str,
 ) -> Result<VscodeMainDiagnostics, ProcessDiscoveryError> {
-    Err(ProcessDiscoveryError::UnsupportedPlatform)
+    let mut pipe = tokio::time::timeout(
+        VSCODE_IPC_TIMEOUT,
+        tokio::net::UnixStream::connect(pipe_name),
+    )
+    .await
+    .map_err(|_| ProcessDiscoveryError::Ipc("connection timed out".into()))?
+    .map_err(|error| ProcessDiscoveryError::Ipc(error.to_string()))?;
+    query_vscode_diagnostics_stream(&mut pipe).await
 }
 
 async fn write_ipc_frame<W>(writer: &mut W, body: &[u8]) -> std::io::Result<()>
@@ -1187,7 +1308,7 @@ fn is_node_process(process: &WindowsProcess) -> bool {
     let name = process.name.to_ascii_lowercase();
     let command = process.command_line.to_ascii_lowercase();
     !command.contains("process._debugprocess(")
-        && (name == "node.exe"
+        && (matches!(name.as_str(), "node.exe" | "node" | "nodejs")
             || command.contains("node.mojom.nodeservice")
             || command.contains("--node-ipc")
             || command.contains("bootstrap-fork")
@@ -1207,8 +1328,17 @@ fn is_attachable_vscode_process(process: &WindowsProcess) -> bool {
 fn is_vscode_main_candidate(process: &WindowsProcess) -> bool {
     let name = process.name.to_ascii_lowercase();
     let command = process.command_line.to_ascii_lowercase();
-    let packaged = is_packaged_vscode_executable(&name);
-    let source_build = name == "electron.exe"
+    let executable = process.executable_path.to_ascii_lowercase();
+    let packaged = is_packaged_vscode_executable(&name)
+        || name == "electron" && [
+            "/visual studio code.app/contents/macos/",
+            "/visual studio code - insiders.app/contents/macos/",
+            "/code - oss.app/contents/macos/",
+            "/vscodium.app/contents/macos/",
+            "/cursor.app/contents/macos/",
+            "/windsurf.app/contents/macos/",
+        ].iter().any(|bundle| executable.contains(bundle));
+    let source_build = matches!(name.as_str(), "electron.exe" | "electron")
         && (command.contains(r"\vscode\") || command.contains("/vscode/"))
         && (command.contains(r"\out\main.js") || command.contains("/out/main.js"));
     ((packaged && !is_attachable_vscode_process(process)) || source_build)
@@ -1229,6 +1359,15 @@ fn is_packaged_vscode_executable(name: &str) -> bool {
             | "vscodium.exe"
             | "cursor.exe"
             | "windsurf.exe"
+            | "code"
+            | "code-insiders"
+            | "code - insiders"
+            | "code - oss"
+            | "code-oss"
+            | "codium"
+            | "vscodium"
+            | "cursor"
+            | "windsurf"
     )
 }
 
@@ -1246,7 +1385,9 @@ fn process_role(process: &WindowsProcess) -> ProcessRole {
     {
         ProcessRole::LanguageServer
     } else if command.contains("extensionhost")
-        || command.contains("node.mojom.nodeservice") && command.contains("--inspect-port=0")
+        || command.contains("node.mojom.nodeservice")
+            && (command.contains("--inspect-port=0")
+                || process.vscode_process_type.as_deref() == Some("extensionHost"))
     {
         ProcessRole::ExtensionHost
     } else if command.contains("ptyhost") {
@@ -1291,6 +1432,145 @@ fn non_javascript_process_role(process: &WindowsProcess) -> ProcessRole {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derives_platform_specific_vscode_ipc_handles() {
+        assert_eq!(
+            vscode_ipc_handles("abc", "1.104.2", "windows", Some("/run/user/1000")),
+            vec![r"\\.\pipe\ba7816bf-1.104.2-main-sock"]
+        );
+        assert_eq!(
+            vscode_ipc_handles("abc", "1.104.2", "linux", Some("/run/user/1000")),
+            vec!["/run/user/1000/vscode-ba7816bf-1.10-main.sock", "abc/1.10-main.sock"]
+        );
+        assert_eq!(
+            vscode_ipc_handles("abc", "1.104.2", "macos", Some("/run/user/1000")),
+            vec!["abc/1.10-main.sock"]
+        );
+        assert_eq!(
+            vscode_ipc_handles("abc", "1.104.2", "linux", None),
+            vec!["abc/1.10-main.sock"]
+        );
+    }
+
+    #[test]
+    fn recognizes_unix_vscode_main_and_extension_host() {
+        for (name, executable) in [
+            ("code", "/opt/VS Code/code"),
+            ("code-insiders", "/opt/code-insiders/code-insiders"),
+            ("Electron", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+            ("Electron", "/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Electron"),
+        ] {
+            let mut main = process(10, 1, name, "--user-data-dir=/home/user/profile");
+            main.executable_path = executable.into();
+            let host = process(11, 10, "Code Helper (Plugin)",
+                "--type=utility --utility-sub-type=node.mojom.NodeService --inspect-port=0");
+            let trees = vscode_process_trees(vec![main, host]);
+            assert_eq!(trees.len(), 1, "{executable}");
+            assert_eq!(trees[0].processes[0].role, ProcessRole::VscodeMain);
+            assert_eq!(trees[0].processes[1].role, ProcessRole::ExtensionHost);
+            assert!(trees[0].processes[1].attachable);
+        }
+        let mut other = process(20, 1, "Electron", "");
+        other.executable_path = "/Applications/Other.app/Contents/MacOS/Electron".into();
+        assert!(!is_vscode_main_candidate(&other));
+        assert!(!is_vscode_main_candidate(&process(21, 1, "code", "--type=zygote")));
+        assert!(!is_vscode_main_candidate(&process(22, 1, "code", "/opt/code/resources/app/out/cli.js")));
+        assert!(is_node_process(&process(23, 1, "node", "node server.js")));
+    }
+
+    #[test]
+    fn recognizes_inspected_utility_extension_hosts_from_vscode_metadata() {
+        let mut host = process(
+            11,
+            10,
+            "Code Helper (Plugin)",
+            "--type=utility --utility-sub-type=node.mojom.NodeService --nolazy --inspect=127.0.0.1:45678",
+        );
+        assert_eq!(process_role(&host), ProcessRole::NodeUtility);
+        host.vscode_process_type = Some("extensionHost".into());
+        assert!(is_node_process(&host));
+        assert_eq!(process_role(&host), ProcessRole::ExtensionHost);
+        let mut inherited_environment = process(12, 11, "node", "node server.js");
+        inherited_environment.vscode_process_type = host.vscode_process_type;
+        assert_eq!(process_role(&inherited_environment), ProcessRole::Node);
+    }
+
+    #[test]
+    fn finds_packaged_vscode_metadata_without_app_path_switch() {
+        assert_eq!(
+            vscode_app_path("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+            Some(PathBuf::from("/Applications/Visual Studio Code.app/Contents/Resources/app"))
+        );
+        assert_eq!(
+            vscode_app_path("/opt/code/code"),
+            Some(PathBuf::from("/opt/code/resources/app"))
+        );
+        assert_eq!(
+            command_argument(r#"code "--user-data-dir=/home/user/Code Profile""#, "--user-data-dir"),
+            Some("/home/user/Code Profile".into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn discovers_current_unix_process_metadata() {
+        let processes = query_windows_processes().await.unwrap();
+        let current = processes.iter().find(|process| process.process_id == std::process::id())
+            .expect("the current process must be observable");
+        assert!(!current.name.is_empty());
+        assert!(!current.command_line.is_empty());
+        assert_eq!(current.creation_date.len(), 20);
+        assert!(current.creation_date.parse::<u64>().unwrap() > 0);
+        assert!(!current.executable_path.is_empty());
+        let output = Command::new("node")
+            .args([
+                "-e",
+                "const {execFileSync}=require('node:child_process'); const started=execFileSync('ps',['-p',process.argv[1],'-o','lstart='],{env:{...process.env,LC_ALL:'C'},encoding:'utf8'}).trim(); process.stdout.write(String(Date.parse(started)/1000).padStart(20,'0'));",
+                &std::process::id().to_string(),
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(current.creation_date, String::from_utf8(output.stdout).unwrap());
+    }
+
+    #[tokio::test]
+    async fn queries_diagnostics_over_a_platform_independent_stream() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            assert_eq!(
+                read_regular_ipc_frame(&mut server).await.unwrap(),
+                serialize_ipc_string("dbgjs")
+            );
+            write_ipc_frame(
+                &mut server,
+                &serialize_ipc_message(&serde_json::json!([200]), None).unwrap(),
+            ).await.unwrap();
+            let request = read_regular_ipc_frame(&mut server).await.unwrap();
+            assert_eq!(
+                deserialize_ipc_message(&request).unwrap().0,
+                serde_json::json!([100, 0, "diagnostics", "getMainDiagnostics"])
+            );
+            write_ipc_frame(
+                &mut server,
+                &serialize_ipc_message(
+                    &serde_json::json!([201, 0]),
+                    Some(&serde_json::json!({
+                        "mainPID": 42,
+                        "windows": [],
+                        "pidToNames": [{ "pid": 43, "name": "extension-host" }]
+                    })),
+                ).unwrap(),
+            ).await.unwrap();
+        });
+        let diagnostics = query_vscode_diagnostics_stream(&mut client).await.unwrap();
+        assert_eq!(diagnostics.main_pid, 42);
+        assert_eq!(diagnostics.pid_to_names[0].pid, 43);
+        assert_eq!(diagnostics.pid_to_names[0].name, "extension-host");
+        server.await.unwrap();
+    }
 
     #[test]
     fn parses_vscode_window_and_utility_ownership() {
@@ -1661,6 +1941,7 @@ mod tests {
             command_line: command_line.to_owned(),
             creation_date: "20260823000000.000000+000".to_owned(),
             executable_path: String::new(),
+            vscode_process_type: None,
         }
     }
 }

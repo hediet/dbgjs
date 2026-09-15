@@ -24,13 +24,13 @@ test("daemon state uses the dbgjs namespace on every platform", () => {
 		LOCALAPPDATA: "local",
 	}), "custom-service.json");
 	assert.equal(defaultServiceStateFile({ LOCALAPPDATA: "local" }),
-		join("local", "hediet", "dbgjs", "service.json"));
+		join("local", "dbgjs", "service.json"));
 	assert.equal(defaultServiceStateFile({ XDG_RUNTIME_DIR: "runtime" }),
-		join("runtime", "hediet-dbgjs", "service.json"));
+		join("runtime", "dbgjs", "service.json"));
 	assert.equal(defaultServiceStateFile({ HOME: "home" }),
-		join("home", ".cache", "hediet", "dbgjs", "service.json"));
+		join("home", ".cache", "dbgjs", "service.json"));
 	assert.equal(defaultServiceStateFile({}),
-		join(tmpdir(), `hediet-dbgjs-${process.pid}`, "service.json"));
+		join(tmpdir(), `dbgjs-${process.pid}`, "service.json"));
 });
 
 test("workspace context identity uses lexical lowercase absolute paths", () => {

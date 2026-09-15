@@ -17,6 +17,7 @@ use dbgjs::service_api::{
     UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
+use dbgjs::coverage_filter::CoveragePathFilter;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -33,6 +34,7 @@ pub enum OutputFormat {
 
 pub struct CoverageOutputOptions<'a> {
     pub path: Option<&'a str>,
+    pub path_glob: Option<&'a str>,
     pub all: bool,
     pub max_lines: usize,
     pub trim_width: bool,
@@ -299,8 +301,17 @@ impl OutputFormat {
         &self,
         value: &CoverageSnapshot,
         options: CoverageOutputOptions<'_>,
-    ) -> Result<(), serde_json::Error> {
-        let filtered = options.path.map(|path| filter_coverage_path(value, path));
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let filter = CoveragePathFilter::new(options.path, options.path_glob)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let filtered = if options.path.is_some() || options.path_glob.is_some() {
+            let mut filtered = value.clone();
+            filter.apply(&mut filtered)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            Some(filtered)
+        } else {
+            None
+        };
         let value = filtered.as_ref().unwrap_or(value);
         match self {
             Self::Human => print_coverage_human(value, options),
@@ -354,12 +365,12 @@ impl OutputFormat {
         Ok(next)
     }
 
-    pub fn print_coverage_stopped(&self) -> Result<(), serde_json::Error> {
+    pub fn print_coverage_stopped(&self, capture_id: &str) -> Result<(), serde_json::Error> {
         match self {
-            Self::Human => println!("Coverage recording stopped. Captured ."),
+            Self::Human => println!("Coverage recording stopped. Captured {capture_id}."),
             Self::Json => println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({ "captureId": "." }))?
+                serde_json::to_string_pretty(&serde_json::json!({ "captureId": capture_id }))?
             ),
         }
         Ok(())
@@ -2799,6 +2810,7 @@ impl HumanOutput for CoverageSnapshot {
             self,
             CoverageOutputOptions {
                 path: None,
+                path_glob: None,
                 all: false,
                 max_lines: 300,
                 trim_width: true,
@@ -2808,6 +2820,9 @@ impl HumanOutput for CoverageSnapshot {
 }
 
 fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOptions<'_>) {
+    if let Some(capture_id) = &snapshot.capture_id {
+        println!("Capture {capture_id}");
+    }
     if snapshot.sources.is_empty() {
         println!("No executed functions captured.");
         return;
@@ -3361,13 +3376,16 @@ fn print_coverage_tree(
             analysis.source_map_cache_bypasses
         );
     }
-    let symbols = options.path.is_some() || options.all;
+    let symbols = options.path.is_some() || options.path_glob.is_some() || options.all;
     let budget = if options.all {
         usize::MAX
     } else {
         options
             .max_lines
-            .saturating_sub(1 + usize::from(snapshot.analysis.is_some()))
+            .saturating_sub(
+                1 + usize::from(snapshot.analysis.is_some())
+                    + usize::from(snapshot.capture_id.is_some()),
+            )
     };
     for line in root.render_with_options(
         &CoverageTreeStyle,
@@ -3376,30 +3394,6 @@ fn print_coverage_tree(
     ) {
         println!("{line}");
     }
-}
-
-fn filter_coverage_path(snapshot: &CoverageSnapshot, prefix: &str) -> CoverageSnapshot {
-    let prefix = normalize_source_path(prefix);
-    let mut filtered = snapshot.clone();
-    for source in &mut filtered.sources {
-        let generated_url = normalize_source_path(&source.generated_url);
-        for function in &mut source.functions {
-            let matches = |range: &dbgjs::service_api::CoverageRangeSnapshot| {
-                range.authored_start.as_ref().is_some_and(|location| {
-                    normalize_source_path(&location.source_url).starts_with(&prefix)
-                }) || (range.authored_start.is_none() && generated_url.starts_with(&prefix))
-            };
-            function.ranges.retain(matches);
-            function.effective_ranges.retain(matches);
-        }
-        source.functions.retain(|function| {
-            !function.ranges.is_empty() || !function.effective_ranges.is_empty()
-        });
-    }
-    filtered
-        .sources
-        .retain(|source| !source.functions.is_empty());
-    filtered
 }
 
 fn effective_file_metrics(entries: &[CoverageEntry]) -> CoverageMetrics {
@@ -4888,7 +4882,7 @@ mod tests {
             internal_id: "internal-1".to_owned(),
             chat_uri: Some("copilotcli:/chat-1".to_owned()),
             title: Some("Add extension launch config".to_owned()),
-            working_directories: vec!["file:///d%3A/dev/hediet/dbgjs".to_owned()],
+            working_directories: vec!["file:///d%3A/dev/dbgjs".to_owned()],
             disconnected: Some(false),
         }];
         let tree = ProcessTreeSnapshot {
@@ -5270,6 +5264,7 @@ mod tests {
             column: 1,
         };
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 0,
             analysis: None,
             sources: vec![CoverageSourceSnapshot {
@@ -5353,6 +5348,7 @@ mod tests {
             column: 1,
         };
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 0,
             analysis: None,
             sources: vec![CoverageSourceSnapshot {

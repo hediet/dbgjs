@@ -23,6 +23,7 @@
     "test:e2e:vscode-source-graph": "playwright test tests/playwright/vscode-source-graph-cli.spec.mjs",
     "test:e2e:extension-host-coverage": "playwright test tests/playwright/vscode-extension-host-coverage-cli.spec.mjs",
     "test:e2e:vscode": "playwright test tests/playwright/vscode-dev.spec.mjs",
+    "test:e2e:vscode-discovery": "node tests/vscode-discovery/run.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",
     "prototype:memory": "cargo run --bin source_memory",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",
     "esbuild": "^0.28.2",
     "typescript": "5.9.2"

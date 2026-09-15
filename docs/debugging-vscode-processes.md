@@ -30,7 +30,7 @@ automatically. By default, its endpoint and persistent contexts are stored
 under:
 
 ```text
-%LOCALAPPDATA%\hediet\dbgjs\
+%LOCALAPPDATA%\dbgjs\
 ```
 
 ## Reading logs and capture coverage
@@ -377,8 +377,10 @@ dbgjs coverage start
 # Collection-only lower bound: no source/map lookup or symbol enrichment
 dbgjs --json coverage capture --raw
 dbgjs coverage capture --id baseline
-dbgjs coverage stop --exclude baseline
-dbgjs coverage show --all
+dbgjs coverage stop --id after-click --exclude baseline
+dbgjs coverage show after-click --all
+dbgjs coverage show . --path-glob '**/contrib/issue/**'
+dbgjs coverage show .2 --target renderer-4
 
 # CPU profile
 dbgjs profile start
@@ -394,12 +396,24 @@ dbgjs heap retainer-path $objectRef
 dbgjs heap dominators $objectRef
 ```
 
-Heap object references are capture-qualified. `.` selects the latest capture,
+Heap object references are capture-qualified. `.` selects the latest heap capture,
 so `.#12345` means heap object `12345` in the latest capture.
+
+Capture IDs are immutable. Omitted IDs generate fresh names; `.` and `.1` select
+the latest capture of the requested kind across the context, and `.2` selects the
+previous one. An explicit target filter narrows that history before selection.
+Stored reads do not inherit the selected live target.
+
+Coverage `--path-prefix` matches from the beginning of normalized source URLs.
+Use `--path-glob '**/issue/**'` for a directory anywhere in a URL. These filters
+also inspect authored ranges in bundled scripts. The old `--path` spelling is a
+deprecated prefix alias, not a substring search.
 
 `coverage capture --raw` retains execution counts and runtime ranges while
 skipping capture-time source acquisition and enrichment. It also accepts
-`--id` and `--exclude`. Coverage operations still pending after 20 seconds print
+`--id` and `--exclude`. Without `--raw`, named and unnamed captures are both
+enriched. Stored captures are immutable; `coverage show --no-cache` is not
+supported. Coverage operations still pending after 20 seconds print
 a one-time stderr hint about this mode without interrupting the operation or
 mixing progress text into JSON stdout.
 

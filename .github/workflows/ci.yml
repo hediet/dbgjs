@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: "22"
       - name: Test change detection
-        run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs
+        run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs
       - name: Detect changes
         id: changes
         env:
@@ -225,10 +225,70 @@ jobs:
       - name: Test downloaded npm tarballs
         run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm --candidate
 
+  vscode-e2e:
+    name: VS Code discovery/source maps (${{ matrix.platform }})
+    needs: [changes, packages]
+    if: needs.changes.outputs.packages == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win32-x64
+          - os: ubuntu-22.04
+            platform: linux-x64-gnu
+          - os: ubuntu-22.04-arm
+            platform: linux-arm64-gnu
+          - os: macos-15-intel
+            platform: darwin-x64
+          - os: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Install Linux desktop runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libatk-bridge2.0-0
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: artifacts/npm
+      - name: Extract tested native binaries
+        run: |
+          mkdir -p artifacts/vscode-native
+          tar -xzf artifacts/npm/hediet-dbgjs-*.tar.gz -C artifacts/vscode-native
+      - name: Test isolated VS Code discovery and authored TypeScript
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a node tests/vscode-discovery/run.mjs --bin-dir artifacts/vscode-native/package/bin
+          else
+            node tests/vscode-discovery/run.mjs --bin-dir artifacts/vscode-native/package/bin
+          fi
+      - name: Upload VS Code E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-e2e-${{ matrix.platform }}
+          path: artifacts/vscode-discovery
+          if-no-files-found: warn
+
   result:
     name: CI result
     if: always()
-    needs: [changes, rust, packages, package-smoke-linux, package-smoke-windows-macos]
+    needs: [changes, rust, packages, package-smoke-linux, package-smoke-windows-macos, vscode-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -246,6 +306,7 @@ jobs:
             packages: "packages",
             "package-smoke-linux": "packages",
             "package-smoke-windows-macos": "packages",
+            "vscode-e2e": "packages",
           };
           for (const [name, output] of Object.entries(requiredOutputs)) {
             const required = results.changes.outputs[output] === "true";

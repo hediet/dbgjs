@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -35,7 +35,7 @@ export function changedPaths(base, head = "HEAD", cwd) {
 		.filter(Boolean);
 }
 
-export function selectTestPlatforms(changes, { ref, event, stableReleased }) {
+export function selectTestPlatforms(changes) {
 	const platforms = [];
 	if (changes.rust) {
 		platforms.push(
@@ -43,22 +43,13 @@ export function selectTestPlatforms(changes, { ref, event, stableReleased }) {
 			{ os: "ubuntu-22.04", target: "x86_64-unknown-linux-gnu" },
 		);
 	}
-	if (
-		changes.packages &&
-		ref === "refs/heads/main" &&
-		["push", "workflow_dispatch"].includes(event) &&
-		!stableReleased
-	) {
-		platforms.push({ os: "macos-15", target: "aarch64-apple-darwin" });
+	if (changes.packages) {
+		platforms.push(
+			{ os: "macos-15-intel", target: "x86_64-apple-darwin" },
+			{ os: "macos-15", target: "aarch64-apple-darwin" },
+		);
 	}
 	return platforms;
-}
-
-export function stableVersionExists(version, cwd) {
-	if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
-		throw new Error(`Expected a stable package version, got ${version}.`);
-	}
-	return execFileSync("git", ["tag", "--list", `v${version}`], { encoding: "utf8", cwd }).trim() !== "";
 }
 
 if (
@@ -67,12 +58,7 @@ if (
 ) {
 	const paths = changedPaths(process.env.BASE_SHA, process.env.HEAD_SHA || "HEAD");
 	const changes = classifyChanges(paths);
-	const { version } = JSON.parse(readFileSync(new URL("../npm/dbgjs/package.json", import.meta.url), "utf8"));
-	const testPlatforms = selectTestPlatforms(changes, {
-		ref: process.env.GITHUB_REF,
-		event: process.env.GITHUB_EVENT_NAME,
-		stableReleased: stableVersionExists(version),
-	});
+	const testPlatforms = selectTestPlatforms(changes);
 	console.log(JSON.stringify({ paths, ...changes, testPlatforms }, null, 2));
 	if (!process.env.GITHUB_OUTPUT) {
 		throw new Error("GITHUB_OUTPUT must be set when running change detection.");

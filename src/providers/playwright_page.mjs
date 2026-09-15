@@ -1,3 +1,4 @@
+import { Console } from "node:console";
 import { pathToFileURL } from "node:url";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
@@ -28,7 +29,12 @@ async function main() {
 			configurable: true,
 		});
 		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const value = await new AsyncFunction(program)();
+		const programConsole = new Console({
+			stdout: process.stderr,
+			stderr: process.stderr,
+			colorMode: false,
+		});
+		const value = await new AsyncFunction("console", program)(programConsole);
 		if (value === undefined) {
 			result = { ok: true, hasValue: false };
 		} else {

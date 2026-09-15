@@ -1339,18 +1339,15 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
             .map(|parent| parent.join("source-map-cache"))?
     } else if let Some(path) = env::var_os("LOCALAPPDATA") {
         PathBuf::from(path)
-            .join("hediet")
             .join("dbgjs")
             .join("source-map-cache")
     } else if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path)
-            .join("hediet")
             .join("dbgjs")
             .join("source-map-cache")
     } else if let Some(path) = env::var_os("HOME") {
         PathBuf::from(path)
             .join(".cache")
-            .join("hediet")
             .join("dbgjs")
             .join("source-map-cache")
     } else {

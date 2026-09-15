@@ -722,6 +722,8 @@ struct ServiceState {
     relays: BTreeMap<String, RelayRegistration>,
     captures: BTreeMap<(String, String), StoredCapture>,
     capture_reservations: BTreeMap<(String, String), CaptureReservation>,
+    next_capture_id: u64,
+    next_publication_order: u64,
 }
 
 #[derive(Clone)]
@@ -920,8 +922,70 @@ fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
 struct StoredCapture {
     metadata: CaptureSnapshot,
     payload: CapturePayloadReference,
+    #[serde(default)]
+    publication_order: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     heap_mapping: Option<crate::service_api::HeapMappingSnapshot>,
+}
+
+fn capture_prefix(kind: CaptureKind) -> &'static str {
+    match kind {
+        CaptureKind::Coverage => "cov",
+        CaptureKind::CpuProfile => "profile",
+        CaptureKind::HeapSnapshot => "heap",
+    }
+}
+
+fn select_stored_capture<'a>(
+    state: &'a ServiceState,
+    context_id: &str,
+    selector: &str,
+    kind: Option<CaptureKind>,
+    target_id: Option<&str>,
+    connection_id: Option<&str>,
+) -> Result<&'a StoredCapture, JsonRpcError> {
+    let canonical_target = target_id.and_then(|target| {
+        DebuggerService::resolve_canonical_target(state, context_id, target).ok()
+    });
+    let resolved_selector = canonical_target.as_ref().map(|target| {
+        crate::target_selector::resolved_target_selector(
+            &target.connection_id, &target.target_id, target.connection_generation, target_id,
+        )
+    });
+    let target_id = resolved_selector.as_deref().or(target_id);
+    let connection_id = connection_id.or_else(||
+        canonical_target.as_ref().map(|target| target.connection_id.as_str()));
+    let matches = |capture: &&StoredCapture| {
+        let metadata = &capture.metadata;
+        metadata.context_id == context_id
+            && kind.is_none_or(|kind| metadata.kind == kind)
+            && connection_id.is_none_or(|connection| metadata.connection_id == connection)
+            && target_id.is_none_or(|target| {
+                crate::target_selector::resolved_target_selector(
+                    &metadata.connection_id,
+                    &metadata.target_id,
+                    metadata.connection_generation,
+                    Some(target),
+                ) == target
+            })
+    };
+    if let Some(index) =
+        crate::service_api::capture_relative_index(selector).map_err(invalid_params)?
+    {
+        let mut captures = state.captures.values().filter(matches).collect::<Vec<_>>();
+        captures.sort_by_key(|capture| std::cmp::Reverse(capture.publication_order));
+        captures.get(index - 1).copied().ok_or_else(|| {
+            invalid_params(format!(
+                "capture selector '{selector}' has no match in context '{context_id}' for the requested kind and target scope"
+            ))
+        })
+    } else {
+        state
+            .captures
+            .get(&(context_id.to_owned(), selector.to_owned()))
+            .filter(matches)
+            .ok_or_else(|| not_found("capture in requested kind and target scope", selector))
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -3166,11 +3230,8 @@ impl DebuggerServiceApi for DebuggerService {
         capture_name: String,
     ) -> Result<CaptureSnapshot, JsonRpcError> {
         let state = self.state.lock().await;
-        state
-            .captures
-            .get(&(context_id, capture_name.clone()))
-            .map(|capture| capture.metadata.clone())
-            .ok_or_else(|| not_found("capture", &capture_name))
+        Ok(select_stored_capture(&state, &context_id, &capture_name, None, None, None)?
+            .metadata.clone())
     }
 
     async fn delete_capture(
@@ -3201,6 +3262,7 @@ impl DebuggerServiceApi for DebuggerService {
                     StoredCapture {
                         metadata: reservation.metadata.clone(),
                         payload: completed.payload.clone(),
+                        publication_order: 0,
                         heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
                     },
                     true,
@@ -3282,19 +3344,17 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         capture_name: String,
         source_path: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
+        path_glob: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        let payload = {
+        let (payload, name) = {
             let state = self.state.lock().await;
-            let capture = state
-                .captures
-                .get(&(context_id, capture_name.clone()))
-                .ok_or_else(|| not_found("capture", &capture_name))?;
-            if capture.metadata.kind != CaptureKind::Coverage {
-                return Err(invalid_params(&format!(
-                    "capture '{capture_name}' is not a coverage capture"
-                )));
-            }
-            capture.payload.clone()
+            let capture = select_stored_capture(
+                &state, &context_id, &capture_name, Some(CaptureKind::Coverage),
+                target_id.as_deref(), connection_id.as_deref(),
+            )?;
+            (capture.payload.clone(), capture.metadata.name.clone())
         };
         let CapturePayload::Coverage(mut snapshot) =
             load_capture_payload(&payload, CaptureKind::Coverage)
@@ -3304,15 +3364,10 @@ impl DebuggerServiceApi for DebuggerService {
                 "capture '{capture_name}' is not a coverage capture"
             )));
         };
-        if let Some(path) = source_path {
-            snapshot.sources.retain(|source| {
-                source_path_is_descendant(&source.generated_url, &path)
-                    || source
-                        .associated_authored_source
-                        .as_deref()
-                        .is_some_and(|source| source_path_is_descendant(source, &path))
-            });
-        }
+        snapshot.capture_id = Some(name);
+        crate::coverage_filter::filter_coverage(
+            &mut snapshot, source_path.as_deref(), path_glob.as_deref(),
+        ).map_err(invalid_params)?;
         Ok(snapshot)
     }
 
@@ -3322,19 +3377,16 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         capture_name: String,
         _source_path: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
-        let payload = {
+        let (payload, name) = {
             let state = self.state.lock().await;
-            let capture = state
-                .captures
-                .get(&(context_id, capture_name.clone()))
-                .ok_or_else(|| not_found("capture", &capture_name))?;
-            if capture.metadata.kind != CaptureKind::CpuProfile {
-                return Err(invalid_params(&format!(
-                    "capture '{capture_name}' is not a CPU profile capture"
-                )));
-            }
-            capture.payload.clone()
+            let capture = select_stored_capture(
+                &state, &context_id, &capture_name, Some(CaptureKind::CpuProfile),
+                target_id.as_deref(), connection_id.as_deref(),
+            )?;
+            (capture.payload.clone(), capture.metadata.name.clone())
         };
         let CapturePayload::CpuProfile(mut snapshot) =
             load_capture_payload(&payload, CaptureKind::CpuProfile)
@@ -3344,6 +3396,7 @@ impl DebuggerServiceApi for DebuggerService {
                 "capture '{capture_name}' is not a CPU profile capture"
             )));
         };
+        snapshot.capture_id = name;
         if snapshot.functions.is_empty() && !snapshot.nodes.is_empty() {
             crate::target_debugger::aggregate_cpu_profile(&mut snapshot)
                 .map_err(target_debugger_rpc_error)?;
@@ -3357,19 +3410,16 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         capture_name: String,
         filter: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
     ) -> Result<HeapClassSnapshot, JsonRpcError> {
-        let (payload, mapping) = {
+        let (payload, mapping, capture_name) = {
             let state = self.state.lock().await;
-            let capture = state
-                .captures
-                .get(&(context_id, capture_name.clone()))
-                .ok_or_else(|| not_found("capture", &capture_name))?;
-            if capture.metadata.kind != CaptureKind::HeapSnapshot {
-                return Err(invalid_params(&format!(
-                    "capture '{capture_name}' is not a heap snapshot"
-                )));
-            }
-            (capture.payload.clone(), capture.heap_mapping.clone())
+            let capture = select_stored_capture(
+                &state, &context_id, &capture_name, Some(CaptureKind::HeapSnapshot),
+                target_id.as_deref(), connection_id.as_deref(),
+            )?;
+            (capture.payload.clone(), capture.heap_mapping.clone(), capture.metadata.name.clone())
         };
         let CapturePayload::HeapSnapshot { path } =
             load_capture_payload(&payload, CaptureKind::HeapSnapshot)
@@ -3397,6 +3447,9 @@ impl DebuggerServiceApi for DebuggerService {
     ) -> Result<(), JsonRpcError> {
         let mut state = self.state.lock().await;
         let previous = state.clone();
+        let capture_name = select_stored_capture(
+            &state, &context_id, &capture_name, Some(CaptureKind::HeapSnapshot), None, None,
+        )?.metadata.name.clone();
         let capture = state.captures.get_mut(&(context_id, capture_name.clone()))
             .ok_or_else(|| not_found("capture", &capture_name))?;
         if capture.metadata.kind != CaptureKind::HeapSnapshot {
@@ -4297,36 +4350,31 @@ impl DebuggerServiceApi for DebuggerService {
                 )
                 .await?
         {
-            let CapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
+            snapshot.capture_id = Some(name.clone());
             return Ok(snapshot);
         }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let owner = debugger.snapshot();
-        let reservation = if let Some(name) = capture_id.as_ref() {
-            Some(CaptureReservationGuard::new(
+        let reservation = CaptureReservationGuard::new(
                 self.clone(),
-                self.reserve_capture(
+                self.reserve_capture_optional(
                     &context_id,
                     &owner.connection_id,
                     &owner.target_id,
                     owner.connection_generation,
-                    name.clone(),
+                    capture_id,
                     CaptureKind::Coverage,
                 )
                 .await?,
-            ))
-        } else {
-            None
-        };
-        if let Some(reservation) = &reservation
-            && reservation.reservation.completed.is_some()
-        {
+            );
+        if reservation.reservation.completed.is_some() {
             let completed = self
                 .promote_completed_capture(
                     &reservation.reservation.metadata.context_id,
@@ -4337,33 +4385,35 @@ impl DebuggerServiceApi for DebuggerService {
                 )
                 .await?
                 .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
-            let CapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
+            snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
             return Ok(snapshot);
         }
-        let snapshot = match debugger
-            .take_coverage(capture_id.clone(), exclude_capture_id, raw.unwrap_or(false))
+        let mut snapshot = match debugger
+            .take_coverage(
+                Some(reservation.reservation.metadata.name.clone()),
+                exclude_capture_id,
+                raw.unwrap_or(false),
+            )
             .await
             .map_err(target_debugger_rpc_error)
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                if let Some(reservation) = &reservation {
-                    self.abandon_capture(&reservation.reservation).await;
-                }
+                self.abandon_capture(&reservation.reservation).await;
                 return Err(error);
             }
         };
-        if let Some(reservation) = &reservation {
-            self.store_capture(
-                &reservation.reservation,
-                CapturePayload::Coverage(snapshot.clone()),
-            )
-            .await?;
-        }
+        self.store_capture(
+            &reservation.reservation,
+            CapturePayload::Coverage(snapshot.clone()),
+        )
+        .await?;
+        snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
         Ok(snapshot)
     }
 
@@ -4374,22 +4424,25 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
         exclude_capture_id: Option<String>,
+        capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        if let Some(completed) = self
+        if let Some(name) = capture_id.as_ref()
+            && let Some(completed) = self
             .promote_completed_capture(
                 &context_id,
                 &connection_id,
                 &target_id,
-                ".",
+                name,
                 CaptureKind::Coverage,
             )
             .await?
         {
-            let CapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
+            snapshot.capture_id = Some(name.clone());
             return Ok(snapshot);
         }
         let debugger = self
@@ -4398,12 +4451,12 @@ impl DebuggerServiceApi for DebuggerService {
         let owner = debugger.snapshot();
         let reservation = CaptureReservationGuard::new(
             self.clone(),
-            self.reserve_capture(
+            self.reserve_capture_optional(
                 &context_id,
                 &owner.connection_id,
                 &owner.target_id,
                 owner.connection_generation,
-                ".".to_owned(),
+                capture_id,
                 CaptureKind::Coverage,
             )
             .await?,
@@ -4419,14 +4472,15 @@ impl DebuggerServiceApi for DebuggerService {
                 )
                 .await?
                 .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
-            let CapturePayload::Coverage(snapshot) = completed.payload else {
+            let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
                 ));
             };
+            snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
             return Ok(snapshot);
         }
-        let snapshot = match debugger
+        let mut snapshot = match debugger
             .stop_coverage(exclude_capture_id)
             .await
             .map_err(target_debugger_rpc_error)
@@ -4442,6 +4496,7 @@ impl DebuggerServiceApi for DebuggerService {
             CapturePayload::Coverage(snapshot.clone()),
         )
         .await?;
+        snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
         Ok(snapshot)
     }
 
@@ -4452,6 +4507,7 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
         exclude_capture_id: Option<String>,
+        capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError> {
         self.stop_coverage(
             _ctx,
@@ -4459,6 +4515,7 @@ impl DebuggerServiceApi for DebuggerService {
             connection_id,
             target_id,
             exclude_capture_id,
+            capture_id,
         )
         .await?;
         Ok(true)
@@ -4505,13 +4562,13 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: String,
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
-        let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
-        if let Some(completed) = self
+        if let Some(name) = capture_id.as_ref()
+            && let Some(completed) = self
             .promote_completed_capture(
                 &context_id,
                 &connection_id,
                 &target_id,
-                &name,
+                name,
                 CaptureKind::CpuProfile,
             )
             .await?
@@ -4529,16 +4586,17 @@ impl DebuggerServiceApi for DebuggerService {
         let owner = debugger.snapshot();
         let reservation = CaptureReservationGuard::new(
             self.clone(),
-            self.reserve_capture(
+            self.reserve_capture_optional(
                 &context_id,
                 &owner.connection_id,
                 &owner.target_id,
                 owner.connection_generation,
-                name.clone(),
+                capture_id,
                 CaptureKind::CpuProfile,
             )
             .await?,
         );
+        let name = reservation.reservation.metadata.name.clone();
         if reservation.reservation.completed.is_some() {
             let completed = self
                 .promote_completed_capture(
@@ -4558,7 +4616,7 @@ impl DebuggerServiceApi for DebuggerService {
             return Ok(snapshot);
         }
         let snapshot = match debugger
-            .stop_cpu_profile(capture_id)
+            .stop_cpu_profile(Some(name.clone()))
             .await
             .map_err(target_debugger_rpc_error)
         {
@@ -4625,13 +4683,13 @@ impl DebuggerServiceApi for DebuggerService {
         capture_numeric_value: bool,
         expose_internals: bool,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
-        let name = capture_id.clone().unwrap_or_else(|| ".".to_owned());
-        if let Some(completed) = self
+        if let Some(name) = capture_id.as_ref()
+            && let Some(completed) = self
             .promote_completed_capture(
                 &context_id,
                 &connection_id,
                 &target_id,
-                &name,
+                name,
                 CaptureKind::HeapSnapshot,
             )
             .await?
@@ -4651,16 +4709,17 @@ impl DebuggerServiceApi for DebuggerService {
         let owner = debugger.snapshot();
         let reservation = CaptureReservationGuard::new(
             self.clone(),
-            self.reserve_capture(
+            self.reserve_capture_optional(
                 &context_id,
                 &owner.connection_id,
                 &owner.target_id,
                 owner.connection_generation,
-                name.clone(),
+                capture_id,
                 CaptureKind::HeapSnapshot,
             )
             .await?,
         );
+        let name = reservation.reservation.metadata.name.clone();
         if reservation.reservation.completed.is_some() {
             let completed = self
                 .promote_completed_capture(
@@ -4683,7 +4742,7 @@ impl DebuggerServiceApi for DebuggerService {
             return Ok(result);
         }
         let result = match debugger
-            .capture_heap_snapshot(capture_id, capture_numeric_value, expose_internals)
+            .capture_heap_snapshot(Some(name.clone()), capture_numeric_value, expose_internals)
             .await
             .map_err(target_debugger_rpc_error)
         {
@@ -4986,6 +5045,7 @@ impl DebuggerService {
         }))
     }
 
+    #[cfg(test)]
     async fn reserve_capture(
         &self,
         context_id: &str,
@@ -4995,8 +5055,43 @@ impl DebuggerService {
         name: String,
         kind: CaptureKind,
     ) -> Result<CaptureReservation, JsonRpcError> {
-        validate_id("capture", &name)?;
+        self.reserve_capture_optional(
+            context_id, connection_id, target_id, connection_generation, Some(name), kind,
+        ).await
+    }
+
+    async fn reserve_capture_optional(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+        connection_generation: u64,
+        name: Option<String>,
+        kind: CaptureKind,
+    ) -> Result<CaptureReservation, JsonRpcError> {
         let mut state = self.state.lock().await;
+        let automatic = name.is_none();
+        let mut next_capture_id = state.next_capture_id.max(1);
+        let name = match name {
+            Some(name) => {
+                validate_id("capture", &name)?;
+                if crate::service_api::capture_relative_index(&name)
+                    .map_err(invalid_params)?.is_some()
+                {
+                    return Err(invalid_params("relative capture selectors cannot be used as permanent capture IDs"));
+                }
+                name
+            }
+            None => loop {
+                let candidate = format!("{}-{next_capture_id}", capture_prefix(kind));
+                next_capture_id = next_capture_id.checked_add(1)
+                    .ok_or_else(|| invalid_state("capture ID sequence exhausted"))?;
+                let key = (context_id.to_owned(), candidate.clone());
+                if !state.captures.contains_key(&key) && !state.capture_reservations.contains_key(&key) {
+                    break candidate;
+                }
+            },
+        };
         let key = (context_id.to_owned(), name.clone());
         if let Some(existing) = state.captures.get(&key) {
             return Err(invalid_state(&format!(
@@ -5080,7 +5175,12 @@ impl DebuggerService {
             completed: None,
             deleting: false,
         };
+        let previous = automatic.then(|| state.clone());
         state.capture_reservations.insert(key, reservation.clone());
+        if let Some(previous) = previous {
+            state.next_capture_id = next_capture_id;
+            self.persist_or_restore(&mut state, previous)?;
+        }
         Ok(reservation)
     }
 
@@ -5164,12 +5264,16 @@ impl DebuggerService {
             .expect("current capture reservation disappeared while locked")
             .completed = Some(completed.clone());
         let previous = state.clone();
+        let publication_order = state.next_publication_order.max(1);
+        state.next_publication_order = publication_order.checked_add(1)
+            .ok_or_else(|| invalid_state("capture publication sequence exhausted"))?;
         state.capture_reservations.remove(&key);
         state.captures.insert(
             key,
             StoredCapture {
                 metadata: metadata.clone(),
                 payload: completed.payload,
+                publication_order,
                 heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
             },
         );
@@ -5198,12 +5302,16 @@ impl DebuggerService {
             ));
         }
         let previous = state.clone();
+        let publication_order = state.next_publication_order.max(1);
+        state.next_publication_order = publication_order.checked_add(1)
+            .ok_or_else(|| invalid_state("capture publication sequence exhausted"))?;
         state.capture_reservations.remove(&key);
         state.captures.insert(
             key,
             StoredCapture {
                 metadata: metadata.clone(),
                 payload: completed.payload.clone(),
+                publication_order,
                 heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
             },
         );
@@ -7737,6 +7845,10 @@ struct StoredServiceState {
     completed_requests: Vec<StoredCompletedRequest>,
     #[serde(default)]
     captures: Vec<StoredCapture>,
+    #[serde(default)]
+    next_capture_id: u64,
+    #[serde(default)]
+    next_publication_order: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -7832,7 +7944,9 @@ struct StoredConnectionStateV1 {
 impl From<&ServiceState> for StoredServiceState {
     fn from(state: &ServiceState) -> Self {
         Self {
-            schema_version: 5,
+            schema_version: 6,
+            next_capture_id: state.next_capture_id,
+            next_publication_order: state.next_publication_order,
             contexts: state
                 .contexts
                 .iter()
@@ -7907,12 +8021,15 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
         .ok_or(ServicePersistenceError::MissingSchemaVersion)?;
-    let stored = match schema_version {
+    let mut stored = match schema_version {
         1 => migrate_embedded_capture_state(path, migrate_v1(serde_json::from_slice(&bytes)?))?,
         2..=4 => migrate_embedded_capture_state(path, serde_json::from_slice(&bytes)?)?,
-        5 => serde_json::from_slice(&bytes)?,
+        5 | 6 => serde_json::from_slice(&bytes)?,
         version => return Err(ServicePersistenceError::UnsupportedSchema(version as u32)),
     };
+    if schema_version < 6 {
+        migrate_capture_order(&mut stored);
+    }
     let completed_requests = stored
         .completed_requests
         .into_iter()
@@ -7944,7 +8061,9 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             });
         }
     }
-    Ok(ServiceState {
+    let state = ServiceState {
+        next_capture_id: stored.next_capture_id,
+        next_publication_order: stored.next_publication_order,
         contexts: stored
             .contexts
             .into_iter()
@@ -8009,7 +8128,35 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
         relays: BTreeMap::new(),
         captures,
         capture_reservations: BTreeMap::new(),
-    })
+    };
+    if schema_version < 6 {
+        persist_stored_state(path, &StoredServiceState::from(&state))?;
+    }
+    Ok(state)
+}
+
+fn migrate_capture_order(stored: &mut StoredServiceState) {
+    let mut keys = stored.captures.iter()
+        .map(|capture| (capture.metadata.context_id.clone(), capture.metadata.name.clone()))
+        .collect::<BTreeSet<_>>();
+    let mut next_id = 1_u64;
+    for (index, capture) in stored.captures.iter_mut().enumerate() {
+        capture.publication_order = index as u64 + 1;
+        let metadata = &mut capture.metadata;
+        if crate::service_api::capture_relative_index(&metadata.name).is_ok_and(|index| index.is_some()) {
+            loop {
+                let name = format!("{}-{next_id}", capture_prefix(metadata.kind));
+                next_id += 1;
+                if keys.insert((metadata.context_id.clone(), name.clone())) {
+                    metadata.name = name;
+                    break;
+                }
+            }
+        }
+    }
+    stored.next_capture_id = next_id;
+    stored.next_publication_order = stored.captures.len() as u64 + 1;
+    stored.schema_version = 6;
 }
 
 fn stored_default_true() -> bool {
@@ -8106,12 +8253,15 @@ fn migrate_embedded_capture_state(
             Ok(StoredCapture {
                 metadata: capture.metadata,
                 payload,
+                publication_order: 0,
                 heap_mapping: None,
             })
         })
         .collect::<Result<Vec<_>, ServicePersistenceError>>()?;
     let stored = StoredServiceState {
         schema_version: 5,
+        next_capture_id: 0,
+        next_publication_order: 0,
         contexts: legacy.contexts,
         completed_requests: legacy.completed_requests,
         captures,
@@ -8541,26 +8691,6 @@ fn sanitize_file_name(value: &str) -> String {
             }
         })
         .collect()
-}
-
-fn source_path_is_descendant(candidate: &str, prefix: &str) -> bool {
-    let candidate = normalize_capture_source_path(candidate);
-    let prefix = normalize_capture_source_path(prefix);
-    candidate == prefix
-        || candidate
-            .strip_prefix(&prefix)
-            .is_some_and(|remainder| remainder.starts_with('/'))
-}
-
-fn normalize_capture_source_path(path: &str) -> String {
-    let mut path = path.replace('\\', "/");
-    while let Some(remainder) = path.strip_prefix("../").or_else(|| path.strip_prefix("./")) {
-        path = remainder.to_owned();
-    }
-    while path.len() > 1 && path.ends_with('/') {
-        path.pop();
-    }
-    path
 }
 
 fn invalid_params(message: impl Into<String>) -> JsonRpcError {
@@ -9003,6 +9133,7 @@ mod tests {
         StoredCapture {
             metadata,
             payload: payload_reference_from_file(path).unwrap(),
+            publication_order: 0,
             heap_mapping: None,
         }
     }
@@ -9034,6 +9165,7 @@ mod tests {
         StoredCapture {
             metadata,
             payload: reference,
+            publication_order: 0,
             heap_mapping: None,
         }
     }
@@ -9106,6 +9238,166 @@ mod tests {
         let state = service.state.lock().await;
         assert_eq!(state.capture_reservations.len(), 1);
         assert!(state.captures.is_empty());
+    }
+
+    fn capture_catalog_service() -> (PathBuf, DebuggerService) {
+        let root = std::env::current_dir().unwrap().join("target")
+            .join(format!("capture-catalog-{}", random_instance_id().unwrap()));
+        let mut state = ServiceState::default();
+        insert_context_with_targets(
+            &mut state, "test",
+            [("runtime", 1, vec![
+                target("target-a", "A", "https://a.test"),
+                target("target-b", "B", "https://b.test"),
+            ])],
+        );
+        (root.clone(), service_with_state(root.join("service.json"), state))
+    }
+
+    fn empty_coverage(timestamp_micros: u64) -> CapturePayload {
+        CapturePayload::Coverage(CoverageSnapshot {
+            capture_id: None,
+            timestamp_micros, sources: Vec::new(), analysis: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn generated_capture_ids_and_publication_order_survive_restart() {
+        let (root, service) = capture_catalog_service();
+        let first = service.reserve_capture_optional(
+            "test", "runtime", "target-a", 1, None, CaptureKind::Coverage,
+        ).await.unwrap();
+        let second = service.reserve_capture_optional(
+            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
+        ).await.unwrap();
+        assert_eq!(first.metadata.name, "cov-1");
+        assert_eq!(second.metadata.name, "cov-2");
+        service.store_capture(&second, empty_coverage(2)).await.unwrap();
+        service.store_capture(&first, empty_coverage(1)).await.unwrap();
+        let snapshot = service.get_stored_coverage(
+            &CallCtx::default(), "test".into(), ".1".into(), None, None, None, None,
+        ).await.unwrap();
+        assert_eq!(snapshot.capture_id.as_deref(), Some("cov-1"));
+        let restored = load_state(&root.join("service.json")).unwrap();
+        for selector in [".", ".1"] {
+            assert_eq!(select_stored_capture(
+                &restored, "test", selector, Some(CaptureKind::Coverage), None, None,
+            ).unwrap().metadata.name, "cov-1");
+        }
+        assert_eq!(select_stored_capture(
+            &restored, "test", ".2", Some(CaptureKind::Coverage), None, None,
+        ).unwrap().metadata.name, "cov-2");
+        assert_eq!(select_stored_capture(
+            &restored, "test", ".", Some(CaptureKind::Coverage), Some("target-b"), None,
+        ).unwrap().metadata.name, "cov-2");
+        for target in ["runtime/target-b", "runtime/target-b@1"] {
+            assert_eq!(select_stored_capture(
+                &restored, "test", ".", Some(CaptureKind::Coverage), Some(target), None,
+            ).unwrap().metadata.name, "cov-2");
+        }
+        assert!(select_stored_capture(
+            &restored, "test", ".", Some(CaptureKind::Coverage), Some("runtime/target-b@2"), None,
+        ).is_err());
+        assert!(select_stored_capture(
+            &restored, "test", ".", Some(CaptureKind::Coverage), None, Some("other-runtime"),
+        ).is_err());
+        assert!(select_stored_capture(
+            &restored, "test", ".2", Some(CaptureKind::Coverage), Some("target-b"), None,
+        ).is_err());
+        assert!(select_stored_capture(
+            &restored, "test", ".", Some(CaptureKind::CpuProfile), None, None,
+        ).is_err());
+        assert!(select_stored_capture(
+            &restored, "test", "cov-1", Some(CaptureKind::Coverage), Some("target-b"), None,
+        ).is_err());
+        assert_eq!(restored.next_capture_id, 3);
+        assert_eq!(restored.next_publication_order, 3);
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_names_skip_named_reservations_and_are_never_reused_after_deletion() {
+        let (root, service) = capture_catalog_service();
+        service.reserve_capture(
+            "test", "runtime", "target-a", 1, "cov-1".into(), CaptureKind::CpuProfile,
+        ).await.unwrap();
+        let automatic = service.reserve_capture_optional(
+            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
+        ).await.unwrap();
+        assert_eq!(automatic.metadata.name, "cov-2");
+        service.store_capture(&automatic, empty_coverage(1)).await.unwrap();
+        service.delete_capture(&CallCtx::default(), "test".into(), "cov-2".into()).await.unwrap();
+        assert_eq!(load_state(&root.join("service.json")).unwrap().next_capture_id, 3);
+        let next = service.reserve_capture_optional(
+            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
+        ).await.unwrap();
+        assert_eq!(next.metadata.name, "cov-3");
+        for selector in [".", ".1", ".2", ".0"] {
+            assert!(service.reserve_capture(
+                "test", "runtime", "target-a", 1, selector.into(), CaptureKind::Coverage,
+            ).await.is_err());
+        }
+        assert!(service.reserve_capture(
+            "test", "runtime", "target-b", 1, "cov-1".into(), CaptureKind::Coverage,
+        ).await.is_err());
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_dot_capture_migration_keeps_immutable_payloads_and_avoids_named_ids() {
+        let (root, service) = capture_catalog_service();
+        let payload = empty_coverage(42);
+        let legacy = stored_capture_from_payload(
+            &root.join("service.json"),
+            capture_metadata("test", ".", CaptureKind::Coverage, "target-a", "runtime"),
+            payload.clone(),
+        );
+        let named = stored_capture_from_payload(
+            &root.join("service.json"),
+            capture_metadata("test", "cov-1", CaptureKind::Coverage, "target-b", "runtime"),
+            payload,
+        );
+        let legacy_payload = legacy.payload.clone();
+        let mut stored = StoredServiceState::from(&*service.state.lock().await);
+        stored.schema_version = 5;
+        stored.captures = vec![legacy, named];
+        persist_stored_state(&root.join("service.json"), &stored).unwrap();
+        let restored = load_state(&root.join("service.json")).unwrap();
+        assert_eq!(restored.captures.len(), 2);
+        let migrated = &restored.captures[&("test".into(), "cov-2".into())];
+        assert_eq!(migrated.payload.path, legacy_payload.path);
+        assert_eq!(migrated.payload.sha256, legacy_payload.sha256);
+        assert_eq!(migrated.metadata.storage_id, "storage-.");
+        assert_eq!(load_state(&root.join("service.json")).unwrap().captures.len(), 2);
+        let persisted: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("service.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(persisted["schemaVersion"], 6);
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn relative_capture_selector_grammar_has_one_positive_index_form() {
+        use crate::service_api::capture_relative_index;
+        assert_eq!(capture_relative_index(".").unwrap(), Some(1));
+        assert_eq!(capture_relative_index(".1").unwrap(), Some(1));
+        assert_eq!(capture_relative_index(".2").unwrap(), Some(2));
+        assert_eq!(capture_relative_index("before-click").unwrap(), None);
+        assert!(capture_relative_index(".0").is_err());
+        assert!(capture_relative_index(".999999999999999999999999").is_err());
+    }
+
+    #[test]
+    fn coverage_capture_id_is_a_backward_compatible_optional_wire_field() {
+        let legacy = serde_json::json!({"timestampMicros": 1, "sources": []});
+        let mut snapshot: CoverageSnapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(snapshot.capture_id, None);
+        assert!(serde_json::to_value(&snapshot).unwrap().get("captureId").is_none());
+        snapshot.capture_id = Some("cov-1".into());
+        assert_eq!(serde_json::to_value(snapshot).unwrap()["captureId"], "cov-1");
     }
 
     #[tokio::test]
@@ -9271,6 +9563,7 @@ mod tests {
                 }
             };
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 42,
             sources: vec![
                 source("1", "./src/index.ts", None),
@@ -9302,6 +9595,9 @@ mod tests {
                 "test".into(),
                 "coverage".into(),
                 Some("../src/".into()),
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -9371,7 +9667,7 @@ mod tests {
         let service = service_with_state(persistence_path, state);
 
         let profile = service
-            .get_stored_cpu_profile(&CallCtx::default(), "test".into(), "profile".into(), None)
+            .get_stored_cpu_profile(&CallCtx::default(), "test".into(), "profile".into(), None, None, None)
             .await
             .unwrap();
 
@@ -9397,6 +9693,7 @@ mod tests {
             .await
             .unwrap();
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
@@ -9595,6 +9892,7 @@ mod tests {
             .await
             .unwrap();
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
@@ -9753,6 +10051,7 @@ mod tests {
             .await
             .unwrap();
         let snapshot = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
@@ -10220,7 +10519,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             let snapshot = restored.get_stored_heap_classes(&CallCtx::default(),
-                "test".into(), "heap".into(), None).await.unwrap();
+                "test".into(), "heap".into(), None, None, None).await.unwrap();
             assert_eq!(snapshot.classes[0].name, "Original");
             assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
             assert_eq!(snapshot.classes[0].provenance.frame_id.as_deref(), Some("child-frame"));
@@ -10241,7 +10540,7 @@ mod tests {
         let reloaded = DebuggerService::load(shutdown, persistence_path).unwrap();
         runtime.block_on(async {
             let snapshot = reloaded.get_stored_heap_classes(&CallCtx::default(),
-                "test".into(), "heap".into(), None).await.unwrap();
+                "test".into(), "heap".into(), None, None, None).await.unwrap();
             assert_eq!(snapshot.classes[0].name, "Supplied");
             assert_eq!(snapshot.analysis.script_mappings[0].hash, "captured-hash");
         });
@@ -10270,6 +10569,7 @@ mod tests {
             &persistence_path,
             metadata,
             CapturePayload::Coverage(CoverageSnapshot {
+                capture_id: None,
                 timestamp_micros: 42,
                 sources: Vec::new(),
                 analysis: None,
@@ -10857,6 +11157,7 @@ mod tests {
         ));
         fs::write(&heap_path, b"legacy heap").unwrap();
         let coverage = CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
@@ -10941,7 +11242,7 @@ mod tests {
         ));
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(persisted["schemaVersion"], 5);
+        assert_eq!(persisted["schemaVersion"], 6);
         assert!(
             persisted["captures"]
                 .as_array()

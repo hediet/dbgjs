@@ -4158,7 +4158,7 @@ mod tests {
                 internal_id: "session-1".to_owned(),
                 chat_uri: Some("agent-host-session://session-1".to_owned()),
                 title: Some("Review pull request".to_owned()),
-                working_directories: vec!["D:\\dev\\hediet\\dbgjs".to_owned()],
+                working_directories: vec!["D:\\dev\\dbgjs".to_owned()],
                 disconnected: Some(false),
             }],
         });

@@ -46,24 +46,22 @@ pub fn default_state_file() -> PathBuf {
     }
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         return PathBuf::from(local_app_data)
-            .join("hediet")
             .join("dbgjs")
             .join("service.json");
     }
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir)
-            .join("hediet-dbgjs")
+            .join("dbgjs")
             .join("service.json");
     }
     if let Some(home) = env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".cache")
-            .join("hediet")
             .join("dbgjs")
             .join("service.json");
     }
     env::temp_dir()
-        .join(format!("hediet-dbgjs-{}", std::process::id()))
+        .join(format!("dbgjs-{}", std::process::id()))
         .join("service.json")
 }
 
@@ -128,7 +126,7 @@ async fn serve_named_pipe(
     )?);
     let token = random_token()?;
     let pipe_id = random_token()?;
-    let pipe_name = format!(r"\\.\pipe\hediet-dbgjs-{}", &pipe_id[..32]);
+    let pipe_name = format!(r"\\.\pipe\dbgjs-{}", &pipe_id[..32]);
     let mut server = create_server(&pipe_name, true)?;
     let endpoint = LocalServiceEndpoint {
         process_id: std::process::id(),

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { changedPaths, classifyChanges, selectTestPlatforms, stableVersionExists } from "./ci-changes.mjs";
+import { changedPaths, classifyChanges, selectTestPlatforms } from "./ci-changes.mjs";
 
 test("documentation-only changes do not start Rust or packaging jobs", () => {
 	assert.deepEqual(
@@ -48,7 +48,7 @@ test("all native build inputs invalidate both jobs", () => {
 	}
 });
 
-test("npm-only changes package binaries without running Rust unit tests", () => {
+test("npm-only changes skip Linux and Windows Rust jobs", () => {
 	for (const path of ["npm/dbgjs/package.json", "npm/dbgjs/README.md", "scripts/npm-pack.mjs"]) {
 		assert.deepEqual(classifyChanges([path]), { rust: false, packages: true }, path);
 	}
@@ -76,32 +76,28 @@ test("empty and extension-only changes skip the native pipeline", () => {
 	});
 });
 
-test("nightly and PR builds keep Linux/Windows full tests but only macOS artifact smoke tests", () => {
+test("Rust changes run full tests on Linux, Windows, Intel macOS and ARM64 macOS", () => {
 	const expected = [
 		{ os: "windows-2022", target: "x86_64-pc-windows-msvc" },
 		{ os: "ubuntu-22.04", target: "x86_64-unknown-linux-gnu" },
+		{ os: "macos-15-intel", target: "x86_64-apple-darwin" },
+		{ os: "macos-15", target: "aarch64-apple-darwin" },
 	];
-	for (const policy of [
-		{ ref: "refs/heads/main", event: "push", stableReleased: true },
-		{ ref: "refs/heads/main", event: "workflow_dispatch", stableReleased: true },
-		{ ref: "refs/pull/42/merge", event: "pull_request", stableReleased: false },
-		{ ref: "refs/heads/feature", event: "workflow_dispatch", stableReleased: false },
-	]) {
-		assert.deepEqual(selectTestPlatforms({ rust: true, packages: true }, policy), expected);
+	assert.deepEqual(selectTestPlatforms({ rust: true, packages: true }), expected);
+});
+
+test("npm-only changes always require both full macOS suites", () => {
+	for (const path of ["npm/dbgjs/package.json", "scripts/npm-pack.mjs"]) {
+		assert.deepEqual(selectTestPlatforms(classifyChanges([path])), [
+			{ os: "macos-15-intel", target: "x86_64-apple-darwin" },
+			{ os: "macos-15", target: "aarch64-apple-darwin" },
+		]);
 	}
 });
 
-test("unreleased main versions require the full macOS suite, including npm-only bumps", () => {
-	for (const event of ["push", "workflow_dispatch"]) {
-		const policy = { ref: "refs/heads/main", event, stableReleased: false };
-		const macos = { os: "macos-15", target: "aarch64-apple-darwin" };
-		assert.deepEqual(selectTestPlatforms({ rust: true, packages: true }, policy), [
-			{ os: "windows-2022", target: "x86_64-pc-windows-msvc" },
-			{ os: "ubuntu-22.04", target: "x86_64-unknown-linux-gnu" },
-			macos,
-		]);
-		assert.deepEqual(selectTestPlatforms({ rust: false, packages: true }, policy), [macos]);
-		assert.deepEqual(selectTestPlatforms(classifyChanges(["README.md"]), policy), []);
+test("documentation-only and extension-only changes still skip all native tests", () => {
+	for (const paths of [[], ["README.md"], ["docs/ci.md"], ["vscode-extension/src/extension.ts"]]) {
+		assert.deepEqual(selectTestPlatforms(classifyChanges(paths)), []);
 	}
 });
 
@@ -120,13 +116,6 @@ test("Git diffs handle docs-only commits, initial runs, and renamed build inputs
 		await mkdir(join(directory, "docs"));
 		await writeFile(join(directory, "src", "lib.rs"), "pub fn fixture() {}\n");
 		const base = commit();
-		assert.equal(stableVersionExists("0.2.0", directory), false);
-		git("tag", "release-candidates/v0.2.0");
-		assert.equal(stableVersionExists("0.2.0", directory), false);
-		git("tag", "v0.2.0");
-		assert.equal(stableVersionExists("0.2.0", directory), true);
-		assert.equal(stableVersionExists("0.2.1", directory), false);
-		assert.throws(() => stableVersionExists("*", directory), /stable package version/);
 		assert.deepEqual(classifyChanges(changedPaths(undefined, "HEAD", directory)), {
 			rust: true, packages: true,
 		});

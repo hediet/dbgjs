@@ -32,6 +32,15 @@ pub struct PlaywrightPageScope {
     pub browser_context_id: Option<String>,
 }
 
+impl PlaywrightPageScope {
+    fn client_browser_context_id(&self) -> &str {
+        self.browser_context_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .unwrap_or("dbgjs-playwright-default")
+    }
+}
+
 pub struct PlaywrightProxy {
     pub websocket_url: String,
     pub cancel: watch::Sender<bool>,
@@ -712,17 +721,19 @@ fn upstream_message(
                 infos.retain(|info| target_info_id(info) == Some(&scope.page.target_id));
                 for info in infos {
                     validate_target_info(info, &scope.page, &scope.page.target_id)?;
+                    project_target_info(info, &scope.page)?;
                 }
             }
             "Target.getTargetInfo" => {
                 let info = object
-                    .get("result")
-                    .and_then(|result| result.get("targetInfo"))
+                    .get_mut("result")
+                    .and_then(|result| result.get_mut("targetInfo"))
                     .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
                 let expected_target = scope.target_for_session(session_id.as_deref()).ok_or(
                     PlaywrightProxyError::ScopeViolation(ScopeViolation::SessionId),
                 )?;
                 validate_target_info(info, &scope.page, expected_target)?;
+                project_target_info(info, &scope.page)?;
             }
             "Target.attachToTarget" => {
                 let session_id = object
@@ -777,19 +788,8 @@ fn upstream_message(
             let target_info = object
                 .get_mut("params")
                 .and_then(|params| params.get_mut("targetInfo"))
-                .and_then(Value::as_object_mut)
                 .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-            if target_info.get("type").and_then(Value::as_str) == Some("other") {
-                target_info.insert("type".to_owned(), Value::String("page".to_owned()));
-            }
-            if !target_info.contains_key("browserContextId")
-                && let Some(context_id) = &scope.page.browser_context_id
-            {
-                target_info.insert(
-                    "browserContextId".to_owned(),
-                    Value::String(context_id.clone()),
-                );
-            }
+            project_target_info(target_info, &scope.page)?;
             return Ok(UpstreamAction::Forward(json_message(value)?));
         }
         if is_browser_broker_target_info(target_info) {
@@ -806,6 +806,11 @@ fn upstream_message(
         if verified_parent && validate_descendant_target_info(target_info, &scope.page).is_ok() {
             scope.descendant_target_ids.insert(target_id.clone());
             scope.register_page_session(session_id, &target_id);
+            let target_info = object
+                .get_mut("params")
+                .and_then(|params| params.get_mut("targetInfo"))
+                .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+            project_target_info(target_info, &scope.page)?;
             return Ok(UpstreamAction::Forward(json_message(value)?));
         }
         return Ok(UpstreamAction::Detach(session_id.to_owned()));
@@ -833,9 +838,8 @@ fn upstream_message(
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
         let target_id =
             target_info_id(target_info).ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        return Ok(if target_id == scope.page.target_id {
+        if target_id == scope.page.target_id {
             validate_target_info(target_info, &scope.page, target_id)?;
-            UpstreamAction::Forward(json_message(value)?)
         } else if object
             .get("sessionId")
             .and_then(Value::as_str)
@@ -843,10 +847,15 @@ fn upstream_message(
             && validate_descendant_target_info(target_info, &scope.page).is_ok()
         {
             scope.descendant_target_ids.insert(target_id.to_owned());
-            UpstreamAction::Forward(json_message(value)?)
         } else {
-            UpstreamAction::Drop
-        });
+            return Ok(UpstreamAction::Drop);
+        }
+        let target_info = object
+            .get_mut("params")
+            .and_then(|params| params.get_mut("targetInfo"))
+            .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+        project_target_info(target_info, &scope.page)?;
+        return Ok(UpstreamAction::Forward(json_message(value)?));
     }
     if method == "Target.targetDestroyed" {
         let target_id = object
@@ -910,6 +919,24 @@ fn internal_response(
             }))?))
         }
     }
+}
+
+fn project_target_info(
+    target_info: &mut Value,
+    page: &PlaywrightPageScope,
+) -> Result<(), PlaywrightProxyError> {
+    let selected = target_info_id(target_info) == Some(&page.target_id);
+    let info = target_info
+        .as_object_mut()
+        .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+    if selected && info.get("type").and_then(Value::as_str) == Some("other") {
+        info.insert("type".to_owned(), Value::String("page".to_owned()));
+    }
+    info.insert(
+        "browserContextId".to_owned(),
+        Value::String(page.client_browser_context_id().to_owned()),
+    );
+    Ok(())
 }
 
 fn validate_target_info(
@@ -1011,7 +1038,7 @@ fn validate_request_identifiers(
         "Browser.setDownloadBehavior" => validate_optional_identifier(
             params,
             "browserContextId",
-            |context_id| scope.page.browser_context_id.as_deref() == Some(context_id),
+            |context_id| scope.page.client_browser_context_id() == context_id,
             ScopeViolation::BrowserContextId,
         ),
         _ => Ok(()),

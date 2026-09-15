@@ -8,6 +8,12 @@ name = "dbgjs"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
+
 [dependencies]
 async-trait = "0.1"
 atomic-write-file = "0.3"

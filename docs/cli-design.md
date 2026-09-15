@@ -13,9 +13,9 @@ VS Code settings and launch configurations from `jsdbg` to `dbgjs`.
 There are no old-name aliases.
 
 The renamed tool deliberately starts with fresh state: on Windows it uses
-`%LOCALAPPDATA%\hediet\dbgjs\service.json`; on Unix it uses
-`$XDG_RUNTIME_DIR/hediet-dbgjs/service.json` or
-`$HOME/.cache/hediet/dbgjs/service.json`. `DBGJS_SERVICE_STATE` overrides
+`%LOCALAPPDATA%\dbgjs\service.json`; on Unix it uses
+`$XDG_RUNTIME_DIR/dbgjs/service.json` or
+`$HOME/.cache/dbgjs/service.json`. `DBGJS_SERVICE_STATE` overrides
 the endpoint path. Saved contexts and captures in the old state location are
 not migrated or deleted. Stop the old service using the old CLI if it is still
 running.
@@ -72,6 +72,14 @@ The first executable vertical slice now validates:
 
 Strict attachment stealing and selected-page Playwright programs are also
 implemented through the same target identities and lifecycle checks.
+
+Selected Electron pages without an upstream browser-context ID receive a stable
+context ID at the Playwright proxy boundary. This client-facing identity is used
+consistently in target discovery and attachment metadata, without being forwarded
+as a real upstream browser context. Genuine upstream context IDs are preserved.
+Playwright programs return their value with `return`; console diagnostics go to
+stderr so they cannot corrupt the JSON result envelope. Failed child processes
+report their exit failure and stderr rather than an incidental empty-JSON error.
 
 ## CDP over stdio
 
@@ -485,9 +493,13 @@ retains the completed payload in memory. Repeating the same capture request
 promotes that payload into the catalog without running the capture again;
 `capture delete` explicitly discards the retained payload and its heap storage.
 
-For compatibility, an omitted name is the literal name `.`. While `.` remains
-cataloged, later unnamed captures fail explicitly and should be given distinct
-names (or the old capture should be explicitly deleted first).
+An omitted name generates a fresh immutable ID. Names such as `.` and `.1` are
+read selectors, not writable capture names. They select the latest successfully
+published capture of the requested kind in the context; `.2` selects the previous
+one. Named and automatically named captures share the same persisted publication
+history across targets. An explicit target or connection filter is applied before
+relative selection; a selected live target does not implicitly scope stored reads.
+The returned durable ID remains usable after a relative selector moves.
 
 Capture lookup is context-scoped, not connection- or target-scoped. Catalog
 listing, metadata lookup, coverage rendering, CPU-profile rendering/export, and
@@ -1384,22 +1396,46 @@ The counter is context-scoped and generated names are not silently reused.
 An explicit ID that already exists fails unless a future explicit replacement
 operation is requested.
 
-Commands that read a coverage object use the latest object when `--id` is
-omitted. Relative selectors are:
+Commands that read a coverage object use the latest coverage object in the
+context when the positional capture selector is omitted. Relative selectors are:
 
 ```text
 .      latest coverage object
-..     object before latest
-...    third-latest object
+.1     alias for .
+.2     object before latest
+.3     third-latest object
 ```
 
-Any larger sequence of dots continues the same rule. All-dot names are reserved
-for relative selectors. Reading past the available history fails explicitly.
-Explicit IDs remain available for durable scripts:
+The numeric suffix is a positive, one-based index into publication history.
+Relative-selector names are reserved. Reading past the available history fails
+explicitly. History includes coverage from every target in the context, but not
+heap snapshots or CPU profiles. Explicit `--target` and `--connection` filters
+narrow history before indexing. Explicit IDs remain available for durable scripts:
 
 ```text
-dbgjs coverage print --id before-click --style functions
+dbgjs coverage show before-click
+dbgjs coverage show .2 --target renderer-4
 ```
+
+Naming and enrichment are independent. Every capture made without `--raw` is
+source-mapped and enriched before successful publication, including captures
+with explicit IDs. `--raw` deliberately skips enrichment for inexpensive
+baselines. Stored captures are immutable: `coverage show --no-cache` is rejected
+rather than silently pretending to recompute them.
+
+Coverage source filters are explicit:
+
+```text
+dbgjs coverage show . --path-prefix https://example.test/src/
+dbgjs coverage show . --path-glob "**/contrib/issue/**"
+```
+
+Prefixes match the beginning of normalized source URLs, not arbitrary substrings.
+Globs use `/` separators, `*` within a path segment, and `**` across segments.
+The filters are mutually exclusive and apply to authored ranges inside bundles,
+not just generated bundle names. `--path` remains a deprecated prefix alias.
+An empty filtered result reports that no functions matched the specified filter,
+distinct from a capture with no execution.
 
 ### 14.4 Exclusion
 
@@ -1407,7 +1443,7 @@ Coverage exclusion derives a view containing execution represented by the
 selected object but not represented by the excluded baseline:
 
 ```text
-dbgjs coverage print --id . --exclude .. --style blocks
+dbgjs coverage print --id . --exclude .2 --style blocks
 ```
 
 For counted coverage, exclusion subtracts aligned execution counts and clamps
@@ -2415,7 +2451,7 @@ The most recent interaction is represented by the latest cumulative object
 excluding the preceding cumulative object:
 
 ```text
-> dbgjs -c frontend coverage print --id . --exclude .. \
+> dbgjs -c frontend coverage print --id . --exclude .2 \
     --style functions
 src/checkout/submitCheckout.ts
   submitCheckout(cart)                 x1
@@ -2432,12 +2468,12 @@ The same comparison can be printed as files or source blocks without recording
 again:
 
 ```text
-> dbgjs -c frontend coverage print --id . --exclude .. --style files
-> dbgjs -c frontend coverage print --id . --exclude .. --style blocks
+> dbgjs -c frontend coverage print --id . --exclude .2 --style files
+> dbgjs -c frontend coverage print --id . --exclude .2 --style blocks
 ```
 
 The relative selectors are convenient for exploration. A script should normally
-use explicit IDs if later captures could change what `.` and `..` select.
+use explicit IDs if later captures could change what `.` and `.2` select.
 
 ## 35. Debug an algorithm in a test with logpoints
 

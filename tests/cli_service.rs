@@ -1927,6 +1927,20 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     assert!(
         String::from_utf8_lossy(&duplicate.2).contains("capture 'offline-profile' already exists")
     );
+    run_json(
+        &cli, &service, &state_file,
+        &["target", "eval", "lateSource()", "--context", &context, "--target", "$node-root:runtime-a"],
+    );
+    let named_coverage = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "capture", "--id", "named-coverage", "--context", &context, "--target", "$node-root:runtime-a"],
+    );
+    assert_eq!(named_coverage["captureId"], "named-coverage");
+    assert!(named_coverage["sources"].as_array().unwrap().iter().any(|source| {
+        source["functions"].as_array().unwrap().iter().any(|function| {
+            function["effectiveRanges"].as_array().is_some_and(|ranges| !ranges.is_empty())
+        })
+    }), "named coverage must be enriched: {named_coverage}");
     let coverage_stopped = run_human_in(
         &cli,
         &service,
@@ -1947,6 +1961,25 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &coverage_stopped.1,
         &coverage_stopped.2,
     );
+    let first_stopped = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "show", ".", "--context", &context],
+    );
+    let first_stopped_id = first_stopped["captureId"].as_str().unwrap().to_owned();
+    assert!(first_stopped_id.starts_with("cov-"), "{first_stopped_id}");
+    run_human(
+        &cli, &service, &state_file,
+        &["coverage", "start", "--context", &context, "--target", "$node-root:runtime-b"],
+    );
+    run_json(
+        &cli, &service, &state_file,
+        &["target", "eval", "6 * 7", "--context", &context, "--target", "$node-root:runtime-b"],
+    );
+    let second_stopped = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "stop", "--id", "main-final", "--context", &context, "--target", "$node-root:runtime-b"],
+    );
+    assert_eq!(second_stopped["captureId"], "main-final");
     run_json(
         &cli,
         &service,
@@ -1966,7 +1999,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     let heap_files = heap_capture_files(&capture_directory);
     assert_eq!(heap_files.len(), 1, "{heap_files:?}");
     let payload_files = capture_payload_files(&capture_directory);
-    assert_eq!(payload_files.len(), 3, "{payload_files:?}");
+    assert_eq!(payload_files.len(), 5, "{payload_files:?}");
     assert!(payload_files.iter().any(|path| {
         path.file_name()
             .unwrap()
@@ -1981,7 +2014,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     }));
     let persisted: serde_json::Value =
         serde_json::from_slice(&fs::read(persistent_state_file(&state_file)).unwrap()).unwrap();
-    assert_eq!(persisted["schemaVersion"], 5);
+    assert_eq!(persisted["schemaVersion"], 6);
     assert!(
         persisted["captures"]
             .as_array()
@@ -2029,6 +2062,29 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &state_file,
         &["capture", "list", "--context", &context],
     );
+    for selector in [".", ".1"] {
+        let latest = run_json(
+            &cli, &service, &state_file,
+            &["coverage", "show", selector, "--context", &context],
+        );
+        assert_eq!(latest["captureId"], "main-final");
+    }
+    let previous = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "show", ".2", "--context", &context],
+    );
+    assert_eq!(previous["captureId"], first_stopped_id);
+    let target_latest = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "show", ".", "--target", "$node-root:runtime-a", "--context", &context],
+    );
+    assert_eq!(target_latest["captureId"], first_stopped_id);
+    let named_offline = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "show", "named-coverage", "--path-glob", "**/late.min.js*", "--context", &context],
+    );
+    assert_eq!(named_offline["captureId"], "named-coverage");
+    assert!(!named_offline["sources"].as_array().unwrap().is_empty(), "{named_offline}");
     let profile = captures
         .as_array()
         .unwrap()

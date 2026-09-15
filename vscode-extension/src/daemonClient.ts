@@ -23,7 +23,7 @@ import {
 } from "./apiTypes.js";
 import { connectLegacyHub, type LegacyHubConnection } from "./legacyHubTransport.js";
 
-const debuggerInterface = "dev.hediet.cdp-debugger";
+const debuggerInterface = "dev.dbgjs.cdp-debugger";
 
 export class DaemonClient {
 	private constructor(
@@ -383,15 +383,15 @@ export function defaultServiceStateFile(environment: NodeJS.ProcessEnv = process
 		return environment.DBGJS_SERVICE_STATE;
 	}
 	if (environment.LOCALAPPDATA !== undefined) {
-		return join(environment.LOCALAPPDATA, "hediet", "dbgjs", "service.json");
+		return join(environment.LOCALAPPDATA, "dbgjs", "service.json");
 	}
 	if (environment.XDG_RUNTIME_DIR !== undefined) {
-		return join(environment.XDG_RUNTIME_DIR, "hediet-dbgjs", "service.json");
+		return join(environment.XDG_RUNTIME_DIR, "dbgjs", "service.json");
 	}
 	if (environment.HOME !== undefined) {
-		return join(environment.HOME, ".cache", "hediet", "dbgjs", "service.json");
+		return join(environment.HOME, ".cache", "dbgjs", "service.json");
 	}
-	return join(tmpdir(), `hediet-dbgjs-${process.pid}`, "service.json");
+	return join(tmpdir(), `dbgjs-${process.pid}`, "service.json");
 }
 
 export async function ensureStateDirectory(stateFile: string): Promise<void> {

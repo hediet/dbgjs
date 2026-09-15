@@ -5,6 +5,7 @@ pub mod context_engine;
 pub mod context_identity;
 pub mod context_relay;
 pub mod context_source_model;
+pub mod coverage_filter;
 pub use cdp_protocol as cdp;
 pub use cdp_protocol::protocol_schema;
 pub mod cdp_runtime;

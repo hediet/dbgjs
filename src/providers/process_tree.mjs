@@ -1,6 +1,6 @@
 	import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, readdir, readlink, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -18,8 +18,8 @@ let running = true;
 let discoveryEnabled = false;
 let wake = () => {};
 
-if (process.platform !== "win32") {
-	throw new Error("existing process-tree discovery is currently implemented only on Windows");
+if (!["win32", "linux", "darwin"].includes(process.platform)) {
+	throw new Error(`existing process-tree discovery is unsupported on ${process.platform}`);
 }
 if (typeof WebSocket !== "function") {
 	throw new Error("existing process-tree discovery requires a Node.js runtime with WebSocket support");
@@ -31,7 +31,8 @@ if (!Number.isSafeInteger(rootPid) || rootPid <= 0) {
 main().catch(reportError);
 
 async function main() {
-	const [processes, listeners] = await Promise.all([listProcesses(), listListeners()]);
+	const processes = await listProcesses();
+	const listeners = await listListeners(processes);
 	const root = processes.find((candidate) => candidate.pid === rootPid);
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
@@ -188,9 +189,8 @@ function idle(milliseconds) {
 }
 
 async function reconcile(initialProcesses, initialListeners) {
-	const [processes, listeners] = initialProcesses && initialListeners
-		? [initialProcesses, initialListeners]
-		: await Promise.all([listProcesses(), listListeners()]);
+	const processes = initialProcesses ?? await listProcesses();
+	const listeners = initialListeners ?? await listListeners(processes);
 	const liveProcessIds = new Set(processes.map((candidate) => candidate.pid));
 	for (const processId of expandedProcessIds) {
 		if (processId !== rootPid && !liveProcessIds.has(processId)) {
@@ -325,6 +325,16 @@ async function activateInspector(pid) {
 	if (existing) {
 		knownEndpoints.set(pid, existing);
 		return existing;
+	}
+	if (process.platform !== "win32") {
+		const candidate = (await listProcesses()).find((candidate) => candidate.pid === pid);
+		if (!candidate || !["node", "nodejs"].includes(candidate.name.toLowerCase())) {
+			throw new Error(
+				`process ${pid} has no inspector; launch VS Code with --inspect-extensions=PORT `
+				+ "for extension hosts and --inspect=PORT for process-tree roots. "
+				+ "Automatic Unix activation is supported only for standalone Node.js processes",
+			);
+		}
 	}
 	await execFile(process.execPath, ["-e", `process._debugProcess(${pid})`], {
 		windowsHide: true,
@@ -516,6 +526,18 @@ async function evaluate(endpoint, expression) {
 }
 
 async function listProcesses() {
+	if (process.platform !== "win32") {
+		const options = {
+			env: { ...process.env, LC_ALL: "C" },
+			maxBuffer: 16 * 1024 * 1024,
+			timeout: 10_000,
+		};
+		const [commands, names] = await Promise.all([
+			execFile("ps", ["-axww", "-o", "pid=,ppid=,lstart=,args="], options),
+			execFile("ps", ["-axww", "-o", "pid=,comm="], options),
+		]);
+		return parseUnixProcesses(commands.stdout, names.stdout);
+	}
 	const value = await powershell(`
 		@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate) |
 			ConvertTo-Json -Compress
@@ -529,7 +551,48 @@ async function listProcesses() {
 	}));
 }
 
-async function listListeners() {
+function parseUnixProcesses(commands, names) {
+	const executableNames = new Map(names.split(/\r?\n/).flatMap((line) => {
+		const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+		return match ? [[Number(match[1]), match[2].split("/").at(-1)]] : [];
+	}));
+	return commands.split(/\r?\n/).flatMap((line) => {
+		const match = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/.exec(line);
+		if (!match) {
+			return [];
+		}
+		const started = Date.parse(match[3]);
+		if (!Number.isFinite(started)) {
+			throw new Error(`invalid process start time: ${match[3]}`);
+		}
+		const pid = Number(match[1]);
+		return [{
+			pid,
+			parentPid: Number(match[2]),
+			name: executableNames.get(pid) ?? "",
+			commandLine: match[4],
+			creationDate: String(Math.floor(started / 1000)).padStart(20, "0"),
+		}];
+	});
+}
+
+async function listListeners(processes) {
+	if (process.platform === "linux") {
+		return listLinuxListeners(processes ?? await listProcesses());
+	}
+	if (process.platform === "darwin") {
+		try {
+			const { stdout } = await execFile("/usr/sbin/lsof", [
+				"-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn",
+			], { maxBuffer: 16 * 1024 * 1024, timeout: 10_000 });
+			return parseLsofListeners(stdout);
+		} catch (error) {
+			if (error.code === 1 && !error.stdout && !error.stderr) {
+				return [];
+			}
+			throw error;
+		}
+	}
 	const executable = join(process.env.SystemRoot || "C:\\Windows", "System32", "netstat.exe");
 	const { stdout } = await execFile(executable, ["-ano", "-p", "tcp"], {
 		windowsHide: true,
@@ -546,6 +609,76 @@ async function listListeners() {
 		const pid = Number(match[2]);
 		listeners.set(`${pid}:${port}`, { pid, port });
 	}
+	return [...listeners.values()];
+}
+
+function parseLsofListeners(stdout) {
+	let pid;
+	const listeners = new Map();
+	for (const line of stdout.split(/\r?\n/)) {
+		if (/^p\d+$/.test(line)) {
+			pid = Number(line.slice(1));
+		} else if (pid && line.startsWith("n")) {
+			const match = /:(\d+)$/.exec(line);
+			if (match) {
+				const port = Number(match[1]);
+				listeners.set(`${pid}:${port}`, { pid, port });
+			}
+		}
+	}
+	return [...listeners.values()];
+}
+
+function parseLinuxTcpListeners(stdout) {
+	const sockets = new Map();
+	for (const line of stdout.trim().split(/\r?\n/).slice(1)) {
+		const fields = line.trim().split(/\s+/);
+		if (fields[3] === "0A" && fields[9]) {
+			const port = Number.parseInt(fields[1].split(":")[1], 16);
+			if (port > 0) {
+				sockets.set(fields[9], port);
+			}
+		}
+	}
+	return sockets;
+}
+
+async function listLinuxListeners(processes) {
+	const tables = await Promise.all(["tcp", "tcp6"].map(async (name) => {
+		try {
+			return parseLinuxTcpListeners(await readFile(`/proc/net/${name}`, "utf8"));
+		} catch (error) {
+			if (error.code === "ENOENT" && name === "tcp6") {
+				return new Map();
+			}
+			throw error;
+		}
+	}));
+	const sockets = new Map(tables.flatMap((table) => [...table]));
+	const listeners = new Map();
+	await Promise.all(processDescendants(processes, rootPid).map(async ({ pid }) => {
+		try {
+			const directory = `/proc/${pid}/fd`;
+			await Promise.all((await readdir(directory)).map(async (fd) => {
+				try {
+					const target = await readlink(`${directory}/${fd}`);
+					const inode = /^socket:\[(\d+)\]$/.exec(target)?.[1];
+					const port = sockets.get(inode);
+					if (port) {
+						listeners.set(`${pid}:${port}`, { pid, port });
+					}
+				} catch (error) {
+					if (!["ENOENT", "EACCES", "EPERM"].includes(error.code)) {
+						throw error;
+					}
+				}
+			}));
+		} catch (error) {
+			if (!["ENOENT", "EACCES", "EPERM"].includes(error.code)) {
+				throw error;
+			}
+		}
+	}));
 	return [...listeners.values()];
 }
 
@@ -612,7 +745,7 @@ function isNodeProcess(candidate) {
 	const executable = candidate.name.toLowerCase();
 	const command = candidate.commandLine.toLowerCase();
 	return !command.includes("process._debugprocess(")
-		&& (executable === "node.exe"
+		&& (["node.exe", "node", "nodejs"].includes(executable)
 		|| command.includes("node.mojom.nodeservice")
 		|| command.includes("--node-ipc")
 		|| command.includes("bootstrap-fork")

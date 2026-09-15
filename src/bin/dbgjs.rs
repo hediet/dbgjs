@@ -14,6 +14,7 @@ use dbgjs::context_identity::{
     ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
 };
+use dbgjs::coverage_filter::CoveragePathFilter;
 use dbgjs::local_rpc::{connect_existing, default_state_file, ensure_service};
 use dbgjs::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
@@ -542,6 +543,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if coverage == "coverage" && matches!(capture.as_str(), "capture" | "take") =>
         {
             let options = parse_coverage_capture_options(options)?;
+            warn_deprecated_coverage_path(options.deprecated_path);
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
@@ -555,15 +557,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     Some(options.raw),
                 )
                 .await)?;
-            if let Some(capture_id) = options.capture_id.as_deref()
-                && !options.render_requested
-            {
+            let capture_id = snapshot.capture_id.as_deref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "service returned a coverage capture without its durable captureId")
+            })?;
+            if !options.render_requested {
                 output.print_coverage_capture(&snapshot, capture_id)?;
             } else {
                 output.print_coverage(
                     &snapshot,
                     CoverageOutputOptions {
                         path: options.path.as_deref(),
+                        path_glob: options.path_glob.as_deref(),
                         all: options.all,
                         max_lines: options.max_lines,
                         trim_width: options.trim_width,
@@ -571,43 +575,45 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
-        [coverage, stop] if coverage == "coverage" && stop == "stop" => {
+        [coverage, stop, options @ ..] if coverage == "coverage" && stop == "stop" => {
+            let options = parse_coverage_stop_options(options)?;
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
-                .finish_coverage(scope.context, scope.connection, scope.target, None)
-                .await)?;
-            output.print_coverage_stopped()?;
-        }
-        [coverage, stop, exclude, capture_id]
-            if coverage == "coverage" && stop == "stop" && exclude == "--exclude" =>
-        {
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
-                .finish_coverage(
+            let snapshot = rpc(client
+                .stop_coverage(
                     scope.context,
                     scope.connection,
                     scope.target,
-                    Some(capture_id.clone()),
+                    options.exclude_capture_id,
+                    options.capture_id,
                 )
                 .await)?;
-            output.print_coverage_stopped()?;
+            let capture_id = snapshot.capture_id.as_deref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "service returned stopped coverage without its durable captureId")
+            })?;
+            output.print_coverage_stopped(capture_id)?;
         }
         [coverage, show, options @ ..] if coverage == "coverage" && show == "show" => {
             let options = parse_coverage_show_options(options)?;
-            let _ = options.no_cache;
+            warn_deprecated_coverage_path(options.deprecated_path);
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print_coverage(
                 &rpc(client
-                    .get_stored_coverage(context, options.capture_id, options.path.clone())
+                    .get_stored_coverage(
+                        context,
+                        options.capture_id,
+                        None,
+                        scope_options.target.clone(),
+                        scope_options.connection.clone(),
+                        None,
+                    )
                     .await)?,
                 CoverageOutputOptions {
                     path: options.path.as_deref(),
+                    path_glob: options.path_glob.as_deref(),
                     all: options.all,
                     max_lines: options.max_lines,
                     trim_width: options.trim_width,
@@ -646,7 +652,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let profile = rpc(client
-                .get_stored_cpu_profile(context, options.capture_id, options.path.clone())
+                .get_stored_cpu_profile(
+                    context, options.capture_id, options.path.clone(),
+                    scope_options.target.clone(), scope_options.connection.clone(),
+                )
                 .await)?;
             output.print_cpu_profile(
                 &profile,
@@ -665,7 +674,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let profile = rpc(client
-                .get_stored_cpu_profile(context, options.capture_id, None)
+                .get_stored_cpu_profile(
+                    context, options.capture_id, None,
+                    scope_options.target.clone(), scope_options.connection.clone(),
+                )
                 .await)?;
             let serialized = serde_json::to_vec_pretty(&cpu_profile_export(&profile))?;
             tokio::fs::write(&destination, serialized).await?;
@@ -690,6 +702,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let options = parse_heap_class_options(options)?;
+            let mut capture_id = options.capture_id.clone();
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             if options.capture {
@@ -698,17 +711,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
-                    Some(options.capture_id.clone()),
+                    (capture_id != ".").then(|| capture_id.clone()),
                     false,
                     false,
                 );
                 tokio::pin!(operation);
-                wait_for_heap_capture(&output, &client, &scope, &mut operation).await?;
+                capture_id = wait_for_heap_capture(&output, &client, &scope, &mut operation).await?.capture_id;
             }
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let classes = rpc(client
-                .get_stored_heap_classes(context, options.capture_id, options.filter)
+                .get_stored_heap_classes(
+                    context, capture_id, options.filter,
+                    scope_options.target.clone(), scope_options.connection.clone(),
+                )
                 .await)?;
             output.print_heap_classes(
                 &classes,
@@ -3523,9 +3539,10 @@ fn parse_logpoint_spec(
 struct CoverageShowOptions {
     capture_id: String,
     path: Option<String>,
+    path_glob: Option<String>,
+    deprecated_path: bool,
     all: bool,
     max_lines: usize,
-    no_cache: bool,
     trim_width: bool,
 }
 
@@ -3534,10 +3551,17 @@ struct CoverageCaptureOptions {
     exclude_capture_id: Option<String>,
     raw: bool,
     path: Option<String>,
+    path_glob: Option<String>,
+    deprecated_path: bool,
     all: bool,
     max_lines: usize,
     trim_width: bool,
     render_requested: bool,
+}
+
+struct CoverageStopOptions {
+    capture_id: Option<String>,
+    exclude_capture_id: Option<String>,
 }
 
 struct CpuProfileShowOptions {
@@ -4732,30 +4756,42 @@ where
 fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions, io::Error> {
     let mut capture_id = None;
     let mut path = None;
+    let mut path_glob = None;
+    let mut deprecated_path = false;
     let mut all = false;
     let mut max_lines = 300_usize;
-    let mut no_cache = false;
     let mut trim_width = true;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
-            "--path" => {
+            "--path" | "--path-prefix" | "--path-glob" => {
+                let option = values[index].as_str();
                 index += 1;
-                path = Some(
-                    values
-                        .get(index)
-                        .ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                "--path requires a source prefix",
-                            )
-                        })?
-                        .clone(),
-                );
+                let value = values.get(index).filter(|value| {
+                    !value.is_empty() && !value.starts_with("--")
+                }).ok_or_else(|| io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{option} requires a source URL {}", if option == "--path-glob" { "glob" } else { "prefix" }),
+                ))?;
+                if path.is_some() || path_glob.is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "specify only one of --path-prefix or --path-glob (--path is a deprecated prefix alias)",
+                    ));
+                }
+                if option == "--path-glob" {
+                    path_glob = Some(value.clone());
+                } else {
+                    path = Some(value.clone());
+                    deprecated_path = option == "--path";
+                }
             }
 
             "--all" => all = true,
-            "--no-cache" => no_cache = true,
+            "--no-cache" => return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--no-cache is not supported for stored coverage: captures are immutable; take a new capture without --raw to enrich it",
+            )),
             "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
@@ -4797,12 +4833,15 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         }
         index += 1;
     }
+    CoveragePathFilter::new(path.as_deref(), path_glob.as_deref())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     Ok(CoverageShowOptions {
         capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
         path,
+        path_glob,
+        deprecated_path,
         all,
         max_lines,
-        no_cache,
         trim_width,
     })
 }
@@ -4843,22 +4882,55 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
     show_values.push(".".to_owned());
     show_values.extend(render_values);
     let options = parse_coverage_show_options(&show_values)?;
-    if options.no_cache {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "--no-cache is only valid for stored coverage",
-        ));
-    }
     Ok(CoverageCaptureOptions {
         capture_id,
         exclude_capture_id,
         raw,
         path: options.path,
+        path_glob: options.path_glob,
+        deprecated_path: options.deprecated_path,
         all: options.all,
         max_lines: options.max_lines,
         trim_width: options.trim_width,
         render_requested,
     })
+}
+
+fn parse_coverage_stop_options(values: &[String]) -> Result<CoverageStopOptions, io::Error> {
+    let mut options = CoverageStopOptions {
+        capture_id: None,
+        exclude_capture_id: None,
+    };
+    let mut arguments = values.iter();
+    while let Some(option) = arguments.next() {
+        let destination = match option.as_str() {
+            "--id" => &mut options.capture_id,
+            "--exclude" => &mut options.exclude_capture_id,
+            _ => return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown coverage stop option '{option}'; expected --id or --exclude"),
+            )),
+        };
+        let value = arguments.next().filter(|value| {
+            !value.is_empty() && !value.starts_with("--")
+        }).ok_or_else(|| io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{option} requires a capture ID"),
+        ))?;
+        if destination.replace(value.clone()).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} may only be specified once"),
+            ));
+        }
+    }
+    Ok(options)
+}
+
+fn warn_deprecated_coverage_path(deprecated: bool) {
+    if deprecated {
+        eprintln!("Warning: coverage --path is a deprecated prefix alias; use --path-prefix, or --path-glob '**/issue/**' to match a directory anywhere in a source URL.");
+    }
 }
 
 fn parse_cpu_profile_start_options(values: &[String]) -> Result<Option<u64>, io::Error> {
@@ -6316,14 +6388,37 @@ async fn run_playwright_program(
             );
         }
     };
-    writer.await.map_err(io::Error::other)??;
+    let write_result = writer.await.map_err(io::Error::other)?;
     let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
     let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
+    let result = parse_playwright_output(status, &stdout, &stderr)?;
+    write_result?;
+    if !stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&stderr));
+    }
+    Ok(result)
+}
+
+fn parse_playwright_output(
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<serde_json::Value>, io::Error> {
+    if !status.success() {
+        let reported_error = serde_json::from_slice::<PlaywrightProgramResult>(trim_ascii(stdout))
+            .ok()
+            .and_then(|result| result.error);
+        return Err(io::Error::other(format!(
+            "Playwright exited with {status}{}; stderr: {}",
+            reported_error.map_or_else(String::new, |error| format!(": {error}")),
+            String::from_utf8_lossy(stderr)
+        )));
+    }
     let result: PlaywrightProgramResult =
-        serde_json::from_slice(trim_ascii(&stdout)).map_err(|error| {
+        serde_json::from_slice(trim_ascii(stdout)).map_err(|error| {
             io::Error::other(format!(
                 "Playwright returned an invalid result: {error}; stderr: {}",
-                String::from_utf8_lossy(&stderr)
+                String::from_utf8_lossy(stderr)
             ))
         })?;
     if !result.ok {
@@ -6331,15 +6426,7 @@ async fn run_playwright_program(
             result
                 .error
                 .unwrap_or_else(|| "Playwright program failed".to_owned()),
-        )
-        .into());
-    }
-    if !status.success() {
-        return Err(io::Error::other(format!(
-            "Playwright exited with {status}; stderr: {}",
-            String::from_utf8_lossy(&stderr)
-        ))
-        .into());
+        ));
     }
     Ok(result.has_value.then_some(result.value))
 }
@@ -6535,7 +6622,8 @@ commands:
   dbgjs target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
     '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
   dbgjs playwright <program|-> [target scope]
-    exposes the selected target as `page`; '-' reads the program from stdin
+    exposes the selected target as `page`; use return for results; console logs go to stderr
+    '-' reads the program from stdin
   dbgjs target watch <expression> [target scope]
   dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   dbgjs target relay --stdio [target scope]
@@ -6549,10 +6637,14 @@ commands:
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
-  dbgjs coverage capture [--id <name>] [--exclude <name>] [--raw] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+  dbgjs coverage capture [--id <name>] [--exclude <selector>] [--raw] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     --raw collects counts and runtime offsets without source-map lookup or symbol enrichment
-  dbgjs coverage stop [--exclude <name>] [target scope]
-  dbgjs coverage show [<name>] [--path <source-prefix>] [--max-lines <count>] [--all] [--no-cache] [--no-trim] [--context <id>]
+  dbgjs coverage stop [--id <name>] [--exclude <selector>] [target scope]
+  dbgjs coverage show [<selector>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+    filters match normalized source URLs, including authored ranges inside bundles
+    --path is a deprecated prefix alias, not a substring match; example glob: '**/issue/**'
+    captures have immutable IDs; . and .1 select latest by kind across the context, .2 the previous
+    explicit --target/--connection filters narrow history before selection; stored reads ignore live target selection
   dbgjs profile start [--sampling-interval <duration>] [target scope]
   dbgjs profile stop [--id <name>] [target scope]
   dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [--context <id>]
@@ -7727,6 +7819,85 @@ mod tests {
     fn parses_coverage_no_trim_option() {
         let options = parse_coverage_show_options(&arguments(&["--no-trim"])).unwrap();
         assert!(!options.trim_width);
+    }
+
+    #[test]
+    fn coverage_path_matching_is_explicit() {
+        let prefix = parse_coverage_show_options(&arguments(&[
+            ".2", "--path-prefix", "https://example.test/src/",
+        ])).unwrap();
+        assert_eq!(prefix.capture_id, ".2");
+        assert_eq!(prefix.path.as_deref(), Some("https://example.test/src/"));
+        assert!(!prefix.deprecated_path);
+
+        let glob = parse_coverage_show_options(&arguments(&[
+            "--path-glob", "**/issue/**",
+        ])).unwrap();
+        assert_eq!(glob.path_glob.as_deref(), Some("**/issue/**"));
+        assert!(glob.path.is_none());
+        assert!(parse_coverage_show_options(&arguments(&["--path", "src/"])).unwrap().deprecated_path);
+        for arguments in [
+            vec!["--path-prefix"],
+            vec!["--path-glob", "--all"],
+            vec!["--path-glob", "["],
+            vec!["--path-prefix", "src/", "--path-glob", "**"],
+            vec!["--path", "src/", "--path-prefix", "other/"],
+            vec!["--no-cache"],
+        ] {
+            let arguments = arguments.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(parse_coverage_show_options(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn parses_named_coverage_stop_with_exclusion() {
+        let options = super::parse_coverage_stop_options(&arguments(&[
+            "--id", "after-click", "--exclude", "before-click",
+        ])).unwrap();
+        assert_eq!(options.capture_id.as_deref(), Some("after-click"));
+        assert_eq!(options.exclude_capture_id.as_deref(), Some("before-click"));
+        assert!(super::parse_coverage_stop_options(&[]).unwrap().capture_id.is_none());
+        for values in [
+            vec!["--id"],
+            vec!["--id", "--exclude", "before"],
+            vec!["--id", "one", "--id", "two"],
+            vec!["--exclude", "one", "--exclude", "two"],
+            vec!["--raw"],
+        ] {
+            assert!(super::parse_coverage_stop_options(&arguments(&values)).is_err());
+        }
+    }
+
+    #[test]
+    fn playwright_failed_process_reports_exit_and_stderr_before_json_errors() {
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::ExitStatus::from_raw(256);
+        let error = super::parse_playwright_output(status, b"", b"Error: missing browserContextId")
+            .unwrap_err().to_string();
+        assert!(error.contains("Playwright exited with"), "{error}");
+        assert!(error.contains("missing browserContextId"), "{error}");
+        assert!(!error.contains("EOF"), "{error}");
+    }
+
+    #[test]
+    fn playwright_success_requires_valid_result_and_preserves_return_value() {
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        let status = std::process::ExitStatus::from_raw(0);
+        let value = super::parse_playwright_output(
+            status, br#"{"ok":true,"hasValue":true,"value":"page title"}"#, b"diagnostic",
+        ).unwrap();
+        assert_eq!(value, Some(serde_json::json!("page title")));
+        assert!(super::parse_playwright_output(status, b"not json", b"").unwrap_err()
+            .to_string().contains("invalid result"));
+        assert!(super::parse_playwright_output(
+            status, br#"{"ok":false,"error":"script failed"}"#, b"",
+        ).unwrap_err().to_string().contains("script failed"));
     }
 
     #[test]

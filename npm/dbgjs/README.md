@@ -3,10 +3,10 @@
 Native JavaScript debugger CLI and TUI, distributed through npm. Requires Node.js
 22 or newer. No Rust compiler or install-time build is needed.
 
-Previously named `@hediet/jsdbg`. Commands now use `dbgjs`, environment variables
-use `DBGJS_*`, and the daemon uses a fresh `dbgjs` state location. Existing
-prototype state is left untouched. On Windows the new endpoint is
-`%LOCALAPPDATA%\hediet\dbgjs\service.json`; `DBGJS_SERVICE_STATE` overrides it.
+Commands use `dbgjs`, environment variables use `DBGJS_*`, and the daemon uses
+a fresh `dbgjs` state location. Existing prototype state is left untouched.
+On Windows the new endpoint is
+`%LOCALAPPDATA%\dbgjs\service.json`; `DBGJS_SERVICE_STATE` overrides it.
 
 ## Install a release build
 

@@ -1,0 +1,74 @@
+[
+  {
+    "command": "process list --root vscode",
+    "result": {
+      "root": {
+        "role": "vscode-main"
+      },
+      "extensionHost": {
+        "role": "extension-host",
+        "attachable": true
+      }
+    }
+  },
+  {
+    "command": "target eval compute(20)",
+    "result": {
+      "kind": "number",
+      "preview": "41",
+      "truncated": false,
+      "reference": null
+    }
+  },
+  {
+    "command": "breakpoint set fixture",
+    "result": {
+      "id": "fixture",
+      "sourcePath": "dbgjs-fixture:///fixture.ts",
+      "line": 5,
+      "column": 2,
+      "mapping": {
+        "sourceUrl": "dbgjs-fixture:///fixture.ts",
+        "requestedLine": 5,
+        "requestedColumn": 2
+      },
+      "status": "installed"
+    }
+  },
+  {
+    "command": "source show fixture.ts",
+    "result": {
+      "path": "dbgjs-fixture:///fixture.ts",
+      "content": "import { writeFileSync } from \"node:fs\";\n\nexport function compute(value: number): number {\n\tconst doubled = value * 2;\n\treturn doubled + 1;\n}\n\nexport function activate(): void {\n\tglobalThis.__dbgjsVscodeFixture = { compute, result: null };\n\twriteFileSync(process.env.DBGJS_VSCODE_FIXTURE_READY, JSON.stringify({ pid: process.pid }));\n}\n"
+    }
+  },
+  {
+    "command": "target wait paused",
+    "result": {
+      "functionName": "compute",
+      "location": {
+        "sourceUrl": "dbgjs-fixture:///fixture.ts",
+        "line": 5,
+        "column": 9
+      }
+    }
+  },
+  {
+    "command": "target eval doubled",
+    "result": {
+      "kind": "number",
+      "preview": "40",
+      "truncated": false,
+      "reference": null
+    }
+  },
+  {
+    "command": "target eval result",
+    "result": {
+      "kind": "number",
+      "preview": "41",
+      "truncated": false,
+      "reference": null
+    }
+  }
+]

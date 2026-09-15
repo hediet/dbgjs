@@ -17,8 +17,8 @@ manifests, and workflow changes conservatively trigger both jobs.
 
 Set **CI result** as the required branch-protection check, not individual matrix
 jobs. It accepts intentional skips but fails when a required job fails or is
-cancelled. Manual dispatch forces build inputs to be considered changed, but
-still follows the macOS nightly/stable test policy.
+cancelled. Manual dispatch forces build inputs to be considered changed,
+including both macOS test architectures.
 
 `Swatinem/rust-cache` caches Cargo downloads and compiled dependencies, keyed by
 the Rust environment and the target/profile. It also caches workspace crate
@@ -32,7 +32,7 @@ embeds the protocol schemas.
 
 An npm-only change skips Linux/Windows Rust unit tests but still verifies and
 packs release binaries, reusing unchanged workspace outputs from the trusted
-`main` cache. An unreleased main version also requires the full macOS suite.
+`main` cache. Both macOS architectures run their full suites for npm-only changes.
 Ordinary docs-only changes, including a root `README.md` change, schedule no
 Rust or packaging jobs, so their total Rust compilation and test time is zero.
 Cache misses only affect speed, never correctness.
@@ -40,11 +40,11 @@ Cache misses only affect speed, never correctness.
 ## Checks and candidate artifacts
 
 Windows x64 and Linux x64 run workspace builds, Rust tests, and offline recording
-tests for Rust changes. macOS x64/ARM64 normally run only the installed-package
-smoke checks, in addition to building their release binaries. The full macOS
-ARM64 workspace and offline recording suite runs only on trusted `main` builds
-whose package version lacks a stable `vX.Y.Z` tag, including npm-only version
-bumps. PRs and feature-branch dispatches do not run the full macOS suite.
+tests for Rust changes. macOS x64 and ARM64 run workspace builds, Rust tests,
+and offline recording tests on every package-producing CI run, including PRs,
+nightly builds, stable builds, and feature-branch manual dispatches. Stable-tag
+existence no longer gates macOS tests. Installed-package smoke checks remain
+enabled on both macOS architectures as well.
 
 The native package matrix builds Windows x64, Linux
 x64/ARM64 (GNU), and macOS x64/ARM64. Each npm package has its own GitHub
@@ -70,9 +70,13 @@ hosted development images because GitHub does not provide runtime-only hosted
 images for those platforms. Alpine/musl and Windows ARM64 are not supported
 yet.
 
-Real browser and desktop VS Code scenarios are not part of this initial CI;
-the workspace tests and installed-package smoke tests cover local service and
-Node debugging without depending on a live external website.
+A focused [desktop VS Code E2E](../tests/vscode-discovery/README.md) runs on all
+five native platforms using downloaded candidate binaries and pinned VS Code.
+It discovers an isolated extension host, attaches by its discovered PID, and
+verifies an authored TypeScript breakpoint, mapped stack location, and local
+evaluation against one deterministic golden transcript. It uses a local fixture,
+not live vscode.dev or a user's existing editor. These sanity checks run in
+addition to the full macOS Rust suites on nightly and stable builds.
 
 ## Nightly and stable packages
 
@@ -134,6 +138,18 @@ A stable tag means **the complete stable artifact set was uploaded**, not that
 the external publisher successfully uploaded all packages to npm. Tags are
 never force-updated. The GitHub concurrency lock covers this workflow only,
 not the independent external uploader.
+
+## Development debug information
+
+The workspace's `dev` and `test` profiles use `debug = 1` in
+[`Cargo.toml`](../Cargo.toml) to reduce debug-symbol storage, particularly Windows
+PDB files. This retains line information for stack traces and source-level
+stepping, but omits full type and variable debug information. Incremental
+compilation and release profile settings are unchanged.
+
+For a debugging session that needs full debug information, set
+`CARGO_PROFILE_DEV_DEBUG=2` or `CARGO_PROFILE_TEST_DEBUG=2` for the corresponding
+Cargo invocation.
 
 ## Windows executable locks during development
 

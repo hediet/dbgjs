@@ -439,6 +439,22 @@ pub enum CaptureKind {
     HeapSnapshot,
 }
 
+pub fn capture_relative_index(selector: &str) -> Result<Option<usize>, String> {
+    if selector == "." {
+        return Ok(Some(1));
+    }
+    let Some(index) = selector.strip_prefix('.') else {
+        return Ok(None);
+    };
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(None);
+    }
+    match index.parse::<usize>() {
+        Ok(index) if index > 0 => Ok(Some(index)),
+        _ => Err(format!("invalid capture selector '{selector}': relative indices start at .1")),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureSnapshot {
@@ -1282,6 +1298,8 @@ pub struct PromiseSelectionSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverageSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
     pub timestamp_micros: u64,
     pub sources: Vec<CoverageSourceSnapshot>,
     #[serde(default)]
@@ -1818,7 +1836,7 @@ pub enum TargetWaitPredicate {
     },
 }
 
-#[hub_rpc_interface(id = "dev.hediet.cdp-debugger")]
+#[hub_rpc_interface(id = "dev.dbgjs.cdp-debugger")]
 pub trait DebuggerServiceApi {
     async fn service_info() -> Result<ServiceInfo, JsonRpcError>;
 
@@ -1992,18 +2010,25 @@ pub trait DebuggerServiceApi {
         context_id: String,
         capture_name: String,
         source_path: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
+        path_glob: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn get_stored_cpu_profile(
         context_id: String,
         capture_name: String,
         source_path: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError>;
 
     async fn get_stored_heap_classes(
         context_id: String,
         capture_name: String,
         filter: Option<String>,
+        target_id: Option<String>,
+        connection_id: Option<String>,
     ) -> Result<HeapClassSnapshot, JsonRpcError>;
 
     async fn supply_stored_heap_source_map(
@@ -2214,6 +2239,7 @@ pub trait DebuggerServiceApi {
         connection_id: String,
         target_id: String,
         exclude_capture_id: Option<String>,
+        capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn finish_coverage(
@@ -2221,6 +2247,7 @@ pub trait DebuggerServiceApi {
         connection_id: String,
         target_id: String,
         exclude_capture_id: Option<String>,
+        capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError>;
 
     async fn get_coverage(

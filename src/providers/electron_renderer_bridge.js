@@ -7,7 +7,7 @@ async (token) => {
 	}
 	const { app, BrowserWindow, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
-	const registryKey = Symbol.for("hediet.dbgjs.rendererBridge");
+	const registryKey = Symbol.for("dbgjs.rendererBridge");
 	const previous = globalThis[registryKey];
 	if (previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
 		await previous.bridge.dispose("replaced by a new dbgjs bridge");

@@ -140,7 +140,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			["coverage", "stop", "--exclude", "background"],
 			environment,
 		);
-		expect(stoppedCoverage).toContain("Captured .");
+		expect(stoppedCoverage).toMatch(/Captured cov-\d+\./);
 		const report = await runCli(
 			"Analyze the stored capture and render its source-mapped symbol tree.",
 			["coverage", "show", "."],
@@ -179,13 +179,13 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			.join("/");
 		const drilldown = await runCli(
 			`Drill into the measured typing path \`${pathPrefix}\`.`,
-			["coverage", "show", ".", "--path", pathPrefix],
+			["coverage", "show", ".", "--path-prefix", pathPrefix],
 			environment,
 		);
 		expect(drilldown).not.toContain("additional hit ranges omitted");
 		expect(drilldown).toMatch(/TextModel|PieceTreeTextBuffer|Cursor/);
 		const exhaustive = await runTextSilent(
-			["coverage", "show", ".", "--path", pathPrefix, "--all"],
+			["coverage", "show", ".", "--path-prefix", pathPrefix, "--all"],
 			environment,
 		);
 		expect(exhaustive).toContain(
@@ -196,11 +196,13 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		expect(exhaustive.trimEnd().split("\n").length).toBeGreaterThanOrEqual(
 			drilldown.trimEnd().split("\n").length,
 		);
-		const noCache = await runTextSilent(
-			["coverage", "show", ".", "--max-lines", "5", "--no-cache"],
+		const unsupportedReanalysis = await run(cli,
+			["coverage", "show", ".", "--no-cache"],
 			environment,
+			{ timeoutMs: commandTimeoutMs },
 		);
-		expect(noCache.trimEnd().split("\n").length).toBeLessThanOrEqual(5);
+		expect(unsupportedReanalysis.code).not.toBe(0);
+		expect(unsupportedReanalysis.output).toContain("captures are immutable");
 		const sourceGrep = await runCli(
 			"Search the debugger's resolved authored sources for both ends of the deferred auto-whitespace handoff.",
 			[

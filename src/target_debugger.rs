@@ -1173,6 +1173,7 @@ async fn run_target(
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
+    let mut pending_stopped_coverage = None::<CoverageSnapshot>;
     let mut cpu_profile = None::<CpuProfileRecording>;
     let mut cpu_profiles = BTreeMap::<String, CpuProfileSnapshot>::new();
     let mut heap_captures = BTreeMap::<String, StoredHeapCapture>::new();
@@ -1728,42 +1729,16 @@ async fn run_target(
                 response,
             })) => {
                 let result = match coverage.as_mut() {
-                    Some(recording)
-                        if capture_id.as_ref().is_some_and(|capture_id| {
-                            recording.captures.contains_key(capture_id)
-                        }) =>
-                    {
-                        Err(TargetDebuggerError::CoverageCaptureAlreadyExists(
-                            capture_id.unwrap(),
-                        ))
-                    }
                     Some(recording) => {
-                        let snapshot = take_coverage(&driver, recording).await;
-                        let snapshot = snapshot.and_then(|snapshot| match exclude_capture_id {
-                            Some(capture_id) => recording
-                                .captures
-                                .get(&capture_id)
-                                .map(|baseline| {
-                                    CoverageRecording::exclude_coverage(snapshot, baseline)
-                                })
-                                .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id)),
-                            None => Ok(snapshot),
-                        });
-                        let mut snapshot = snapshot;
-                        if !raw && capture_id.is_none()
-                            && let Ok(snapshot) = &mut snapshot
-                            && let Err(error) =
-                                project_coverage(&mut driver, &session_key, snapshot, None, false)
-                                    .await
-                        {
-                            snapshot.sources.clear();
-                            let _ = response.send(Err(error));
-                            continue;
-                        }
-                        if let (Ok(snapshot), Some(capture_id)) = (&snapshot, capture_id) {
-                            recording.captures.insert(capture_id, snapshot.clone());
-                        }
-                        snapshot
+                        capture_coverage(
+                            &mut driver,
+                            &session_key,
+                            recording,
+                            capture_id,
+                            exclude_capture_id,
+                            raw,
+                        )
+                        .await
                     }
                     None => Err(TargetDebuggerError::CoverageNotActive),
                 };
@@ -1774,62 +1749,44 @@ async fn run_target(
                 response,
             })) => {
                 let result = async {
-                    let recording = coverage
-                        .as_mut()
-                        .ok_or(TargetDebuggerError::CoverageNotActive)?;
-                    let snapshot = take_coverage(&driver, recording).await?;
-                    let snapshot = match exclude_capture_id {
-                        Some(capture_id) => {
-                            let baseline =
-                                recording.captures.get(&capture_id).ok_or_else(|| {
-                                    TargetDebuggerError::CoverageCaptureNotFound(capture_id.clone())
-                                })?;
-                            CoverageRecording::exclude_coverage(snapshot, baseline)
-                        }
-                        None => snapshot,
-                    };
-                    let stored = snapshot.clone();
-                    let mut snapshot = snapshot;
-                    project_coverage(&mut driver, &session_key, &mut snapshot, None, false).await?;
-                    driver
-                        .client()
-                        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
-                        .await
-                        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
-                    coverage = None;
-                    Ok((snapshot, stored))
+                    if coverage.is_some() {
+                        let (completed, baseline) =
+                            finish_coverage_recording(&driver, &mut coverage, exclude_capture_id)
+                                .await?;
+                        let stored = completed.snapshot();
+                        let stored = match baseline {
+                            Some(baseline) => CoverageRecording::exclude_coverage(stored, &baseline),
+                            None => stored,
+                        };
+                        completed_recordings.remove(".");
+                        coverage_objects.insert(".".to_owned(), stored.clone());
+                        pending_stopped_coverage = Some(stored);
+                    }
+                    project_stopped_coverage(
+                        &mut pending_stopped_coverage,
+                        async |snapshot| {
+                            project_coverage(&mut driver, &session_key, snapshot, None, false).await
+                        },
+                    )
+                    .await
                 }
                 .await;
-                if let Ok((_, stored)) = &result {
-                    coverage_objects.insert(".".to_owned(), stored.clone());
-                }
-                let _ = response.send(result.map(|(snapshot, _)| snapshot));
+                let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::FinishCoverage {
                 exclude_capture_id,
                 response,
             })) => {
                 let result = async {
-                    let recording = coverage
-                        .as_mut()
-                        .ok_or(TargetDebuggerError::CoverageNotActive)?;
-                    update_coverage(&driver, recording).await?;
-                    let mut completed = recording.clone();
-                    if let Some(capture_id) = exclude_capture_id {
-                        let baseline = recording
-                            .captures
-                            .get(&capture_id)
-                            .cloned()
-                            .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))?;
+                    let (mut completed, baseline) =
+                        finish_coverage_recording(&driver, &mut coverage, exclude_capture_id)
+                            .await?;
+                    if let Some(baseline) = baseline {
                         completed.exclude_baseline(&baseline);
                     }
-                    driver
-                        .client()
-                        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
-                        .await
-                        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
                     completed_recordings.insert(".".to_owned(), completed);
-                    coverage = None;
+                    coverage_objects.remove(".");
+                    pending_stopped_coverage = None;
                     Ok(())
                 }
                 .await;
@@ -2658,13 +2615,11 @@ fn temporary_heap_snapshot_path() -> PathBuf {
             .unwrap_or_else(|| std::env::temp_dir().join("dbgjs-heap-captures"))
     } else if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
         PathBuf::from(local_app_data)
-            .join("hediet")
             .join("dbgjs")
             .join("heap-captures")
     } else if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home)
             .join(".cache")
-            .join("hediet")
             .join("dbgjs")
             .join("heap-captures")
     } else {
@@ -3320,6 +3275,84 @@ fn begin_type_text(
             .map(|_| ())
             .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))
     })
+}
+
+async fn capture_coverage(
+    driver: &mut DebuggerDriver,
+    session_key: &SessionKey,
+    recording: &mut CoverageRecording,
+    capture_id: Option<String>,
+    exclude_capture_id: Option<String>,
+    raw: bool,
+) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    if let Some(capture_id) = &capture_id
+        && recording.captures.contains_key(capture_id)
+    {
+        return Err(TargetDebuggerError::CoverageCaptureAlreadyExists(
+            capture_id.clone(),
+        ));
+    }
+    let mut snapshot = take_coverage(driver, recording).await?;
+    if let Some(capture_id) = exclude_capture_id {
+        let baseline = recording
+            .captures
+            .get(&capture_id)
+            .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))?;
+        snapshot = CoverageRecording::exclude_coverage(snapshot, baseline);
+    }
+    if !raw {
+        project_coverage(driver, session_key, &mut snapshot, None, false).await?;
+    }
+    if let Some(capture_id) = capture_id {
+        recording.captures.insert(capture_id, snapshot.clone());
+    }
+    Ok(snapshot)
+}
+
+async fn finish_coverage_recording(
+    driver: &DebuggerDriver,
+    recording: &mut Option<CoverageRecording>,
+    exclude_capture_id: Option<String>,
+) -> Result<(CoverageRecording, Option<CoverageSnapshot>), TargetDebuggerError> {
+    let active = recording
+        .as_mut()
+        .ok_or(TargetDebuggerError::CoverageNotActive)?;
+    let baseline = exclude_capture_id
+        .map(|capture_id| {
+            active
+                .captures
+                .get(&capture_id)
+                .cloned()
+                .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))
+        })
+        .transpose()?;
+    update_coverage(driver, active).await?;
+    driver
+        .client()
+        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
+        .await
+        .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
+    let completed = recording
+        .take()
+        .ok_or(TargetDebuggerError::CoverageNotActive)?;
+    Ok((completed, baseline))
+}
+
+async fn project_stopped_coverage(
+    pending: &mut Option<CoverageSnapshot>,
+    project: impl AsyncFnOnce(&mut CoverageSnapshot) -> Result<(), TargetDebuggerError>,
+) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    let mut snapshot = pending
+        .as_ref()
+        .ok_or(TargetDebuggerError::CoverageNotActive)?
+        .clone();
+    project(&mut snapshot).await.map_err(|error| {
+        TargetDebuggerError::Coverage(format!(
+            "recording stopped, but projection failed; raw coverage is retained for retry: {error}"
+        ))
+    })?;
+    *pending = None;
+    Ok(snapshot)
 }
 
 async fn start_coverage(
@@ -4204,6 +4237,7 @@ impl CoverageRecording {
 
     fn snapshot(&self) -> CoverageSnapshot {
         CoverageSnapshot {
+            capture_id: None,
             timestamp_micros: self.timestamp_micros,
             analysis: None,
             sources: self
@@ -5938,6 +5972,10 @@ mod source_acquisition_tests;
 #[cfg(test)]
 #[path = "heap_mapping_retry_tests.rs"]
 mod heap_mapping_retry_tests;
+
+#[cfg(test)]
+#[path = "coverage_finalization_regression_tests.rs"]
+mod coverage_finalization_regression_tests;
 
 #[cfg(test)]
 mod tests {
