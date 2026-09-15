@@ -75,19 +75,19 @@ export async function reserveNightlyVersion(github, run, baseVersion) {
 			const claim = JSON.parse(tag.message);
 			assert.equal(claim.sha, tag.sha, "Nightly reservation changed commit.");
 			assert.ok(Number.isSafeInteger(claim.runId) && claim.runId > 0);
-			assert.match(claim.version, new RegExp(`^\\d+\\.\\d+\\.\\d+-nightly\\.${date}\\.${index}$`));
+			assert.match(claim.version, new RegExp(`^\\d+\\.\\d+\\.\\d+-(?:nightly|next)\\.${date}\\.${index}$`));
 			return { ...claim, index: Number(index) };
 		}));
 		const existing = claims.filter((claim) => claim.runId === run.id);
 		assert.ok(existing.length <= 1, "CI run has multiple nightly reservations.");
 		if (existing.length) {
 			assert.equal(existing[0].sha, run.head_sha, "Reserved nightly run changed identity.");
-			assert.equal(existing[0].version, `${baseVersion}-nightly.${date}.${existing[0].index}`);
+			assert.equal(existing[0].version.split("-")[0], baseVersion, "Reserved nightly base version changed.");
 			return existing[0].version;
 		}
 		const index = claims.reduce((max, claim) => Math.max(max, claim.index), 0) + 1;
 		assert.ok(Number.isSafeInteger(index), "Nightly index overflow.");
-		const version = `${baseVersion}-nightly.${date}.${index}`;
+		const version = `${baseVersion}-next.${date}.${index}`;
 		const created = await github.createTag(`${prefix}${index}`, run.head_sha,
 			JSON.stringify({ version, runId: run.id, sha: run.head_sha }), { allowExisting: true });
 		if (created) return version;

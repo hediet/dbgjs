@@ -11,11 +11,11 @@ import { npm } from "./npm-tools.mjs";
 export async function prepareReleasePackages({ input, output, version, tag }) {
 	assert.ok(
 		(tag === "latest" && /^\d+\.\d+\.\d+$/.test(version)) ||
-		(tag === "next" && /^\d+\.\d+\.\d+-nightly\.[1-9]\d{7}\.[1-9]\d*$/.test(version)),
+		(tag === "next" && /^\d+\.\d+\.\d+-(?:next|nightly)\.[1-9]\d{7}\.[1-9]\d*$/.test(version)),
 		"Release version and publication tag must agree.",
 	);
 	const candidates = await inspectCandidatePackages(input);
-	assert.equal(version.split("-nightly.")[0], candidates.baseVersion);
+	assert.equal(version.split("-")[0], candidates.baseVersion);
 	const staging = await mkdtemp(join(tmpdir(), "dbgjs-release-"));
 	const packages = [];
 	try {

@@ -25,8 +25,8 @@ Installing only the entry tarball will not supply an unpublished native
 dependency.
 
 Nightly artifacts are named `npm-nightly-dbgjs` and `npm-nightly-<platform>`.
-Their versions are `X.Y.Z-nightly.<YYYYMMDD>.<index>`, for example
-`0.1.0-nightly.20260915.1`. The date is the source CI run's UTC creation date;
+Their versions are `X.Y.Z-next.<YYYYMMDD>.<index>`, for example
+`0.1.0-next.20260915.2`. The date is the source CI run's UTC creation date;
 the daily index starts at 1 and retries reuse the same version. Install both
 matching nightly tarballs together. Release packages carry `publishConfig.tag`:
 `next` for nightlies and `latest` for stable packages, for the external npm

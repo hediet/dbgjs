@@ -9,7 +9,7 @@ test("new versions produce nightly and stable; stable tags follow artifact uploa
 	assert.equal(state.nightly, true);
 	assert.equal(state.stable, true);
 	assert.deepEqual(fixture.packed.map(({ version, tag }) => ({ version, tag })), [
-		{ version: "0.2.0-nightly.20260915.1", tag: "next" },
+		{ version: "0.2.0-next.20260915.1", tag: "next" },
 		{ version: "0.2.0", tag: "latest" },
 	]);
 	assert.ok(fixture.tags.has("release-candidates/v0.2.0"));
@@ -78,7 +78,7 @@ test("failed packaging retains the nightly reservation but does not claim stable
 	assert.deepEqual([...fixture.tags.keys()], ["nightly-builds/20260915/1"]);
 	fixture.pack = pack;
 	await prepareRelease(fixture);
-	assert.equal(fixture.packed[0].version, "0.2.0-nightly.20260915.1");
+	assert.equal(fixture.packed[0].version, "0.2.0-next.20260915.1");
 });
 
 test("stable promotion requires full macOS tests but nightly does not", async () => {
@@ -136,12 +136,12 @@ test("failed bump followed by a green commit releases the green commit", async (
 
 test("daily indices start at 1, span base versions, and reset on the next UTC date", async () => {
 	const { github, run } = createFixture();
-	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-nightly.20260915.1");
-	assert.equal(await reserveNightlyVersion(github, { ...run, id: 124 }, "0.3.0"), "0.3.0-nightly.20260915.2");
+	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-next.20260915.1");
+	assert.equal(await reserveNightlyVersion(github, { ...run, id: 124 }, "0.3.0"), "0.3.0-next.20260915.2");
 	assert.equal(await reserveNightlyVersion(github, {
 		...run, id: 125, created_at: "2026-09-16T00:00:00Z",
-	}, "0.3.0"), "0.3.0-nightly.20260916.1");
-	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-nightly.20260915.1");
+	}, "0.3.0"), "0.3.0-next.20260916.1");
+	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-next.20260915.1");
 });
 
 test("concurrent runs reserve distinct daily indices; concurrent retries reuse one reservation", async () => {
@@ -152,7 +152,7 @@ test("concurrent runs reserve distinct daily indices; concurrent retries reuse o
 		reserveNightlyVersion(github, run, "0.2.0"),
 	]);
 	assert.equal(versions[0], versions[2]);
-	assert.deepEqual([...new Set(versions)].sort(), ["0.2.0-nightly.20260915.1", "0.2.0-nightly.20260915.2"]);
+	assert.deepEqual([...new Set(versions)].sort(), ["0.2.0-next.20260915.1", "0.2.0-next.20260915.2"]);
 	assert.equal(tags.size, 2);
 });
 
@@ -161,20 +161,36 @@ test("daily allocation uses numeric maximum, not tag count or lexicographic orde
 	for (const index of [2, 10]) {
 		tags.set(`nightly-builds/20260915/${index}`, {
 			sha: run.head_sha,
-			message: JSON.stringify({ sha: run.head_sha, runId: index, version: `0.2.0-nightly.20260915.${index}` }),
+			message: JSON.stringify({ sha: run.head_sha, runId: index, version: `0.2.0-next.20260915.${index}` }),
 		});
 	}
-	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-nightly.20260915.11");
+	assert.equal(await reserveNightlyVersion(github, run, "0.2.0"), "0.2.0-next.20260915.11");
 });
 
 test("nightly reservations reject changed identities and malformed dates", async () => {
 	const { github, run } = createFixture();
 	await reserveNightlyVersion(github, run, "0.2.0");
 	await assert.rejects(reserveNightlyVersion(github, { ...run, head_sha: "b".repeat(40) }, "0.2.0"), /identity/);
-	await assert.rejects(reserveNightlyVersion(github, run, "0.3.0"), /0.3.0-nightly/);
+	await assert.rejects(reserveNightlyVersion(github, run, "0.3.0"), /base version changed/);
 	for (const created_at of ["not a date", "2026-02-30T00:00:00Z"]) {
 		await assert.rejects(reserveNightlyVersion(github, { ...run, created_at }, "0.2.0"));
 	}
+});
+
+test("next versions continue the daily counter and preserve legacy nightly retries", async () => {
+	const fixture = createFixture();
+	const version = "0.2.0-nightly.20260915.1";
+	const reservation = {
+		sha: fixture.run.head_sha,
+		message: JSON.stringify({ version, runId: fixture.run.id, sha: fixture.run.head_sha }),
+	};
+	fixture.tags.set("nightly-builds/20260915/1", reservation);
+	await prepareRelease(fixture);
+	assert.equal(fixture.packed[0].version, version);
+	assert.equal(fixture.packed[0].tag, "next");
+	assert.equal(await reserveNightlyVersion(fixture.github, { ...fixture.run, id: 124 }, "0.2.0"),
+		"0.2.0-next.20260915.2");
+	assert.deepEqual(fixture.tags.get("nightly-builds/20260915/1"), reservation);
 });
 
 test("nightly reservation failures propagate and persistent contention is bounded", async () => {
