@@ -28,13 +28,14 @@ jobs:
       tests: ${{ steps.changes.outputs.tests }}
       test_matrix: ${{ steps.changes.outputs.test_matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
+          package-manager-cache: false
       - name: Test change detection
         run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs
       - name: Detect changes
@@ -54,10 +55,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -100,10 +101,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -123,14 +124,14 @@ jobs:
       - name: Pack npm tarballs
         run: node scripts/npm-pack.mjs --platform ${{ matrix.platform }} --bin-dir target/release --output artifacts/npm --candidate
       - name: Upload npm tarballs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm/hediet-dbgjs-${{ matrix.platform }}-*.tar.gz
           if-no-files-found: error
       - name: Upload npm entry package
         if: matrix.platform == 'linux-x64-gnu'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-dbgjs
           path: artifacts/npm/hediet-dbgjs-[0-9]*.tar.gz
@@ -156,18 +157,18 @@ jobs:
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends ca-certificates libssl3
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-dbgjs
           path: artifacts/npm
@@ -202,18 +203,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-dbgjs
           path: artifacts/npm
@@ -242,10 +243,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -255,7 +256,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends xvfb libgtk-3-0 libnss3 libasound2 libgbm1 libxss1 libatk-bridge2.0-0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-${{ matrix.platform }}
           path: artifacts/npm
@@ -272,7 +273,7 @@ jobs:
           fi
       - name: Upload VS Code E2E diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vscode-e2e-${{ matrix.platform }}
           path: artifacts/vscode-discovery
