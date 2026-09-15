@@ -1,6 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { breakpointResult, discoveryResult, pauseResult } from "./transcript.mjs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { resolveCodeExecutable } from "./launch.mjs";
+
+test("macOS launch uses the bundle executable rather than the downloader's legacy Electron name", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-code-launch-"));
+	try {
+		const contents = join(directory, "Visual Studio Code.app", "Contents");
+		await mkdir(join(contents, "MacOS"), { recursive: true });
+		const executable = join(contents, "MacOS", "Code");
+		await writeFile(executable, "");
+		const legacyPath = join(contents, "MacOS", "Electron");
+		assert.equal(await resolveCodeExecutable(legacyPath, "darwin", (plist) => {
+			assert.equal(plist, join(contents, "Info.plist"));
+			return "Code\n";
+		}), executable);
+		await assert.rejects(resolveCodeExecutable(legacyPath, "darwin", () => "../invalid"), /filename/);
+		await assert.rejects(resolveCodeExecutable(legacyPath, "darwin", () => "Missing"), /ENOENT/);
+		assert.equal(await resolveCodeExecutable(executable, "linux"), executable);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 test("discovery transcript excludes process identity noise but validates actual roles", () => {
 	for (const pid of [123, 456]) {

@@ -569,9 +569,17 @@ async fn query_windows_process_stats()
 #[cfg(not(windows))]
 async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
     tokio::task::spawn_blocking(|| {
-        use sysinfo::{ProcessesToUpdate, System};
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
         let mut system = System::new();
-        system.refresh_processes(ProcessesToUpdate::All, true);
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing()
+                .with_cmd(UpdateKind::Always)
+                .with_environ(UpdateKind::Always)
+                .with_exe(UpdateKind::Always)
+                .without_tasks(),
+        );
         system
             .processes()
             .iter()

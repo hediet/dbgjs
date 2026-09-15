@@ -11,6 +11,7 @@ import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import { transform } from "esbuild";
 import { allocatePort, run } from "../playwright/live-test-harness.mjs";
 import { breakpointResult, discoveryResult, pauseResult } from "./transcript.mjs";
+import { resolveCodeExecutable } from "./launch.mjs";
 
 const vscodeVersion = "1.137.0";
 const authoredUrl = "dbgjs-fixture:///fixture.ts";
@@ -24,10 +25,10 @@ const output = resolve(values.output);
 await mkdir(output, { recursive: true });
 await writeFile(join(output, "commands.jsonl"), "");
 await writeFile(join(output, "actual.json"), "[]\n");
-const code = await downloadAndUnzipVSCode({
+const code = await resolveCodeExecutable(await downloadAndUnzipVSCode({
 	version: vscodeVersion,
 	cachePath: resolve("artifacts/vscode-download"),
-});
+}));
 const directory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-e2e-"));
 const suffix = process.platform === "win32" ? ".exe" : "";
 const cli = join(directory, `dbgjs${suffix}`);
@@ -77,6 +78,10 @@ try {
 	}));
 	const readyPath = join(directory, "ready.json");
 	const inspectorPort = await allocatePort();
+	let mainInspectorPort;
+	do {
+		mainInspectorPort = await allocatePort();
+	} while (mainInspectorPort === inspectorPort);
 	codeProcess = spawn(code, [
 		"--new-window", "--locale=en", "--skip-welcome", "--skip-release-notes",
 		"--disable-workspace-trust", "--disable-updates", "--disable-gpu",
@@ -85,6 +90,7 @@ try {
 		`--extensions-dir=${join(directory, "extensions")}`,
 		`--extensionDevelopmentPath=${extension}`,
 		`--inspect-extensions=${inspectorPort}`,
+		`--inspect=127.0.0.1:${mainInspectorPort}`,
 		workspace,
 	], {
 		env: { ...environment, DBGJS_VSCODE_FIXTURE_READY: readyPath },

@@ -170,7 +170,9 @@ mod tests {
     #[test]
     fn explicit_errors_for_invalid_globs_and_missing_paths() {
         assert!(filter_coverage(&mut mixed_bundle(), None, Some("[")).unwrap_err().contains("invalid"));
-        assert!(filter_coverage(&mut mixed_bundle(), Some("src/select"), None).unwrap_err().contains("no coverage"));
+        let missing = filter_coverage(&mut mixed_bundle(), Some("src/select"), None).unwrap_err();
+        assert!(missing.contains("No executed functions matched"), "{missing}");
+        assert!(missing.contains("prefix \"src/select\""), "{missing}");
         assert!(filter_coverage(&mut mixed_bundle(), Some("src"), Some("**/*.ts")).unwrap_err().contains("mutually exclusive"));
     }
 
