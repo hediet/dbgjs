@@ -44,9 +44,9 @@ The downloaded VS Code installation is cached locally under
 extensions, workspace, copied CLI binaries, service state, and source-map cache.
 Only processes launched by the test are terminated during cleanup.
 
-Both the main-process and extension-host inspectors are explicitly enabled on
-loopback: Unix PID attachment routes through the main process and cannot safely
-activate Electron's inspector by signal. On macOS the executable is read from
+Neither the main-process nor extension-host inspector is enabled at launch.
+PID attachment must activate debugging on the running VS Code instance.
+On macOS the executable is read from
 the downloaded app's `CFBundleExecutable`, rather than assuming an Electron
 binary name.
 

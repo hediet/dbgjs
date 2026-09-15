@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import { transform } from "esbuild";
-import { allocatePort, run } from "../playwright/live-test-harness.mjs";
+import { run } from "../playwright/live-test-harness.mjs";
 import { breakpointResult, discoveryResult, pauseResult } from "./transcript.mjs";
 import { resolveCodeExecutable } from "./launch.mjs";
 
@@ -77,11 +77,6 @@ try {
 		activationEvents: ["*"], extensionKind: ["workspace"],
 	}));
 	const readyPath = join(directory, "ready.json");
-	const inspectorPort = await allocatePort();
-	let mainInspectorPort;
-	do {
-		mainInspectorPort = await allocatePort();
-	} while (mainInspectorPort === inspectorPort);
 	codeProcess = spawn(code, [
 		"--new-window", "--locale=en", "--skip-welcome", "--skip-release-notes",
 		"--disable-workspace-trust", "--disable-updates", "--disable-gpu",
@@ -89,8 +84,6 @@ try {
 		`--user-data-dir=${userData}`,
 		`--extensions-dir=${join(directory, "extensions")}`,
 		`--extensionDevelopmentPath=${extension}`,
-		`--inspect-extensions=${inspectorPort}`,
-		`--inspect=127.0.0.1:${mainInspectorPort}`,
 		workspace,
 	], {
 		env: { ...environment, DBGJS_VSCODE_FIXTURE_READY: readyPath },
