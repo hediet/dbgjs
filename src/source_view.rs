@@ -1,16 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use oxc_allocator::Allocator;
 use oxc_codegen::{Codegen, CodegenOptions};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sourcemap::{DecodedMap, RawToken, SourceMap, decode_slice};
+use sourcemap::{DecodedMap, RawToken, SourceMap, SourceMapIndex, decode_slice};
 
-use crate::content_store::{ContentHash, ContentStore, ContentStoreStats};
+use crate::content_store::{ContentHash, ContentStore, ContentStoreStats, HashedBytes};
 use crate::context_source_model::{ContextSourceModel, SourceContributionId, SourceSnapshotRole};
 use crate::source_graph::{
     IdentityBasis, ProjectionId, ProjectionKind, RouteLimits, RouteSearch, SourceFileStoreError,
@@ -162,6 +163,101 @@ pub struct GeneratedSourceInput<'a> {
     pub source_map: Option<&'a [u8]>,
     pub source_map_url: Option<&'a str>,
     pub minified: bool,
+}
+
+/// Serialized as bytes; clones share the digest and a one-shot decoded-map handoff.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SourceMapData {
+    bytes: HashedBytes,
+    #[serde(skip)]
+    prepared: Arc<Mutex<Option<Result<DecodedSourceMap, SourceViewError>>>>,
+}
+
+impl SourceMapData {
+    pub fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            bytes: HashedBytes::new(bytes),
+            prepared: Arc::default(),
+        }
+    }
+
+    pub(crate) fn is_supported(&self) -> bool {
+        let decode = || {
+            self.prepared
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| DecodedSourceMap::decode(self.bytes.as_ref()))
+                .is_ok()
+        };
+        if self.len() >= 64 * 1024 {
+            rayon::join(decode, || self.content_hash()).0
+        } else {
+            decode()
+        }
+    }
+
+    pub(crate) fn content_hash(&self) -> ContentHash {
+        self.bytes.hash()
+    }
+
+    fn take_prepared(&self) -> Option<Result<DecodedSourceMap, SourceViewError>> {
+        self.prepared.lock().unwrap().take()
+    }
+}
+
+impl std::ops::Deref for SourceMapData {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+}
+
+impl std::fmt::Debug for SourceMapData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceMapData")
+            .field("encoded_bytes", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SourceMapData {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes.as_ref() == other.bytes.as_ref()
+    }
+}
+
+impl Eq for SourceMapData {}
+
+struct DecodedSourceMap {
+    shape: MapShape,
+    map: SourceMap,
+}
+
+impl DecodedSourceMap {
+    fn decode(bytes: &[u8]) -> Result<Self, SourceViewError> {
+        match decode_slice(bytes)
+            .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?
+        {
+            DecodedMap::Regular(map) => Ok(Self {
+                shape: MapShape::Ordinary,
+                map,
+            }),
+            DecodedMap::Index(index) => Ok(Self {
+                shape: MapShape::Indexed {
+                    section_count: index.get_section_count() as usize,
+                    max_depth: indexed_depth(&index),
+                },
+                map: index
+                    .flatten()
+                    .map_err(|error| SourceViewError::InvalidIndexedSourceMap(error.to_string()))?,
+            }),
+            DecodedMap::Hermes(_) => Err(SourceViewError::InvalidSourceMap(
+                "Hermes source maps are not part of this prototype".into(),
+            )),
+        }
+    }
 }
 
 pub(crate) fn appears_minified(source_url: &str, content: &str) -> bool {
@@ -317,6 +413,18 @@ impl ResolvedSourceView {
         &mut self,
         input: GeneratedSourceInput<'_>,
     ) -> Result<(), SourceViewError> {
+        self.add_generated_with_prepared_map(input, None)
+    }
+
+    pub(crate) fn add_generated_with_prepared_map<'a>(
+        &mut self,
+        input: GeneratedSourceInput<'a>,
+        source_map: Option<&'a SourceMapData>,
+    ) -> Result<(), SourceViewError> {
+        let input = GeneratedSourceInput {
+            source_map: source_map.map(|map| &**map).or(input.source_map),
+            ..input
+        };
         if self.generated.contains_key(input.url) {
             return Err(SourceViewError::DuplicateGeneratedSource(input.url.into()));
         }
@@ -324,7 +432,7 @@ impl ResolvedSourceView {
         let generated_content = self.store.intern(input.content);
         let generated_snapshot = self.register_generated_snapshot(input.url, generated_content)?;
         if let Some(raw_map) = input.source_map {
-            match self.add_source_map(raw_map) {
+            match self.add_source_map(raw_map, source_map) {
                 Ok(map_id) => {
                     self.add_mapped_files(
                         input.url,
@@ -631,33 +739,29 @@ impl ResolvedSourceView {
         }
     }
 
-    fn add_source_map(&mut self, raw_map: &[u8]) -> Result<MapId, SourceViewError> {
-        let encoded = std::str::from_utf8(raw_map)
-            .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
-        let content = self.store.intern(encoded);
-        let projection = self.model.cached_source_map(content, || {
-            let decoded = decode_slice(raw_map)
-                .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
-            let shape = map_shape(raw_map);
-            let map = match decoded {
-                DecodedMap::Regular(map) => map,
-                DecodedMap::Index(index) => index
-                    .flatten()
-                    .map_err(|error| SourceViewError::InvalidIndexedSourceMap(error.to_string()))?,
-                DecodedMap::Hermes(_) => {
-                    return Err(SourceViewError::InvalidSourceMap(
-                        "Hermes source maps are not part of this prototype".into(),
-                    ));
-                }
-            };
-            Ok(MapProjection {
-                shape,
-                map,
-                content,
-                encoded_bytes: raw_map.len(),
-                reverse: OnceLock::new(),
-            })
-        })?;
+    fn add_source_map(
+        &mut self,
+        raw_map: &[u8],
+        source_map: Option<&SourceMapData>,
+    ) -> Result<MapId, SourceViewError> {
+        let prepared = source_map.and_then(SourceMapData::take_prepared);
+        let content = match source_map {
+            Some(source_map) => self.store.intern_bytes(&source_map.bytes),
+            None => std::str::from_utf8(raw_map).map(|encoded| self.store.intern(encoded)),
+        }
+        .map_err(|error| SourceViewError::InvalidSourceMap(error.to_string()))?;
+        let projection =
+            self.model
+                .cached_source_map(content, || -> Result<_, SourceViewError> {
+                    let decoded = prepared.unwrap_or_else(|| DecodedSourceMap::decode(raw_map))?;
+                    Ok(MapProjection {
+                        shape: decoded.shape,
+                        map: decoded.map,
+                        content,
+                        encoded_bytes: raw_map.len(),
+                        reverse: OnceLock::new(),
+                    })
+                })?;
         let id = MapId(self.maps.len());
         self.maps.push(projection);
         Ok(id)
@@ -671,37 +775,47 @@ impl ResolvedSourceView {
         source_map_url: Option<&str>,
     ) -> Result<(), SourceViewError> {
         let map = &self.maps[map_id.0];
-        let mut discovered = Vec::new();
-        for source_id in 0..map.map.get_source_count() {
-            let Some(logical_url) = map.map.get_source(source_id) else {
-                continue;
-            };
-            let candidates = self.content_candidates(
-                logical_url,
-                map.map.get_source_contents(source_id),
-                map_id,
-            );
-            if candidates.is_empty() {
-                self.diagnostics.push(SourceDiagnostic::MissingContent {
-                    logical_url: logical_url.into(),
-                });
-                continue;
-            }
-            let content = candidates[0].content;
-            discovered.push((
-                source_id,
-                logical_url.to_owned(),
-                candidates,
-                ProjectionPath {
-                    generated_url: generated_url.into(),
-                    content,
-                    steps: vec![ProjectionStep::SourceMap {
-                        map_id,
-                        shape: map.shape.clone(),
-                    }],
-                },
-            ));
-        }
+        let discovered = (0..map.map.get_source_count())
+            .into_par_iter()
+            .map(|source_id| {
+                let logical_url = map.map.get_source(source_id)?;
+                let candidates = self.content_candidates(
+                    logical_url,
+                    map.map.get_source_contents(source_id),
+                    map_id,
+                );
+                if candidates.is_empty() {
+                    return Some(Err(SourceDiagnostic::MissingContent {
+                        logical_url: logical_url.into(),
+                    }));
+                }
+                let content = candidates[0].content;
+                Some(Ok((
+                    source_id,
+                    logical_url.to_owned(),
+                    candidates,
+                    ProjectionPath {
+                        generated_url: generated_url.into(),
+                        content,
+                        steps: vec![ProjectionStep::SourceMap {
+                            map_id,
+                            shape: map.shape.clone(),
+                        }],
+                    },
+                )))
+            })
+            .collect::<Vec<_>>();
+        let discovered = discovered
+            .into_iter()
+            .flatten()
+            .filter_map(|discovered| match discovered {
+                Ok(discovered) => Some(discovered),
+                Err(diagnostic) => {
+                    self.diagnostics.push(diagnostic);
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let map_content = self.maps[map_id.0].content;
         for (source_index, logical_url, candidates, path) in discovered {
             let resolved_snapshot = self.register_resolved_candidates(
@@ -922,27 +1036,13 @@ fn build_reverse_index(map: &SourceMap) -> ReverseIndex {
     reverse
 }
 
-fn map_shape(raw_map: &[u8]) -> MapShape {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(raw_map) else {
-        return MapShape::Ordinary;
-    };
-    let Some(sections) = value["sections"].as_array() else {
-        return MapShape::Ordinary;
-    };
-    MapShape::Indexed {
-        section_count: sections.len(),
-        max_depth: indexed_depth(&value),
-    }
-}
-
-fn indexed_depth(value: &serde_json::Value) -> usize {
-    let Some(sections) = value["sections"].as_array() else {
-        return 0;
-    };
-    1 + sections
-        .iter()
-        .filter_map(|section| section.get("map"))
-        .map(indexed_depth)
+fn indexed_depth(index: &SourceMapIndex) -> usize {
+    1 + index
+        .sections()
+        .filter_map(|section| match section.get_sourcemap() {
+            Some(DecodedMap::Index(index)) => Some(indexed_depth(index)),
+            _ => None,
+        })
         .max()
         .unwrap_or(0)
 }
@@ -1033,44 +1133,58 @@ pub(crate) struct LineIndex {
 struct LineRecord {
     start: usize,
     end: usize,
+    utf16_start: u32,
     utf16_len: u32,
-    unicode_boundaries: Option<Vec<(u32, usize)>>,
+    unicode_characters: Vec<UnicodeCharacter>,
     trailing_cr: bool,
+}
+
+struct UnicodeCharacter {
+    byte_start: usize,
+    utf16_start: u32,
+    byte_len: u8,
+    utf16_len: u8,
 }
 
 impl LineIndex {
     pub(crate) fn new(text: &str) -> Self {
         let mut lines = Vec::new();
         let mut start = 0;
+        let mut utf16_start = 0_u32;
         let mut utf16_len = 0;
-        let mut boundaries = Vec::new();
-        let mut has_non_ascii = false;
+        let mut unicode_characters = Vec::new();
         for (index, character) in text.char_indices() {
             if character == '\n' {
-                boundaries.push((utf16_len, index));
                 lines.push(LineRecord {
                     start,
                     end: index,
+                    utf16_start,
                     utf16_len,
-                    unicode_boundaries: has_non_ascii.then_some(boundaries),
+                    unicode_characters,
                     trailing_cr: index > start && text.as_bytes()[index - 1] == b'\r',
                 });
                 start = index + 1;
+                utf16_start = utf16_start.saturating_add(utf16_len).saturating_add(1);
                 utf16_len = 0;
-                boundaries = Vec::new();
-                has_non_ascii = false;
+                unicode_characters = Vec::new();
             } else {
-                boundaries.push((utf16_len, index));
+                if !character.is_ascii() {
+                    unicode_characters.push(UnicodeCharacter {
+                        byte_start: index,
+                        utf16_start: utf16_len,
+                        byte_len: character.len_utf8() as u8,
+                        utf16_len: character.len_utf16() as u8,
+                    });
+                }
                 utf16_len += character.len_utf16() as u32;
-                has_non_ascii |= !character.is_ascii();
             }
         }
-        boundaries.push((utf16_len, text.len()));
         lines.push(LineRecord {
             start,
             end: text.len(),
+            utf16_start,
             utf16_len,
-            unicode_boundaries: has_non_ascii.then_some(boundaries),
+            unicode_characters,
             trailing_cr: text.ends_with('\r'),
         });
         Self { lines }
@@ -1081,27 +1195,42 @@ impl LineIndex {
         let column = position
             .column
             .min(line.utf16_len - u32::from(line.trailing_cr));
-        match &line.unicode_boundaries {
-            Some(boundaries) => {
-                let index = boundaries.partition_point(|(boundary, _)| *boundary < column);
-                Some(boundaries[index].1)
-            }
-            None => Some(line.start + column as usize),
+        line.byte_offset(column, true)
+    }
+
+    pub(crate) fn clamped_utf16_position(&self, offset: u32) -> Position {
+        let line_index = self
+            .lines
+            .partition_point(|line| line.utf16_start <= offset)
+            - 1;
+        let line = &self.lines[line_index];
+        let column = (offset - line.utf16_start).min(line.utf16_len);
+        let byte = line
+            .byte_offset(column, true)
+            .expect("clamped columns have a byte offset");
+        Position {
+            line: line_index as u32,
+            column: line
+                .utf16_column(byte, false)
+                .expect("rounded offsets are character boundaries"),
+        }
+    }
+
+    pub(crate) fn clamped_byte_position(&self, offset: u32) -> Position {
+        let offset = offset as usize;
+        let line_index = self.lines.partition_point(|line| line.start <= offset) - 1;
+        let line = &self.lines[line_index];
+        Position {
+            line: line_index as u32,
+            column: line
+                .utf16_column(offset.min(line.end), true)
+                .expect("clamped byte offsets have a column"),
         }
     }
 
     fn byte_offset(&self, position: Position) -> Option<usize> {
         let line = self.lines.get(position.line as usize)?;
-        if position.column > line.utf16_len {
-            return None;
-        }
-        match &line.unicode_boundaries {
-            Some(boundaries) => boundaries
-                .binary_search_by_key(&position.column, |(column, _)| *column)
-                .ok()
-                .map(|index| boundaries[index].1),
-            None => Some(line.start + position.column as usize),
-        }
+        line.byte_offset(position.column, false)
     }
 
     fn position(&self, byte_offset: usize) -> Option<Position> {
@@ -1110,13 +1239,7 @@ impl LineIndex {
         if byte_offset > line.end {
             return None;
         }
-        let column = match &line.unicode_boundaries {
-            Some(boundaries) => boundaries
-                .binary_search_by_key(&byte_offset, |(_, byte)| *byte)
-                .ok()
-                .map(|index| boundaries[index].0)?,
-            None => (byte_offset - line.start) as u32,
-        };
+        let column = line.utf16_column(byte_offset, false)?;
         Some(Position {
             line: line_index as u32,
             column,
@@ -1128,9 +1251,55 @@ impl LineIndex {
             + self
                 .lines
                 .iter()
-                .filter_map(|line| line.unicode_boundaries.as_ref())
-                .map(|boundaries| boundaries.len() * size_of::<(u32, usize)>())
+                .map(|line| line.unicode_characters.len() * size_of::<UnicodeCharacter>())
                 .sum::<usize>()
+    }
+}
+
+impl LineRecord {
+    fn byte_offset(&self, column: u32, round_surrogate_up: bool) -> Option<usize> {
+        if column > self.utf16_len {
+            return None;
+        }
+        let index = self
+            .unicode_characters
+            .partition_point(|c| c.utf16_start <= column);
+        let Some(character) = index.checked_sub(1).map(|i| &self.unicode_characters[i]) else {
+            return Some(self.start + column as usize);
+        };
+        let delta = column - character.utf16_start;
+        if delta == 0 {
+            Some(character.byte_start)
+        } else if delta < u32::from(character.utf16_len) {
+            round_surrogate_up.then_some(character.byte_start + usize::from(character.byte_len))
+        } else {
+            Some(
+                character.byte_start
+                    + usize::from(character.byte_len)
+                    + (delta - u32::from(character.utf16_len)) as usize,
+            )
+        }
+    }
+
+    fn utf16_column(&self, byte_offset: usize, round_utf8_up: bool) -> Option<u32> {
+        let index = self
+            .unicode_characters
+            .partition_point(|c| c.byte_start <= byte_offset);
+        let Some(character) = index.checked_sub(1).map(|i| &self.unicode_characters[i]) else {
+            return Some((byte_offset - self.start) as u32);
+        };
+        let delta = byte_offset - character.byte_start;
+        if delta == 0 {
+            Some(character.utf16_start)
+        } else if delta < usize::from(character.byte_len) {
+            round_utf8_up.then_some(character.utf16_start + u32::from(character.utf16_len))
+        } else {
+            Some(
+                character.utf16_start
+                    + u32::from(character.utf16_len)
+                    + (delta - usize::from(character.byte_len)) as u32,
+            )
+        }
     }
 }
 
@@ -1457,6 +1626,213 @@ mod tests {
     }
 
     #[test]
+    fn decoded_sections_preserve_shape_for_empty_and_nested_indexes() {
+        let empty = json!({ "version": 3, "sections": [] });
+        let nested = json!({
+            "version": 3,
+            "sections": [
+                { "offset": { "line": 0, "column": 0 }, "map": empty },
+                { "offset": { "line": 1, "column": 0 }, "map": {
+                    "version": 3,
+                    "sections": [{ "offset": { "line": 0, "column": 0 }, "map": empty }]
+                }}
+            ]
+        });
+        assert_eq!(
+            DecodedSourceMap::decode(&serde_json::to_vec(&empty).unwrap())
+                .unwrap()
+                .shape,
+            MapShape::Indexed {
+                section_count: 0,
+                max_depth: 1
+            },
+        );
+        assert_eq!(
+            DecodedSourceMap::decode(&serde_json::to_vec(&nested).unwrap())
+                .unwrap()
+                .shape,
+            MapShape::Indexed {
+                section_count: 2,
+                max_depth: 3
+            },
+        );
+    }
+
+    #[test]
+    fn validated_source_maps_transfer_decoded_storage_without_pinning_it_in_captured_state() {
+        let bytes = regular_map(
+            "src/app.ts",
+            Some("export const value = 1;"),
+            &[(0, 0, 0, 0)],
+        );
+        let data = SourceMapData::new(bytes.clone());
+        assert!(data.is_supported());
+        let captured = data.clone();
+        let contents_pointer = data
+            .prepared
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .map
+            .get_source_contents(0)
+            .unwrap()
+            .as_ptr();
+        let encoded = serde_json::to_vec(&data).unwrap();
+        assert_eq!(encoded, serde_json::to_vec(&bytes).unwrap());
+        let restored: SourceMapData = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(restored, data);
+        assert!(restored.prepared.lock().unwrap().is_none());
+
+        let model = Arc::new(ContextSourceModel::new());
+        let mut views = Vec::new();
+        for (index, source_map) in [&data, &restored].into_iter().enumerate() {
+            assert!(source_map.is_supported());
+            let mut view = ResolvedSourceView::new(
+                ResolutionPolicy::PreferSourcesContent,
+                model.clone(),
+                SourceContributionId::new(format!("handoff-{index}")),
+                BTreeMap::new(),
+            );
+            view.add_generated_with_prepared_map(
+                GeneratedSourceInput {
+                    url: "bundle.js",
+                    content: "const value=1;",
+                    source_map: None,
+                    source_map_url: None,
+                    minified: false,
+                },
+                Some(source_map),
+            )
+            .unwrap();
+            assert!(source_map.prepared.lock().unwrap().is_none());
+            assert_eq!(
+                view.maps[0].map.get_source_contents(0).unwrap().as_ptr(),
+                contents_pointer
+            );
+            views.push(view);
+        }
+        assert!(Arc::ptr_eq(&views[0].maps[0], &views[1].maps[0]));
+        assert!(captured.prepared.lock().unwrap().is_none());
+        drop(views);
+        assert_eq!(model.decoded_source_map_count(), 0);
+        assert_eq!(model.content_stats().unique_contents, 0);
+        assert_eq!(&*captured, bytes.as_slice());
+    }
+
+    #[test]
+    fn large_map_preparation_shares_the_digest_with_one_or_multiple_workers() {
+        let bytes = regular_map("src/app.ts", Some(&"x".repeat(64 * 1024)), &[(0, 0, 0, 0)]);
+        let expected = ContentHash::of_bytes(&bytes);
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                let data = SourceMapData::new(bytes.clone());
+                assert!(data.is_supported());
+                assert_eq!(data.content_hash(), expected);
+                let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+                view.add_generated_with_prepared_map(
+                    GeneratedSourceInput {
+                        url: "bundle.js",
+                        content: "x",
+                        source_map: None,
+                        source_map_url: None,
+                        minified: false,
+                    },
+                    Some(&data),
+                )
+                .unwrap();
+                assert_eq!(view.maps[0].content, expected);
+                assert!(data.prepared.lock().unwrap().is_none());
+
+                let invalid = SourceMapData::new(vec![b'!'; 64 * 1024]);
+                assert!(!invalid.is_supported());
+                assert_eq!(invalid.content_hash(), ContentHash::of_bytes(&invalid));
+            });
+        }
+    }
+
+    #[test]
+    fn parallel_source_discovery_preserves_order_mapping_and_content_deduplication() {
+        let mut builder = SourceMapBuilder::new(Some("bundle.js"));
+        for index in 0..96 {
+            let source = format!("src/{index}.ts");
+            let source_id = builder.add_source(&source);
+            if index % 3 != 0 {
+                builder.set_source_contents(source_id, Some("shared authored content"));
+            }
+            builder.add(index, 0, 0, 0, Some(&source), None, false);
+        }
+        let mut bytes = Vec::new();
+        builder.into_sourcemap().to_writer(&mut bytes).unwrap();
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+                view.add_generated(GeneratedSourceInput {
+                    url: "bundle.js",
+                    content: "compiled",
+                    source_map: Some(&bytes),
+                    source_map_url: None,
+                    minified: false,
+                })
+                .unwrap();
+                assert_eq!(
+                    view.diagnostics(),
+                    (0..96)
+                        .step_by(3)
+                        .map(|index| SourceDiagnostic::MissingContent {
+                            logical_url: format!("src/{index}.ts"),
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                assert_eq!(view.files().len(), 64);
+                assert_eq!(view.model.graph_snapshot().projections.len(), 64);
+                assert_eq!(view.memory_report().content_store.unique_contents, 3);
+                assert_eq!(view.memory_report().content_store.intern_requests, 66);
+                for index in 0..96 {
+                    assert_eq!(
+                        view.source_map_location("bundle.js", Position { line: index, column: 0 }),
+                        Some((format!("src/{index}.ts"), Position::ZERO)),
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn invalid_prepared_maps_preserve_diagnostics_and_release_the_handoff() {
+        let data = SourceMapData::new(b"<html>unavailable</html>".as_slice());
+        assert!(!data.is_supported());
+        let mut view = empty_view(ResolutionPolicy::PreferSourcesContent);
+        view.add_generated_with_prepared_map(
+            GeneratedSourceInput {
+                url: "bundle.js",
+                content: "const value=1;",
+                source_map: None,
+                source_map_url: None,
+                minified: false,
+            },
+            Some(&data),
+        )
+        .unwrap();
+        assert!(data.prepared.lock().unwrap().is_none());
+        assert!(matches!(
+            view.diagnostics(),
+            [SourceDiagnostic::SourceMapFailed { .. }]
+        ));
+        assert_eq!(view.files()["bundle.js"].kind, SourceKind::Identity);
+    }
+
+    #[test]
     fn identical_maps_and_sources_are_shared_across_views() {
         let model = Arc::new(ContextSourceModel::new());
         let map = regular_map(
@@ -1565,6 +1941,158 @@ mod tests {
         let report = view.memory_report();
         assert_eq!(report.content_store.unique_contents, 2);
         assert!(report.estimated_format_index_bytes > 0);
+    }
+
+    #[test]
+    fn sparse_line_indexes_preserve_all_character_and_line_boundaries() {
+        let alphabet = ["a", "é", "中", "😀", "\r", "\n"];
+        let mut samples = vec![String::new()];
+        for _ in 0..3 {
+            samples = samples
+                .into_iter()
+                .flat_map(|prefix| {
+                    alphabet
+                        .iter()
+                        .map(move |suffix| format!("{prefix}{suffix}"))
+                })
+                .collect();
+        }
+        samples.push(String::new());
+        for text in samples {
+            let index = LineIndex::new(&text);
+            let mut start = 0;
+            let mut utf16_start = 0;
+            let mut global_boundaries = Vec::new();
+            let mut line_count = 0;
+            for (line_number, line) in text.split('\n').enumerate() {
+                line_count += 1;
+                let mut column = 0;
+                let mut boundaries = Vec::new();
+                for (byte, character) in line.char_indices() {
+                    let position = Position {
+                        line: line_number as u32,
+                        column,
+                    };
+                    boundaries.push((column, start + byte));
+                    global_boundaries.push((start + byte, utf16_start + column, position));
+                    assert_eq!(index.byte_offset(position), Some(start + byte), "{text:?}");
+                    assert_eq!(index.position(start + byte), Some(position), "{text:?}");
+                    for inside in 1..character.len_utf8() {
+                        assert_eq!(index.position(start + byte + inside), None, "{text:?}");
+                    }
+                    for inside in 1..character.len_utf16() {
+                        assert_eq!(
+                            index.byte_offset(Position {
+                                column: column + inside as u32,
+                                ..position
+                            }),
+                            None,
+                            "{text:?}"
+                        );
+                    }
+                    column += character.len_utf16() as u32;
+                }
+                boundaries.push((column, start + line.len()));
+                let end = Position {
+                    line: line_number as u32,
+                    column,
+                };
+                global_boundaries.push((start + line.len(), utf16_start + column, end));
+                assert_eq!(index.byte_offset(end), Some(start + line.len()), "{text:?}");
+                assert_eq!(index.position(start + line.len()), Some(end), "{text:?}");
+                let content_columns = line
+                    .strip_suffix('\r')
+                    .unwrap_or(line)
+                    .encode_utf16()
+                    .count() as u32;
+                for requested in 0..=column + 2 {
+                    let expected = boundaries
+                        .iter()
+                        .find(|(column, _)| *column >= requested.min(content_columns))
+                        .unwrap()
+                        .1;
+                    assert_eq!(
+                        index.clamped_byte_offset(Position {
+                            column: requested,
+                            ..end
+                        }),
+                        Some(expected),
+                        "{text:?}"
+                    );
+                }
+                assert_eq!(
+                    index.byte_offset(Position {
+                        column: column + 1,
+                        ..end
+                    }),
+                    None
+                );
+                start += line.len() + 1;
+                utf16_start += column + 1;
+            }
+            let last = global_boundaries.last().unwrap();
+            for target in 0..=text.len() + 2 {
+                let expected = global_boundaries
+                    .iter()
+                    .find(|(byte, _, _)| *byte >= target)
+                    .unwrap_or(last)
+                    .2;
+                assert_eq!(
+                    index.clamped_byte_position(target as u32),
+                    expected,
+                    "{text:?}"
+                );
+            }
+            for target in 0..=text.encode_utf16().count() as u32 + 2 {
+                let expected = global_boundaries
+                    .iter()
+                    .find(|(_, utf16, _)| *utf16 >= target)
+                    .unwrap_or(last)
+                    .2;
+                assert_eq!(index.clamped_utf16_position(target), expected, "{text:?}");
+            }
+            assert_eq!(index.clamped_byte_position(u32::MAX), last.2);
+            assert_eq!(index.clamped_utf16_position(u32::MAX), last.2);
+            assert_eq!(index.position(text.len() + 1), None);
+            assert_eq!(
+                index.clamped_byte_offset(Position {
+                    line: line_count,
+                    column: 0
+                }),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_line_index_storage_scales_with_unicode_not_ascii_text_length() {
+        let ascii = "a".repeat(200_000);
+        let plain = LineIndex::new(&ascii);
+        assert_eq!(plain.lines[0].unicode_characters.capacity(), 0);
+        let mixed = LineIndex::new(&format!("{ascii}😀{ascii}"));
+        assert_eq!(mixed.lines[0].unicode_characters.len(), 1);
+        assert!(mixed.estimated_bytes() < 256);
+        assert_eq!(
+            mixed.byte_offset(Position {
+                line: 0,
+                column: 200_001
+            }),
+            None
+        );
+        assert_eq!(
+            mixed.clamped_byte_offset(Position {
+                line: 0,
+                column: 200_001
+            }),
+            Some(200_004)
+        );
+        assert_eq!(
+            mixed.byte_offset(Position {
+                line: 0,
+                column: 400_002
+            }),
+            Some(400_004)
+        );
     }
 
     #[test]

@@ -103,6 +103,12 @@ struct ContextSourceState {
     contributions: BTreeMap<SourceContributionId, SourceContribution>,
     snapshot_references: BTreeMap<SourceSnapshotId, usize>,
     projection_references: BTreeMap<ProjectionId, usize>,
+    source_map_references: BTreeMap<SourceSnapshotId, SourceMapReferences>,
+}
+
+struct SourceMapReferences {
+    content: ContentHash,
+    projections: usize,
 }
 
 impl Default for ContextSourceModel {
@@ -121,6 +127,7 @@ impl ContextSourceModel {
                 contributions: BTreeMap::new(),
                 snapshot_references: BTreeMap::new(),
                 projection_references: BTreeMap::new(),
+                source_map_references: BTreeMap::new(),
             }),
             content,
             decoded_maps: Mutex::new(HashMap::new()),
@@ -182,23 +189,18 @@ impl ContextSourceModel {
         kind: ProjectionKind,
     ) -> Result<ProjectionId, SourceGraphError> {
         let mut state = self.state.lock().unwrap();
-        if let ProjectionKind::SourceMap { map, .. } = &kind
-            && let Some(existing) = state.graph.projections().find_map(|projection| {
-                if projection.derived != derived {
-                    return None;
-                }
-                match projection.kind {
-                    ProjectionKind::SourceMap {
-                        map: existing_map, ..
-                    } if existing_map != *map => Some(existing_map),
-                    _ => None,
-                }
-            })
+        let source_map = match &kind {
+            ProjectionKind::SourceMap { map, .. } => Some(*map),
+            _ => None,
+        };
+        if let Some(map) = source_map
+            && let Some(existing) = state.source_map_references.get(&derived)
+            && existing.content != map
         {
             return Err(SourceGraphError::ConflictingSourceMap {
                 snapshot: derived,
-                existing,
-                contributed: *map,
+                existing: existing.content,
+                contributed: map,
             });
         }
         let projection = state.graph.add_projection(derived, basis, kind)?;
@@ -209,7 +211,20 @@ impl ContextSourceModel {
             .projections
             .insert(projection);
         if inserted {
-            *state.projection_references.entry(projection).or_default() += 1;
+            let references = state.projection_references.entry(projection).or_default();
+            let new_projection = *references == 0;
+            *references += 1;
+            if new_projection
+                && let Some(content) = source_map
+            {
+                state.source_map_references
+                    .entry(derived)
+                    .or_insert(SourceMapReferences {
+                        content,
+                        projections: 0,
+                    })
+                    .projections += 1;
+            }
         }
         Ok(projection)
     }
@@ -903,8 +918,17 @@ impl ContextSourceModel {
 
         for projection in contribution.projections {
             decrement_reference(&mut state.projection_references, projection);
-            if !state.projection_references.contains_key(&projection) {
-                state.graph.remove_projection(projection);
+            if !state.projection_references.contains_key(&projection)
+                && let Some(projection) = state.graph.remove_projection(projection)
+                && matches!(projection.kind, ProjectionKind::SourceMap { .. })
+            {
+                let references = state.source_map_references
+                    .get_mut(&projection.derived)
+                    .expect("source-map projections have an indexed reference");
+                references.projections -= 1;
+                if references.projections == 0 {
+                    state.source_map_references.remove(&projection.derived);
+                }
             }
         }
         for snapshot in contribution.snapshots {
@@ -1104,14 +1128,35 @@ mod tests {
             .add_projection(&first, generated, source, kind.clone())
             .unwrap();
         let second_projection = model
-            .add_projection(&second, generated, source, kind)
+            .add_projection(&second, generated, source, kind.clone())
             .unwrap();
         assert_eq!(first_projection, second_projection);
+        assert_eq!(
+            model
+                .add_projection(&first, generated, source, kind)
+                .unwrap(),
+            first_projection,
+        );
+        let map_projections = || {
+            model.state.lock().unwrap().source_map_references
+                .get(&generated)
+                .map_or(0, |entry| entry.projections)
+        };
+        assert_eq!(map_projections(), 1);
+        model
+            .add_projection(
+                &second, generated, source,
+                ProjectionKind::SourceMap { map, source_index: 1 },
+            )
+            .unwrap();
+        assert_eq!(map_projections(), 2);
 
         model.release(&first);
-        assert_eq!(model.graph_snapshot().projections.len(), 1);
+        assert_eq!(model.graph_snapshot().projections.len(), 2);
+        assert_eq!(map_projections(), 2);
         model.release(&second);
         assert!(model.graph_snapshot().projections.is_empty());
+        assert!(model.state.lock().unwrap().source_map_references.is_empty());
     }
 
     #[test]
@@ -1170,6 +1215,30 @@ mod tests {
                 ..
             } if snapshot == generated
         ));
+        model.release(&first);
+        assert!(model.state.lock().unwrap().source_map_references.is_empty());
+        let replacement = model.content_store().intern("replacement map");
+        assert!(
+            model
+                .add_projection(
+                    &second, generated, generated,
+                    ProjectionKind::SourceMap { map: replacement, source_index: 0 },
+                )
+                .is_err()
+        );
+        assert!(model.state.lock().unwrap().source_map_references.is_empty());
+        model
+            .add_projection(
+                &second, generated, second_source,
+                ProjectionKind::SourceMap { map: replacement, source_index: 0 },
+            )
+            .unwrap();
+        assert_eq!(
+            model.state.lock().unwrap().source_map_references[&generated].content,
+            replacement,
+        );
+        model.release(&second);
+        assert!(model.state.lock().unwrap().source_map_references.is_empty());
     }
 
     #[test]

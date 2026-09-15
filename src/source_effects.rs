@@ -13,8 +13,8 @@ use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
 use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
-    GeneratedSourceInput, MappingQuality, Position, ProjectionStep, Provenance, ResolutionPolicy,
-    ResolvedSourceView, SourceViewError, appears_minified, canonical_source_uri,
+    GeneratedSourceInput, LineIndex, MappingQuality, Position, ProjectionStep, Provenance,
+    ResolutionPolicy, ResolvedSourceView, SourceViewError, appears_minified, canonical_source_uri,
 };
 
 pub struct SourceEffectOptions {
@@ -39,10 +39,16 @@ struct RetainedView {
     logical_to_canonical: BTreeMap<String, String>,
     canonical_to_logical: BTreeMap<String, String>,
     generated_content: Arc<str>,
-    generated_index: GeneratedOffsetIndex,
+    generated_index: Arc<LineIndex>,
     projection_cache: Mutex<BTreeMap<u32, Option<ProjectedOffset>>>,
     symbol_indexes: SymbolIndexCache,
     view: Arc<ResolvedSourceView>,
+}
+
+impl RetainedView {
+    fn positions_for(&self, content: &str) -> Option<&Arc<LineIndex>> {
+        std::ptr::eq(content, self.generated_content.as_ref()).then_some(&self.generated_index)
+    }
 }
 
 type CachedSymbolIndex = Arc<OnceLock<Option<crate::language_intelligence::SymbolIndex>>>;
@@ -53,7 +59,12 @@ struct SymbolIndexCache {
 }
 
 impl SymbolIndexCache {
-    fn get_or_create(&self, source_url: &str, content: &str) -> CachedSymbolIndex {
+    fn get_or_create(
+        &self,
+        source_url: &str,
+        content: &str,
+        positions: Option<&Arc<LineIndex>>,
+    ) -> CachedSymbolIndex {
         let index = {
             let mut indexes = self.entries.lock().unwrap();
             indexes
@@ -61,7 +72,13 @@ impl SymbolIndexCache {
                 .or_insert_with(|| Arc::new(OnceLock::new()))
                 .clone()
         };
-        index.get_or_init(|| crate::language_intelligence::SymbolIndex::new(source_url, content));
+        index.get_or_init(|| {
+            crate::language_intelligence::SymbolIndex::with_positions(
+                source_url,
+                content,
+                positions.cloned(),
+            )
+        });
         index
     }
 
@@ -90,102 +107,6 @@ pub struct SourceEffectInterpreter {
     store: Arc<ContentStore>,
     views: BTreeMap<EffectId, RetainedView>,
     runtime_sources: BTreeMap<ScriptKey, RuntimeSourceObservation>,
-}
-
-struct GeneratedOffsetIndex {
-    checkpoints: Vec<OffsetCheckpoint>,
-}
-
-#[derive(Clone, Copy)]
-struct OffsetCheckpoint {
-    byte: usize,
-    utf16: u32,
-    line: u32,
-    column: u32,
-}
-
-impl GeneratedOffsetIndex {
-    const CHECKPOINT_BYTES: usize = 4096;
-
-    fn new(content: &str) -> Self {
-        let mut checkpoints = vec![OffsetCheckpoint {
-            byte: 0,
-            utf16: 0,
-            line: 0,
-            column: 0,
-        }];
-        let mut utf16 = 0_u32;
-        let mut line = 0_u32;
-        let mut column = 0_u32;
-        let mut next_checkpoint = Self::CHECKPOINT_BYTES;
-        for (byte, character) in content.char_indices() {
-            if byte >= next_checkpoint || character == '\n' {
-                checkpoints.push(OffsetCheckpoint {
-                    byte,
-                    utf16,
-                    line,
-                    column,
-                });
-                next_checkpoint = byte.saturating_add(Self::CHECKPOINT_BYTES);
-            }
-            utf16 = utf16.saturating_add(character.len_utf16() as u32);
-            if character == '\n' {
-                line = line.saturating_add(1);
-                column = 0;
-            } else {
-                column = column.saturating_add(character.len_utf16() as u32);
-            }
-        }
-        Self { checkpoints }
-    }
-
-    fn utf16_position(&self, content: &str, target: u32) -> Position {
-        let checkpoint = self
-            .checkpoints
-            .partition_point(|checkpoint| checkpoint.utf16 <= target)
-            .saturating_sub(1);
-        self.scan(content, self.checkpoints[checkpoint], |state| {
-            state.utf16 >= target
-        })
-    }
-
-    fn byte_position(&self, content: &str, target: u32) -> Position {
-        let target = target as usize;
-        let checkpoint = self
-            .checkpoints
-            .partition_point(|checkpoint| checkpoint.byte <= target)
-            .saturating_sub(1);
-        self.scan(content, self.checkpoints[checkpoint], |state| {
-            state.byte >= target
-        })
-    }
-
-    fn scan(
-        &self,
-        content: &str,
-        mut state: OffsetCheckpoint,
-        done: impl Fn(OffsetCheckpoint) -> bool,
-    ) -> Position {
-        let base = state.byte;
-        for (relative_byte, character) in content[base..].char_indices() {
-            state.byte = base + relative_byte;
-            if done(state) {
-                break;
-            }
-            state.utf16 = state.utf16.saturating_add(character.len_utf16() as u32);
-            if character == '\n' {
-                state.line = state.line.saturating_add(1);
-                state.column = 0;
-            } else {
-                state.column = state.column.saturating_add(character.len_utf16() as u32);
-            }
-            state.byte = base + relative_byte + character.len_utf8();
-        }
-        Position {
-            line: state.line,
-            column: state.column,
-        }
-    }
 }
 
 impl SourceEffectInterpreter {
@@ -228,15 +149,18 @@ impl SourceEffectInterpreter {
                     )),
                     self.options.workspace.clone(),
                 );
-                view.add_generated(GeneratedSourceInput {
-                    url: generated_url,
-                    content,
-                    source_map: source_map.as_deref(),
-                    source_map_url: source_map_url.as_deref(),
-                    minified: source_map.is_none()
-                        && self.options.format_unmapped_sources
-                        && appears_minified(generated_url, content),
-                })?;
+                view.add_generated_with_prepared_map(
+                    GeneratedSourceInput {
+                        url: generated_url,
+                        content,
+                        source_map: None,
+                        source_map_url: source_map_url.as_deref(),
+                        minified: source_map.is_none()
+                            && self.options.format_unmapped_sources
+                            && appears_minified(generated_url, content),
+                    },
+                    source_map.as_ref(),
+                )?;
                 let logical_sources = view
                     .files()
                     .iter()
@@ -264,7 +188,7 @@ impl SourceEffectInterpreter {
                         logical_to_canonical,
                         canonical_to_logical,
                         generated_content: content.clone(),
-                        generated_index: GeneratedOffsetIndex::new(content),
+                        generated_index: Arc::new(LineIndex::new(content)),
                         projection_cache: Mutex::new(BTreeMap::new()),
                         symbol_indexes: SymbolIndexCache::default(),
                         view: Arc::new(view),
@@ -464,15 +388,14 @@ impl SourceEffectInterpreter {
                 .map(|projected| (projected.source_url, projected.position, projected.content));
         }
 
-        let mapped = [
+        let mapped = std::iter::once_with(|| {
             retained
                 .generated_index
-                .utf16_position(&retained.generated_content, utf16_offset),
-            retained
-                .generated_index
-                .byte_position(&retained.generated_content, utf16_offset),
-        ]
-        .into_iter()
+                .clamped_utf16_position(utf16_offset)
+        })
+        .chain(std::iter::once_with(|| {
+            retained.generated_index.clamped_byte_position(utf16_offset)
+        }))
         .find_map(|position| {
             retained
                 .view
@@ -536,7 +459,7 @@ impl SourceEffectInterpreter {
         Some(
             retained
                 .generated_index
-                .utf16_position(&retained.generated_content, utf16_offset),
+                .clamped_utf16_position(utf16_offset),
         )
     }
 
@@ -556,7 +479,7 @@ impl SourceEffectInterpreter {
         let retained = self.views.get(&source_state.view_id)?;
         retained
             .symbol_indexes
-            .get_or_create(source_url, content)
+            .get_or_create(source_url, content, retained.positions_for(content))
             .get()
             .and_then(Option::as_ref)
             .and_then(|index| index.breadcrumb(line, column))
@@ -583,7 +506,11 @@ impl SourceEffectInterpreter {
             .into_par_iter()
             .for_each(|((view_id, source_url), content)| {
                 if let Some(retained) = self.views.get(&view_id) {
-                    retained.symbol_indexes.get_or_create(&source_url, &content);
+                    retained.symbol_indexes.get_or_create(
+                        &source_url,
+                        &content,
+                        retained.positions_for(&content),
+                    );
                 }
             });
     }
@@ -1080,15 +1007,19 @@ mod tests {
     fn symbol_indexes_are_shared_and_lookups_do_not_hold_the_cache_lock() {
         let cache = SymbolIndexCache::default();
         let source = "class Example { method() { return 1; } }";
+        let positions = Arc::new(LineIndex::new(source));
         let cells = std::thread::scope(|scope| {
             let threads = (0..8)
-                .map(|_| scope.spawn(|| cache.get_or_create("fixture.js", source)))
+                .map(|_| {
+                    scope.spawn(|| cache.get_or_create("fixture.js", source, Some(&positions)))
+                })
                 .collect::<Vec<_>>();
             threads
                 .into_iter()
                 .map(|thread| thread.join().unwrap())
                 .collect::<Vec<_>>()
         });
+        assert_eq!(Arc::strong_count(&positions), 2);
         assert!(cells.iter().all(|cell| Arc::ptr_eq(cell, &cells[0])));
         let entries = cache.entries.lock().unwrap();
         assert_eq!(entries.len(), 1);
@@ -1120,17 +1051,17 @@ mod tests {
     #[test]
     fn generated_offset_index_maps_utf16_and_byte_offsets() {
         let content = "a😀b\nsecond";
-        let index = GeneratedOffsetIndex::new(content);
+        let index = LineIndex::new(content);
         assert_eq!(
-            index.utf16_position(content, 3),
+            index.clamped_utf16_position(3),
             Position { line: 0, column: 3 }
         );
         assert_eq!(
-            index.byte_position(content, 5),
+            index.clamped_byte_position(5),
             Position { line: 0, column: 3 }
         );
         assert_eq!(
-            index.utf16_position(content, 5),
+            index.clamped_utf16_position(5),
             Position { line: 1, column: 0 }
         );
     }
@@ -1435,7 +1366,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: fetch_id,
                 content: Arc::from("var answer=42;"),
-                source_map: Some(Arc::from(source_map())),
+                source_map: Some(crate::source_view::SourceMapData::new(source_map())),
                 source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },

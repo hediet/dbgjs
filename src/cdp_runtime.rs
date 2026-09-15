@@ -31,7 +31,7 @@ use crate::cdp::{
 use crate::cdp_transport::ManagedCdpTransport;
 use crate::debugger_engine::{Effect, Input, RawFrame, RawScope, SessionKey, StepKind};
 use crate::session_transport::CdpSessionMux;
-use crate::source_view::Position;
+use crate::source_view::{Position, SourceMapData};
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
 
 #[path = "cdp_source_map_resources.rs"]
@@ -550,7 +550,7 @@ impl CdpDebuggerSession {
                             .await
                         {
                             Ok((source_map, resolved_url)) => {
-                                (Some(Arc::from(source_map)), Some(resolved_url), None)
+                                (Some(source_map), Some(resolved_url), None)
                             }
                             Err(error) if error.is_source_map_unavailable() => {
                                 (None, None, Some(error.to_string()))
@@ -673,10 +673,10 @@ impl CdpDebuggerSession {
         script_hash: &str,
         source_map_url: &str,
         frame_id: Option<&str>,
-    ) -> Result<(Vec<u8>, String), CdpRuntimeError> {
+    ) -> Result<(SourceMapData, String), CdpRuntimeError> {
         if source_map_url.starts_with("data:") {
             return decode_source_map_data_url(source_map_url)
-                .map(|source_map| (source_map, generated_url.to_owned()));
+                .map(|source_map| (SourceMapData::new(source_map), generated_url.to_owned()));
         }
 
         let resolved_url = resolve_source_map_url(generated_url, source_map_url)?;
@@ -691,7 +691,7 @@ impl CdpDebuggerSession {
         if let Some(path) = &cache_path {
             match tokio::fs::read(path).await {
                 Ok(bytes) => {
-                    if let Some(source_map) = decode_source_map_cache(&bytes) {
+                    if let Some(source_map) = decode_source_map_cache(bytes) {
                         self.source_map_cache_hits.fetch_add(1, Ordering::Relaxed);
                         if let Err(error) =
                             tokio::fs::write(path.with_extension("access"), []).await
@@ -737,9 +737,10 @@ impl CdpDebuggerSession {
             }
             Err(error) => return Err(error),
         };
-        if source_map_is_supported(&bytes) {
+        let source_map = SourceMapData::new(bytes);
+        if source_map.is_supported() {
             if let Some(path) = cache_path
-                && let Err(error) = write_source_map_cache(&path, &bytes).await
+                && let Err(error) = write_source_map_cache(&path, &source_map).await
             {
                 eprintln!(
                     "failed to write source-map cache entry {}: {error}",
@@ -749,7 +750,7 @@ impl CdpDebuggerSession {
         } else {
             eprintln!("not caching invalid or unsupported source map {resolved_url}");
         }
-        Ok((bytes, resolved_url))
+        Ok((source_map, resolved_url))
     }
 
     async fn load_source_map_via_cdp(
@@ -1362,7 +1363,7 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
     Some(directory.join(format!("{:x}.map", hasher.finalize())))
 }
 
-async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+async fn write_source_map_cache(path: &Path, source_map: &SourceMapData) -> Result<(), std::io::Error> {
     const MAGIC: &[u8] = b"dbgjs-source-map-v1\n";
     static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
     let Some(parent) = path.parent() else {
@@ -1377,11 +1378,11 @@ async fn write_source_map_cache(path: &Path, bytes: &[u8]) -> Result<(), std::io
         std::process::id(),
         TEMPORARY_ID.fetch_add(1, Ordering::Relaxed)
     ));
-    let digest = format!("{:x}\n", Sha256::digest(bytes));
+    let digest = format!("{}\n", source_map.content_hash());
     let mut file = tokio::fs::File::create(&temporary).await?;
     file.write_all(MAGIC).await?;
     file.write_all(digest.as_bytes()).await?;
-    file.write_all(bytes).await?;
+    file.write_all(source_map).await?;
     file.sync_data().await?;
     drop(file);
     match tokio::fs::rename(&temporary, path).await {
@@ -1493,22 +1494,18 @@ async fn cleanup_source_map_cache(directory: &Path) {
     }
 }
 
-fn decode_source_map_cache(bytes: &[u8]) -> Option<Vec<u8>> {
+fn decode_source_map_cache(mut bytes: Vec<u8>) -> Option<SourceMapData> {
     const MAGIC: &[u8] = b"dbgjs-source-map-v1\n";
     let remainder = bytes.strip_prefix(MAGIC)?;
     let newline = remainder.iter().position(|byte| *byte == b'\n')?;
-    let expected = std::str::from_utf8(&remainder[..newline]).ok()?;
-    let source_map = &remainder[newline + 1..];
-    (format!("{:x}", Sha256::digest(source_map)) == expected && source_map_is_supported(source_map))
-        .then(|| source_map.to_vec())
-}
-
-fn source_map_is_supported(bytes: &[u8]) -> bool {
-    match sourcemap::decode_slice(bytes) {
-        Ok(sourcemap::DecodedMap::Regular(_)) => true,
-        Ok(sourcemap::DecodedMap::Index(index)) => index.flatten().is_ok(),
-        Ok(sourcemap::DecodedMap::Hermes(_)) | Err(_) => false,
+    let expected: [u8; 64] = remainder[..newline].try_into().ok()?;
+    let payload_start = MAGIC.len() + newline + 1;
+    drop(bytes.drain(..payload_start));
+    let source_map = SourceMapData::new(bytes);
+    if source_map.content_hash().to_string().as_bytes() != expected.as_slice() {
+        return None;
     }
+    source_map.is_supported().then_some(source_map)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1709,17 +1706,43 @@ mod tests {
         cached.extend(format!("{:x}\n", Sha256::digest(source_map)).as_bytes());
         cached.extend(source_map);
         assert_eq!(
-            decode_source_map_cache(&cached).as_deref(),
+            decode_source_map_cache(cached.clone()).as_deref(),
             Some(source_map.as_slice())
         );
         *cached.last_mut().unwrap() ^= 1;
-        assert!(decode_source_map_cache(&cached).is_none());
+        assert!(decode_source_map_cache(cached).is_none());
 
         let invalid = b"<html>temporary CDN error</html>";
         let mut cached = b"dbgjs-source-map-v1\n".to_vec();
         cached.extend(format!("{:x}\n", Sha256::digest(invalid)).as_bytes());
         cached.extend(invalid);
-        assert!(decode_source_map_cache(&cached).is_none());
+        assert!(decode_source_map_cache(cached).is_none());
+    }
+
+    #[tokio::test]
+    async fn source_map_cache_reuses_the_digest_without_changing_the_disk_format() {
+        let directory = std::env::temp_dir().join(format!(
+            "dbgjs-source-map-digest-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = directory.join("source.map");
+        let bytes = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        let source_map = SourceMapData::new(bytes.as_slice());
+        assert!(source_map.is_supported());
+        write_source_map_cache(&path, &source_map).await.unwrap();
+        let cached = tokio::fs::read(&path).await.unwrap();
+        let mut expected =
+            format!("dbgjs-source-map-v1\n{:x}\n", Sha256::digest(bytes)).into_bytes();
+        expected.extend(bytes);
+        assert_eq!(cached, expected);
+        let restored = decode_source_map_cache(cached).unwrap();
+        assert_eq!(restored.content_hash(), source_map.content_hash());
+        assert_eq!(restored, source_map);
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 
     #[tokio::test]

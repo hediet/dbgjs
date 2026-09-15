@@ -17,6 +17,7 @@ export async function main(args = process.argv.slice(2)) {
 			output: { type: "string" },
 			profile: { type: "string", default: "debug" },
 			"skip-build": { type: "boolean", default: false },
+			"capture-only": { type: "boolean", default: false },
 			"timeout-ms": { type: "string", default: "300000" },
 		},
 	});
@@ -128,16 +129,20 @@ export async function main(args = process.argv.slice(2)) {
 		const scope = ["--context", context, "--connection", "code", "--target", target];
 		pageScope = scope;
 		const dbgjs = (label, arguments_) => command(label, cli, arguments_, serviceEnvironment);
-		const playwright = (label, program) => dbgjs(label, ["playwright", program, ...scope]);
-		await playwright("Dismiss first-run welcome and open Source Control", `
+		const playwright = (label, program) => dbgjs(label, ["playwright", `
 			await page.addLocatorHandler(
 				page.getByRole("dialog", { name: "Welcome to Visual Studio Code", exact: true }),
 				async dialog => { await dialog.getByRole("button", { name: "Close", exact: true }).click(); }
 			);
+			${program}
+		`, ...scope]);
+		await playwright("Dismiss first-run welcome and open Source Control", `
 			await page.getByRole("tab", { name: /^Source Control/ }).click();
 			return await page.locator("body").ariaSnapshot();
 		`);
 		await playwright("Open multi-diff editor", `
+			await page.getByRole("treeitem", { name: "greeting.ts, Modified", exact: true }).waitFor();
+			await page.getByRole("treeitem", { name: "greeting.test.ts, Modified", exact: true }).waitFor();
 			const changes = page.getByRole("treeitem", { name: "Changes", exact: true });
 			await changes.waitFor();
 			await changes.hover();
@@ -168,15 +173,17 @@ export async function main(args = process.argv.slice(2)) {
 		assert(rawRevert, "The raw capture must include the same executed revert function");
 		const runtimeRanges = (fn) => fn.ranges.map(({ startOffset, endOffset, count }) => ({ startOffset, endOffset, count }));
 		assert.deepEqual(runtimeRanges(revert), runtimeRanges(rawRevert), "Enrichment must preserve the revert counts and offsets");
-		await dbgjs("Explain mapped source provenance", ["source", "explain", source.generatedUrl, "--context", context]);
-		await dbgjs("Read mapped TypeScript", [
-			"source", "show", revert.authoredLocation.sourceUrl,
-			"--line", String(revert.authoredLocation.line), "--context-lines", "8", "--context", context,
-		]);
-		await dbgjs("Resolve mapped TypeScript position", [
-			"source", "map", revert.authoredLocation.sourceUrl, String(revert.authoredLocation.line),
-			String(revert.authoredLocation.column), "--context", context,
-		]);
+		if (!values["capture-only"]) {
+			await dbgjs("Explain mapped source provenance", ["source", "explain", source.generatedUrl, "--context", context]);
+			await dbgjs("Read mapped TypeScript", [
+				"source", "show", revert.authoredLocation.sourceUrl,
+				"--line", String(revert.authoredLocation.line), "--context-lines", "8", "--context", context,
+			]);
+			await dbgjs("Resolve mapped TypeScript position", [
+				"source", "map", revert.authoredLocation.sourceUrl, String(revert.authoredLocation.line),
+				String(revert.authoredLocation.column), "--context", context,
+			]);
+		}
 		const bundle = await installedBundlePath(source.generatedUrl, code);
 		const bundleBytes = await readFile(bundle);
 		const appDirectory = resolve(dirname(bundle), "..", "..", "..");

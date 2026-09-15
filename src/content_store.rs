@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -50,6 +50,35 @@ impl fmt::Debug for ContentHash {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct HashedBytes {
+    _bytes: Arc<[u8]>,
+    #[serde(skip)]
+    _hash: Arc<OnceLock<ContentHash>>,
+}
+
+impl HashedBytes {
+    pub(crate) fn new(bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            _bytes: bytes.into(),
+            _hash: Arc::default(),
+        }
+    }
+
+    pub(crate) fn hash(&self) -> ContentHash {
+        *self
+            ._hash
+            .get_or_init(|| ContentHash::of_bytes(&self._bytes))
+    }
+}
+
+impl AsRef<[u8]> for HashedBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self._bytes
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContentStoreStats {
     pub intern_requests: usize,
@@ -68,8 +97,19 @@ pub struct ContentStore {
 
 impl ContentStore {
     pub fn intern(&self, text: &str) -> ContentHash {
+        self._intern_with_hash(text, ContentHash::of_bytes(text.as_bytes()))
+    }
+
+    pub(crate) fn intern_bytes(
+        &self,
+        bytes: &HashedBytes,
+    ) -> Result<ContentHash, std::str::Utf8Error> {
+        let text = std::str::from_utf8(bytes.as_ref())?;
+        Ok(self._intern_with_hash(text, bytes.hash()))
+    }
+
+    fn _intern_with_hash(&self, text: &str, id: ContentHash) -> ContentHash {
         self.intern_requests.fetch_add(1, Ordering::Relaxed);
-        let id = ContentHash::of_bytes(text.as_bytes());
         let mut content = self.content.lock().unwrap();
         content.entry(id).or_insert_with(|| {
             self.unique_utf8_bytes
@@ -111,6 +151,63 @@ impl ContentStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rayon::prelude::*;
+
+    #[test]
+    fn immutable_bytes_share_the_hash_and_preserve_raw_serialization() {
+        let bytes = HashedBytes::new(b"shared source".as_slice());
+        let cloned = bytes.clone();
+        assert!(Arc::ptr_eq(&bytes._bytes, &cloned._bytes));
+        assert!(Arc::ptr_eq(&bytes._hash, &cloned._hash));
+        assert!(bytes._hash.get().is_none());
+        let expected = ContentHash::of_bytes(bytes.as_ref());
+        assert_eq!(cloned.hash(), expected);
+        assert_eq!(bytes._hash.get(), Some(&expected));
+        let encoded = serde_json::to_vec(&bytes).unwrap();
+        assert_eq!(encoded, serde_json::to_vec(bytes.as_ref()).unwrap());
+        let restored: HashedBytes = serde_json::from_slice(&encoded).unwrap();
+        assert!(restored._hash.get().is_none());
+        assert_eq!(restored.hash(), expected);
+        assert_eq!(restored.as_ref(), bytes.as_ref());
+    }
+
+    #[test]
+    fn concurrent_byte_interning_reuses_one_content_allocation() {
+        let bytes = HashedBytes::new(vec![b'x'; 64 * 1024]);
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            let store = ContentStore::default();
+            let ids = pool.install(|| {
+                (0..32)
+                    .into_par_iter()
+                    .map(|_| store.intern_bytes(&bytes).unwrap())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(ids, vec![bytes.hash(); 32]);
+            assert_eq!(
+                store.stats(),
+                ContentStoreStats {
+                    intern_requests: 32,
+                    materializations: 0,
+                    unique_contents: 1,
+                    unique_utf8_bytes: 64 * 1024,
+                },
+            );
+            assert_eq!(store.get(ids[0]).unwrap().as_bytes(), bytes.as_ref());
+        }
+    }
+
+    #[test]
+    fn byte_interning_rejects_invalid_utf8_without_storing_it() {
+        let store = ContentStore::default();
+        let bytes = HashedBytes::new([0xff].as_slice());
+        assert!(store.intern_bytes(&bytes).is_err());
+        assert!(bytes._hash.get().is_none());
+        assert_eq!(store.stats(), ContentStore::default().stats());
+    }
 
     #[test]
     fn controlled_hashing_checks_between_chunks() {

@@ -6,7 +6,7 @@ use im::{OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
 
 use crate::content_store::ContentHash;
-use crate::source_view::{ContentCandidate, Position};
+use crate::source_view::{ContentCandidate, Position, SourceMapData};
 
 const MAX_DIAGNOSTICS: usize = 1024;
 pub const MAX_BREAKPOINT_CANDIDATES: usize = 8;
@@ -95,7 +95,7 @@ pub enum ScriptSourceState {
     Pending(EffectId),
     Loaded {
         content: Arc<str>,
-        source_map: Option<Arc<[u8]>>,
+        source_map: Option<SourceMapData>,
         build_effect: EffectId,
     },
     Resolved(SourceViewState),
@@ -122,7 +122,7 @@ pub struct ScriptState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturedScriptSource {
     pub content: Arc<str>,
-    pub source_map: Option<Arc<[u8]>>,
+    pub source_map: Option<SourceMapData>,
     pub source_map_url: Option<String>,
     pub source_map_error: Option<String>,
 }
@@ -569,7 +569,7 @@ pub enum Effect {
         script_version: u64,
         generated_url: String,
         content: Arc<str>,
-        source_map: Option<Arc<[u8]>>,
+        source_map: Option<SourceMapData>,
         #[serde(default)]
         source_map_url: Option<String>,
     },
@@ -682,7 +682,7 @@ pub enum Input {
     ScriptSourceFetched {
         effect_id: EffectId,
         content: Arc<str>,
-        source_map: Option<Arc<[u8]>>,
+        source_map: Option<SourceMapData>,
         #[serde(default)]
         source_map_url: Option<String>,
         source_map_error: Option<String>,
@@ -3045,7 +3045,7 @@ mod tests {
         assert_eq!(frame_id.as_deref(), Some("child-frame"));
         let fetched = reduce(&requested.state, Input::ScriptSourceFetched {
             effect_id: *effect_id, content: Arc::from("class a {}"),
-            source_map: Some(Arc::from(b"{\"version\":3}".as_slice())),
+            source_map: Some(SourceMapData::new(b"{\"version\":3}".as_slice())),
             source_map_url: Some("https://example.test/app.js.map".into()), source_map_error: None,
         });
         let [Effect::BuildSourceView { effect_id, .. }] = fetched.effects.as_slice()
@@ -3221,7 +3221,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: fetch_id,
                 content: Arc::from("compiled"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
@@ -3666,7 +3666,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: fetch,
                 content: Arc::from("compiled second"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("second.js.map".into()),
                 source_map_error: None,
             },
@@ -3820,7 +3820,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: parsed.effects[0].effect_id(),
                 content: Arc::from("compiled two"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("two.js.map".into()),
                 source_map_error: None,
             },
@@ -4181,7 +4181,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: fetch,
                 content: Arc::from("compiled"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("bundle.js.map".into()),
                 source_map_error: None,
             },
@@ -5044,7 +5044,7 @@ mod tests {
                     version: 1,
                     source: ScriptSourceState::Loaded {
                         content: Arc::from("compiled"),
-                        source_map: Some(Arc::from([])),
+                        source_map: Some(SourceMapData::new([])),
                         build_effect: effect_id,
                     },
                 }),
@@ -5365,7 +5365,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: *retry_fetch,
                 content: Arc::from("compiled"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
@@ -5467,7 +5467,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id,
                 content: Arc::from("compiled"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some("file:///bundle.js.map".into()),
                 source_map_error: None,
             },
@@ -5544,7 +5544,7 @@ mod tests {
             Input::ScriptSourceFetched {
                 effect_id: fetch.1,
                 content: Arc::from("compiled"),
-                source_map: Some(Arc::from([])),
+                source_map: Some(SourceMapData::new([])),
                 source_map_url: Some(format!("{generated_url}.map")),
                 source_map_error: None,
             },

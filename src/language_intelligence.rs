@@ -6,11 +6,12 @@ use oxc_ast_visit::{
 };
 use oxc_parser::Parser;
 use oxc_span::{SourceType, Span};
+use std::sync::Arc;
 
 use crate::source_view::{LineIndex, Position};
 
 pub struct SymbolIndex {
-    positions: LineIndex,
+    positions: Arc<LineIndex>,
     root: Option<Box<SymbolNode>>,
 }
 
@@ -29,22 +30,34 @@ struct SymbolNode {
 
 impl SymbolIndex {
     pub fn new(source_url: &str, source: &str) -> Option<Self> {
-        let allocator = Allocator::default();
-        let source_type = SourceType::from_path(source_url).unwrap_or_else(|_| SourceType::tsx());
-        let parsed = Parser::new(&allocator, source, source_type).parse();
-        if parsed.panicked {
-            return None;
-        }
-        let mut visitor = SymbolVisitor {
-            stack: Vec::new(),
-            symbols: Vec::new(),
+        Self::with_positions(source_url, source, None)
+    }
+
+    pub(crate) fn with_positions(
+        source_url: &str,
+        source: &str,
+        positions: Option<Arc<LineIndex>>,
+    ) -> Option<Self> {
+        let mut symbols = {
+            let allocator = Allocator::default();
+            let source_type =
+                SourceType::from_path(source_url).unwrap_or_else(|_| SourceType::tsx());
+            let parsed = Parser::new(&allocator, source, source_type).parse();
+            if parsed.panicked {
+                return None;
+            }
+            let mut visitor = SymbolVisitor {
+                stack: Vec::new(),
+                symbols: Vec::new(),
+            };
+            visitor.visit_program(&parsed.program);
+            visitor.symbols
         };
-        visitor.visit_program(&parsed.program);
-        visitor.symbols.sort_by_key(|symbol| symbol.span.start);
-        let count = visitor.symbols.len();
+        symbols.sort_by_key(|symbol| symbol.span.start);
+        let count = symbols.len();
         Some(Self {
-            positions: LineIndex::new(source),
-            root: SymbolNode::from_sorted(&mut visitor.symbols.into_iter(), count),
+            positions: positions.unwrap_or_else(|| Arc::new(LineIndex::new(source))),
+            root: SymbolNode::from_sorted(&mut symbols.into_iter(), count),
         })
     }
 
