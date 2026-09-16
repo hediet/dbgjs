@@ -488,8 +488,14 @@ impl ConnectionRuntime {
         let events = launch
             .events
             .expect("the process tree provider always captures events");
-        let started =
-            ProcessTreeTargetSource::start(root_pid, &launch.endpoint, control, events).await;
+        let started = ProcessTreeTargetSource::start(
+            root_pid,
+            &launch.endpoint,
+            launch.browser_endpoint.as_deref(),
+            control,
+            events,
+        )
+        .await;
         let (source, source_events) = match started {
             Ok(started) => started,
             Err(error) => {
@@ -1276,6 +1282,7 @@ async fn launch_provider<const N: usize>(
     });
     Ok(ProviderLaunch {
         endpoint,
+        browser_endpoint: ready.browser_endpoint,
         child,
         events,
     })
@@ -1398,11 +1405,13 @@ async fn terminate_provider_tree(child: &mut Child) {
 #[serde(rename_all = "camelCase")]
 struct PlaywrightReady {
     endpoint: Option<String>,
+    browser_endpoint: Option<String>,
     error: Option<String>,
 }
 
 pub(crate) struct ProviderLaunch {
     pub endpoint: String,
+    pub browser_endpoint: Option<String>,
     pub child: Child,
     pub events: Option<mpsc::UnboundedReceiver<ProviderEvent>>,
 }

@@ -183,6 +183,19 @@ Use `dbgjs process attach p:43336 --set` to explicitly select by PID instead.
 PID attachment succeeds only when it identifies exactly one live Electron
 `webContents`; it never prefers a primary window over other matching contents.
 
+When Electron exposes a Chromium remote-debugging endpoint, renderer attachment
+prefers a flattened browser-CDP session. The main-process Node inspector supplies
+the exact PID/window-to-page mapping through `webContents.fromDevToolsTargetId`.
+It does not attach `webContents.debugger`: separate browser-CDP clients can inspect
+the same renderer without evicting one another. Each connection owns its metadata
+bridge and browser session; disconnecting one leaves the others intact.
+
+Without a browser endpoint, attachment falls back to `webContents.debugger`.
+Renderers explicitly startup-blocked by the Electron bridge also stay on that
+bridge to preserve startup-block ownership and resume behavior. Bridge
+installation errors are reported instead of being hidden by a later
+renderer-discovery timeout.
+
 Capture the current renderer viewport in the system temporary directory:
 
 ```powershell

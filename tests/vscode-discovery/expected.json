@@ -12,6 +12,14 @@
     }
   },
   {
+    "command": "process attach renderer with another browser client",
+    "result": {
+      "rendererIsWorkbench": true,
+      "electronDebuggerAttached": false,
+      "otherClientAfterRelease": 42
+    }
+  },
+  {
     "command": "target eval compute(20)",
     "result": {
       "kind": "number",

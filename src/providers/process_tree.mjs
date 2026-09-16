@@ -38,7 +38,11 @@ async function main() {
 		throw new Error(`root process ${rootPid} does not exist`);
 	}
 	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners);
-	process.stdout.write(`${JSON.stringify({ endpoint: rootEndpoint })}\n`);
+	const browser = await browserForPid(rootPid, listeners);
+	process.stdout.write(`${JSON.stringify({
+		endpoint: rootEndpoint,
+		browserEndpoint: browser?.electron ? browser.endpoint : undefined,
+	})}\n`);
 
 	readControlCommands();
 	process.once("SIGINT", stop);
@@ -491,10 +495,11 @@ async function ensureRootEndpoint(pid, listeners) {
 		return inspector;
 	}
 	const browser = await browserForPid(pid, listeners);
-	if (browser) {
-		knownEndpoints.set(pid, browser);
-		return browser;
+	if (browser && !browser.electron) {
+		knownEndpoints.set(pid, browser.endpoint);
+		return browser.endpoint;
 	}
+	// Electron's browser endpoint cannot evaluate the main-process renderer bridge.
 	return ensureInspector(pid, listeners);
 }
 
@@ -504,7 +509,10 @@ async function browserForPid(pid, listeners) {
 			const version = await fetchJson(`http://127.0.0.1:${listener.port}/json/version`);
 			return typeof version?.webSocketDebuggerUrl === "string"
 				&& version.webSocketDebuggerUrl.includes("/devtools/browser/")
-				? version.webSocketDebuggerUrl
+				? {
+					endpoint: version.webSocketDebuggerUrl,
+					electron: /\bElectron\/\d/.test(version["User-Agent"] ?? ""),
+				}
 				: undefined;
 		}),
 	);

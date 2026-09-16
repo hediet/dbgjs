@@ -12,17 +12,63 @@ const source = (await readFile(new URL("../src/providers/process_tree.mjs", impo
 	.replace('const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));', "const rootPid = testRootPid;")
 	.replace("main().catch(reportError);", "");
 
-function helper(rootPid = process.pid) {
+function helper(rootPid = process.pid, overrides = {}) {
 	return new Function(
 		"execFileCallback", "randomUUID", "open", "readFile", "readdir", "readlink", "rm",
-		"basename", "join", "posix", "tmpdir", "promisify", "testRootPid",
-		`${source}\nreturn { parseUnixProcesses, parseLsofListeners, parseLinuxTcpListeners,
+		"basename", "join", "posix", "tmpdir", "promisify", "testRootPid", "overrides",
+		`${source}
+		if (overrides.fetchJson) fetchJson = overrides.fetchJson;
+		if (overrides.ensureInspector) ensureInspector = overrides.ensureInspector;
+		return { parseUnixProcesses, parseLsofListeners, parseLinuxTcpListeners,
 			isNodeProcess, listProcesses, listListeners, ensureRootEndpoint, ensureInspector,
 			processInstanceId, electronFusePath, electronInspectorFuseEnabled,
 			assertElectronInspectorSignalSupported };`,
 	)(execFileCallback, randomUUID, open, readFile, readdir, readlink, rm,
-		basename, join, posix, tmpdir, promisify, rootPid);
+		basename, join, posix, tmpdir, promisify, rootPid, overrides);
 }
+
+test("Electron with browser-only CDP activates the main-process inspector, not the browser endpoint", async () => {
+	const listeners = [{ pid: 42, port: 1234 }];
+	const browser = "ws://127.0.0.1:1234/devtools/browser/test";
+	const inspector = "ws://127.0.0.1:5678/node-test";
+	for (const electron of [false, true]) {
+		let activations = 0;
+		const api = helper(42, {
+			fetchJson: async (url) => url.endsWith("/json/version") ? {
+				Browser: "Chrome/148.0",
+				"User-Agent": `Chrome/148.0${electron ? " Electron/42.10.0" : ""}`,
+				webSocketDebuggerUrl: browser,
+			} : [],
+			ensureInspector: async (pid, knownListeners) => {
+				assert.equal(pid, 42);
+				assert.equal(knownListeners, listeners);
+				activations++;
+				return inspector;
+			},
+		});
+		assert.equal(await api.ensureRootEndpoint(42, listeners), electron ? inspector : browser);
+		assert.equal(activations, electron ? 1 : 0);
+	}
+});
+
+test("root selection reuses existing Node inspectors and reports Electron activation errors", async () => {
+	const inspector = "ws://127.0.0.1:5678/node-test";
+	const listeners = [{ pid: 42, port: 5678 }];
+	const api = helper(42, {
+		fetchJson: async () => [{ type: "node", webSocketDebuggerUrl: inspector }],
+		ensureInspector: async () => assert.fail("existing inspector must be reused"),
+	});
+	assert.equal(await api.ensureRootEndpoint(42, listeners), inspector);
+
+	const failing = helper(42, {
+		fetchJson: async (url) => url.endsWith("/json/version") ? {
+			"User-Agent": "Electron/42.10.0",
+			webSocketDebuggerUrl: "ws://127.0.0.1:5678/devtools/browser/test",
+		} : [],
+		ensureInspector: async () => { throw new Error("inspector activation failed"); },
+	});
+	await assert.rejects(failing.ensureRootEndpoint(42, listeners), /inspector activation failed/);
+});
 
 test("Unix ps parsing preserves macOS executable names, arguments and stable start times", () => {
 	const api = helper();

@@ -72,12 +72,16 @@ pub struct ElectronRendererBridge {
 impl ElectronRendererBridge {
     pub async fn install(
         client: CdpClient<hubrpc::connection::channel::Channel>,
-    ) -> Result<Arc<Self>, TransportError> {
+        independent: bool,
+    ) -> Result<Option<Arc<Self>>, TransportError> {
         let token = random_token()?;
         let token_json = serde_json::to_string(&token).map_err(|error| {
             transport_error(format!("failed to serialize bridge token: {error}"))
         })?;
-        let expression = format!("({BRIDGE_SOURCE})({token_json})");
+        let expression = format!(
+            "typeof process !== 'undefined' && process.versions?.electron && process.type === 'browser' \
+             ? ({BRIDGE_SOURCE})({token_json}, {independent}) : null"
+        );
         let mut params = RuntimeEvaluateParams::new(expression);
         params.object_group = Some(BRIDGE_OBJECT_GROUP.to_owned());
         params.include_command_line_api = Some(false);
@@ -92,8 +96,14 @@ impl ElectronRendererBridge {
         if let Some(exception) = response.exception_details {
             return Err(transport_error(format!(
                 "failed to install renderer bridge: {}",
-                exception.text
+                exception
+                    .exception
+                    .and_then(|value| value.description)
+                    .unwrap_or(exception.text)
             )));
+        }
+        if response.result.value == Some(serde_json::Value::Null) {
+            return Ok(None);
         }
         let object_id = response
             .result
@@ -116,14 +126,26 @@ impl ElectronRendererBridge {
                 return Err(error);
             }
         };
-        Ok(Arc::new(Self {
+        Ok(Some(Arc::new(Self {
             client,
             object_id,
             port: endpoint.port,
             token,
             control,
             disposed: AtomicBool::new(false),
-        }))
+        })))
+    }
+
+    pub async fn resolve_browser_targets(
+        &self,
+        target_ids: Vec<String>,
+    ) -> Result<std::collections::BTreeMap<String, u64>, TransportError> {
+        self.call(&format!(
+            "function() {{ return this.resolveBrowserTargets({}); }}",
+            serde_json::to_string(&target_ids)
+                .map_err(|error| transport_error(error.to_string()))?
+        ))
+        .await
     }
 
     pub async fn list_targets(&self) -> Result<Vec<ElectronRendererTarget>, TransportError> {

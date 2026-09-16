@@ -113,6 +113,7 @@ globalThis.require = (name) => {
 			},
 			webContents: {
 				fromId: (id) => allContents.find((candidate) => candidate.id === id),
+				fromDevToolsTargetId: (id) => allContents.find((candidate) => `native-${candidate.id}` === id),
 				getAllWebContents: () => allContents,
 			},
 		};
@@ -131,6 +132,14 @@ const install = (0, eval)(`(${source})`);
 const token = "deterministic-token";
 const bridge = await install(token);
 const { port } = bridge.endpoint();
+assert.deepEqual(bridge.resolveBrowserTargets(["native-7", "missing"]), { "native-7": 7 });
+const parallelBridge = await install("parallel-browser-client", true);
+assert.equal(bridge.endpoint().port, port, "browser-CDP metadata clients must not replace each other");
+assert.deepEqual(parallelBridge.resolveBrowserTargets(["native-7"]), { "native-7": 7 });
+assert.equal(fakeDebugger.attachCount, 0, "target identity mapping must not attach the Electron debugger");
+assert.equal(fakeDebugger.detachCount, 0, "target identity mapping must not evict an existing debugger");
+await parallelBridge.dispose();
+assert.equal(bridge.endpoint().port, port, "closing one metadata client must preserve the other");
 assert.equal(bridge.list()[0].primaryWindowId, 1);
 const shared = new FakeWebContents(8, contents.processId, "shared renderer", "file:///shared.html");
 shared.ownerWindow = windows[0];

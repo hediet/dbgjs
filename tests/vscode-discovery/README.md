@@ -14,6 +14,9 @@ The scenario proves:
 5. Executing the fixture pauses at the exact authored line and column.
 6. A local variable evaluates correctly while paused, and execution completes
    after resume.
+7. With Chromium remote debugging enabled and another client already attached,
+   renderer PID attachment selects the workbench page through browser CDP, not
+   `webContents.debugger`, and releasing dbgjs preserves the other client's session.
 
 `expected.json` is a checked-in golden transcript shared by every platform.
 It preserves actual roles, values, source text, mapping requests, and authored
@@ -45,6 +48,7 @@ extensions, workspace, copied CLI binaries, service state, and source-map cache.
 Only processes launched by the test are terminated during cleanup.
 
 Neither the main-process nor extension-host inspector is enabled at launch.
+Chromium's browser endpoint is enabled to cover the browser-only endpoint case.
 PID attachment must activate debugging on the running VS Code instance.
 On Unix, attachment checks Electron's inspector fuse before sending the debug
 signal; renderer processes and binaries with disabled or unknown fuses are

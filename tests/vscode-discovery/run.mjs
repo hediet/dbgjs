@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import { transform } from "esbuild";
+import { chromium } from "playwright";
 import { run } from "../playwright/live-test-harness.mjs";
 import { breakpointResult, discoveryResult, pauseResult } from "./transcript.mjs";
 import { resolveCodeExecutable } from "./launch.mjs";
@@ -48,6 +49,7 @@ let codeProcess;
 let codeExited;
 let serviceUsed = false;
 let codeOutput = "";
+let browserClient;
 try {
 	await copyFile(resolve(values["bin-dir"], `dbgjs${suffix}`), cli);
 	await copyFile(resolve(values["bin-dir"], `dbgjs-service${suffix}`), service);
@@ -81,6 +83,7 @@ try {
 		"--new-window", "--locale=en", "--skip-welcome", "--skip-release-notes",
 		"--disable-workspace-trust", "--disable-updates", "--disable-gpu",
 		"--no-sandbox", "--disable-dev-shm-usage",
+		"--remote-debugging-port=0",
 		`--user-data-dir=${userData}`,
 		`--extensions-dir=${join(directory, "extensions")}`,
 		`--extensionDevelopmentPath=${extension}`,
@@ -118,6 +121,39 @@ try {
 
 	serviceUsed = true;
 	await command(["context", "create", "--context", ":vscode-discovery-e2e", "--set"]);
+	const [browserPort] = (await readFile(join(userData, "DevToolsActivePort"), "utf8")).split("\n");
+	browserClient = await chromium.connectOverCDP(`http://127.0.0.1:${Number(browserPort)}`);
+	const page = browserClient.contexts().flatMap((context) => context.pages())
+		.find((page) => page.url().includes("/workbench/"));
+	assert.ok(page, "The independent browser client must find the workbench page.");
+	const externalSession = await page.context().newCDPSession(page);
+	const renderer = tree.processes.find((process) => process.role === "renderer" && process.windowId !== undefined);
+	assert.ok(renderer, "Discovery must find the workbench renderer PID.");
+	await command(["process", "attach", String(renderer.processId), "--set"]);
+	const rendererState = await command(["target", "show"]);
+	const rendererId = rendererState.target.targetId;
+	assert.match(rendererId, /^renderer-\d+$/);
+	const rendererUrl = await command(["target", "eval", "location.href", "--full"]);
+	assert.equal(rendererUrl.preview.preview, page.url(), "PID attachment must select the page, not an OOPIF.");
+	await command(["target", "attach", "--target", `$node-root:process-tree-${codeProcess.pid}`]);
+	const attachedViaElectron = await command([
+		"target", "eval",
+		`process.mainModule.require("electron").webContents.fromId(${Number(rendererId.slice("renderer-".length))}).debugger.isAttached()`,
+		"--target", `$node-root:process-tree-${codeProcess.pid}`,
+	]);
+	assert.equal(attachedViaElectron.preview.preview, "false", "Renderer attachment must use browser CDP, not webContents.debugger.");
+	const externalResult = await externalSession.send("Runtime.evaluate", { expression: "location.href", returnByValue: true });
+	assert.equal(externalResult.result.value, page.url(), "The independent renderer session must remain usable.");
+	await command(["target", "release", "--target", rendererId]);
+	const afterRelease = await externalSession.send("Runtime.evaluate", { expression: "6 * 7", returnByValue: true });
+	assert.equal(afterRelease.result.value, 42, "Releasing dbgjs must not detach another browser client.");
+	transcript.push({
+		command: "process attach renderer with another browser client",
+		result: { rendererIsWorkbench: true, electronDebuggerAttached: false, otherClientAfterRelease: 42 },
+	});
+	await externalSession.detach();
+	await browserClient.close();
+	browserClient = undefined;
 	await command(["process", "attach", String(extensionHost.processId), "--context", ":vscode-discovery-e2e", "--set"]);
 	const identity = await command(["target", "eval", "process.pid"]);
 	assert.equal(identity.preview.kind, "number");
@@ -167,6 +203,7 @@ try {
 	await writeFile(join(output, "actual.json"), JSON.stringify(transcript, null, 2) + "\n");
 	await writeFile(join(output, "vscode.log"), codeOutput);
 	try {
+		if (browserClient) await browserClient.close();
 		if (serviceUsed) {
 			const stopped = await run(cli, ["service", "stop"], environment, { timeoutMs: 15_000 });
 			assert.equal(stopped.code, 0, stopped.output);

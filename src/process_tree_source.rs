@@ -57,6 +57,7 @@ struct NestedTargetRecord {
 pub struct ProcessTreeTargetSource {
     root_pid: u32,
     root_endpoint: Arc<TargetEndpoint>,
+    browser_endpoint: Option<Arc<TargetEndpoint>>,
     bridge: Mutex<Option<Arc<ElectronRendererBridge>>>,
     control: Mutex<Option<ChildStdin>>,
     events: mpsc::UnboundedSender<TargetSourceEvent>,
@@ -82,6 +83,7 @@ impl ProcessTreeTargetSource {
     pub(crate) async fn start(
         root_pid: u32,
         root_endpoint_url: &str,
+        browser_endpoint_url: Option<&str>,
         control: ChildStdin,
         provider_events: mpsc::UnboundedReceiver<ProviderEvent>,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<TargetSourceEvent>), String> {
@@ -91,10 +93,21 @@ impl ProcessTreeTargetSource {
                 .map_err(|error| error.to_string())?,
         );
         let root_endpoint = TargetEndpoint::open(transport)?;
+        let browser_endpoint = if let Some(url) = browser_endpoint_url {
+            let transport = Arc::new(
+                CdpWebSocketTransport::connect(url)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            );
+            Some(TargetEndpoint::open(transport)?)
+        } else {
+            None
+        };
         let (events, receiver) = mpsc::unbounded_channel();
         let source = Arc::new(Self {
             root_pid,
             root_endpoint: root_endpoint.clone(),
+            browser_endpoint,
             bridge: Mutex::new(None),
             control: Mutex::new(Some(control)),
             events,
@@ -114,13 +127,24 @@ impl ProcessTreeTargetSource {
             tasks: std::sync::Mutex::new(Vec::new()),
         });
         source.supervise_provider_events(provider_events);
-        match ElectronRendererBridge::install(root_endpoint.client()).await {
-            Ok(bridge) => {
-                source.supervise_bridge_events(&bridge).await;
-                *source.bridge.lock().await = Some(bridge);
+        // Browser roots have no Runtime domain; plain Node roots explicitly return no bridge.
+        if !root_endpoint_url.contains("/devtools/browser/") {
+            match ElectronRendererBridge::install(
+                root_endpoint.client(),
+                source.browser_endpoint.is_some(),
+            )
+            .await
+            {
+                Ok(Some(bridge)) => {
+                    source.supervise_bridge_events(&bridge).await;
+                    *source.bridge.lock().await = Some(bridge);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    source.close().await;
+                    return Err(error.to_string());
+                }
             }
-            // A plain Node.js or browser root has no Electron renderer bridge.
-            Err(_) => {}
         }
         Ok((source, receiver))
     }
@@ -818,10 +842,32 @@ impl TargetSource for ProcessTreeTargetSource {
                 .await
                 .clone()
                 .ok_or_else(|| "Electron renderer bridge is unavailable".to_owned())?;
-            let (transport, stolen) = bridge
-                .attach(target_id.to_owned(), &renderer, force)
-                .await?;
-            (TargetEndpoint::open(transport)?, stolen)
+            // Startup blocks belong to the bridge and must be adopted through that same owner.
+            if let Some(browser) = &self.browser_endpoint
+                && !renderer.waiting_for_debugger
+            {
+                let targets = browser
+                    .client()
+                    .target_get_targets(TargetGetTargetsParams::new())
+                    .await
+                    .map_err(|error| format!("browser target discovery failed: {error:?}"))?;
+                let mappings = bridge
+                    .resolve_browser_targets(browser_page_target_ids(targets.target_infos))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let native_id = select_browser_renderer_target(mappings, renderer.web_contents_id)?;
+                let endpoint = browser.attach_child(&native_id).await?;
+                self.native_target_aliases
+                    .lock()
+                    .unwrap()
+                    .insert(native_id, target_id.to_owned());
+                (endpoint, false)
+            } else {
+                let (transport, stolen) = bridge
+                    .attach(target_id.to_owned(), &renderer, force)
+                    .await?;
+                (TargetEndpoint::open(transport)?, stolen)
+            }
         };
         self.attachments
             .lock()
@@ -868,6 +914,9 @@ impl TargetSource for ProcessTreeTargetSource {
         for (_, endpoint) in std::mem::take(&mut *self.attachments.lock().await) {
             endpoint.close().await;
         }
+        if let Some(browser) = &self.browser_endpoint {
+            browser.close().await;
+        }
         self.root_endpoint.close().await;
         // Closing stdin is how `process_tree.mjs` learns to stop scanning and exit.
         self.control.lock().await.take();
@@ -879,6 +928,33 @@ impl TargetSource for ProcessTreeTargetSource {
 
 fn renderer_target_id(web_contents_id: u64) -> String {
     format!("{RENDERER_TARGET_PREFIX}{web_contents_id}")
+}
+
+fn browser_page_target_ids(targets: Vec<TargetTargetInfo>) -> Vec<String> {
+    // Electron also maps OOPIF target IDs to their owner's webContents.
+    targets
+        .into_iter()
+        .filter(|target| target.r#type == "page")
+        .map(|target| target.target_id)
+        .collect()
+}
+
+fn select_browser_renderer_target(
+    mappings: BTreeMap<String, u64>,
+    web_contents_id: u64,
+) -> Result<String, String> {
+    let mut matches = mappings
+        .into_iter()
+        .filter_map(|(id, contents_id)| (contents_id == web_contents_id).then_some(id));
+    match (matches.next(), matches.next()) {
+        (Some(id), None) => Ok(id),
+        (None, _) => Err(format!(
+            "Electron webContents {web_contents_id} has no live browser CDP page target"
+        )),
+        _ => Err(format!(
+            "Electron webContents {web_contents_id} maps to multiple browser CDP page targets"
+        )),
+    }
 }
 
 fn nested_target_id(parent_target_id: &str, native_target_id: &str) -> String {
@@ -1037,6 +1113,33 @@ fn node_target_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_renderer_selection_excludes_oopifs_and_rejects_ambiguous_identity() {
+        let mut page = target_info("workbench", None);
+        page.r#type = "page".to_owned();
+        assert_eq!(
+            browser_page_target_ids(vec![target_info("webview-frame", Some("workbench")), page]),
+            vec!["workbench"]
+        );
+        assert_eq!(
+            select_browser_renderer_target(BTreeMap::from([("workbench".to_owned(), 5)]), 5),
+            Ok("workbench".to_owned())
+        );
+        assert!(
+            select_browser_renderer_target(BTreeMap::new(), 5)
+                .unwrap_err()
+                .contains("no live")
+        );
+        assert!(
+            select_browser_renderer_target(
+                BTreeMap::from([("a".to_owned(), 5), ("b".to_owned(), 5)]),
+                5,
+            )
+            .unwrap_err()
+            .contains("multiple")
+        );
+    }
 
     fn target_info(target_id: &str, parent_id: Option<&str>) -> TargetTargetInfo {
         let mut info = TargetTargetInfo::new(

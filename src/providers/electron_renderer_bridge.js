@@ -1,4 +1,4 @@
-async (token) => {
+async (token, independent = false) => {
 	const electronRequire = typeof require === "function"
 		? require
 		: process?.mainModule?.require?.bind(process.mainModule);
@@ -9,7 +9,7 @@ async (token) => {
 	const net = electronRequire("node:net");
 	const registryKey = Symbol.for("dbgjs.rendererBridge");
 	const previous = globalThis[registryKey];
-	if (previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
+	if (!independent && previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
 		await previous.bridge.dispose("replaced by a new dbgjs bridge");
 	}
 
@@ -552,6 +552,12 @@ async (token) => {
 				.filter((contents) => safeProcessId(contents) > 0 || startupBlocks.has(contents.id))
 				.map(descriptor);
 		},
+		resolveBrowserTargets(targetIds) {
+			return Object.fromEntries(targetIds.flatMap((targetId) => {
+				const contents = webContents.fromDevToolsTargetId(targetId);
+				return contents && !contents.isDestroyed() ? [[targetId, contents.id]] : [];
+			}));
+		},
 		setWaitForDebuggerOnStart(enabled) {
 			waitForDebuggerOnStart = enabled === true;
 			if (!waitForDebuggerOnStart) {
@@ -603,7 +609,9 @@ async (token) => {
 	}
 	app.on("web-contents-created", onAppWebContentsCreated);
 	app.on("browser-window-created", onAppBrowserWindowCreated);
-	globalThis[registryKey] = { owner: "dbgjs", token, bridge };
+	if (!independent) {
+		globalThis[registryKey] = { owner: "dbgjs", token, bridge };
+	}
 	controlTimer = setTimeout(() => {
 		if (!controlSocket) {
 			void bridge.dispose("renderer bridge control handshake timed out");
