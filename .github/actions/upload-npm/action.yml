@@ -21,6 +21,12 @@ runs:
         overwrite: true
     - uses: actions/upload-artifact@v7
       with:
+        name: npm-${{ inputs.channel }}-win32-arm64
+        path: artifacts/release/npm-${{ inputs.channel }}-win32-arm64/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v7
+      with:
         name: npm-${{ inputs.channel }}-linux-x64-gnu
         path: artifacts/release/npm-${{ inputs.channel }}-linux-x64-gnu/*.tgz
         if-no-files-found: error

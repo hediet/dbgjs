@@ -28,14 +28,15 @@ test("candidate packages become stable and nightly tarballs with matching depend
 			}));
 			execFileSync("tar", ["-czf", join(input, `${key}.tar.gz`), "-C", fixture, "package"]);
 		}
-		assert.equal((await inspectCandidatePackages(input)).packages.length, 5);
+		const packageCount = Object.keys(platforms).length + 1;
+		assert.equal((await inspectCandidatePackages(input)).packages.length, packageCount);
 		for (const [version, tag, channel] of [
 			[entry.version, "latest", "stable"],
 			[`${entry.version}-next.20260915.2`, "next", "nightly"],
 			[`${entry.version}-nightly.20260915.1`, "next", "nightly"],
 		]) {
 			const result = await prepareReleasePackages({ input, output: join(directory, "output"), version, tag });
-			assert.equal(result.packages.length, 5);
+			assert.equal(result.packages.length, packageCount);
 			for (const packed of result.packages) {
 				const manifest = JSON.parse(execFileSync("tar", ["-xOzf", packed.path, "package/package.json"], { encoding: "utf8" }));
 				assert.equal(manifest.private, undefined);
@@ -46,6 +47,10 @@ test("candidate packages become stable and nightly tarballs with matching depend
 				assert.equal(execFileSync("tar", ["-xOzf", packed.path, "package/bin/dbgjs"], { encoding: "utf8" }), "binary fixture\n");
 				if (manifest.name === "@hediet/dbgjs") {
 					assert.deepEqual(Object.values(manifest.optionalDependencies), Object.keys(platforms).map(() => version));
+				} else {
+					const platform = platforms[manifest.name.slice("@hediet/dbgjs-".length)];
+					assert.deepEqual(manifest.os, [platform.os]);
+					assert.deepEqual(manifest.cpu, [platform.cpu]);
 				}
 			}
 		}

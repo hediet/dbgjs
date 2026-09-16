@@ -36,8 +36,8 @@ npm run test:e2e:vscode-discovery -- --bin-dir target/release
 On Linux, run through `xvfb-run -a` when no display is available.
 The supplied directory must contain native `dbgjs` and `dbgjs-service`
 executables. The test does not compile Rust. CI downloads the matching
-candidate artifact and runs on Windows x64, Linux x64/ARM64, and macOS
-ARM64. This is a small routine sanity test, not the full macOS Rust suite.
+candidate artifact and runs on Windows x64/ARM64, Linux x64/ARM64, and macOS
+ARM64. This is a small routine sanity test, not the full Windows/macOS ARM64 Rust suites.
 
 The downloaded VS Code installation is cached locally under
 `artifacts/vscode-download`. Each run uses separate temporary user data,

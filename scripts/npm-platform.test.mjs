@@ -25,8 +25,14 @@ test("every supported host resolves to its exact optional dependency", async () 
 	assert.equal(Object.keys(manifest.optionalDependencies).length, Object.keys(platforms).length);
 });
 
+test("Windows ARM64 selects its native package, not x64 emulation", () => {
+	assert.equal(platformKey("win32", "arm64"), "win32-arm64");
+	assert.deepEqual(platforms["win32-arm64"], { os: "win32", cpu: "arm64" });
+	assert.equal(platformKey("win32", "x64"), "win32-x64");
+});
+
 test("unsupported platforms and musl fail explicitly", () => {
-	for (const args of [["win32", "arm64"], ["darwin", "x64"], ["linux", "x64"], ["linux", "riscv64", "2.35"], ["freebsd", "x64"]]) {
+	for (const args of [["win32", "ia32"], ["darwin", "x64"], ["linux", "x64"], ["linux", "riscv64", "2.35"], ["freebsd", "x64"]]) {
 		assert.throws(() => platformKey(...args), /Unsupported dbgjs platform/);
 	}
 });

@@ -55,6 +55,16 @@ try {
 		assert.match(await run("--help"), /dbgjs/);
 		await assert.rejects(() => run("not-a-real-command"), /exited with/);
 		const executable = (name) => join(nativeBin, `${name}${process.platform === "win32" ? ".exe" : ""}`);
+		if (process.platform === "win32") {
+			for (const name of ["dbgjs", "dbgjs-service", "dbgjs-tui"]) {
+				const binary = await readFile(executable(name));
+				const peOffset = binary.readUInt32LE(0x3c);
+				assert.equal(binary.toString("ascii", 0, 2), "MZ");
+				assert.equal(binary.readUInt32LE(peOffset), 0x00004550, `${name} must be a PE executable.`);
+				assert.equal(binary.readUInt16LE(peOffset + 4), process.arch === "arm64" ? 0xaa64 : 0x8664,
+					`${name} must match the native Windows architecture, not run under emulation.`);
+			}
+		}
 		assert.match(await runProcess(executable("dbgjs"), ["--help"], { cwd: prefix, env }), /dbgjs/);
 		assert.match(await runProcess(executable("dbgjs-tui"), ["--help"], { cwd: prefix, env }), /usage: dbgjs-tui/);
 		for (const name of ["dbgjs", "dbgjs-tui"]) {

@@ -44,7 +44,10 @@ export function selectTestPlatforms(changes) {
 		);
 	}
 	if (changes.packages) {
-		platforms.push({ os: "macos-15", target: "aarch64-apple-darwin" });
+		platforms.push(
+			{ os: "windows-11-arm", target: "aarch64-pc-windows-msvc" },
+			{ os: "macos-15", target: "aarch64-apple-darwin" },
+		);
 	}
 	return platforms;
 }

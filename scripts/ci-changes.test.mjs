@@ -48,7 +48,7 @@ test("all native build inputs invalidate both jobs", () => {
 	}
 });
 
-test("npm-only changes skip Linux and Windows Rust jobs", () => {
+test("npm-only changes skip Linux and Windows x64 Rust jobs", () => {
 	for (const path of ["npm/dbgjs/package.json", "npm/dbgjs/README.md", "scripts/npm-pack.mjs"]) {
 		assert.deepEqual(classifyChanges([path]), { rust: false, packages: true }, path);
 	}
@@ -76,18 +76,20 @@ test("empty and extension-only changes skip the native pipeline", () => {
 	});
 });
 
-test("Rust changes run full tests on Linux, Windows and ARM64 macOS", () => {
+test("Rust changes run full tests on Linux, Windows x64/ARM64 and ARM64 macOS", () => {
 	const expected = [
 		{ os: "windows-2022", target: "x86_64-pc-windows-msvc" },
 		{ os: "ubuntu-22.04", target: "x86_64-unknown-linux-gnu" },
+		{ os: "windows-11-arm", target: "aarch64-pc-windows-msvc" },
 		{ os: "macos-15", target: "aarch64-apple-darwin" },
 	];
 	assert.deepEqual(selectTestPlatforms({ rust: true, packages: true }), expected);
 });
 
-test("npm-only changes always require the full ARM64 macOS suite", () => {
+test("npm-only changes always require the full Windows and macOS ARM64 suites", () => {
 	for (const path of ["npm/dbgjs/package.json", "scripts/npm-pack.mjs"]) {
 		assert.deepEqual(selectTestPlatforms(classifyChanges([path])), [
+			{ os: "windows-11-arm", target: "aarch64-pc-windows-msvc" },
 			{ os: "macos-15", target: "aarch64-apple-darwin" },
 		]);
 	}

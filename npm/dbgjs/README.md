@@ -10,6 +10,17 @@ On Windows the new endpoint is
 
 ## Install a release build
 
+Install the current development build from npm:
+
+```sh
+npm install -g @hediet/dbgjs@next
+dbgjs --help
+```
+
+npm selects the native package for the Node.js process's OS and architecture.
+Windows ARM64 Node.js installs `@hediet/dbgjs-win32-arm64`; it does not need
+`--force` or x64 emulation.
+
 Download and extract `npm-stable-dbgjs` and `npm-stable-<platform>` from the
 Release packages workflow. Each artifact contains one tarball. Install the
 entry package and its matching native package in the same command, for example
@@ -35,9 +46,9 @@ publisher.
 CI itself uploads private `.tar.gz` candidates for smoke testing, not publishable
 `.tgz` releases. Only successful main builds are promoted to release artifacts.
 
-Supported platforms: Windows x64, macOS ARM64, Linux GNU x64/ARM64.
-Linux requires glibc 2.35 or newer and OpenSSL 3. Intel macOS, Musl/Alpine and
-Windows ARM64 are not supported. Platform dependencies must not be omitted.
+Supported platforms: Windows x64/ARM64, macOS ARM64, Linux GNU x64/ARM64.
+Linux requires glibc 2.35 or newer and OpenSSL 3. Intel macOS and Musl/Alpine
+are not supported. Platform dependencies must not be omitted.
 
 The package supplies Playwright's JavaScript library, but does not install a
 browser. Browser debugging requires a separately installed browser. `DBGJS_NODE`
