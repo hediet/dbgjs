@@ -43,3 +43,28 @@ likewise keep their fields and add `preview`. `PromiseSnapshot.reference` is
 nullable so a renderer can preserve Promise state while withholding an unsafe
 live identity; existing Promise inspection output still contains its previous
 string reference.
+
+## Heap previews
+
+`heap show <capture>#<id>` and `heap refs <capture>#<id>` retain the resolvable
+heap references and show shallow snapshot previews alongside them. Incoming
+references include the source preview, too. Reference string previews show at
+most 20 Unicode characters before escaping; `...` marks truncation and `~` marks an uncertain
+reconstructed prefix (for example, a sliced string without recorded bounds).
+Objects show their snapshot class name and up to three own data properties;
+arrays show a few indexed entries, and functions show their names. Nested
+objects are summarized, never recursively expanded. Prototype links, internal
+edges and accessor pairs are excluded from the own-property summary.
+
+Previews only read the captured heap: they never evaluate JavaScript or invoke
+getters. Each object scans at most 64 edges; each preview is at most 512 escaped
+characters, with bounded names and cycle/depth/work-protected string
+reconstruction. Reference limits are applied before previews are computed.
+`--all` expands the reference table, not the depth or size of each preview.
+Select a displayed reference to inspect its properties separately.
+The selected node's string value still respects the existing string-length
+option independently of its short reference preview.
+
+JSON adds optional `preview` on heap nodes and `sourcePreview`/`targetPreview`
+on heap references, without changing their IDs or existing string fields.
+Older snapshots without these fields still deserialize and render.

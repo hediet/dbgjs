@@ -1271,6 +1271,8 @@ pub struct ValuePreviewSnapshot {
     pub preview: Option<String>,
     pub truncated: bool,
     pub reference: Option<String>,
+    #[serde(default)]
+    pub source: crate::object_inspection::ObjectSourceSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1604,10 +1606,14 @@ pub struct HeapNodeSnapshot {
     pub name: String,
     pub string_value: Option<String>,
     pub string_truncated: bool,
+    #[serde(default)]
+    pub preview: Option<String>,
     pub shallow_size: u64,
     pub outgoing_reference_count: u64,
     pub incoming_reference_count: u64,
     pub locations: Vec<HeapNodeLocationSnapshot>,
+    #[serde(default)]
+    pub source: crate::object_inspection::ObjectSourceSnapshot,
     pub immediate_dominator: Option<String>,
     pub retained_size: Option<u64>,
 }
@@ -1651,6 +1657,14 @@ pub struct HeapReferenceSnapshot {
     pub name_or_index: i64,
     pub source: String,
     pub target: String,
+    #[serde(default)]
+    pub source_preview: Option<String>,
+    #[serde(default)]
+    pub target_preview: Option<String>,
+    #[serde(default)]
+    pub source_locations: crate::object_inspection::ObjectSourceSnapshot,
+    #[serde(default)]
+    pub target_locations: crate::object_inspection::ObjectSourceSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2421,6 +2435,7 @@ mod tests {
             preview: Some(text.to_owned()),
             truncated: false,
             reference: Some(reference.to_owned()),
+            source: Default::default(),
         };
         let snapshot = ValueSnapshot {
             selector: ValueSelector::Expression {

@@ -45,10 +45,12 @@ pub fn import_cdp_protocol(
             if let Some(types) = domain["types"].as_array() {
                 for type_definition in types {
                     let type_name = required_str(type_definition, "id")?;
+                    let mut schema = convert_schema(type_definition, domain_name);
+                    apply_type_compatibility_overrides(domain_name, type_name, &mut schema);
                     insert_unique(
                         &mut schemas,
                         format!("{domain_name}.{type_name}"),
-                        convert_schema(type_definition, domain_name),
+                        schema,
                     )?;
                 }
             }
@@ -207,6 +209,20 @@ fn apply_compatibility_overrides(wire_method: &str, params: &mut Value) {
             .as_object_mut()
             .expect("Debugger.paused.reason is an object schema")
             .remove("enum");
+    }
+}
+
+fn apply_type_compatibility_overrides(domain: &str, name: &str, schema: &mut Value) {
+    if domain == "Runtime" && name == "RemoteObject"
+        && let Some(subtypes) = schema.pointer_mut("/properties/subtype/enum").and_then(Value::as_array_mut)
+    {
+        // V8 emits these internal-property subtypes but omits them from the public PDL.
+        for subtype in ["internal#location", "internal#scope", "internal#scopeList", "internal#entry"] {
+            let subtype = Value::String(subtype.into());
+            if !subtypes.contains(&subtype) {
+                subtypes.push(subtype);
+            }
+        }
     }
 }
 

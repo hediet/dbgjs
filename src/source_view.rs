@@ -634,6 +634,21 @@ impl ResolvedSourceView {
         ))
     }
 
+    /// Selects the current projection, retaining authored coordinates even when
+    /// the source map does not provide the authored content.
+    pub(crate) fn preferred_generated_location(
+        &self,
+        generated_url: &str,
+        position: Position,
+    ) -> Option<(String, Position, SourceKind)> {
+        if let Some(mapped) = self.forward(generated_url, position).into_iter().next() {
+            let kind = self.files.get(&mapped.source_url)?.kind;
+            return Some((mapped.source_url, mapped.position, kind));
+        }
+        self.source_map_location(generated_url, position)
+            .map(|(url, position)| (url, position, SourceKind::Authored))
+    }
+
     pub fn reverse(&self, logical_url: &str, position: Position) -> Vec<CandidateLocation> {
         let Some(file) = self.files.get(logical_url) else {
             return Vec::new();

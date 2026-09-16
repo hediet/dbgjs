@@ -58,6 +58,7 @@ pub struct HeapGraph {
     location_column: Vec<u32>,
 
     id_index: OnceLock<HashMap<u64, u32>>,
+    location_index: OnceLock<HashMap<NodeIndex, Vec<usize>>>,
     reverse: OnceLock<ReverseIndex>,
     dominators: OnceLock<Result<DominatorAnalysis, AnalysisError>>,
 }
@@ -240,9 +241,19 @@ impl HeapGraph {
         node: NodeIndex,
     ) -> Result<impl Iterator<Item = Location> + '_, AnalysisError> {
         self.checked_node(node)?;
-        Ok(self
-            .locations()
-            .filter(move |location| location.node == node))
+        let index = self.location_index.get_or_init(|| {
+            let mut index = HashMap::<NodeIndex, Vec<usize>>::new();
+            for (offset, node) in self.location_node.iter().enumerate() {
+                index.entry(NodeIndex(*node)).or_default().push(offset);
+            }
+            index
+        });
+        Ok(index.get(&node).into_iter().flatten().map(move |&index| Location {
+            node,
+            script_id: self.location_script_id[index],
+            line: self.location_line[index],
+            column: self.location_column[index],
+        }))
     }
 
     pub fn outgoing_references(
@@ -1946,6 +1957,7 @@ impl GraphBuilder {
             location_line: self.location_line,
             location_column: self.location_column,
             id_index: OnceLock::new(),
+            location_index: OnceLock::new(),
             reverse: OnceLock::new(),
             dominators: OnceLock::new(),
         })

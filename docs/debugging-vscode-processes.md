@@ -412,6 +412,31 @@ dbgjs heap dominators $objectRef
 Heap object references are capture-qualified. `.` selects the latest heap capture,
 so `.#12345` means heap object `12345` in the latest capture.
 
+Object inspection (`value`, `target eval`, and heap node views) includes source
+locations when available. The shared source resolver prefers authored source-map
+positions, otherwise the current formatted projection or generated source. Paths
+are printed in full so they can be passed back to `source show`. JSON retains both
+generated and resolved positions, breadcrumbs, provenance, and mapping diagnostics
+under `source`.
+
+Heap locations use captured script/source-map data and follow bound-function and
+prototype/constructor links within a bounded traversal. For directly selected heap
+objects, the debugger also attempts a live comparison on the same target. Live
+inspection reads `[[FunctionLocation]]`, follows bound targets, and inspects
+constructors without invoking property getters. These extra lookups share a budget
+of eight lookup requests and 750 ms per inspection; source acquisition also respects
+the deadline. Temporary remote handles are released. Unavailable objects, exhausted
+budgets, and mapping failures are reported without discarding snapshot evidence.
+Disagreeing positions are retained and explicitly marked as a source conflict.
+Matching heap/live locations are printed once, preferring the snapshot entry;
+JSON retains both pieces of evidence. Live-edited code or changed source maps can
+make captured and live locations disagree, so live comparison is not skipped.
+Function and constructor locations are distinguished; neither is an allocation stack.
+Reference endpoints also include captured locations (`sourceLocations` and
+`targetLocations` in JSON), without additional live lookups for every edge.
+Heap object previews show a few shallow properties, string prefixes, and prototype
+information alongside the original capture-qualified IDs; they never invoke getters.
+
 Capture IDs are immutable. Omitted IDs generate fresh names; `.` and `.1` select
 the latest capture of the requested kind across the context, and `.2` selects the
 previous one. An explicit target filter narrows that history before selection.

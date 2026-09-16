@@ -3378,6 +3378,7 @@ async fn evaluate_watches(
                         preview: Some("unavailable in this frame".to_owned()),
                         truncated: false,
                         reference: None,
+                        source: Default::default(),
                     },
                 },
             },

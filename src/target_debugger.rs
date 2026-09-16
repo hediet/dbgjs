@@ -1547,7 +1547,7 @@ async fn run_target(
                 response,
             })) => {
                 let result =
-                    evaluate(&driver, &session_key, pause_epoch, frame_index, expression).await;
+                    evaluate(&mut driver, &session_key, pause_epoch, frame_index, expression).await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::ScopeVariables {
@@ -1557,7 +1557,7 @@ async fn run_target(
                 response,
             })) => {
                 let result =
-                    scope_variables(&driver, &session_key, pause_epoch, frame_index, scope_index)
+                    scope_variables(&mut driver, &session_key, pause_epoch, frame_index, scope_index)
                         .await;
                 let _ = response.send(result);
             }
@@ -1566,7 +1566,7 @@ async fn run_target(
                 object_id,
                 response,
             })) => {
-                let result = object_properties(&driver, &session_key, pause_epoch, object_id).await;
+                let result = object_properties(&mut driver, &session_key, pause_epoch, object_id).await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::InspectValue {
@@ -1578,7 +1578,7 @@ async fn run_target(
                 let object_group =
                     (!options.retain_references).then(|| "dbgjs-ephemeral-value".to_owned());
                 let result = inspect_value(
-                    &driver,
+                    &mut driver,
                     &session_key,
                     pause_epoch,
                     selector,
@@ -1983,7 +1983,10 @@ async fn run_target(
                 if let Ok(capture) = &result {
                     let timing = capture.timing.clone();
                     if let Some(previous) =
-                        heap_captures.insert(capture_id.clone(), StoredHeapCapture { path, timing, mapping })
+                        heap_captures.insert(capture_id.clone(), StoredHeapCapture {
+                            path, timing, mapping,
+                            source_resolver: Default::default(),
+                        })
                     {
                         let _ = tokio::fs::remove_file(previous.path).await;
                     }
@@ -2236,7 +2239,7 @@ async fn run_target(
                         .then(|| graph.dominators())
                         .transpose()
                         .map_err(heap_analysis_error)?;
-                    let nodes = selection
+                    let mut nodes = selection
                         .nodes
                         .into_iter()
                         .map(|node| {
@@ -2246,9 +2249,14 @@ async fn run_target(
                                 node,
                                 max_string_length,
                                 dominators,
+                                heap_captures.get(&capture_id),
                             )
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    let mut inspector = crate::object_inspection::LiveSourceInspector::default();
+                    for node in &mut nodes {
+                        enrich_heap_live_source(&mut driver, &session_key, node, &mut inspector).await;
+                    }
                     Ok(HeapNodeSelectionSnapshot {
                         capture_id,
                         total_nodes: graph.node_count() as u64,
@@ -2287,11 +2295,7 @@ async fn run_target(
                                 .filter(|reference| {
                                     edge_policy == HeapEdgePolicy::All
                                         || reference.edge_type != "weak"
-                                })
-                                .map(|reference| {
-                                    heap_reference_snapshot(&graph, &capture_id, reference)
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
+                                }),
                         );
                     }
                     if matches!(
@@ -2305,18 +2309,17 @@ async fn run_target(
                                 .filter(|reference| {
                                     edge_policy == HeapEdgePolicy::All
                                         || reference.edge_type != "weak"
-                                })
-                                .map(|reference| {
-                                    heap_reference_snapshot(&graph, &capture_id, reference)
-                                })
-                                .collect::<Result<Vec<_>, _>>()?,
+                                }),
                         );
                     }
-                    references.sort_by_key(|reference| reference.edge_index);
+                    references.sort_by_key(|reference| reference.edge.0);
                     let omitted_reference_count =
                         references.len().saturating_sub(limit as usize) as u64;
                     references.truncate(limit as usize);
-                    Ok(HeapReferencesSnapshot {
+                    let references = references.into_iter()
+                        .map(|reference| heap_reference_snapshot(&graph, &capture_id, reference, heap_captures.get(&capture_id)))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut snapshot = HeapReferencesSnapshot {
                         capture_id: capture_id.clone(),
                         node: heap_node_snapshot(
                             &graph,
@@ -2324,12 +2327,18 @@ async fn run_target(
                             node,
                             max_string_length,
                             None,
+                            heap_captures.get(&capture_id),
                         )?,
                         direction,
                         edge_policy,
                         references,
                         omitted_reference_count,
-                    })
+                    };
+                    enrich_heap_live_source(
+                        &mut driver, &session_key, &mut snapshot.node,
+                        &mut crate::object_inspection::LiveSourceInspector::default(),
+                    ).await;
+                    Ok(snapshot)
                 }
                 .await;
                 let _ = response.send(result);
@@ -2378,6 +2387,7 @@ async fn run_target(
                                     node,
                                     max_string_length,
                                     None,
+                                    heap_captures.get(&capture_id),
                                 )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
@@ -2420,6 +2430,7 @@ async fn run_target(
                             dominator,
                             max_string_length,
                             Some(dominators),
+                            heap_captures.get(&capture_id),
                         )?);
                         current = dominator;
                     }
@@ -2431,6 +2442,7 @@ async fn run_target(
                             node,
                             max_string_length,
                             Some(dominators),
+                            heap_captures.get(&capture_id),
                         )?,
                         chain,
                     })
@@ -2637,6 +2649,7 @@ struct StoredHeapCapture {
     path: PathBuf,
     timing: HeapSnapshotTiming,
     mapping: HeapMappingSnapshot,
+    source_resolver: Arc<std::sync::Mutex<crate::heap_locations::HeapSourceResolver>>,
 }
 
 async fn load_heap_graph(
@@ -2723,6 +2736,7 @@ fn heap_node_snapshot(
     node: NodeIndex,
     max_string_length: Option<u32>,
     dominators: Option<&crate::heap_graph::DominatorAnalysis>,
+    capture: Option<&StoredHeapCapture>,
 ) -> Result<HeapNodeSnapshot, TargetDebuggerError> {
     let summary = graph.node_summary(node).map_err(heap_analysis_error)?;
     let (name, name_truncated) = bounded_heap_text(summary.raw_name, max_string_length);
@@ -2749,10 +2763,12 @@ fn heap_node_snapshot(
         name,
         string_value,
         string_truncated,
+        preview: Some(crate::heap_preview::heap_preview(graph, node).map_err(heap_analysis_error)?),
         shallow_size: summary.shallow_size,
         outgoing_reference_count: summary.outgoing_references as u64,
         incoming_reference_count: summary.incoming_references as u64,
         locations,
+        source: heap_object_source(graph, node, capture)?,
         immediate_dominator: dominators
             .and_then(|analysis| analysis.immediate_dominator(node))
             .map(|dominator| {
@@ -2766,10 +2782,59 @@ fn heap_node_snapshot(
     })
 }
 
+fn heap_object_source(
+    graph: &HeapGraph,
+    node: NodeIndex,
+    capture: Option<&StoredHeapCapture>,
+) -> Result<crate::object_inspection::ObjectSourceSnapshot, TargetDebuggerError> {
+    capture.map(|capture| {
+        capture.source_resolver.lock().unwrap().inspect(graph, &capture.mapping, node)
+    }).transpose().map_err(heap_analysis_error).map(Option::unwrap_or_default)
+}
+
+async fn enrich_heap_live_source(
+    driver: &mut DebuggerDriver,
+    session: &SessionKey,
+    node: &mut HeapNodeSnapshot,
+    inspector: &mut crate::object_inspection::LiveSourceInspector,
+) {
+    if !matches!(node.node_type.as_str(), "closure" | "object") {
+        return;
+    }
+    if !inspector.take_request() {
+        node.source.diagnostics.push("live comparison skipped: location lookup budget exhausted".into());
+        return;
+    }
+    let materialized = tokio::time::timeout(
+        inspector.remaining_time(),
+        driver.raw_cdp_request("HeapProfiler.getObjectByHeapObjectId", serde_json::json!({
+            "objectId": node.heap_object_id,
+            "objectGroup": "dbgjs-heap-location",
+        })),
+    ).await;
+    match materialized {
+        Ok(Ok(value)) => {
+            if let Some(id) = value.pointer("/result/objectId").and_then(serde_json::Value::as_str) {
+                node.source.merge(inspector.inspect(driver, session, id, None).await);
+            } else {
+                node.source.diagnostics.push("heap object is not available for live location comparison".into());
+            }
+        }
+        Ok(Err(error)) => node.source.diagnostics.push(format!("live heap location comparison unavailable: {error:?}")),
+        Err(_) => node.source.diagnostics.push("live heap location comparison timed out".into()),
+    }
+    if let Err(error) = driver.client().runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+        object_group: "dbgjs-heap-location".into(),
+    }).await {
+        node.source.diagnostics.push(format!("failed to release live heap location object: {error:?}"));
+    }
+}
+
 fn heap_reference_snapshot(
     graph: &HeapGraph,
     capture_id: &str,
     reference: crate::heap_graph::HeapReference<'_>,
+    capture: Option<&StoredHeapCapture>,
 ) -> Result<HeapReferenceSnapshot, TargetDebuggerError> {
     let source = graph
         .node_summary(reference.source)
@@ -2784,6 +2849,10 @@ fn heap_reference_snapshot(
         name_or_index: reference.name_or_index,
         source: heap_node_reference(capture_id, source.heap_object_id),
         target: heap_node_reference(capture_id, target.heap_object_id),
+        source_preview: Some(crate::heap_preview::heap_preview(graph, reference.source).map_err(heap_analysis_error)?),
+        target_preview: Some(crate::heap_preview::heap_preview(graph, reference.target).map_err(heap_analysis_error)?),
+        source_locations: heap_object_source(graph, reference.source, capture)?,
+        target_locations: heap_object_source(graph, reference.target, capture)?,
     })
 }
 
@@ -3090,20 +3159,26 @@ fn project_heap_classes(
         diagnostics.push(diagnostic);
     }
     let mut projected = BTreeMap::<(String, String, u32, u32, String), ProjectedHeapClass>::new();
+    let mut symbol_indexes = BTreeMap::<String, crate::source_location::SymbolIndexCache>::new();
     for group in groups {
         let script_id = group.script_id.to_string();
         let script = scripts.get(&script_id);
         let generated_url = script.map(|script| script.url.clone())
             .filter(|url| !url.is_empty()).unwrap_or_else(|| format!("script:{script_id}"));
-        let mapped = views.get(&script_id).and_then(|view|
-            view.source_map_location(&generated_url, Position { line: group.line, column: group.column })
-                .map(|(url, position)| {
-                    let name = view.text(&url).ok().and_then(|content|
-                        crate::language_intelligence::breadcrumb(&url, &content, position.line + 1, position.column + 1));
-                    let canonical_url = crate::source_view::canonical_source_uri(
-                        script.and_then(|script| script.source_map_url.as_deref()), &url).display();
-                    (canonical_url, position, name)
-                }));
+        let mapped = views.get(&script_id).map(|view| {
+            let resolved = crate::source_location::resolve_source_position(
+                view, &generated_url,
+                script.and_then(|script| script.source_map_url.as_deref()),
+                Position { line: group.line, column: group.column },
+                symbol_indexes.entry(script_id.clone()).or_default(),
+            );
+            (resolved.resolved.source_url,
+                Position {
+                    line: resolved.resolved.line.saturating_sub(1),
+                    column: resolved.resolved.column.saturating_sub(1),
+                },
+                resolved.breadcrumb)
+        });
         let (source_url, location, name) = match mapped {
             Some((url, position, name)) => (
                 url.clone(), source_location(url, position.line, position.column),
@@ -4483,7 +4558,7 @@ async fn settle_execution(
 }
 
 async fn evaluate(
-    driver: &DebuggerDriver,
+    driver: &mut DebuggerDriver,
     session_key: &SessionKey,
     pause_epoch: Option<u64>,
     frame_index: u32,
@@ -4501,15 +4576,20 @@ async fn evaluate(
         Some(OBJECT_GROUP),
     )
     .await;
-    let snapshot = result.map(|result| {
+    let snapshot = match result {
+        Ok(result) => {
         let mut preview = remote_value_snapshot(
             &result.remote,
             crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
         );
         preview.truncated |= result.preview_truncated;
+        if let Some(object_id) = &result.remote.object_id {
+            preview.source = crate::object_inspection::LiveSourceInspector::default()
+                .inspect(driver, session_key, object_id, None).await;
+        }
         preview.reference = None;
         let kind = remote_object_kind(&result.remote);
-        EvaluationSnapshot {
+        Ok(EvaluationSnapshot {
             expression,
             kind,
             value: result.remote.value,
@@ -4517,8 +4597,10 @@ async fn evaluate(
             description: result.remote.description,
             object_id: None,
             preview,
+        })
         }
-    });
+        Err(error) => Err(error),
+    };
     let release = driver
         .client()
         .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
@@ -4804,7 +4886,7 @@ fn evaluated_remote_from_envelope(
 }
 
 async fn scope_variables(
-    driver: &DebuggerDriver,
+    driver: &mut DebuggerDriver,
     session_key: &SessionKey,
     pause_epoch: u64,
     frame_index: u32,
@@ -4829,21 +4911,28 @@ async fn scope_variables(
 }
 
 async fn object_properties(
-    driver: &DebuggerDriver,
+    driver: &mut DebuggerDriver,
     session_key: &SessionKey,
     pause_epoch: Option<u64>,
     object_id: String,
 ) -> Result<Vec<VariableSnapshot>, TargetDebuggerError> {
     let (properties, _) =
         get_object_property_descriptors(driver, session_key, pause_epoch, object_id).await?;
-    Ok(properties
+    let mut variables = properties
         .into_iter()
         .filter_map(|property| {
             property
                 .value
                 .map(|value| variable_snapshot(property.name, value))
         })
-        .collect())
+        .collect::<Vec<_>>();
+    let mut inspector = crate::object_inspection::LiveSourceInspector::default();
+    for variable in &mut variables {
+        if let Some(object_id) = &variable.object_id {
+            variable.preview.source = inspector.inspect(driver, session_key, object_id, None).await;
+        }
+    }
+    Ok(variables)
 }
 
 async fn get_object_property_descriptors(
@@ -4881,7 +4970,7 @@ async fn get_object_property_descriptors(
 }
 
 async fn inspect_value(
-    driver: &DebuggerDriver,
+    driver: &mut DebuggerDriver,
     session_key: &SessionKey,
     pause_epoch: Option<u64>,
     selector: ValueSelector,
@@ -4934,11 +5023,18 @@ async fn inspect_value(
         }
         (None, _) => (Vec::new(), Vec::new()),
     };
+    let mut inspector = crate::object_inspection::LiveSourceInspector::default();
+    let source = if let Some(object_id) = &object_id {
+        let known = object_group.is_none().then_some((properties.as_slice(), internal_properties.as_slice()));
+        inspector.inspect(driver, session_key, object_id, known).await
+    } else {
+        Default::default()
+    };
     let is_promise = remote
         .as_ref()
         .is_some_and(|value| value.remote.subtype == Some(RuntimeRemoteObjectSubtype::Promise))
         || has_live_promise_evidence(&internal_properties);
-    let promise = if is_promise {
+    let mut promise = if is_promise {
         object_id.as_ref().map(|object_id| {
             inspect_live_promise(
                 object_id.clone(),
@@ -4962,10 +5058,12 @@ async fn inspect_value(
             preview: None,
             truncated: false,
             reference: object_id.clone(),
+            source: Default::default(),
         },
         |value| remote_value_snapshot(&value.remote, options.max_preview_length),
     );
     preview.truncated |= remote.as_ref().is_some_and(|value| value.preview_truncated);
+    preview.source = source;
     let remote_preview = remote
         .as_ref()
         .and_then(|value| value.remote.preview.as_ref());
@@ -5004,6 +5102,7 @@ async fn inspect_value(
                         preview,
                         truncated,
                         reference: property_references.get(&property.name).cloned(),
+                        source: Default::default(),
                     },
                 }
             })
@@ -5033,6 +5132,16 @@ async fn inspect_value(
     let properties_truncated =
         preview_overflow || properties.len() > options.max_properties as usize;
     properties.truncate(options.max_properties as usize);
+    for property in &mut properties {
+        if let Some(object_id) = &property.value.reference {
+            property.value.source = inspector.inspect(driver, session_key, object_id, None).await;
+        }
+    }
+    if let Some(settlement) = promise.as_mut().and_then(|promise| promise.settlement.as_mut())
+        && let Some(object_id) = &settlement.reference
+    {
+        settlement.source = inspector.inspect(driver, session_key, object_id, None).await;
+    }
     Ok(ValueSnapshot {
         selector,
         subtype,

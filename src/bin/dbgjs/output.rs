@@ -1463,19 +1463,43 @@ impl HumanOutput for HeapReferencesSnapshot {
     fn print_human(&self) {
         println!("{}", heap_node_line(&self.node));
         for reference in &self.references {
-            let label = reference
-                .name
-                .as_deref()
-                .map(|name| format!(" {}", escaped_heap_text(name, false)))
-                .unwrap_or_else(|| format!(" [{}]", reference.name_or_index));
-            println!(
-                "  {} --{}{}--> {}",
-                reference.source, reference.edge_type, label, reference.target
-            );
+            println!("{}", heap_reference_line(reference));
         }
         if self.omitted_reference_count > 0 {
             println!("  ... {} references omitted", self.omitted_reference_count);
         }
+    }
+}
+
+fn heap_reference_line(reference: &dbgjs::service_api::HeapReferenceSnapshot) -> String {
+    let label = reference
+        .name
+        .as_deref()
+        .map(|name| format!(" {}", escaped_heap_text(name, false)))
+        .unwrap_or_else(|| format!(" [{}]", reference.name_or_index));
+    format!(
+        "  {}{} --{}{}--> {}{}{}{}",
+        reference.source,
+        heap_preview_suffix(reference.source_preview.as_deref()),
+        reference.edge_type,
+        label,
+        reference.target,
+        heap_preview_suffix(reference.target_preview.as_deref()),
+        heap_reference_source(&reference.source, &reference.source_locations),
+        heap_reference_source(&reference.target, &reference.target_locations),
+    )
+}
+
+fn heap_preview_suffix(preview: Option<&str>) -> String {
+    preview.map(|preview| format!("  {preview}")).unwrap_or_default()
+}
+
+fn heap_reference_source(reference: &str, source: &dbgjs::object_inspection::ObjectSourceSnapshot) -> String {
+    let rendered = render_object_source(source);
+    if rendered.is_empty() {
+        String::new()
+    } else {
+        format!("\n    {reference}:{}", rendered.replace("\n  ", "\n      "))
     }
 }
 
@@ -1494,9 +1518,11 @@ fn heap_show_lines(snapshot: &HeapReferencesSnapshot) -> Vec<String> {
             .map(|name| escaped_heap_text(name, false))
             .unwrap_or_else(|| format!("[{}]", reference.name_or_index));
         format!(
-            "  {:<28} {}",
+            "  {:<28} {}{}{}",
             format!("{} {label}", reference.edge_type),
-            reference.target
+            reference.target,
+            heap_preview_suffix(reference.target_preview.as_deref()),
+            heap_reference_source(&reference.target, &reference.target_locations),
         )
     }));
     if snapshot.omitted_reference_count > 0 {
@@ -1646,13 +1672,14 @@ fn heap_node_line(node: &HeapNodeSnapshot) -> String {
         .string_value
         .as_deref()
         .map(|value| escaped_heap_text(value, node.string_truncated))
+        .or_else(|| node.preview.clone())
         .unwrap_or_else(|| escaped_heap_text(&node.name, node.string_truncated));
     let retained = node
         .retained_size
         .map(|size| format!(", retained:{}", compact_bytes(size)))
         .unwrap_or_default();
     format!(
-        "{}  type:{}, value:{}, shallow:{}{}, in:{}, out:{}",
+        "{}  type:{}, value:{}, shallow:{}{}, in:{}, out:{}{}",
         node.reference,
         node.node_type,
         value,
@@ -1660,6 +1687,7 @@ fn heap_node_line(node: &HeapNodeSnapshot) -> String {
         retained,
         node.incoming_reference_count,
         node.outgoing_reference_count,
+        render_object_source(&node.source),
     )
 }
 
@@ -2770,11 +2798,7 @@ impl HumanOutput for ValueSnapshot {
                 } else {
                     "value"
                 };
-                let preview = settlement.preview.as_deref().unwrap_or("<no preview>");
-                println!(
-                    "  {label}: {preview}{}",
-                    if settlement.truncated { "..." } else { "" }
-                );
+                println!("  {label}: {}", render_value_preview(settlement));
                 if let Some(reference) = &settlement.reference {
                     println!("  settlement reference: {reference}");
                 }
@@ -2782,6 +2806,7 @@ impl HumanOutput for ValueSnapshot {
             if let Some(reference) = &self.preview.reference {
                 println!("  reference: {reference}");
             }
+            print!("{}", render_object_source(&self.preview.source));
             return;
         }
 
@@ -3980,7 +4005,7 @@ fn render_value_snapshot(value: &ValueSnapshot) -> String {
                     .as_deref()
                     .map(|reference| format!(" ({reference})"))
                     .unwrap_or_default();
-                format!("{class_name}{reference}")
+                format!("{class_name}{reference}{}", render_object_source(&value.preview.source))
             },
         )
 }
@@ -4000,7 +4025,59 @@ fn render_value_preview_with_reference(
 fn render_value_preview(value: &dbgjs::service_api::ValuePreviewSnapshot) -> String {
     let preview = value.preview.as_deref().unwrap_or(&value.kind);
     let truncated = if value.truncated { "..." } else { "" };
-    format!("{}{truncated}", terminal_text(preview))
+    format!("{}{truncated}{}", terminal_text(preview), render_object_source(&value.source))
+}
+
+fn render_object_source(source: &dbgjs::object_inspection::ObjectSourceSnapshot) -> String {
+    let mut output = String::new();
+    if source.has_conflicting_locations() {
+        output.push_str("\n  source conflict: location evidence disagrees; all positions retained");
+    }
+    for location in &source.locations {
+        if location.origin == "live"
+            && let Some(snapshot) = source.locations.iter().find(|snapshot| {
+                snapshot.origin == "heapSnapshot"
+                    && snapshot.kind == location.kind
+                    && snapshot.script_id == location.script_id
+                    && snapshot.position.generated == location.position.generated
+                    && snapshot.position.resolved == location.position.resolved
+                    && snapshot.position.mapping == location.position.mapping
+            })
+        {
+            if location.position.diagnostic != snapshot.position.diagnostic
+                && let Some(diagnostic) = &location.position.diagnostic
+            {
+                output.push_str(&format!("\n  source note: {}", terminal_text(diagnostic)));
+            }
+            continue;
+        }
+        let position = &location.position.resolved;
+        output.push_str(&format!(
+            "\n  source [{}; {}; {}]: {}:{}:{}",
+            location.origin, location.kind, location.position.mapping,
+            source_path_text(&position.source_url), position.line, position.column,
+        ));
+        if let Some(breadcrumb) = &location.position.breadcrumb {
+            output.push_str(&format!(" -- {}", terminal_text(breadcrumb)));
+        }
+        if let Some(diagnostic) = &location.position.diagnostic {
+            output.push_str(&format!("\n  source note: {}", terminal_text(diagnostic)));
+        }
+    }
+    for diagnostic in &source.diagnostics {
+        output.push_str(&format!("\n  source note: {}", terminal_text(diagnostic)));
+    }
+    output
+}
+
+fn source_path_text(value: &str) -> String {
+    value.chars().flat_map(|character| {
+        if character.is_control() {
+            character.escape_default().collect::<Vec<_>>()
+        } else {
+            vec![character]
+        }
+    }).collect()
 }
 
 fn terminal_text(value: &str) -> String {
@@ -4242,7 +4319,7 @@ mod tests {
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
         aggregate_coverage_entries, coverage_entries, effective_file_metrics,
-        eval_truncation_guidance, heap_path_lines, heap_show_lines, looks_minified_identifier,
+        eval_truncation_guidance, heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
         page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
         render_heap_classes_human, render_uncompacted_source_graph, render_value_snapshot,
@@ -4275,12 +4352,90 @@ mod tests {
     }
 
     #[test]
+    fn object_source_output_keeps_complete_resolvable_paths_and_conflicting_evidence() {
+        let path = format!("file:///workspace/{}/provider.ts", "long-directory/".repeat(30));
+        let generated = SourceLocation { source_url: "file:///workspace/app.min.js".into(), line: 1, column: 89 };
+        let position = dbgjs::source_location::ResolvedSourcePosition {
+            generated: generated.clone(),
+            resolved: SourceLocation { source_url: path.clone(), line: 42, column: 7 },
+            breadcrumb: Some("Provider.provideModels".into()),
+            mapping: "authored".into(),
+            diagnostic: None,
+        };
+        let heap = dbgjs::object_inspection::ObjectLocationSnapshot {
+            origin: "heapSnapshot".into(), kind: "function".into(), script_id: "7".into(),
+            position,
+        };
+        let mut live = heap.clone();
+        live.origin = "live".into();
+        live.position.generated.column += 1;
+        let source = dbgjs::object_inspection::ObjectSourceSnapshot {
+            locations: vec![heap, live], diagnostics: vec![],
+        };
+        let rendered = super::render_object_source(&source);
+        assert_eq!(rendered.matches(&path).count(), 2);
+        assert!(rendered.contains(":42:7"));
+        assert!(rendered.contains("source conflict"));
+        assert!(rendered.contains("Provider.provideModels"));
+        assert!(!rendered.contains("..."));
+        assert_eq!(super::source_path_text("file:///src/\u{e9}.ts"), "file:///src/\u{e9}.ts");
+        assert!(!super::source_path_text("file:///src/\u{1b}.ts").contains('\u{1b}'));
+    }
+
+    #[test]
+    fn object_source_output_prefers_snapshot_for_matching_live_locations() {
+        use dbgjs::object_inspection::{ObjectLocationSnapshot, ObjectSourceSnapshot};
+        let heap = ObjectLocationSnapshot {
+            origin: "heapSnapshot".into(),
+            kind: "constructor".into(),
+            script_id: "7".into(),
+            position: dbgjs::source_location::ResolvedSourcePosition {
+                generated: SourceLocation {
+                    source_url: "file:///workspace/app.min.js".into(), line: 1, column: 89,
+                },
+                resolved: SourceLocation {
+                    source_url: "file:///workspace/provider.ts".into(), line: 6, column: 3,
+                },
+                breadcrumb: Some("Provider.constructor".into()),
+                mapping: "authored".into(),
+                diagnostic: None,
+            },
+        };
+        let mut live = heap.clone();
+        live.origin = "live".into();
+        for locations in [vec![heap.clone(), live.clone()], vec![live.clone(), heap.clone()]] {
+            let source = ObjectSourceSnapshot { locations, diagnostics: vec![] };
+            let rendered = super::render_object_source(&source);
+            assert_eq!(rendered.matches("source [").count(), 1);
+            assert!(rendered.contains("[heapSnapshot; constructor; authored]"));
+            assert!(!rendered.contains("[live;"));
+            assert!(!rendered.contains("source conflict"));
+            assert_eq!(serde_json::to_value(&source).unwrap()["locations"].as_array().unwrap().len(), 2);
+        }
+        let mut source = ObjectSourceSnapshot { locations: vec![live.clone()], diagnostics: vec![] };
+        assert!(super::render_object_source(&source).contains("[live; constructor; authored]"));
+        source.locations.push(heap);
+        source.locations[0].position.diagnostic = Some("live mapping note".into());
+        let rendered = super::render_object_source(&source);
+        assert_eq!(rendered.matches("source [").count(), 1);
+        assert!(rendered.contains("live mapping note"));
+        source.locations[0].position.resolved.line += 1;
+        let rendered = super::render_object_source(&source);
+        assert_eq!(rendered.matches("source [").count(), 2);
+        assert!(rendered.contains("source conflict"));
+        source.locations[0] = live;
+        source.locations[0].kind = "function".into();
+        assert_eq!(super::render_object_source(&source).matches("source [").count(), 2);
+    }
+
+    #[test]
     fn evaluation_and_value_snapshot_share_bounded_preview_rendering() {
         let preview = ValuePreviewSnapshot {
             kind: "string".to_owned(),
             preview: Some("bounded".to_owned()),
             truncated: true,
             reference: None,
+            source: Default::default(),
         };
         let evaluation = EvaluationSnapshot {
             expression: "value".to_owned(),
@@ -4326,6 +4481,7 @@ mod tests {
                 preview: None,
                 truncated: true,
                 reference: None,
+                source: Default::default(),
             },
             properties: Vec::new(),
             omitted_property_count: 0,
@@ -4345,7 +4501,8 @@ mod tests {
                 "kind": "symbol",
                 "preview": null,
                 "truncated": true,
-                "reference": null
+                "reference": null,
+                "source": { "locations": [], "diagnostics": [] }
             })
         );
     }
@@ -4981,6 +5138,10 @@ mod tests {
                     name_or_index: 0,
                     source: ".#10".to_owned(),
                     target: ".#11".to_owned(),
+                    source_preview: None,
+                    target_preview: Some("\"hello\\nworld\"".to_owned()),
+                    source_locations: Default::default(),
+                    target_locations: Default::default(),
                 },
                 HeapReferenceSnapshot {
                     edge_index: 2,
@@ -4989,6 +5150,10 @@ mod tests {
                     name_or_index: 3,
                     source: ".#10".to_owned(),
                     target: ".#12".to_owned(),
+                    source_preview: None,
+                    target_preview: Some("Array [0: 42]".to_owned()),
+                    source_locations: Default::default(),
+                    target_locations: Default::default(),
                 },
             ],
             omitted_reference_count: 2,
@@ -5000,11 +5165,60 @@ mod tests {
                 ".#10  type:object, value:\"Object\", shallow:0 B, in:1, out:4",
                 "Outgoing properties/references (2 of 4):",
                 "  PROPERTY/EDGE                 REFERENCE",
-                "  property \"title\"             .#11",
-                "  element [3]                  .#12",
+                "  property \"title\"             .#11  \"hello\\nworld\"",
+                "  element [3]                  .#12  Array [0: 42]",
                 "  ... 2 references omitted; use --all to expand",
             ]
         );
+    }
+
+    #[test]
+    fn heap_previews_preserve_endpoint_references() {
+        let mut node = heap_node("capture#10", "object", "Widget", 1, 1);
+        node.preview = Some("Widget {\"title\": \"hello\"}".to_owned());
+        assert_eq!(
+            heap_node_line(&node),
+            "capture#10  type:object, value:Widget {\"title\": \"hello\"}, shallow:0 B, in:1, out:1"
+        );
+        let reference = HeapReferenceSnapshot {
+            edge_index: 1,
+            edge_type: "property".to_owned(),
+            name: Some("title".to_owned()),
+            name_or_index: 0,
+            source: "capture#10".to_owned(),
+            target: "capture#11".to_owned(),
+            source_preview: node.preview,
+            target_preview: Some("\"hello\"".to_owned()),
+            source_locations: Default::default(),
+            target_locations: Default::default(),
+        };
+        assert_eq!(
+            heap_reference_line(&reference),
+            "  capture#10  Widget {\"title\": \"hello\"} --property \"title\"--> capture#11  \"hello\""
+        );
+    }
+
+    #[test]
+    fn heap_previews_default_when_deserializing_older_snapshots() {
+        let mut json = serde_json::to_value(heap_node(".#10", "object", "Object", 0, 0)).unwrap();
+        json.as_object_mut().unwrap().remove("preview");
+        let node: HeapNodeSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(node.preview, None);
+        let reference: HeapReferenceSnapshot = serde_json::from_value(serde_json::json!({
+            "edgeIndex": 1, "edgeType": "property", "name": "title", "nameOrIndex": 0,
+            "source": ".#10", "target": ".#11"
+        })).unwrap();
+        assert_eq!(reference.source_preview, None);
+        assert_eq!(reference.target_preview, None);
+        assert_eq!(heap_reference_line(&reference), "  .#10 --property \"title\"--> .#11");
+    }
+
+    #[test]
+    fn heap_preview_does_not_replace_explicit_selected_string_value() {
+        let mut node = heap_node(".#10", "string", "abcdefghijklmnopqrstuvw", 0, 0);
+        node.string_value = Some(node.name.clone());
+        node.preview = Some("\"abcdefghijklmnopqrst...\"".to_owned());
+        assert!(heap_node_line(&node).contains("value:\"abcdefghijklmnopqrstuvw\""));
     }
 
     fn heap_node(
@@ -5022,10 +5236,12 @@ mod tests {
             name: name.to_owned(),
             string_value: None,
             string_truncated: false,
+            preview: None,
             shallow_size: 0,
             outgoing_reference_count,
             incoming_reference_count,
             locations: Vec::new(),
+            source: Default::default(),
             immediate_dominator: None,
             retained_size: None,
         }

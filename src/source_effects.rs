@@ -11,6 +11,7 @@ use crate::debugger_engine::{
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
 use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
+use crate::source_location::{ResolvedSourcePosition, resolve_source_position_with_breadcrumb};
 use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
     GeneratedSourceInput, LineIndex, MappingQuality, Position, ProjectionStep, Provenance,
@@ -36,6 +37,7 @@ impl Default for SourceEffectOptions {
 struct RetainedView {
     script: ScriptKey,
     generated_url: String,
+    source_map_url: Option<String>,
     logical_to_canonical: BTreeMap<String, String>,
     canonical_to_logical: BTreeMap<String, String>,
     generated_content: Arc<str>,
@@ -53,12 +55,27 @@ impl RetainedView {
 
 type CachedSymbolIndex = Arc<OnceLock<Option<crate::language_intelligence::SymbolIndex>>>;
 
+/// Symbol indexes for one immutable source view. Failed parses are cached too.
 #[derive(Default)]
-struct SymbolIndexCache {
+pub struct SymbolIndexCache {
     entries: Mutex<BTreeMap<String, CachedSymbolIndex>>,
 }
 
 impl SymbolIndexCache {
+    pub(crate) fn breadcrumb(
+        &self,
+        source_url: &str,
+        content: &str,
+        line: u32,
+        column: u32,
+        positions: Option<&Arc<LineIndex>>,
+    ) -> Option<String> {
+        self.get_or_create(source_url, content, positions)
+            .get()
+            .and_then(Option::as_ref)
+            .and_then(|index| index.breadcrumb(line, column))
+    }
+
     fn get_or_create(
         &self,
         source_url: &str,
@@ -82,7 +99,7 @@ impl SymbolIndexCache {
         index
     }
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         self.entries.lock().unwrap().clear();
     }
 }
@@ -185,6 +202,7 @@ impl SourceEffectInterpreter {
                     RetainedView {
                         script: script.clone(),
                         generated_url: generated_url.clone(),
+                        source_map_url: source_map_url.clone(),
                         logical_to_canonical,
                         canonical_to_logical,
                         generated_content: content.clone(),
@@ -432,17 +450,43 @@ impl SourceEffectInterpreter {
             return None;
         };
         let retained = self.views.get(&source_state.view_id)?;
-        let mapped = retained
+        let (source_url, position, _) = retained
             .view
-            .forward(&retained.generated_url, position)
-            .into_iter()
-            .next()?;
+            .preferred_generated_location(&retained.generated_url, position)?;
         retained
             .view
             .files()
-            .get(&mapped.source_url)
+            .get(&source_url)
             .and_then(|authored| self.store.get(authored.primary.content))
-            .map(|content| (mapped.source_url, mapped.position, content))
+            .map(|content| (source_url, position, content))
+    }
+
+    pub fn resolve_generated_position(
+        &self,
+        state: &DebuggerState,
+        script_key: &ScriptKey,
+        position: Position,
+    ) -> Option<ResolvedSourcePosition> {
+        let ScriptSourceState::Resolved(source_state) = &state.scripts.get(script_key)?.source
+        else {
+            return None;
+        };
+        let retained = self.views.get(&source_state.view_id)?;
+        Some(resolve_source_position_with_breadcrumb(
+            &retained.view,
+            &retained.generated_url,
+            retained.source_map_url.as_deref(),
+            position,
+            |source_url, content, line, column| {
+                retained.symbol_indexes.breadcrumb(
+                    source_url,
+                    content,
+                    line,
+                    column,
+                    retained.positions_for(content),
+                )
+            },
+        ))
     }
 
     pub fn generated_position(
@@ -479,10 +523,7 @@ impl SourceEffectInterpreter {
         let retained = self.views.get(&source_state.view_id)?;
         retained
             .symbol_indexes
-            .get_or_create(source_url, content, retained.positions_for(content))
-            .get()
-            .and_then(Option::as_ref)
-            .and_then(|index| index.breadcrumb(line, column))
+            .breadcrumb(source_url, content, line, column, retained.positions_for(content))
     }
 
     pub fn prepare_breadcrumbs(
@@ -1021,6 +1062,13 @@ mod tests {
         });
         assert_eq!(Arc::strong_count(&positions), 2);
         assert!(cells.iter().all(|cell| Arc::ptr_eq(cell, &cells[0])));
+        for _ in 0..3 {
+            assert_eq!(
+                cache.breadcrumb("fixture.js", source, 1, 30, Some(&positions)).as_deref(),
+                Some("Example.method")
+            );
+        }
+        assert_eq!(Arc::strong_count(&positions), 2);
         let entries = cache.entries.lock().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -1046,6 +1094,119 @@ mod tests {
                 .as_deref(),
             Some("Example.method")
         );
+    }
+
+    #[test]
+    fn symbol_index_cache_reuses_negative_entries_until_cleared() {
+        let cache = SymbolIndexCache::default();
+        let failed = Arc::new(OnceLock::new());
+        assert!(failed.set(None).is_ok());
+        cache.entries.lock().unwrap().insert("fixture.js".into(), failed.clone());
+        assert_eq!(
+            cache.breadcrumb("fixture.js", "function example() {}", 1, 1, None),
+            None
+        );
+        assert!(Arc::ptr_eq(
+            &failed,
+            &cache.get_or_create("fixture.js", "function example() {}", None)
+        ));
+        cache.clear();
+        assert_eq!(
+            cache.breadcrumb("fixture.js", "function example() {}", 1, 1, None).as_deref(),
+            Some("example")
+        );
+    }
+
+    #[test]
+    fn source_position_resolution_shares_projection_and_cache_without_changing_frame_errors() {
+        for authored_content in [Some("function example() { return 1; }"), None] {
+            let model = Arc::new(ContextSourceModel::new());
+            let mut interpreter = SourceEffectInterpreter::new(
+                SourceEffectOptions::default(),
+                model,
+                "source-position-test",
+            );
+            let script = ScriptKey {
+                session: crate::debugger_engine::SessionKey {
+                    connection_generation: 1,
+                    session_id: "session-1".into(),
+                },
+                script_id: "script-1".into(),
+            };
+            let mut builder = SourceMapBuilder::new(Some("bundle.js"));
+            let source = builder.add_source("../src/example.ts");
+            builder.set_source_contents(source, authored_content);
+            builder.add(0, 0, 0, 24, Some("../src/example.ts"), None, false);
+            let mut map = Vec::new();
+            builder.into_sourcemap().to_writer(&mut map).unwrap();
+            let built = interpreter.interpret(&Effect::BuildSourceView {
+                effect_id: EffectId(1),
+                script: script.clone(),
+                script_version: 1,
+                generated_url: "file:///workspace/dist/bundle.js".into(),
+                content: Arc::from("function a(){return 1;}"),
+                source_map: Some(crate::source_view::SourceMapData::new(map)),
+                source_map_url: Some("file:///workspace/dist/bundle.js.map".into()),
+            }).unwrap().unwrap();
+            let Input::SourceViewBuilt { logical_sources, .. } = built else {
+                panic!("expected source view");
+            };
+            let mut state = DebuggerState::default();
+            Arc::make_mut(&mut state.scripts).insert(script.clone(), Arc::new(
+                crate::debugger_engine::ScriptState {
+                    url: "file:///workspace/dist/bundle.js".into(),
+                    hash: "runtime-hash".into(),
+                    source_map_url: Some("file:///workspace/dist/bundle.js.map".into()),
+                    version: 1,
+                    source: ScriptSourceState::Resolved(crate::debugger_engine::SourceViewState {
+                        view_id: EffectId(1),
+                        logical_sources: Arc::new(logical_sources),
+                    }),
+                    provenance: Default::default(),
+                    captured_source: None,
+                },
+            ));
+            for _ in 0..3 {
+                let resolved = interpreter.resolve_generated_position(
+                    &state, &script, Position::ZERO,
+                ).unwrap();
+                assert_eq!(resolved.mapping, "authored");
+                assert_eq!(resolved.resolved.source_url, "file:///workspace/src/example.ts");
+                assert_eq!((resolved.resolved.line, resolved.resolved.column), (1, 25));
+                assert_eq!(resolved.diagnostic.is_some(), authored_content.is_none());
+                assert_eq!(resolved.breadcrumb.as_deref(), authored_content.map(|_| "example"));
+                let projected = interpreter.project_generated_position(
+                    &state, &script, Position::ZERO,
+                );
+                assert_eq!(projected.is_some(), authored_content.is_some());
+                if let Some((url, position, content)) = projected {
+                    assert_eq!(position, Position { line: 0, column: 24 });
+                    assert_eq!(
+                        interpreter.breadcrumb(&state, &script, &url, 1, 25, &content),
+                        resolved.breadcrumb
+                    );
+                }
+            }
+            let retained = &interpreter.views[&EffectId(1)];
+            assert_eq!(
+                retained.symbol_indexes.entries.lock().unwrap().len(),
+                usize::from(authored_content.is_some())
+            );
+            let frame = interpreter.interpret(&Effect::MapFrame {
+                effect_id: EffectId(2),
+                session: script.session.clone(),
+                pause_epoch: 1,
+                frame_index: 0,
+                script,
+                view_id: EffectId(1),
+                position: Position::ZERO,
+            });
+            if authored_content.is_none() {
+                assert!(matches!(frame, Err(SourceEffectError::UnavailableMappedSource { .. })));
+            } else {
+                assert!(matches!(frame, Ok(Some(Input::FrameMapped { .. }))));
+            }
+        }
     }
 
     #[test]

@@ -164,6 +164,7 @@ pub fn remote_value_snapshot(
         preview,
         truncated,
         reference: value.object_id.clone(),
+        source: Default::default(),
     }
 }
 
@@ -181,6 +182,7 @@ fn heap_value_snapshot(
         preview: Some(preview),
         truncated,
         reference: Some(format!("{capture_id}#{}", summary.heap_object_id)),
+        source: Default::default(),
     })
 }
 

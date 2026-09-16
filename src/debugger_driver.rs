@@ -187,6 +187,15 @@ impl DebuggerDriver {
         &self.sources
     }
 
+    pub fn resolve_generated_position(
+        &self,
+        script: &crate::debugger_engine::ScriptKey,
+        position: crate::source_view::Position,
+    ) -> Option<crate::source_location::ResolvedSourcePosition> {
+        self.sources
+            .resolve_generated_position(&self.state, script, position)
+    }
+
     pub fn breadcrumb(
         &self,
         script: &crate::debugger_engine::ScriptKey,
