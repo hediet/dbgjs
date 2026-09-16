@@ -2108,6 +2108,69 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &["capture", "show", "offline-profile", "--context", &context],
     );
     assert_eq!(shown, *profile);
+    let without_analysis_timing = |text: &str| {
+        text.lines()
+            .filter(|line| !line.starts_with("Analysis ") && !line.starts_with("Total "))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    for (name, command, limit) in [
+        ("named-coverage", ["coverage", "show"], 300),
+        ("offline-profile", ["profile", "show"], 80),
+        ("offline-heap", ["heap", "classes"], 300),
+    ] {
+        let rendered = run_human(
+            &cli, &service, &state_file,
+            &["capture", "show", name, "--context", &context],
+        );
+        let expected = run_human(
+            &cli, &service, &state_file,
+            &[command[0], command[1], name, "--context", &context],
+        );
+        assert_eq!(
+            without_analysis_timing(&rendered),
+            without_analysis_timing(&expected),
+            "capture show must reuse the {name} renderer",
+        );
+        assert!(!rendered.is_empty());
+        assert!(rendered.lines().count() <= limit, "{name}: {rendered}");
+        assert!(!rendered.contains("storage="), "{rendered}");
+        let metadata = run_json(
+            &cli, &service, &state_file,
+            &["capture", "show", name, "--context", &context],
+        );
+        assert_eq!(
+            &metadata,
+            captures.as_array().unwrap().iter().find(|capture| capture["name"] == name).unwrap(),
+            "JSON capture show must retain the catalog metadata contract",
+        );
+    }
+    for (selector, command, name) in [
+        (".", ["heap", "classes"], "offline-heap"),
+        (".1", ["heap", "classes"], "offline-heap"),
+        (".2", ["coverage", "show"], "main-final"),
+    ] {
+        let rendered = run_human(
+            &cli, &service, &state_file,
+            &["capture", "show", selector, "--context", &context],
+        );
+        let expected = run_human(
+            &cli, &service, &state_file,
+            &[command[0], command[1], name, "--context", &context],
+        );
+        assert_eq!(
+            without_analysis_timing(&rendered),
+            without_analysis_timing(&expected),
+            "{selector} must resolve across all capture kinds",
+        );
+    }
+    let missing = run_human_in(
+        &cli, &service, &state_file, &std::env::current_dir().unwrap(),
+        &["capture", "show", "missing-capture", "--context", &context],
+    );
+    assert!(!missing.0.success());
+    assert!(missing.1.is_empty());
+    assert!(String::from_utf8_lossy(&missing.2).contains("does not exist"));
     let offline_profile = run_json(
         &cli,
         &service,
@@ -2157,7 +2220,7 @@ capture reserved before storage
 $ dbgjs connection disconnect --context <context> --connection runtime-a
 $ dbgjs connection disconnect --context <context> --connection runtime-b
 $ dbgjs service stop
-$ dbgjs capture show offline-profile --context <context>
+$ dbgjs --json capture show offline-profile --context <context>
 kind=cpuProfile owner=runtime-a/<node-a>@1
 $ dbgjs profile show offline-profile --context <context>
 offline query succeeded

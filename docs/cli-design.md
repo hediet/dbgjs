@@ -81,6 +81,32 @@ Playwright programs return their value with `return`; console diagnostics go to
 stderr so they cannot corrupt the JSON result envelope. Failed child processes
 report their exit failure and stderr rather than an incidental empty-JSON error.
 
+### Inspecting stored captures
+
+`dbgjs capture list --context <id>` lists compact catalog entries.
+`dbgjs capture show <name> --context <id>` renders the stored capture's default
+human-readable view: a coverage tree, CPU profile summary, or heap class tree.
+It uses the same output budgets and width trimming as `coverage show`,
+`profile show`, and `heap classes`, respectively. Reads work after disconnect
+or daemon restart and do not start recording or take a new capture.
+
+Relative selectors (`.`, `.1`, `.2`, ...) resolve across all capture kinds in
+the context, once, before rendering the exact stored name. In contrast,
+`coverage show .` selects the latest coverage capture, not the latest capture
+of any kind.
+
+```console
+dbgjs capture show . --context :investigation
+dbgjs coverage show click --context :investigation --path-glob "**/contrib/issue/**"
+```
+
+Use the kind-specific commands for filtering and output options such as
+`--max-lines`; coverage and heap trees also support `--all` and `--no-trim`.
+`--no-trim` disables line-width trimming, not tree pruning.
+For compatibility, `dbgjs --json capture show <name>` still returns catalog
+metadata, as does `capture list` for each entry. Use `--json coverage show`,
+`--json profile show`, or `--json heap classes` for structured content.
+
 ## CDP over stdio
 
 A durable connection can launch an adapter whose stdin and stdout carry CDP

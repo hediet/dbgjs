@@ -20,7 +20,7 @@ use dbgjs::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
 };
 use dbgjs::service_api::{
-    BreakpointSpec, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
+    BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
     ContextSummary, CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot,
     HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
@@ -628,25 +628,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print_coverage(
-                &rpc(client
-                    .get_stored_coverage(
-                        context,
-                        options.capture_id,
-                        None,
-                        scope_options.target.clone(),
-                        scope_options.connection.clone(),
-                        None,
-                    )
-                    .await)?,
-                CoverageOutputOptions {
-                    path: options.path.as_deref(),
-                    path_glob: options.path_glob.as_deref(),
-                    all: options.all,
-                    max_lines: options.max_lines,
-                    trim_width: options.trim_width,
-                },
-            )?;
+            show_stored_coverage(&client, &output, context, &scope_options, options).await?;
         }
         [profile, start, options @ ..] if profile == "profile" && start == "start" => {
             let sampling_interval_micros = parse_cpu_profile_start_options(options)?;
@@ -675,25 +657,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [profile, show, options @ ..] if profile == "profile" && show == "show" => {
             let options = parse_cpu_profile_show_options(options)?;
-            let _ = options.no_cache;
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let profile = rpc(client
-                .get_stored_cpu_profile(
-                    context, options.capture_id, options.path.clone(),
-                    scope_options.target.clone(), scope_options.connection.clone(),
-                )
-                .await)?;
-            output.print_cpu_profile(
-                &profile,
-                CpuProfileOutputOptions {
-                    path: options.path.as_deref(),
-                    view: options.view,
-                    sort: options.sort,
-                    max_lines: options.max_lines,
-                },
-            )?;
+            show_stored_cpu_profile(&client, &output, context, &scope_options, options).await?;
         }
         [profile, export, options @ ..] if profile == "profile" && export == "export" => {
             let options = parse_cpu_profile_export_options(options)?;
@@ -729,7 +696,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&result)?;
         }
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
-            let options = parse_heap_class_options(options)?;
+            let mut options = parse_heap_class_options(options)?;
             let mut capture_id = options.capture_id.clone();
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
@@ -748,22 +715,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let classes = rpc(client
-                .get_stored_heap_classes(
-                    context, capture_id, options.filter,
-                    scope_options.target.clone(), scope_options.connection.clone(),
-                )
-                .await)?;
-            output.print_heap_classes(
-                &classes,
-                HeapClassOutputOptions {
-                    all: options.all,
-                    max_lines: options.max_lines,
-                    instances: options.instances,
-                    sort_by_instances: options.sort_by_instances,
-                    trim_width: options.trim_width,
-                },
-            )?;
+            options.capture_id = capture_id;
+            show_stored_heap_classes(&client, &output, context, &scope_options, options).await?;
         }
         [heap, supply, capture, script, hash, map] if heap == "heap" && supply == "supply-map" => {
             let map_path = absolute_path(Path::new(map))?;
@@ -788,7 +741,41 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.get_capture(context, name.clone()).await)?)?;
+            let capture = rpc(client.get_capture(context.clone(), name.clone()).await)?;
+            if output.is_json() {
+                output.print(&capture)?;
+            } else {
+                // Resolve relative history once across all kinds, then read the exact stored name.
+                match capture.kind {
+                    CaptureKind::Coverage => {
+                        show_stored_coverage(
+                            &client, &output, context, &scope_options,
+                            CoverageShowOptions {
+                                capture_id: capture.name,
+                                ..parse_coverage_show_options(&[])?
+                            },
+                        ).await?;
+                    }
+                    CaptureKind::CpuProfile => {
+                        show_stored_cpu_profile(
+                            &client, &output, context, &scope_options,
+                            CpuProfileShowOptions {
+                                capture_id: capture.name,
+                                ..parse_cpu_profile_show_options(&[])?
+                            },
+                        ).await?;
+                    }
+                    CaptureKind::HeapSnapshot => {
+                        show_stored_heap_classes(
+                            &client, &output, context, &scope_options,
+                            HeapClassOptions {
+                                capture_id: capture.name,
+                                ..parse_heap_class_options(&[])?
+                            },
+                        ).await?;
+                    }
+                }
+            }
         }
         [capture, delete, name] if capture == "capture" && delete == "delete" => {
             let client = ensure_service(&state_file).await?;
@@ -4782,6 +4769,84 @@ where
     Ok(result)
 }
 
+async fn show_stored_coverage(
+    client: &DebuggerServiceApiClient,
+    output: &OutputFormat,
+    context: String,
+    scope: &ScopeOptions,
+    options: CoverageShowOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let snapshot = rpc(client
+        .get_stored_coverage(
+            context, options.capture_id, None,
+            scope.target.clone(), scope.connection.clone(), None,
+        )
+        .await)?;
+    output.print_coverage(
+        &snapshot,
+        CoverageOutputOptions {
+            path: options.path.as_deref(),
+            path_glob: options.path_glob.as_deref(),
+            all: options.all,
+            max_lines: options.max_lines,
+            trim_width: options.trim_width,
+        },
+    )?;
+    Ok(())
+}
+
+async fn show_stored_cpu_profile(
+    client: &DebuggerServiceApiClient,
+    output: &OutputFormat,
+    context: String,
+    scope: &ScopeOptions,
+    options: CpuProfileShowOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _ = options.no_cache;
+    let profile = rpc(client
+        .get_stored_cpu_profile(
+            context, options.capture_id, options.path.clone(),
+            scope.target.clone(), scope.connection.clone(),
+        )
+        .await)?;
+    output.print_cpu_profile(
+        &profile,
+        CpuProfileOutputOptions {
+            path: options.path.as_deref(),
+            view: options.view,
+            sort: options.sort,
+            max_lines: options.max_lines,
+        },
+    )?;
+    Ok(())
+}
+
+async fn show_stored_heap_classes(
+    client: &DebuggerServiceApiClient,
+    output: &OutputFormat,
+    context: String,
+    scope: &ScopeOptions,
+    options: HeapClassOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let classes = rpc(client
+        .get_stored_heap_classes(
+            context, options.capture_id, options.filter,
+            scope.target.clone(), scope.connection.clone(),
+        )
+        .await)?;
+    output.print_heap_classes(
+        &classes,
+        HeapClassOutputOptions {
+            all: options.all,
+            max_lines: options.max_lines,
+            instances: options.instances,
+            sort_by_instances: options.sort_by_instances,
+            trim_width: options.trim_width,
+        },
+    )?;
+    Ok(())
+}
+
 fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions, io::Error> {
     let mut capture_id = None;
     let mut path = None;
@@ -6683,6 +6748,8 @@ commands:
   dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
   dbgjs capture list [--context <id>]
   dbgjs capture show <name> [--context <id>]
+    renders the kind's default bounded view: coverage tree, CPU profile, or heap classes
+    --json returns catalog metadata; use coverage show, profile show, or heap classes for view options and JSON data
   dbgjs capture delete <name> [--context <id>]
   dbgjs promise list [<capture>] [--state <pending|fulfilled|rejected|unknown>] [--limit <count>] [--max-preview-length <count>] [target scope]
   dbgjs heap classes [<name>] [--capture] [--filter <regex>] [--sort-by-instances] [--instances] [--max-lines <count>] [--all] [--no-cache] [--no-trim]

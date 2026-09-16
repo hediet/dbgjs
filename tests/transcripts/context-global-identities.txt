@@ -11,7 +11,7 @@ capture reserved before storage
 $ dbgjs connection disconnect --context <context> --connection runtime-a
 $ dbgjs connection disconnect --context <context> --connection runtime-b
 $ dbgjs service stop
-$ dbgjs capture show offline-profile --context <context>
+$ dbgjs --json capture show offline-profile --context <context>
 kind=cpuProfile owner=runtime-a/<node-a>@1
 $ dbgjs profile show offline-profile --context <context>
 offline query succeeded
