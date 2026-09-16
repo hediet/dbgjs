@@ -17,6 +17,10 @@ The scenario proves:
 7. With Chromium remote debugging enabled and another client already attached,
    renderer PID attachment selects the workbench page through browser CDP, not
    `webContents.debugger`, and releasing dbgjs preserves the other client's session.
+8. On Windows, attaching the discovered renderer window also verifies real
+   Playwright title, URL, and utility-world locator queries. The exposed page
+   target ID must match Chromium's root frame ID, and detaching an auxiliary
+   CDP session must leave the page usable.
 
 `expected.json` is a checked-in golden transcript shared by every platform.
 It preserves actual roles, values, source text, mapping requests, and authored

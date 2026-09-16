@@ -95,6 +95,25 @@ Playwright requires a page-root session whose target and main-frame identities
 are coherent. Direct Node targets are rejected rather than exposed as fake
 browser roots.
 
+Before exposing targets, the proxy opens a private relay session and reads
+`Page.getFrameTree`. It projects only the selected target's identity to the real
+root frame ID, as Playwright keys its main frame session by target ID. This also
+supports Electron pages whose graph target ID is synthetic (for example,
+`renderer-3`). Target discovery, attachment, and lifecycle notifications use the
+projected ID; graph-level target parameters are reverse-routed to the graph
+ID. Selected-session target-info queries go through the relay's graph lookup
+and retain their client session on replies; native window queries retain the
+Chromium ID. Frame IDs, execution-context metadata, child target/session identities, and
+opaque application data remain unchanged. The private session stays owned by
+the relay until teardown. Failed or malformed identity lookups fail explicitly
+within the capability deadline rather than exposing an incoherent page.
+
+Regression coverage includes the proxy's identifier projection and reverse
+routing tests, the Chromium selected-page E2E (including OOPIFs), and the Windows
+isolated VS Code discovery E2E. The latter verifies a synthetic Electron renderer
+target using real Playwright title, URL, utility-world locator, and auxiliary CDP
+session detach operations, comparing them with raw CDP in the same connection.
+
 ## Deferred choices
 
 - Sandboxing and module loading.

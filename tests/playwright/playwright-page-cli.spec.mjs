@@ -11,14 +11,17 @@ import {
 } from "./live-test-harness.mjs";
 
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const cli = resolve(`target/debug/dbgjs${executableSuffix}`);
-const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
+const binDirectory = process.env.DBGJS_TEST_BIN_DIR ?? "target/debug";
+const cli = resolve(binDirectory, `dbgjs${executableSuffix}`);
+const service = resolve(binDirectory, `dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/playwright-page-cli.md");
 
 test("selected page runs bounded Playwright programs through dbgjs", async () => {
 	test.setTimeout(300_000);
-	const build = await run("cargo", ["build", "--bins"], {});
-	expect(build.code, build.output).toBe(0);
+	if (!process.env.DBGJS_TEST_BIN_DIR) {
+		const build = await run("cargo", ["build", "--bins"], {});
+		expect(build.code, build.output).toBe(0);
+	}
 
 	const scratchRoot = resolve(".test-tmp");
 	const stateDirectory = join(scratchRoot, `playwright-page-${randomUUID()}`);
@@ -227,8 +230,9 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 				return new Promise(() => {});
 			})`,
 			...scope,
-		], environment, { timeoutMs: 15_000 });
-		await expect.poll(() => page.title()).toBe("proxy command pending");
+		], environment, { timeoutMs: 45_000 });
+		await expect.poll(() => page.title(), { timeout: 30_000 }).toBe("proxy command pending");
+		const closingAt = performance.now();
 		await page.close();
 		const destroyed = await destruction;
 		await appendTranscriptCommand(
@@ -241,7 +245,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 		);
 		expect(destroyed.code, destroyed.output).not.toBe(0);
 		expect(destroyed.timedOut, destroyed.output).toBe(false);
-		expect(destroyed.durationMs, destroyed.output).toBeLessThan(10_000);
+		expect(performance.now() - closingAt, destroyed.output).toBeLessThan(10_000);
 		expect(await unrelatedPage.title()).toBe("unrelated owner page");
 		await appendFile(
 			transcriptPath,

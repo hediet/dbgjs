@@ -13,6 +13,7 @@ import { chromium } from "playwright";
 import { run } from "../playwright/live-test-harness.mjs";
 import { breakpointResult, discoveryResult, pauseResult } from "./transcript.mjs";
 import { resolveCodeExecutable } from "./launch.mjs";
+import { verifySelectedElectronPage } from "../playwright/electron-page-verification.mjs";
 
 const vscodeVersion = "1.137.0";
 const authoredUrl = "dbgjs-fixture:///fixture.ts";
@@ -189,6 +190,22 @@ try {
 		return completed.preview.preview === "41";
 	});
 	transcript.push({ command: "target eval result", result: completed.preview });
+	if (process.platform === "win32") {
+		let renderer;
+		await poll("fixture renderer window discovery", async () => {
+			const forests = await command(["process", "list", "--root", "vscode", "--no-cmd-line"]);
+			renderer = forests.find((forest) => forest.rootProcessId === codeProcess.pid)
+				?.processes.find((process) => process.role === "renderer" && Number.isSafeInteger(process.windowId));
+			return Boolean(renderer);
+		});
+		await command(["process", "attach", `w:${codeProcess.pid}/${renderer.windowId}`, "--set"]);
+		const context = await command(["context", "show"]);
+		assert.ok(context.connections.some((connection) =>
+			connection.targets.some((target) => target.targetId.startsWith("renderer-"))),
+			"The regression must exercise a synthetic Electron renderer target.");
+		await verifySelectedElectronPage(command);
+		console.log("Electron Playwright title, URL, utility world, identity, and auxiliary detach passed.");
+	}
 	const actual = JSON.stringify(transcript, null, 2) + "\n";
 	await writeFile(join(output, "actual.json"), actual);
 	const goldenPath = fileURLToPath(new URL("./expected.json", import.meta.url));

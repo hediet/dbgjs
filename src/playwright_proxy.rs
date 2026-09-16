@@ -96,7 +96,7 @@ async fn run(
 
     let config = websocket_config();
     let PlaywrightCdpSource::BrowserRoot { endpoint } = source;
-    let Some(upstream) = connect_upstream(
+    let Some(mut upstream) = connect_upstream(
         endpoint,
         config.clone(),
         &mut cancel,
@@ -107,7 +107,96 @@ async fn run(
     else {
         return Ok(());
     };
-    bridge(client, upstream, page, cancel, capability_deadline).await
+    let client_target_id = tokio::select! {
+        result = resolve_page_identity(&mut upstream, &page) => result?,
+        _ = tokio::time::sleep_until(capability_deadline) => {
+            return Err(PlaywrightProxyError::CapabilityTimeout);
+        }
+        _ = cancel.changed() => return Ok(()),
+    };
+    bridge(
+        client,
+        upstream,
+        page,
+        client_target_id,
+        cancel,
+        capability_deadline,
+    )
+    .await
+}
+
+async fn resolve_page_identity(
+    upstream: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+    page: &PlaywrightPageScope,
+) -> Result<String, PlaywrightProxyError> {
+    // Keep this private session until relay teardown so its attachment stays owned.
+    // Resolve identity before any discovery/attachment is visible to Playwright.
+    let attached = identity_request(
+        upstream,
+        json!({
+            "id": -1,
+            "method": "Target.attachToTarget",
+            "params": { "targetId": page.target_id, "flatten": true }
+        }),
+    )
+    .await?;
+    let session_id = attached
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or(PlaywrightProxyError::InvalidPageIdentity)?;
+    let tree = identity_request(
+        upstream,
+        json!({
+            "id": -2,
+            "sessionId": session_id,
+            "method": "Page.getFrameTree",
+            "params": {}
+        }),
+    )
+    .await?;
+    let frame = &tree["frameTree"]["frame"];
+    if frame.get("parentId").is_some() {
+        return Err(PlaywrightProxyError::InvalidPageIdentity);
+    }
+    frame
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .ok_or(PlaywrightProxyError::InvalidPageIdentity)
+}
+
+async fn identity_request(
+    upstream: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+    request: Value,
+) -> Result<Value, PlaywrightProxyError> {
+    upstream.send(json_message(request.clone())?).await?;
+    while let Some(message) = upstream.next().await {
+        let message = message?;
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+        let Some(value) = parse_data_message(message)? else {
+            continue;
+        };
+        if value.get("id") != request.get("id")
+            || value.get("sessionId") != request.get("sessionId")
+        {
+            continue;
+        }
+        if let Some(error) = value.get("error") {
+            return Err(PlaywrightProxyError::PageIdentityRequest {
+                method: request["method"].as_str().unwrap().to_owned(),
+                error: error.clone(),
+            });
+        }
+        return value
+            .get("result")
+            .cloned()
+            .ok_or(PlaywrightProxyError::InvalidPageIdentity);
+    }
+    Err(PlaywrightProxyError::InvalidPageIdentity)
 }
 
 async fn connect_upstream(
@@ -204,12 +293,14 @@ async fn bridge(
     client: tokio_tungstenite::WebSocketStream<TcpStream>,
     upstream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
     page: PlaywrightPageScope,
+    client_target_id: String,
     mut cancel: watch::Receiver<bool>,
     capability_deadline: Instant,
 ) -> Result<(), PlaywrightProxyError> {
     let (mut client_sender, mut client_receiver) = client.split();
     let (mut upstream_sender, mut upstream_receiver) = upstream.split();
     let mut scope = ActiveScope::new(page);
+    scope.client_target_id = client_target_id;
     let mut pending = HashMap::<String, PendingRequest>::new();
     let mut internal = HashMap::<String, InternalRequest>::new();
     let mut next_internal_id = -1_i64;
@@ -373,6 +464,7 @@ fn reserve_internal_request(
 
 struct ActiveScope {
     page: PlaywrightPageScope,
+    client_target_id: String,
     sessions: HashSet<String>,
     browser_broker_sessions: HashSet<String>,
     session_target_ids: HashMap<String, String>,
@@ -383,6 +475,7 @@ struct ActiveScope {
 impl ActiveScope {
     fn new(page: PlaywrightPageScope) -> Self {
         Self {
+            client_target_id: page.target_id.clone(),
             page,
             sessions: HashSet::new(),
             browser_broker_sessions: HashSet::new(),
@@ -429,6 +522,14 @@ impl ActiveScope {
             None => Some(&self.page.target_id),
         }
     }
+
+    fn client_target_id<'a>(&'a self, target_id: &'a str) -> &'a str {
+        if target_id == self.page.target_id {
+            &self.client_target_id
+        } else {
+            target_id
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -472,6 +573,41 @@ fn client_request(
     }
     if let Err(error) = validate_request_identifiers(object, &method, scope) {
         return scope_error(id, response_session, error);
+    }
+    if method == "Target.getTargetInfo"
+        && let Some(session_id) = object.get("sessionId").and_then(Value::as_str)
+        && scope.target_for_session(Some(session_id)) == Some(&scope.page.target_id)
+    {
+        let session_id = session_id.to_owned();
+        object.remove("sessionId");
+        object.insert(
+            "params".to_owned(),
+            json!({ "targetId": scope.page.target_id }),
+        );
+        if let Some(id) = &id {
+            reserve_pending_request(
+                pending,
+                id_key(id)?,
+                PendingRequest::Forwarded {
+                    method,
+                    session_id: Some(session_id),
+                },
+            )?;
+        }
+        return Ok(ClientAction::Forward(json_message(value)?));
+    }
+    if matches!(
+        method.as_str(),
+        "Target.attachToTarget"
+            | "Target.activateTarget"
+            | "Target.closeTarget"
+            | "Target.getTargetInfo"
+    ) && let Some(target_id) = object
+        .get_mut("params")
+        .and_then(|params| params.get_mut("targetId"))
+        && target_id.as_str() == Some(&scope.client_target_id)
+    {
+        *target_id = Value::String(scope.page.target_id.clone());
     }
     let session = object.get("sessionId").and_then(Value::as_str);
 
@@ -709,6 +845,15 @@ fn upstream_message(
             return Ok(UpstreamAction::Drop);
         };
         pending.remove(&key);
+        if method == "Target.getTargetInfo"
+            && let Some(session_id) = &session_id
+            && scope.target_for_session(Some(session_id)) == Some(&scope.page.target_id)
+        {
+            object.insert("sessionId".to_owned(), json!(session_id));
+        }
+        if object.contains_key("error") {
+            return Ok(UpstreamAction::Forward(json_message(value)?));
+        }
         match method.as_str() {
             "Target.getTargets" => {
                 let Some(infos) = object
@@ -721,7 +866,7 @@ fn upstream_message(
                 infos.retain(|info| target_info_id(info) == Some(&scope.page.target_id));
                 for info in infos {
                     validate_target_info(info, &scope.page, &scope.page.target_id)?;
-                    project_target_info(info, &scope.page)?;
+                    project_target_info(info, scope)?;
                 }
             }
             "Target.getTargetInfo" => {
@@ -733,7 +878,7 @@ fn upstream_message(
                     PlaywrightProxyError::ScopeViolation(ScopeViolation::SessionId),
                 )?;
                 validate_target_info(info, &scope.page, expected_target)?;
-                project_target_info(info, &scope.page)?;
+                project_target_info(info, scope)?;
             }
             "Target.attachToTarget" => {
                 let session_id = object
@@ -789,7 +934,7 @@ fn upstream_message(
                 .get_mut("params")
                 .and_then(|params| params.get_mut("targetInfo"))
                 .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-            project_target_info(target_info, &scope.page)?;
+            project_target_info(target_info, scope)?;
             return Ok(UpstreamAction::Forward(json_message(value)?));
         }
         if is_browser_broker_target_info(target_info) {
@@ -810,7 +955,7 @@ fn upstream_message(
                 .get_mut("params")
                 .and_then(|params| params.get_mut("targetInfo"))
                 .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-            project_target_info(target_info, &scope.page)?;
+            project_target_info(target_info, scope)?;
             return Ok(UpstreamAction::Forward(json_message(value)?));
         }
         return Ok(UpstreamAction::Detach(session_id.to_owned()));
@@ -824,7 +969,9 @@ fn upstream_message(
         if !scope.remove_session(session_id) {
             return Ok(UpstreamAction::Drop);
         }
-        return Ok(if scope.primary_session_id.as_deref() == Some(session_id) {
+        let primary = scope.primary_session_id.as_deref() == Some(session_id);
+        project_target_id(object.get_mut("params"), scope);
+        return Ok(if primary {
             scope.primary_session_id = None;
             UpstreamAction::ForwardAndClose(json_message(value)?)
         } else {
@@ -854,7 +1001,7 @@ fn upstream_message(
             .get_mut("params")
             .and_then(|params| params.get_mut("targetInfo"))
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
-        project_target_info(target_info, &scope.page)?;
+        project_target_info(target_info, scope)?;
         return Ok(UpstreamAction::Forward(json_message(value)?));
     }
     if method == "Target.targetDestroyed" {
@@ -864,6 +1011,7 @@ fn upstream_message(
             .and_then(Value::as_str)
             .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
         return Ok(if target_id == scope.page.target_id {
+            project_target_id(object.get_mut("params"), scope);
             UpstreamAction::ForwardAndClose(json_message(value)?)
         } else if scope.remove_descendant_target(target_id) {
             UpstreamAction::Forward(json_message(value)?)
@@ -921,11 +1069,21 @@ fn internal_response(
     }
 }
 
+fn project_target_id(params: Option<&mut Value>, scope: &ActiveScope) {
+    if let Some(target_id) = params.and_then(|params| params.get_mut("targetId"))
+        && target_id.as_str() == Some(&scope.page.target_id)
+    {
+        *target_id = Value::String(scope.client_target_id.clone());
+    }
+}
+
 fn project_target_info(
     target_info: &mut Value,
-    page: &PlaywrightPageScope,
+    scope: &ActiveScope,
 ) -> Result<(), PlaywrightProxyError> {
+    let page = &scope.page;
     let selected = target_info_id(target_info) == Some(&page.target_id);
+    project_target_id(Some(target_info), scope);
     let info = target_info
         .as_object_mut()
         .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
@@ -936,6 +1094,12 @@ fn project_target_info(
         "browserContextId".to_owned(),
         Value::String(page.client_browser_context_id().to_owned()),
     );
+    if info.get("openerId").and_then(Value::as_str) == Some(&page.target_id) {
+        info.insert(
+            "openerId".to_owned(),
+            Value::String(scope.client_target_id.clone()),
+        );
+    }
     Ok(())
 }
 
@@ -1014,7 +1178,7 @@ fn validate_request_identifiers(
             validate_optional_identifier(
                 params,
                 "targetId",
-                |target_id| target_id == scope.page.target_id,
+                |target_id| target_id == scope.client_target_id,
                 ScopeViolation::TargetId,
             )
         }
@@ -1025,7 +1189,7 @@ fn validate_request_identifiers(
             validate_optional_identifier(
                 params,
                 "targetId",
-                |target_id| target_id == expected_target,
+                |target_id| target_id == scope.client_target_id(expected_target),
                 ScopeViolation::TargetId,
             )
         }
@@ -1174,6 +1338,10 @@ pub enum PlaywrightProxyError {
     ScopeViolation(#[from] ScopeViolation),
     #[error("Playwright proxy received an invalid CDP message")]
     InvalidCdpMessage,
+    #[error("Playwright proxy could not resolve a nonempty page root frame identity")]
+    InvalidPageIdentity,
+    #[error("Playwright proxy page identity request {method} failed: {error}")]
+    PageIdentityRequest { method: String, error: Value },
 }
 
 #[cfg(test)]
@@ -1194,6 +1362,367 @@ mod tests {
         scope.register_page_session("selected-session", "selected");
         scope.primary_session_id = Some("selected-session".to_owned());
         scope
+    }
+
+    fn projected_scope() -> ActiveScope {
+        let mut scope = scope();
+        scope.client_target_id = "chromium-root-frame".to_owned();
+        scope
+    }
+
+    async fn resolve_mock_identity(response: Value) -> Result<String, PlaywrightProxyError> {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            let attach = parse_data_message(socket.next().await.unwrap().unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(attach["method"], "Target.attachToTarget");
+            assert_eq!(attach["params"]["targetId"], "selected");
+            socket
+                .send(text(json!({
+                    "id": attach["id"], "result": { "sessionId": "identity-session" }
+                })))
+                .await
+                .unwrap();
+            let tree = parse_data_message(socket.next().await.unwrap().unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(tree["method"], "Page.getFrameTree");
+            assert_eq!(tree["sessionId"], "identity-session");
+            let mut response = response;
+            response["id"] = tree["id"].clone();
+            response["sessionId"] = tree["sessionId"].clone();
+            socket.send(text(response)).await.unwrap();
+        });
+        let (mut socket, _) = connect_async(endpoint).await.unwrap();
+        let result = timeout(
+            Duration::from_secs(5),
+            resolve_page_identity(&mut socket, &page()),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn resolves_real_root_frame_identity_before_exposing_selected_page() {
+        let id = resolve_mock_identity(json!({
+            "result": { "frameTree": { "frame": { "id": "chromium-root-frame" } } }
+        }))
+        .await
+        .unwrap();
+        assert_eq!(id, "chromium-root-frame");
+    }
+
+    #[tokio::test]
+    async fn malformed_or_non_root_frame_identity_is_rejected() {
+        for frame in [
+            json!({}),
+            json!({ "id": "" }),
+            json!({ "id": "child-frame", "parentId": "root-frame" }),
+        ] {
+            let error = resolve_mock_identity(json!({
+                "result": { "frameTree": { "frame": frame } }
+            }))
+            .await
+            .unwrap_err();
+            assert!(matches!(error, PlaywrightProxyError::InvalidPageIdentity));
+        }
+    }
+
+    #[tokio::test]
+    async fn frame_identity_protocol_error_is_preserved() {
+        let error = resolve_mock_identity(json!({
+            "error": { "code": -32000, "message": "Page is unavailable" }
+        }))
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PlaywrightProxyError::PageIdentityRequest { method, error }
+                if method == "Page.getFrameTree" && error["message"] == "Page is unavailable"
+        ));
+    }
+
+    fn forwarded_upstream(value: Value, scope: &mut ActiveScope) -> Value {
+        let action =
+            upstream_message(text(value), scope, &mut HashMap::new(), &mut HashMap::new()).unwrap();
+        let (UpstreamAction::Forward(message) | UpstreamAction::ForwardAndClose(message)) = action
+        else {
+            panic!("expected forwarded upstream message");
+        };
+        parse_data_message(message).unwrap().unwrap()
+    }
+
+    #[test]
+    fn selected_identity_is_projected_in_discovery_attachment_and_lifecycle() {
+        for method in [
+            "Target.targetCreated",
+            "Target.targetInfoChanged",
+            "Target.attachedToTarget",
+        ] {
+            let event = forwarded_upstream(
+                json!({
+                    "method": method,
+                    "params": {
+                        "sessionId": "auxiliary-session",
+                        "targetInfo": { "targetId": "selected", "type": "page" }
+                    }
+                }),
+                &mut projected_scope(),
+            );
+            assert_eq!(
+                event["params"]["targetInfo"]["targetId"],
+                "chromium-root-frame"
+            );
+            assert_eq!(event["params"]["sessionId"], "auxiliary-session");
+        }
+        for method in ["Target.targetDestroyed", "Target.detachedFromTarget"] {
+            let event = forwarded_upstream(
+                json!({
+                    "method": method,
+                    "params": { "targetId": "selected", "sessionId": "selected-session" }
+                }),
+                &mut projected_scope(),
+            );
+            assert_eq!(event["params"]["targetId"], "chromium-root-frame");
+        }
+    }
+
+    #[test]
+    fn projected_target_requests_reverse_route_without_accepting_internal_identity() {
+        for method in [
+            "Target.attachToTarget",
+            "Target.activateTarget",
+            "Target.closeTarget",
+            "Target.getTargetInfo",
+        ] {
+            let mut request = json!({
+                "id": 1, "method": method,
+                "params": { "targetId": "chromium-root-frame" }
+            });
+            let ClientAction::Forward(message) = client_request(
+                text(request.clone()),
+                &projected_scope(),
+                &mut HashMap::new(),
+                &HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("{method} was not forwarded");
+            };
+            let forwarded = parse_data_message(message).unwrap().unwrap();
+            assert_eq!(forwarded["params"]["targetId"], "selected");
+            assert_eq!(forwarded.get("sessionId"), request.get("sessionId"));
+            request["params"]["targetId"] = json!("selected");
+            let rejected = client_response(
+                client_request(
+                    text(request),
+                    &projected_scope(),
+                    &mut HashMap::new(),
+                    &HashMap::new(),
+                )
+                .unwrap(),
+            );
+            assert!(rejected.get("error").is_some(), "{method}");
+        }
+    }
+
+    #[test]
+    fn selected_session_target_info_uses_graph_identity_and_preserves_response_session() {
+        for result in [
+            json!({ "result": { "targetInfo": { "targetId": "selected", "type": "page" } } }),
+            json!({ "error": { "code": -32000, "message": "Target disappeared" } }),
+        ] {
+            let mut scope = projected_scope();
+            let mut pending = HashMap::new();
+            let ClientAction::Forward(message) = client_request(
+                text(json!({
+                    "id": 1, "method": "Target.getTargetInfo", "sessionId": "selected-session"
+                })),
+                &scope,
+                &mut pending,
+                &HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("target info was not forwarded");
+            };
+            let request = parse_data_message(message).unwrap().unwrap();
+            assert!(request.get("sessionId").is_none());
+            assert_eq!(request["params"]["targetId"], "selected");
+            let mut response = result.clone();
+            response["id"] = json!(1);
+            let UpstreamAction::Forward(message) = upstream_message(
+                text(response),
+                &mut scope,
+                &mut pending,
+                &mut HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("target info response was not forwarded");
+            };
+            let response = parse_data_message(message).unwrap().unwrap();
+            assert_eq!(response["sessionId"], "selected-session");
+            if result.get("error").is_some() {
+                assert_eq!(response["error"], result["error"]);
+            } else {
+                assert_eq!(
+                    response["result"]["targetInfo"]["targetId"],
+                    "chromium-root-frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn window_query_keeps_native_target_identity() {
+        let request = json!({
+            "id": 1, "method": "Browser.getWindowForTarget", "sessionId": "selected-session",
+            "params": { "targetId": "chromium-root-frame" }
+        });
+        let ClientAction::Forward(message) = client_request(
+            text(request.clone()),
+            &projected_scope(),
+            &mut HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap() else {
+            panic!("window query was not forwarded");
+        };
+        assert_eq!(parse_data_message(message).unwrap().unwrap(), request);
+    }
+
+    #[test]
+    fn target_info_responses_project_only_selected_identity() {
+        for method in ["Target.getTargets", "Target.getTargetInfo"] {
+            let mut pending = HashMap::new();
+            client_request(
+                text(json!({ "id": 1, "method": method })),
+                &projected_scope(),
+                &mut pending,
+                &HashMap::new(),
+            )
+            .unwrap();
+            let info = json!({ "targetId": "selected", "type": "page" });
+            let result = if method == "Target.getTargets" {
+                json!({ "targetInfos": [info, { "targetId": "unrelated" }] })
+            } else {
+                json!({ "targetInfo": info })
+            };
+            let UpstreamAction::Forward(message) = upstream_message(
+                text(json!({ "id": 1, "result": result })),
+                &mut projected_scope(),
+                &mut pending,
+                &mut HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("target information was not forwarded");
+            };
+            let response = parse_data_message(message).unwrap().unwrap();
+            if method == "Target.getTargets" {
+                assert_eq!(
+                    response["result"]["targetInfos"].as_array().unwrap().len(),
+                    1
+                );
+                assert_eq!(
+                    response["result"]["targetInfos"][0]["targetId"],
+                    "chromium-root-frame"
+                );
+            } else {
+                assert_eq!(
+                    response["result"]["targetInfo"]["targetId"],
+                    "chromium-root-frame"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn child_sessions_frame_ids_and_opaque_values_are_not_rewritten() {
+        let mut scope = projected_scope();
+        let child = forwarded_upstream(
+            json!({
+                "method": "Target.attachedToTarget", "sessionId": "selected-session",
+                "params": {
+                    "sessionId": "child-session",
+                    "targetInfo": { "targetId": "child-frame", "type": "iframe", "openerId": "selected" }
+                }
+            }),
+            &mut scope,
+        );
+        assert_eq!(child["params"]["targetInfo"]["targetId"], "child-frame");
+        assert_eq!(
+            child["params"]["targetInfo"]["openerId"],
+            "chromium-root-frame"
+        );
+        assert_eq!(
+            scope.target_for_session(Some("child-session")),
+            Some("child-frame")
+        );
+        for (method, params) in [
+            (
+                "Page.createIsolatedWorld",
+                json!({ "frameId": "chromium-root-frame" }),
+            ),
+            (
+                "Page.navigate",
+                json!({ "frameId": "chromium-root-frame", "url": "https://example.test" }),
+            ),
+            ("Target.getTargetInfo", json!({ "targetId": "child-frame" })),
+            (
+                "Network.setExtraHTTPHeaders",
+                json!({ "headers": { "targetId": "chromium-root-frame" } }),
+            ),
+            (
+                "Runtime.callFunctionOn",
+                json!({ "arguments": [{ "value": {
+                "targetId": "chromium-root-frame", "frameId": "selected", "sessionId": "selected"
+            }}] }),
+            ),
+        ] {
+            let request = json!({
+                "id": 1, "method": method, "sessionId": "child-session", "params": params
+            });
+            let ClientAction::Forward(message) = client_request(
+                text(request.clone()),
+                &scope,
+                &mut HashMap::new(),
+                &HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("{method} was not forwarded");
+            };
+            assert_eq!(parse_data_message(message).unwrap().unwrap(), request);
+        }
+        for (method, params) in [
+            (
+                "Page.frameNavigated",
+                json!({ "frame": { "id": "chromium-root-frame" } }),
+            ),
+            (
+                "Runtime.executionContextCreated",
+                json!({ "context": {
+                    "auxData": { "frameId": "chromium-root-frame", "targetId": "selected" }
+                }}),
+            ),
+        ] {
+            let event =
+                json!({ "method": method, "sessionId": "selected-session", "params": params });
+            assert_eq!(forwarded_upstream(event.clone(), &mut scope), event);
+        }
+        let detached = forwarded_upstream(
+            json!({
+                "method": "Target.detachedFromTarget",
+                "params": { "sessionId": "child-session", "targetId": "child-frame" }
+            }),
+            &mut scope,
+        );
+        assert_eq!(detached["params"]["targetId"], "child-frame");
+        assert!(scope.sessions.contains("selected-session"));
+        assert!(!scope.sessions.contains("child-session"));
     }
 
     #[test]
@@ -1974,9 +2503,29 @@ mod tests {
         let endpoint = format!("ws://{}", listener.local_addr().unwrap());
         let upstream = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let socket = accept_async(stream).await.unwrap();
-            let (_, mut receiver) = socket.split();
-            while receiver.next().await.is_some() {}
+            let mut socket = accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, Message::Close(_)) {
+                    break;
+                }
+                let Some(request) = parse_data_message(message).unwrap() else {
+                    continue;
+                };
+                let result = match request["method"].as_str() {
+                    Some("Target.attachToTarget") => json!({ "sessionId": "identity-session" }),
+                    Some("Page.getFrameTree") => {
+                        json!({ "frameTree": { "frame": { "id": "selected" } } })
+                    }
+                    _ => json!({}),
+                };
+                let mut response = json!({ "id": request["id"], "result": result });
+                if let Some(session_id) = request.get("sessionId") {
+                    response["sessionId"] = session_id.clone();
+                }
+                if socket.send(text(response)).await.is_err() {
+                    break;
+                }
+            }
         });
         let proxy = start(
             PlaywrightCdpSource::BrowserRoot { endpoint },
