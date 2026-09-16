@@ -46,6 +46,32 @@ publisher.
 CI itself uploads private `.tar.gz` candidates for smoke testing, not publishable
 `.tgz` releases. Only successful main builds are promoted to release artifacts.
 
+## Version and source provenance
+
+Use `dbgjs --version` for the native binary's version and source provenance, or
+`dbgjs --json --version` for machine-readable output:
+
+```json
+{"version":"0.1.0","gitCommit":"1234567890abcdef1234567890abcdef12345678","gitDirty":false}
+```
+
+`version` is the binary's base Cargo version. `gitCommit` is the full source
+commit SHA, and `gitDirty` records whether the source checkout had uncommitted
+changes to tracked files (staged or unstaged) when the binary was built;
+untracked files are excluded. Builds without known provenance report `null`
+for the unknown fields.
+
+Both the entry and native npm package manifests include `gitHead` (the binary's
+full commit SHA) and `gitDirty` (a boolean), read by executing the native `dbgjs`
+from the packaging command's `--bin-dir`, not from the packaging checkout.
+Packaging rejects unknown provenance. Release promotion additionally requires
+all candidates to have the same commit and `gitDirty: false`.
+
+Promotion preserves binaries and provenance metadata unchanged. The npm package
+`version` can therefore be a nightly version such as `0.1.0-next.20260915.2`
+while `dbgjs --version` and its JSON equivalent still report base version
+`0.1.0`. Install entry and native packages with the same npm version.
+
 Supported platforms: Windows x64/ARM64, macOS ARM64, Linux GNU x64/ARM64.
 Linux requires glibc 2.35 or newer and OpenSSL 3. Intel macOS and Musl/Alpine
 are not supported. Platform dependencies must not be omitted.

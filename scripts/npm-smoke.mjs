@@ -55,6 +55,16 @@ try {
 		assert.match(await run("--help"), /dbgjs/);
 		await assert.rejects(() => run("not-a-real-command"), /exited with/);
 		const executable = (name) => join(nativeBin, `${name}${process.platform === "win32" ? ".exe" : ""}`);
+		const provenance = JSON.parse(await run("--json", "--version"));
+		assert.deepEqual(provenance, JSON.parse(await runProcess(executable("dbgjs"), ["--json", "--version"], { cwd: prefix, env })));
+		assert.equal(provenance.version, manifest.version);
+		assert.match(provenance.gitCommit, /^[0-9a-f]{40}$/);
+		assert.equal(typeof provenance.gitDirty, "boolean");
+		for (const name of ["dbgjs", `dbgjs-${host}`]) {
+			const installed = JSON.parse(await readFile(join(modules, "@hediet", name, "package.json"), "utf8"));
+			assert.equal(installed.gitHead, provenance.gitCommit);
+			assert.equal(installed.gitDirty, provenance.gitDirty);
+		}
 		if (process.platform === "win32") {
 			for (const name of ["dbgjs", "dbgjs-service", "dbgjs-tui"]) {
 				const binary = await readFile(executable(name));

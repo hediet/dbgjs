@@ -43,7 +43,7 @@ export async function prepareReleasePackages({ input, output, version, tag }) {
 			assert.ok(packed[0].filename.endsWith(".tgz"));
 			packages.push({ name: manifest.name, filename: packed[0].filename, path: join(destination, packed[0].filename) });
 		}
-		return { baseVersion: candidates.baseVersion, version, packages };
+		return { baseVersion: candidates.baseVersion, gitHead: candidates.gitHead, gitDirty: false, version, packages };
 	} finally {
 		await rm(staging, { recursive: true, force: true });
 	}
@@ -57,6 +57,7 @@ export async function inspectCandidatePackages(input) {
 	]);
 	const packages = [];
 	let baseVersion;
+	let gitHead;
 	for (const path of files) {
 		const entries = execFileSync("tar", ["-tzf", path], { encoding: "utf8" }).trim().split(/\r?\n/);
 		assert.ok(entries.every((entry) =>
@@ -68,6 +69,10 @@ export async function inspectCandidatePackages(input) {
 		assert.match(manifest.version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
 		baseVersion ??= manifest.version;
 		assert.equal(manifest.version, baseVersion, "Candidate versions must match.");
+		assert.match(manifest.gitHead, /^[0-9a-f]{40}$/, "Candidate gitHead must be a full Git SHA.");
+		assert.equal(manifest.gitDirty, false, "Release candidates must have gitDirty false.");
+		gitHead ??= manifest.gitHead;
+		assert.equal(manifest.gitHead, gitHead, "Candidate commits must match.");
 		if (manifest.name === "@hediet/dbgjs") {
 			for (const platform of Object.keys(platforms)) {
 				assert.equal(manifest.optionalDependencies?.[`@hediet/dbgjs-${platform}`], baseVersion);
@@ -77,7 +82,7 @@ export async function inspectCandidatePackages(input) {
 		expected.delete(manifest.name);
 	}
 	assert.equal(expected.size, 0, `Missing candidates: ${[...expected.keys()].join(", ")}`);
-	return { baseVersion, packages };
+	return { baseVersion, gitHead, gitDirty: false, packages };
 }
 
 async function findArchives(directory) {

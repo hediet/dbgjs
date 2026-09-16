@@ -7,6 +7,8 @@ import test from "node:test";
 import { platforms } from "../npm/dbgjs/lib/platform.mjs";
 import { inspectCandidatePackages, prepareReleasePackages } from "./npm-release-pack.mjs";
 
+const gitHead = "1234567890abcdef1234567890abcdef12345678";
+
 test("candidate packages become stable and nightly tarballs with matching dependencies and unchanged binaries", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dbgjs-release-test-"));
 	const input = join(directory, "input");
@@ -24,12 +26,15 @@ test("candidate packages become stable and nightly tarballs with matching depend
 			}]),
 		]) {
 			await writeFile(join(packageDirectory, "package.json"), JSON.stringify({
-				...manifest, private: true, files: ["bin"],
+				...manifest, private: true, files: ["bin"], gitHead, gitDirty: false,
 			}));
 			execFileSync("tar", ["-czf", join(input, `${key}.tar.gz`), "-C", fixture, "package"]);
 		}
 		const packageCount = Object.keys(platforms).length + 1;
-		assert.equal((await inspectCandidatePackages(input)).packages.length, packageCount);
+		const inspected = await inspectCandidatePackages(input);
+		assert.equal(inspected.packages.length, packageCount);
+		assert.equal(inspected.gitHead, gitHead);
+		assert.equal(inspected.gitDirty, false);
 		for (const [version, tag, channel] of [
 			[entry.version, "latest", "stable"],
 			[`${entry.version}-next.20260915.2`, "next", "nightly"],
@@ -37,10 +42,14 @@ test("candidate packages become stable and nightly tarballs with matching depend
 		]) {
 			const result = await prepareReleasePackages({ input, output: join(directory, "output"), version, tag });
 			assert.equal(result.packages.length, packageCount);
+			assert.equal(result.gitHead, gitHead);
+			assert.equal(result.gitDirty, false);
 			for (const packed of result.packages) {
 				const manifest = JSON.parse(execFileSync("tar", ["-xOzf", packed.path, "package/package.json"], { encoding: "utf8" }));
 				assert.equal(manifest.private, undefined);
 				assert.equal(manifest.version, version);
+				assert.equal(manifest.gitHead, gitHead);
+				assert.equal(manifest.gitDirty, false);
 				assert.equal(manifest.publishConfig.tag, tag);
 				assert.ok(packed.path.includes(`npm-${channel}-`));
 				assert.ok(packed.filename.endsWith(`-${version}.tgz`));
@@ -63,6 +72,31 @@ test("candidate packages become stable and nightly tarballs with matching depend
 			[`${entry.version}-next.20260915.1`, "latest"],
 		]) {
 			await assert.rejects(prepareReleasePackages({ input, output: directory, version, tag }), /must agree/);
+		}
+		for (const name of ["@hediet/dbgjs", "@hediet/dbgjs-win32-x64"]) {
+			const key = name === "@hediet/dbgjs" ? "dbgjs" : "win32-x64";
+			const archive = join(input, `${key}.tar.gz`);
+			const original = await readFile(archive);
+			const manifest = JSON.parse(execFileSync("tar", ["-xOzf", archive, "package/package.json"], { encoding: "utf8" }));
+			for (const [changes, error] of [
+				[{ gitHead: "b".repeat(40) }, /Candidate commits must match/],
+				[{ gitHead: null }, /gitHead/],
+				[{ gitHead: undefined }, /gitHead/],
+				[{ gitHead: "1234567" }, /gitHead/],
+				[{ gitHead: "z".repeat(40) }, /gitHead/],
+				[{ gitDirty: true }, /gitDirty false/],
+				[{ gitDirty: null }, /gitDirty false/],
+				[{ gitDirty: undefined }, /gitDirty false/],
+				[{ gitDirty: "false" }, /gitDirty false/],
+			]) {
+				await writeFile(join(packageDirectory, "package.json"), JSON.stringify({ ...manifest, ...changes }));
+				execFileSync("tar", ["-czf", archive, "-C", fixture, "package"]);
+				await assert.rejects(inspectCandidatePackages(input), error);
+				await assert.rejects(prepareReleasePackages({
+					input, output: join(directory, "rejected"), version: entry.version, tag: "latest",
+				}), error);
+				await writeFile(archive, original);
+			}
 		}
 		const [filename] = await readdir(input);
 		await rename(join(input, filename), join(directory, filename));

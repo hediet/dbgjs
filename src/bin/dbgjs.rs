@@ -119,6 +119,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output = OutputFormat::from_arguments(&mut arguments);
     if matches!(
         arguments.as_slice(),
+        [argument] if matches!(argument.as_str(), "--version" | "-V" | "version")
+    ) {
+        let commit = env!("DBGJS_BUILD_GIT_COMMIT");
+        let dirty = env!("DBGJS_BUILD_GIT_DIRTY").parse::<bool>().ok();
+        if output.is_json() {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "gitCommit": (commit != "unknown").then_some(commit),
+                    "gitDirty": dirty,
+                }))?
+            );
+        } else {
+            let suffix = match dirty {
+                Some(true) => ", dirty",
+                Some(false) => "",
+                None => ", dirty status unknown",
+            };
+            println!(
+                "dbgjs {} (commit {commit}{suffix})",
+                env!("CARGO_PKG_VERSION")
+            );
+        }
+        return Ok(());
+    }
+    if matches!(
+        arguments.as_slice(),
         [argument] if matches!(argument.as_str(), "--help" | "-h" | "help")
     ) {
         println!("{}", usage());
@@ -6567,6 +6595,8 @@ fn usage() -> &'static str {
     "usage: dbgjs [--json] <command>
 
 commands:
+  dbgjs --version | -V | version
+    reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
   dbgjs daemon view [--context <id> | --all-contexts]
   dbgjs service status|stop
   dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
