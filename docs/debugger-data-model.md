@@ -13,7 +13,7 @@ For a shorter introduction, see
 The TypeScript interfaces are conceptual:
 
 - `readonly` means a committed debugger-state revision never changes.
-- `ReadonlyMap` documents keyed identity. A JSON/HubRPC representation may use
+- `ReadonlyMap` documents keyed identity. A JSON/LinkRPC representation may use
   arrays of entries instead.
 - Function-bearing interfaces describe behavior without prescribing storage.
   For example, source-map data is represented by mapping functions rather than
@@ -1579,7 +1579,7 @@ interface HydratedScript {
 }
 ```
 
-The engine input is a tagged union, but only `UserCommand` is public HubRPC
+The engine input is a tagged union, but only `UserCommand` is public LinkRPC
 input:
 
 ```ts
@@ -1875,10 +1875,10 @@ The Rust prototype currently implements important subsets of this model:
 
 The following target-model pieces are not yet implemented:
 
-- Unconnected HubRPC/DAP breakpoint workflows.
+- Unconnected LinkRPC/DAP breakpoint workflows.
 - Source-map path catalog discovery independent of full source hydration.
 - Immutable detail artifacts for scopes, properties, and coverage.
-- Native HubRPC server streaming and cancellation. The debugger currently
+- Native LinkRPC server streaming and cancellation. The debugger currently
   exposes the same cursor semantics through cancellation-safe unary long
   polling.
 - Explicit attachment-incarnation identities and selector policies spanning

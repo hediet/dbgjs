@@ -306,7 +306,7 @@ impl TargetDebuggerHandle {
         &self,
         method: String,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, hubrpc::prelude::JsonRpcError> {
+    ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::RawCdpRequest {
@@ -316,14 +316,14 @@ impl TargetDebuggerHandle {
             })
             .await
             .map_err(|_| {
-                hubrpc::prelude::JsonRpcError::new(
-                    hubrpc::prelude::error_codes::PEER_DISCONNECTED,
+                linkrpc::prelude::JsonRpcError::new(
+                    linkrpc::prelude::error_codes::PEER_DISCONNECTED,
                     "target debugger stopped before CDP request was sent",
                 )
             })?;
         receiver.await.map_err(|_| {
-            hubrpc::prelude::JsonRpcError::new(
-                hubrpc::prelude::error_codes::PEER_DISCONNECTED,
+            linkrpc::prelude::JsonRpcError::new(
+                linkrpc::prelude::error_codes::PEER_DISCONNECTED,
                 "target debugger stopped before CDP response arrived",
             )
         })?
@@ -986,7 +986,7 @@ enum TargetCommand {
     RawCdpRequest {
         method: String,
         params: serde_json::Value,
-        response: oneshot::Sender<Result<serde_json::Value, hubrpc::prelude::JsonRpcError>>,
+        response: oneshot::Sender<Result<serde_json::Value, linkrpc::prelude::JsonRpcError>>,
     },
     InspectValue {
         pause_epoch: Option<u64>,
@@ -1274,8 +1274,8 @@ async fn run_target(
                     tokio::time::timeout(RAW_CDP_TIMEOUT, driver.raw_cdp_request(&method, params))
                         .await
                         .map_err(|_| {
-                            hubrpc::prelude::JsonRpcError::new(
-                                hubrpc::prelude::error_codes::REQUEST_TIMEOUT,
+                            linkrpc::prelude::JsonRpcError::new(
+                                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
                                 "raw CDP request timed out after 30 seconds",
                             )
                         })

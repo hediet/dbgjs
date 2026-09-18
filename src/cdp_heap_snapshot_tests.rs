@@ -1,8 +1,8 @@
 use super::*;
 use crate::cdp::HeapProfilerTakeHeapSnapshotParams;
-use hubrpc::prelude::JsonRpcMessage;
-use hubrpc::protocol::jsonrpc::{JsonRpcNotification, JsonRpcResponse, ResponsePayload};
-use hubrpc::transport::memory::{MemoryTransport, transport_pair_of};
+use linkrpc::prelude::JsonRpcMessage;
+use linkrpc::protocol::jsonrpc::{JsonRpcNotification, JsonRpcResponse, ResponsePayload};
+use linkrpc::transport::memory::{MemoryTransport, transport_pair_of};
 use serde_json::json;
 
 fn heap_session() -> (CdpDebuggerSession, MemoryTransport) {

@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hubrpc::prelude::{MessageTransport, TransportError};
+use linkrpc::prelude::{MessageTransport, TransportError};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, watch};
 
@@ -185,8 +185,8 @@ async fn read_bounded_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hubrpc::prelude::{JsonRpcMessage, JsonRpcRequest};
-    use hubrpc::protocol::jsonrpc::RequestId;
+    use linkrpc::prelude::{JsonRpcMessage, JsonRpcRequest};
+    use linkrpc::protocol::jsonrpc::RequestId;
     use serde_json::json;
     use tokio::io::{AsyncReadExt, duplex};
 

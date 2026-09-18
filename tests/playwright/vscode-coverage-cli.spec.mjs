@@ -33,7 +33,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real dbgjs/HubRPC/Chrome/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
+		`# Why does vscode.dev remove auto-indented whitespace later?\n\nThis is a real dbgjs/LinkRPC/Chrome/CDP coverage, breakpoint, and stepping investigation.\n\n- Expected duration: ${expectedDurationMs / 1000}s\n- Hard timeout (+20%): ${hardTimeoutMs / 1000}s\n`,
 	);
 
 	const stateDirectory = await mkdtemp(join(tmpdir(), "dbgjs-vscode-coverage-"));

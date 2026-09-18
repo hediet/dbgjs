@@ -8,7 +8,7 @@ import {
 	run,
 } from "./live-test-harness.mjs";
 
-test("CLI spawns its HubRPC service and connects it to Chromium", async () => {
+test("CLI spawns its LinkRPC service and connects it to Chromium", async () => {
 	test.setTimeout(600_000);
 	const userDataDir = await mkdtemp(join(tmpdir(), "cdp-cli-service-"));
 	const debuggingPort = await allocatePort();

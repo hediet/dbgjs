@@ -2,9 +2,9 @@ use super::*;
 use std::future::Future;
 use std::pin::Pin;
 
-use hubrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
-use hubrpc::protocol::jsonrpc::{JsonRpcRequest, JsonRpcResponse, RequestId, ResponsePayload};
-use hubrpc::transport::memory::{MemoryTransport, transport_pair_of};
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
+use linkrpc::protocol::jsonrpc::{JsonRpcRequest, JsonRpcResponse, RequestId, ResponsePayload};
+use linkrpc::transport::memory::{MemoryTransport, transport_pair_of};
 use serde_json::json;
 
 use crate::session_transport::CdpEnvelope;

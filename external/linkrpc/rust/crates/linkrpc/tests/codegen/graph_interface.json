@@ -1,0 +1,148 @@
+{
+  "id": "com.example.graph",
+  "hash": "",
+  "description": "A demo interface exercising the full codegen surface.",
+  "x-linkrpc-codegen": { "note": "identity-neutral codegen hint; stripped from the hash" },
+  "methods": {
+    "get_tree": {
+      "description": "Fetch the tree rooted at an id.",
+      "x-safety": { "readOnly": true },
+      "params": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "result": { "$ref": "#/components/schemas/TreeNode" }
+    },
+    "tree_changed": {
+      "description": "Server-emitted event fired whenever the tree changes.",
+      "x-linkrpc-codegen": { "kind": "serverNotification" },
+      "params": { "$ref": "#/components/schemas/TreeNode" }
+    },
+    "paint": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "shape": { "$ref": "#/components/schemas/Shape" },
+          "color": { "$ref": "#/components/schemas/Color" }
+        },
+        "required": ["shape", "color"],
+        "additionalProperties": false
+      },
+      "result": { "type": "boolean" }
+    },
+    "notify_changed": {
+      "params": {
+        "type": "object",
+        "properties": { "node": { "$ref": "#/components/schemas/TreeNode" } },
+        "required": ["node"],
+        "additionalProperties": false
+      }
+    },
+    "raw_echo": {
+      "params": true,
+      "result": true
+    },
+    "configure": {
+      "description": "A method whose params mix required and optional fields.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string", "description": "Optional display label." }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "result": { "type": "boolean" }
+    },
+    "reset": {
+      "description": "A method with an empty (all-defaults) params object.",
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TreeNode": {
+        "description": "A recursive tree node.",
+        "type": "object",
+        "properties": {
+          "value": { "type": "string" },
+          "point": { "$ref": "#/components/schemas/Point" },
+          "parent": { "$ref": "#/components/schemas/TreeNode" },
+          "children": { "type": "array", "items": { "$ref": "#/components/schemas/TreeNode" } }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "Point": {
+        "type": "object",
+        "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
+        "required": ["x", "y"],
+        "additionalProperties": false
+      },
+      "Shape": {
+        "description": "A tagged union of shapes.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": { "kind": { "const": "circle" }, "radius": { "type": "number" } },
+            "required": ["kind", "radius"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": { "kind": { "const": "rectangle" }, "width": { "type": "number" }, "height": { "type": "number" } },
+            "required": ["kind", "width", "height"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": { "kind": { "const": "point" } },
+            "required": ["kind"],
+            "additionalProperties": false
+          }
+        ],
+        "discriminator": { "propertyName": "kind" }
+      },
+      "Color": { "enum": ["red", "green", "blue", "self"] },
+      "JsonNode": {
+        "description": "A recursive JSON value, recursing only through arrays and maps.",
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "$ref": "#/components/schemas/JsonNode" } },
+          { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/JsonNode" } }
+        ]
+      },
+      "Ping": {
+        "type": "object",
+        "properties": { "pong": { "$ref": "#/components/schemas/Pong" } },
+        "additionalProperties": false
+      },
+      "Pong": {
+        "type": "object",
+        "properties": { "ping": { "$ref": "#/components/schemas/Ping" } },
+        "additionalProperties": false
+      },
+      "Metadata": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      },
+      "Tags": { "type": "array", "items": { "type": "string" } },
+      "Bag": {
+        "description": "An open object with a known field plus arbitrary extras.",
+        "type": "object",
+        "properties": { "id": { "type": "string" } },
+        "required": ["id"],
+        "additionalProperties": true
+      }
+    }
+  }
+}

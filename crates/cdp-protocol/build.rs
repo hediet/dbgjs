@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use hubrpc::prelude::{GenerateRustOptions, generate_rust_interface};
+use linkrpc::prelude::{GenerateRustOptions, generate_rust_interface};
 
 #[path = "src/protocol_schema.rs"]
 mod protocol_schema;
@@ -25,7 +25,7 @@ fn main() {
     let browser = read_protocol(&browser_protocol);
     let js = read_protocol(&js_protocol);
     let interface = protocol_schema::import_typed_cdp_protocol(&browser, &js)
-        .expect("CDP protocol must import as a typed HubRPC interface");
+        .expect("CDP protocol must import as a typed LinkRPC interface");
     let generated = generate_rust_interface(
         &interface,
         &GenerateRustOptions {

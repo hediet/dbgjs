@@ -1,4 +1,4 @@
-use hubrpc::prelude::{JsonRpcError, hub_rpc_interface};
+use linkrpc::prelude::{JsonRpcError, link_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -1851,7 +1851,7 @@ pub enum TargetWaitPredicate {
     },
 }
 
-#[hub_rpc_interface(id = "dev.dbgjs.cdp-debugger")]
+#[link_rpc_interface(id = "dev.dbgjs.cdp-debugger")]
 pub trait DebuggerServiceApi {
     async fn service_info() -> Result<ServiceInfo, JsonRpcError>;
 

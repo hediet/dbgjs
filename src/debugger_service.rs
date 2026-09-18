@@ -9,7 +9,7 @@ use std::time::Duration;
 use atomic_write_file::AtomicWriteFile;
 use futures_util::{StreamExt, future::join_all, stream};
 use globset::{Glob, GlobMatcher};
-use hubrpc::prelude::{CallCtx, JsonRpcError, error_codes};
+use linkrpc::prelude::{CallCtx, JsonRpcError, error_codes};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, watch};
@@ -8730,7 +8730,7 @@ fn capture_payload_rpc_error(error: ServicePersistenceError) -> JsonRpcError {
 }
 
 fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(), String> {
-    static INTERFACE: OnceLock<Result<hubrpc::prelude::HubRpcInterfaceSchema, String>> =
+    static INTERFACE: OnceLock<Result<linkrpc::prelude::LinkRpcInterfaceSchema, String>> =
         OnceLock::new();
     let interface = INTERFACE
         .get_or_init(|| {

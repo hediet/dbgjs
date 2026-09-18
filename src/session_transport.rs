@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
-use hubrpc::prelude::{
+use linkrpc::prelude::{
     JsonRpcMessage, MessageTransport, MultiplexedTransport, MuxChannel, MuxCodec, MuxError,
     TransportError,
 };
@@ -173,9 +173,9 @@ impl Drop for CdpSessionTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hubrpc::connection::channel::{Channel, RejectingHandler, RequestHandler};
-    use hubrpc::protocol::jsonrpc::{JsonRpcResponse, RequestId, ResponsePayload};
-    use hubrpc::transport::memory::transport_pair_of;
+    use linkrpc::connection::channel::{Channel, RejectingHandler, RequestHandler};
+    use linkrpc::protocol::jsonrpc::{JsonRpcResponse, RequestId, ResponsePayload};
+    use linkrpc::transport::memory::transport_pair_of;
     use serde_json::json;
 
     #[derive(Default)]
@@ -189,7 +189,7 @@ mod tests {
             &self,
             method: String,
             _params: Value,
-        ) -> Result<Value, hubrpc::prelude::JsonRpcError> {
+        ) -> Result<Value, linkrpc::prelude::JsonRpcError> {
             panic!("unexpected request: {method}");
         }
 
@@ -202,7 +202,7 @@ mod tests {
     fn envelope_is_plain_cdp_json() {
         let envelope = CdpEnvelope {
             session_id: Some("session-a".into()),
-            message: JsonRpcMessage::Request(hubrpc::prelude::JsonRpcRequest {
+            message: JsonRpcMessage::Request(linkrpc::prelude::JsonRpcRequest {
                 id: RequestId::Number(7),
                 method: "Debugger.enable".into(),
                 params: Some(json!({ "maxScriptsCacheSize": 1024 })),
@@ -294,7 +294,7 @@ mod tests {
         browser_raw
             .send(CdpEnvelope {
                 session_id: Some("child-a".into()),
-                message: JsonRpcMessage::Notification(hubrpc::prelude::JsonRpcNotification {
+                message: JsonRpcMessage::Notification(linkrpc::prelude::JsonRpcNotification {
                     method: "Debugger.scriptParsed".into(),
                     params: Some(json!({ "scriptId": "1" })),
                 }),
@@ -343,7 +343,7 @@ mod tests {
             &self,
             method: String,
             params: Value,
-        ) -> Result<Value, hubrpc::prelude::JsonRpcError> {
+        ) -> Result<Value, linkrpc::prelude::JsonRpcError> {
             self.0.handle_request(method, params).await
         }
 

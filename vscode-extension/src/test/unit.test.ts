@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { parseObservationResult, parseTargetDebuggerSnapshot } from "../apiTypes.js";
 import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../daemonClient.js";
 import { resolveDaemonExecutable } from "../daemonProcess.js";
+import { connectDaemon } from "../daemonTransport.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
@@ -251,6 +252,230 @@ test("daemon endpoint parsing accepts the Rust named-pipe shape", () => {
 	);
 });
 
+test("daemon transport preserves the preamble and handles fragmented and coalesced responses", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-transport-test-"));
+	const endpoint = testEndpoint(directory);
+	const sockets = new Set<Socket>();
+	const requests: unknown[] = [];
+	const logs: string[] = [];
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		socket.on("close", () => sockets.delete(socket));
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) {
+					return;
+				}
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				requests.push(JSON.parse(line));
+				if (requests.length === 3) {
+					const first = requests[1] as { id: number };
+					const second = requests[2] as { id: number };
+					const response = [
+						JSON.stringify({ jsonrpc: "2.0", id: first.id, result: { value: 1 } }),
+						"malformed-json-is-skipped",
+						JSON.stringify({ jsonrpc: "2.0", id: second.id, result: { value: 2 } }),
+						"",
+					].join("\n");
+					socket.write(response.slice(0, 7));
+					setTimeout(() => socket.write(response.slice(7)), 5);
+				}
+			}
+		});
+	});
+	await listen(server, endpoint);
+
+	const daemon = await connectDaemon(endpoint, "secret-token", (message) => logs.push(message));
+	try {
+		assert.deepEqual(
+			await Promise.all([
+				daemon.connection.channel.sendRequest(
+					"dev.dbgjs.cdp-debugger::first",
+					{ contextId: "workspace", cursor: 1 },
+				),
+				daemon.connection.channel.sendRequest(
+					"dev.dbgjs.cdp-debugger::second",
+					{ targetId: "target" },
+				),
+			]),
+			[{ value: 1 }, { value: 2 }],
+		);
+		assert.deepEqual(requests, [
+			{ hello: 1, token: "secret-token" },
+			{
+				jsonrpc: "2.0",
+				id: 1,
+				method: "dev.dbgjs.cdp-debugger::first",
+				params: { contextId: "workspace", cursor: 1 },
+			},
+			{
+				jsonrpc: "2.0",
+				id: 2,
+				method: "dev.dbgjs.cdp-debugger::second",
+				params: { targetId: "target" },
+			},
+		]);
+		assert.equal(logs.some((message) => message.includes("secret-token")), false);
+		assert.equal(
+			logs.some((message) => message.includes("dev.dbgjs.cdp-debugger::first")),
+			true,
+		);
+	} finally {
+		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("daemon transport rejects pending requests when the peer disconnects", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-disconnect-test-"));
+	const endpoint = testEndpoint(directory);
+	const sockets = new Set<Socket>();
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		socket.on("close", () => sockets.delete(socket));
+		let buffer = "";
+		let lines = 0;
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) {
+					return;
+				}
+				buffer = buffer.slice(newline + 1);
+				lines++;
+				if (lines === 2) {
+					socket.destroy();
+					return;
+				}
+			}
+		});
+	});
+	await listen(server, endpoint);
+
+	const daemon = await connectDaemon(endpoint, "test-token");
+	let closes = 0;
+	const closed = new Promise<void>((resolve) => {
+		daemon.onClose(() => {
+			closes++;
+			resolve();
+		});
+	});
+	try {
+		await assert.rejects(
+			daemon.connection.channel.sendRequest("dev.dbgjs.cdp-debugger::pending", {}),
+			/Connection closed/,
+		);
+		await closed;
+		assert.equal(closes, 1);
+		let lateCloses = 0;
+		daemon.onClose(() => lateCloses++);
+		await Promise.resolve();
+		assert.equal(lateCloses, 1);
+	} finally {
+		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("closing the daemon transport destroys its owned socket exactly once", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-close-test-"));
+	const endpoint = testEndpoint(directory);
+	const sockets = new Set<Socket>();
+	let peerClosedResolve!: () => void;
+	const peerClosed = new Promise<void>((resolve) => {
+		peerClosedResolve = resolve;
+	});
+	let peerConnectedResolve!: () => void;
+	const peerConnected = new Promise<void>((resolve) => {
+		peerConnectedResolve = resolve;
+	});
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		peerConnectedResolve();
+		socket.resume();
+		socket.on("close", () => {
+			sockets.delete(socket);
+			peerClosedResolve();
+		});
+	});
+	await listen(server, endpoint);
+
+	const daemon = await connectDaemon(endpoint, "test-token");
+	await peerConnected;
+	let closes = 0;
+	daemon.onClose(() => closes++);
+	daemon.close();
+	daemon.close();
+	try {
+		await withTimeout(peerClosed, 1_000);
+		assert.equal(closes, 1);
+	} finally {
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("daemon transport reports a close that races setup to late subscribers", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-setup-close-test-"));
+	const endpoint = testEndpoint(directory);
+	const sockets = new Set<Socket>();
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		socket.on("close", () => sockets.delete(socket));
+		socket.destroy();
+	});
+	await listen(server, endpoint);
+
+	const daemon = await connectDaemon(endpoint, "test-token");
+	try {
+		let closes = 0;
+		const closed = new Promise<void>((resolve) => {
+			daemon.onClose(() => {
+				closes++;
+				resolve();
+			});
+		});
+		await withTimeout(closed, 1_000);
+		assert.equal(closes, 1);
+		await assert.rejects(
+			daemon.connection.channel.sendRequest("dev.dbgjs.cdp-debugger::closed", {}),
+			/Connection closed/,
+		);
+		let lateCloses = 0;
+		const lateClosed = new Promise<void>((resolve) => {
+			daemon.onClose(() => {
+				lateCloses++;
+				resolve();
+			});
+		});
+		await lateClosed;
+		assert.equal(lateCloses, 1);
+	} finally {
+		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("daemon transport rejects an initial connection failure", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-connect-failure-test-"));
+	const endpoint = testEndpoint(directory);
+	try {
+		await assert.rejects(connectDaemon(endpoint, "test-token"));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("long polls do not block command RPCs", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dbgjs-rpc-test-"));
 	const stateFile = join(directory, "service.json");
@@ -383,4 +608,24 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 			clearTimeout(timer);
 		}
 	}
+}
+
+function testEndpoint(directory: string): string {
+	return process.platform === "win32"
+		? `\\\\.\\pipe\\dbgjs-test-${randomUUID()}`
+		: join(directory, "s");
+}
+
+async function listen(server: ReturnType<typeof createServer>, endpoint: string): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(endpoint, resolve);
+	});
+}
+
+async function closeServer(server: ReturnType<typeof createServer>, sockets: Set<Socket>): Promise<void> {
+	for (const socket of sockets) {
+		socket.destroy();
+	}
+	await new Promise<void>((resolve) => server.close(() => resolve()));
 }

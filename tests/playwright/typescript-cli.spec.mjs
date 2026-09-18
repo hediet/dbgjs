@@ -21,7 +21,7 @@ const service = resolve(`target/debug/dbgjs-service${executableSuffix}`);
 const transcriptPath = resolve("artifacts/typescript-cli-transcript.md");
 let stepNumber = 0;
 
-test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () => {
+test("CLI pauses at an authored TypeScript breakpoint through LinkRPC", async () => {
 	test.setTimeout(600_000);
 	const build = await run("cargo", ["build", "--bins"], {});
 	expect(build.code, build.output).toBe(0);
@@ -35,7 +35,7 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 	await mkdir(resolve("artifacts"), { recursive: true });
 	await writeFile(
 		transcriptPath,
-		"# Debugging authored TypeScript with `dbgjs`\n\nThis transcript exercises the CLI, authenticated HubRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
+		"# Debugging authored TypeScript with `dbgjs`\n\nThis transcript exercises the CLI, authenticated LinkRPC service, reducer-driven debugger engine, installed Chrome, CDP, and source maps.\n",
 	);
 
 	const stateDirectory = resolve(

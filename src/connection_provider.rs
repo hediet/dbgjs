@@ -578,7 +578,7 @@ impl ConnectionRuntime {
         }))
     }
 
-    pub fn root(&self) -> &CdpClient<hubrpc::connection::channel::Channel> {
+    pub fn root(&self) -> &CdpClient<linkrpc::connection::channel::Channel> {
         self.cdp.root()
     }
 

@@ -10,7 +10,9 @@ preserve unrelated work when moving or committing changes.
 
 The small change-detection job always runs. Changes confined to `docs/`, `todo/`,
 root Markdown files, the external-dependency README, or agent skills do not
-start Rust or packaging jobs. The VS Code extension is outside this pipeline.
+start Rust or packaging jobs. The VS Code extension has a separate build and
+unit-test job, including its LinkRPC socket transport tests, on every CI run.
+Extension-only changes still skip the native build and packaging jobs.
 Documentation inside an npm package still triggers packaging. Unknown paths,
 Rust sources, embedded JavaScript, test fixtures, vendored sources, dependency
 manifests, and workflow changes conservatively trigger both jobs.

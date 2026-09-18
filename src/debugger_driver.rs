@@ -80,7 +80,7 @@ impl DebuggerDriver {
         &self.state
     }
 
-    pub fn client(&self) -> &CdpClient<hubrpc::connection::channel::Channel> {
+    pub fn client(&self) -> &CdpClient<linkrpc::connection::channel::Channel> {
         self.session.client()
     }
 
@@ -88,7 +88,7 @@ impl DebuggerDriver {
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, hubrpc::prelude::JsonRpcError> {
+    ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
         self.session.raw_request(method, params).await
     }
 

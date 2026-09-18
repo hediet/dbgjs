@@ -13,7 +13,7 @@ flowchart LR
         VSCode["VS Code / DAP"]
     end
 
-    Clients -->|"typed HubRPC<br/>local pipe or socket"| Service["dbgjs-service<br/>long-lived Rust daemon"]
+    Clients -->|"typed LinkRPC<br/>local pipe or socket"| Service["dbgjs-service<br/>long-lived Rust daemon"]
 
     subgraph Core["Debugger core"]
         Contexts["Debug contexts<br/>intent + immutable revisions"]
@@ -62,7 +62,7 @@ flowchart LR
 
 dbgjs is built around one long-lived Rust service rather than putting debugger
 logic into every UI. The CLI, terminal UI, and VS Code adapter all use the same
-typed HubRPC API, so they see one authoritative state. Inside the service, a
+typed LinkRPC API, so they see one authoritative state. Inside the service, a
 debug context stores durable intent such as breakpoints and can coordinate
 multiple connections—for example, Node.js and Chrome. Connection providers
 discover processes and targets, while target debugger actors translate stable

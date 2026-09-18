@@ -482,7 +482,7 @@ async fn run_vscode_dev_scenario() {
 }
 
 async fn dispatch_ctrl_n(
-    client: &dbgjs::cdp::CdpClient<hubrpc::connection::channel::Channel>,
+    client: &dbgjs::cdp::CdpClient<linkrpc::connection::channel::Channel>,
 ) {
     let mut key_down =
         InputDispatchKeyEventParams::new(InputDispatchKeyEventParamsType::RawKeyDown);

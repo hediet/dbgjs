@@ -1,8 +1,8 @@
 use super::*;
 use async_trait::async_trait;
 use base64::Engine;
-use hubrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
-use hubrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
+use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
 use serde_json::json;
 
 use crate::cdp_runtime::CdpConnection;
@@ -34,7 +34,7 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for SourceTransport {
         let payload = match response {
             Ok(content) => ResponsePayload::Result(json!({ "scriptSource": content })),
             Err(message) => {
-                ResponsePayload::Error(hubrpc::prelude::JsonRpcError::new(-32000, message.clone()))
+                ResponsePayload::Error(linkrpc::prelude::JsonRpcError::new(-32000, message.clone()))
             }
         };
         self.outbound

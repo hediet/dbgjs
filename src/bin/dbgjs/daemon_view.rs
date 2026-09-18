@@ -453,7 +453,7 @@ fn quoted(value: &str, max_chars: usize) -> String {
     format!("\"{}\"", inline(value, max_chars))
 }
 
-fn rpc_error(error: hubrpc::prelude::JsonRpcError) -> io::Error {
+fn rpc_error(error: linkrpc::prelude::JsonRpcError) -> io::Error {
     io::Error::other(format!("{error:?}"))
 }
 

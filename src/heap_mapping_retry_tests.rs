@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
-use hubrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
-use hubrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
+use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
 use serde_json::json;
 
 use crate::cdp_runtime::CdpConnection;

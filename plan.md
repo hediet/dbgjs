@@ -70,7 +70,7 @@ now contains the reducer, service, CLI, source-map, coverage, heap-analysis, and
 live-runtime work described below. Checklist state reflects validated behavior;
 partially implemented architecture remains unchecked.
 
-- [x] Typed CDP schema import and generated HubRPC client interfaces.
+- [x] Typed CDP schema import and generated LinkRPC client interfaces.
 - [x] CDP WebSocket transport and flattened-session multiplexing.
 - [x] Deterministic debugger reducer, semantic effects, recording, and replay
   prototypes.
@@ -97,7 +97,7 @@ Every milestone must add at least one black-box test that:
 - launches the real `dbgjs` executable;
 - lets the CLI discover or spawn the real `dbgjs-service`;
 - communicates over the platform-native named pipe or Unix socket;
-- uses the generated HubRPC client rather than calling service methods directly;
+- uses the generated LinkRPC client rather than calling service methods directly;
 - uses a real Chromium/Node runtime or an explicitly named deterministic fake
   CDP endpoint when protocol races must be controlled;
 - invokes separate CLI processes for concurrent-client behavior;
@@ -184,7 +184,7 @@ make the current service state harder to replace.
 
 ---
 
-## Milestone 2 — Unified observable HubRPC state
+## Milestone 2 — Unified observable LinkRPC state
 
 **Goal:** Give every client one race-free mechanism for consistent `get`,
 `watch`, events, and waits.
@@ -193,11 +193,11 @@ make the current service state harder to replace.
 
 - [x] Specify the subscription result and cursor model:
   `Current` and `After(revision)`.
-- [ ] Extend HubRPC-Rust with server streaming, client cancellation, and
+- [ ] Extend LinkRPC with server streaming, client cancellation, and
   transport cleanup.
 - [x] Implement an atomic initial snapshot plus subsequent revision observation.
   The current transport uses cancellation-safe unary long polling; native
-  HubRPC server streaming remains the next transport step.
+  LinkRPC server streaming remains the next transport step.
 - [x] Store bounded context revision/event history.
 - [x] Return an explicit `HistoryGap` with a current recovery snapshot or
   revision when a cursor is too old.
@@ -322,7 +322,7 @@ one shared graph.
 - [x] Reuse the existing proven source-map coordinate algorithms while using the
   graph for topology, routing, and provenance.
 - [ ] Complete context-wide `source resolve`, `source map`, `source endpoints`,
-  and `source show` semantics. HubRPC and CLI projections now expose runtime and
+  and `source show` semantics. LinkRPC and CLI projections now expose runtime and
   authored source listing, generated-to-authored mapping, content display,
   grep, safe atomic export, and cache eviction; provider-qualified context-wide
   graph routing and ambiguity reporting remain.
@@ -607,7 +607,7 @@ state or lifecycle models:
 - [ ] MCP client integration.
 - [ ] VS Code/DAP adapter and unconnected breakpoint integration.
 - [ ] Dirty editor-buffer edit projections.
-- [ ] TUI over the same observable HubRPC service.
+- [ ] TUI over the same observable LinkRPC service.
 
 ## Recommended execution order
 

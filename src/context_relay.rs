@@ -11,8 +11,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use hubrpc::connection::channel::{Channel, RequestHandler};
-use hubrpc::prelude::{JsonRpcError, error_codes};
+use linkrpc::connection::channel::{Channel, RequestHandler};
+use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, oneshot, watch};

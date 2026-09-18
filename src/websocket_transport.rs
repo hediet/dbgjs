@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use hubrpc::prelude::{MessageTransport, TransportError};
+use linkrpc::prelude::{MessageTransport, TransportError};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, watch};
 use tokio_tungstenite::tungstenite::Message;

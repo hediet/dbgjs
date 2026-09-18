@@ -1,0 +1,23 @@
+[package]
+name = "linkrpc-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Runnable examples for the Rust linkrpc port. Each example is a pair of binaries (a server and a
+# consumer) that share a single `#[link_rpc_interface]` contract defined in this crate's library —
+# the "shared crate" pattern from docs/examples.md. The library also exposes small helpers so the
+# client examples and the e2e tests can spawn the server binaries without repeating themselves.
+
+[dependencies]
+linkrpc = { path = "../linkrpc" }
+linkrpc-tokio = { path = "../linkrpc-tokio" }
+tokio = { workspace = true, features = ["process", "io-std", "net", "rt-multi-thread", "macros", "time"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+# Builds + locates the example server binaries on demand (Cargo only sets CARGO_BIN_EXE_* for bin
+# targets, not examples), so a client can spawn `--example calc_server` as a child process.
+escargot = "0.5"

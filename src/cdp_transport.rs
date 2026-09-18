@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hubrpc::prelude::{MessageTransport, TransportError};
+use linkrpc::prelude::{MessageTransport, TransportError};
 use tokio::sync::Mutex;
 
 use crate::session_transport::CdpEnvelope;

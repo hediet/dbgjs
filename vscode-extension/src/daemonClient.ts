@@ -1,4 +1,4 @@
-import type { JsonValue } from "@vscode/hubrpc";
+import type { JsonValue } from "@hediet/linkrpc";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
@@ -21,13 +21,13 @@ import {
 	parseTargetDebuggerSnapshot,
 	parseVariables,
 } from "./apiTypes.js";
-import { connectLegacyHub, type LegacyHubConnection } from "./legacyHubTransport.js";
+import { connectDaemon, type DaemonConnection } from "./daemonTransport.js";
 
 const debuggerInterface = "dev.dbgjs.cdp-debugger";
 
 export class DaemonClient {
 	private constructor(
-		private readonly hub: LegacyHubConnection,
+		private readonly hub: DaemonConnection,
 		public readonly stateFile: string,
 	) {}
 
@@ -407,7 +407,7 @@ async function connectDaemonHub(
 	stateFile: string,
 	purpose: string,
 	log?: (message: string) => void,
-): Promise<LegacyHubConnection> {
+): Promise<DaemonConnection> {
 	const scopedLog = log === undefined
 		? undefined
 		: (message: string): void => log(`[${purpose}] ${message}`);
@@ -415,7 +415,7 @@ async function connectDaemonHub(
 	const endpoint = parseEndpointFile(
 		JSON.parse(await readFile(stateFile, "utf8")) as unknown,
 	);
-	return connectLegacyHub(endpoint.address, endpoint.token, scopedLog);
+	return connectDaemon(endpoint.address, endpoint.token, scopedLog);
 }
 
 export function parseEndpointFile(value: unknown): EndpointFile {

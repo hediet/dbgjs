@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hubrpc::prelude::{MessageTransport, TransportError};
+use linkrpc::prelude::{MessageTransport, TransportError};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
@@ -61,7 +61,7 @@ pub enum BridgeEvent {
 }
 
 pub struct ElectronRendererBridge {
-    client: CdpClient<hubrpc::connection::channel::Channel>,
+    client: CdpClient<linkrpc::connection::channel::Channel>,
     object_id: String,
     port: u16,
     token: String,
@@ -71,7 +71,7 @@ pub struct ElectronRendererBridge {
 
 impl ElectronRendererBridge {
     pub async fn install(
-        client: CdpClient<hubrpc::connection::channel::Channel>,
+        client: CdpClient<linkrpc::connection::channel::Channel>,
         independent: bool,
     ) -> Result<Option<Arc<Self>>, TransportError> {
         let token = random_token()?;
@@ -243,7 +243,7 @@ impl ElectronRendererBridge {
 }
 
 async fn call_bridge_object<T: DeserializeOwned>(
-    client: &CdpClient<hubrpc::connection::channel::Channel>,
+    client: &CdpClient<linkrpc::connection::channel::Channel>,
     object_id: &str,
     function_declaration: &str,
 ) -> Result<T, TransportError> {
@@ -778,7 +778,7 @@ fn transport_error(message: impl Into<String>) -> TransportError {
 
 #[cfg(test)]
 mod tests {
-    use hubrpc::prelude::MessageTransport;
+    use linkrpc::prelude::MessageTransport;
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
 

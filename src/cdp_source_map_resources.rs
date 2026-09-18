@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hubrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
-use hubrpc::protocol::jsonrpc::{JsonRpcRequest, RequestId, ResponsePayload};
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
+use linkrpc::protocol::jsonrpc::{JsonRpcRequest, RequestId, ResponsePayload};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 

@@ -192,12 +192,17 @@ debugger must still be attached before breakpoints or logpoints bind.
 The process-tree provider currently requires Windows and a Node.js runtime with
 built-in WebSocket support.
 
-## Transport finding
+## Transport
 
-`@vscode/hubrpc@0.0.2-0` contains the compatible HubRPC connection core, but its
-published Node connector sends the newer `hubrpc::initialize` handshake. The
-daemon currently expects the older one-line `{"hello":1,"token":"..."}` preamble.
-`legacyHubTransport.ts` is the small compatibility bridge.
+The extension uses `@hediet/linkrpc` for its JSON-RPC connection and public
+Node NDJSON transport. The daemon still expects the one-line
+`{"hello":1,"token":"..."}` preamble before JSON-RPC traffic, so the extension
+writes that preamble once and creates the NDJSON transport without LinkRPC's
+optional initialize handshake.
+
+The upstream NDJSON transport deliberately skips malformed JSON lines. Valid
+JSON-RPC traffic is traced through LinkRPC's public trace callback; the
+authentication preamble (and therefore its token) is not traced.
 
 ## Daemon API gaps exposed by the prototype
 

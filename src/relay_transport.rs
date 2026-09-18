@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use hubrpc::prelude::{MessageTransport, TransportError};
+use linkrpc::prelude::{MessageTransport, TransportError};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
@@ -259,8 +259,8 @@ pub enum RelayTransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hubrpc::prelude::{JsonRpcMessage, JsonRpcRequest};
-    use hubrpc::protocol::jsonrpc::RequestId;
+    use linkrpc::prelude::{JsonRpcMessage, JsonRpcRequest};
+    use linkrpc::protocol::jsonrpc::RequestId;
     use serde_json::json;
     use tokio_tungstenite::connect_async;
 

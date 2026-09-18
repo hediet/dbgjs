@@ -38,7 +38,7 @@ test("all native build inputs invalidate both jobs", () => {
 		"src/providers/node.mjs",
 		"src/embedded-help.md",
 		"crates/cdp-protocol/build.rs",
-		"external/hubrpc-rust/crates/hubrpc/src/lib.rs",
+		"external/linkrpc/rust/crates/linkrpc/src/lib.rs",
 		"tests/transcripts/bounded-evaluation.txt",
 		".github/workflows/ci.yml",
 		"scripts/ci-changes.mjs",

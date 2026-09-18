@@ -1,7 +1,7 @@
-use hubrpc::prelude::{compute_interface_hash_value, normalize_json_schema};
+use linkrpc::prelude::{compute_interface_hash_value, normalize_json_schema};
 use serde_json::{Map, Value, json};
 
-const CODEGEN_KEY: &str = "x-hubrpc-codegen";
+const CODEGEN_KEY: &str = "x-linkrpc-codegen";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtocolSchemaError {
@@ -11,7 +11,7 @@ pub enum ProtocolSchemaError {
     Missing(&'static str),
     #[error("duplicate CDP schema entry: {0}")]
     Duplicate(String),
-    #[error("HubRPC schema normalization failed: {0}")]
+    #[error("LinkRPC schema normalization failed: {0}")]
     Normalize(String),
 }
 
@@ -90,6 +90,7 @@ pub fn import_cdp_protocol(
     Ok(json!({
         "id": "cdp.protocol",
         "hash": "",
+        // This normative text is hash-bearing; keep its legacy wording for wire identity stability.
         "description": "Chrome DevTools Protocol imported as one root-addressed HubRPC compatibility interface.",
         "methods": methods,
         "components": {
@@ -113,7 +114,7 @@ pub fn compute_imported_interface_hash(interface: &Value) -> Result<String, Prot
 pub fn import_typed_cdp_protocol(
     browser_protocol: &str,
     js_protocol: &str,
-) -> Result<hubrpc::prelude::HubRpcInterfaceSchema, ProtocolSchemaError> {
+) -> Result<linkrpc::prelude::LinkRpcInterfaceSchema, ProtocolSchemaError> {
     let mut interface = import_cdp_protocol(browser_protocol, js_protocol)?;
     let hash = compute_imported_interface_hash(&interface)?;
     interface["hash"] = Value::String(hash);
@@ -387,7 +388,7 @@ mod tests {
     #[test]
     fn imports_the_complete_protocol_into_one_interface_document() {
         let interface = imported();
-        let typed: hubrpc::prelude::HubRpcInterfaceSchema =
+        let typed: linkrpc::prelude::LinkRpcInterfaceSchema =
             serde_json::from_value(interface.clone()).unwrap();
         assert!(interface["methods"].as_object().unwrap().len() > 500);
         assert_eq!(
@@ -413,8 +414,8 @@ mod tests {
     fn imports_a_hashed_typed_interface_for_generic_code_generation() {
         let typed = import_typed_cdp_protocol(BROWSER_PROTOCOL, JS_PROTOCOL).unwrap();
         assert_eq!(typed.id, "cdp.protocol");
-        assert!(!typed.hash.is_empty());
-        assert_eq!(hubrpc::prelude::compute_interface_hash(&typed), typed.hash);
+        assert_eq!(typed.hash, "f4103a602d4212c9");
+        assert_eq!(linkrpc::prelude::compute_interface_hash(&typed), typed.hash);
         assert_eq!(typed.methods.len(), 896);
         assert_eq!(typed.components.unwrap().schemas.unwrap().len(), 607);
     }

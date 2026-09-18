@@ -5,10 +5,10 @@ use dbgjs::cdp::{
     RuntimeEvaluateParams, RuntimeRemoteObjectType, TargetAttachToTargetParams,
 };
 use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
-use hubrpc::connection::channel::{Channel, RejectingHandler};
-use hubrpc::prelude::{JsonRpcMessage, MessageTransport};
-use hubrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
-use hubrpc::transport::memory::transport_pair_of;
+use linkrpc::connection::channel::{Channel, RejectingHandler};
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport};
+use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
+use linkrpc::transport::memory::transport_pair_of;
 use serde_json::json;
 
 #[test]

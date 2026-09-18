@@ -52,7 +52,7 @@ stated as a requirement, exact command names and flags are not yet fixed.
 The first executable vertical slice now validates:
 
 - `dbgjs` discovering or spawning a long-lived `dbgjs-service`;
-- generated typed HubRPC requests over authenticated NDJSON on a Windows named
+- generated typed LinkRPC requests over authenticated NDJSON on a Windows named
   pipe or Unix domain socket;
 - multiple contexts and multiple named connection configurations per context;
 - disconnected breakpoint intent;

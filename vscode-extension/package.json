@@ -240,7 +240,7 @@
     "test:vscode": "npm run compile && node test/runIntegration.mjs"
   },
   "dependencies": {
-    "@vscode/hubrpc": "0.0.2-0",
+    "@hediet/linkrpc": "file:../external/linkrpc/npm/hediet-linkrpc.tgz",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
-use hubrpc::prelude::{
-    DirectoryServiceClient, HubRpcConnection, InterfaceHandler, RegisterOptions,
+use linkrpc::prelude::{
+    DirectoryServiceClient, InterfaceHandler, LinkRpcConnection, RegisterOptions,
 };
-use hubrpc_tokio::ndjson::{NdjsonTransport, Preamble};
+use linkrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
@@ -295,7 +295,7 @@ where
     transport
         .write_preamble(&Preamble::new(Some(token.to_owned())))
         .await?;
-    let connection = HubRpcConnection::new(Box::new(transport));
+    let connection = LinkRpcConnection::new(Box::new(transport));
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
     if validate_interface {
@@ -460,7 +460,7 @@ async fn serve_peer(
         return Err(LocalRpcError::AuthenticationFailed);
     }
 
-    let connection = HubRpcConnection::new(Box::new(transport));
+    let connection = LinkRpcConnection::new(Box::new(transport));
     connection.register(
         Arc::new(debugger_service_api::interface()),
         Arc::new(DebuggerServiceApiServer::new(service)) as Arc<dyn InterfaceHandler>,
@@ -586,13 +586,13 @@ pub enum LocalRpcError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Connection(#[from] hubrpc::connection::hub_connection::ConnError),
+    Connection(#[from] linkrpc::connection::hub_connection::ConnError),
     #[error("local service authentication failed")]
     AuthenticationFailed,
-    #[error("local service does not expose required HubRPC interface '{0}'")]
+    #[error("local service does not expose required LinkRPC interface '{0}'")]
     InterfaceMissing(String),
     #[error(
-        "HubRPC interface '{interface_id}' hash mismatch: service has {actual}, client expects {expected}"
+        "LinkRPC interface '{interface_id}' hash mismatch: service has {actual}, client expects {expected}"
     )]
     InterfaceHashMismatch {
         interface_id: String,
@@ -600,7 +600,7 @@ pub enum LocalRpcError {
         actual: String,
     },
     #[error(
-        "spawned service {executable} exposes incompatible HubRPC interface '{interface_id}' \
+        "spawned service {executable} exposes incompatible LinkRPC interface '{interface_id}' \
          (service has {actual}, client expects {expected}); rebuild it with \
          `cargo build --bin dbgjs-service`"
     )]

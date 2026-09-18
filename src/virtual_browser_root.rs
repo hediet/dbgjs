@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use hubrpc::connection::channel::{Channel, RequestHandler};
-use hubrpc::prelude::{JsonRpcError, MessageTransport, TransportError, error_codes};
+use linkrpc::connection::channel::{Channel, RequestHandler};
+use linkrpc::prelude::{JsonRpcError, MessageTransport, TransportError, error_codes};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -876,9 +876,9 @@ impl RequestHandler for SessionHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hubrpc::connection::channel::RejectingHandler;
-    use hubrpc::prelude::{JsonRpcMessage, JsonRpcResponse};
-    use hubrpc::protocol::jsonrpc::ResponsePayload;
+    use linkrpc::connection::channel::RejectingHandler;
+    use linkrpc::prelude::{JsonRpcMessage, JsonRpcResponse};
+    use linkrpc::protocol::jsonrpc::ResponsePayload;
     use serde_json::json;
     use std::sync::Mutex as StdMutex;
 

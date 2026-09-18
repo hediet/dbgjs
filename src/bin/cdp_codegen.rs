@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use dbgjs::protocol_schema::import_typed_cdp_protocol;
-use hubrpc::prelude::{GenerateRustOptions, generate_rust_interface};
+use linkrpc::prelude::{GenerateRustOptions, generate_rust_interface};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

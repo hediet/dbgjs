@@ -4728,7 +4728,7 @@ async fn wait_for_heap_capture<F>(
     operation: &mut std::pin::Pin<&mut F>,
 ) -> Result<HeapCaptureResult, Box<dyn std::error::Error>>
 where
-    F: std::future::Future<Output = Result<HeapCaptureResult, hubrpc::prelude::JsonRpcError>>,
+    F: std::future::Future<Output = Result<HeapCaptureResult, linkrpc::prelude::JsonRpcError>>,
 {
     let mut last_progress = None::<HeapSnapshotProgress>;
     let result = loop {
@@ -6373,7 +6373,7 @@ async fn run_relay_stdio(websocket_url: &str) -> Result<(), Box<dyn std::error::
     use dbgjs::cdp_transport::ManagedCdpTransport;
     use dbgjs::stdio_transport::CdpStdioTransport;
     use dbgjs::websocket_transport::CdpWebSocketTransport;
-    use hubrpc::prelude::MessageTransport;
+    use linkrpc::prelude::MessageTransport;
 
     let websocket = CdpWebSocketTransport::connect(websocket_url).await?;
     let stdio = CdpStdioTransport::new(
@@ -6677,7 +6677,7 @@ fn parse_breakpoint_spec(
     Ok((specification, parse_mutation_options(&mutation_arguments)?))
 }
 
-fn rpc<T>(result: Result<T, hubrpc::prelude::JsonRpcError>) -> Result<T, io::Error> {
+fn rpc<T>(result: Result<T, linkrpc::prelude::JsonRpcError>) -> Result<T, io::Error> {
     result.map_err(|error| io::Error::other(format!("{error:?}")))
 }
 
