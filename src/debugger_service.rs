@@ -9644,8 +9644,8 @@ mod tests {
                 total_time_micros: 0,
                 sample_count: 0,
             }],
-            samples: vec![1],
-            time_deltas_micros: vec![250],
+            samples: vec![1, 1, 1],
+            time_deltas_micros: vec![250, -28, 10],
             functions: Vec::new(),
             analysis: None,
         };
@@ -9675,6 +9675,9 @@ mod tests {
         assert_eq!(profile.functions[0].name, "work");
         assert_eq!(profile.functions[0].self_time_micros, 250);
         assert_eq!(profile.functions[0].total_time_micros, 250);
+        assert_eq!(profile.functions[0].sample_count, 3);
+        assert_eq!(profile.samples, vec![1, 1, 1]);
+        assert_eq!(profile.time_deltas_micros, vec![250, -28, 10]);
         let _ = fs::remove_dir_all(root);
     }
 

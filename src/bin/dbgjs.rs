@@ -8332,6 +8332,25 @@ mod tests {
     }
 
     #[test]
+    fn cpu_profile_export_preserves_signed_deltas_and_sample_order() {
+        let profile: super::CpuProfileSnapshot = serde_json::from_value(serde_json::json!({
+            "captureId": "typing-cpu",
+            "samplingIntervalMicros": 1000,
+            "startTimeMicros": 10000,
+            "endTimeMicros": 11000,
+            "nodes": [],
+            "samples": [2, 3, 2],
+            "timeDeltasMicros": [100, -28, 10]
+        }))
+        .unwrap();
+        let exported = super::cpu_profile_export(&profile);
+        assert_eq!(exported["samples"], serde_json::json!([2, 3, 2]));
+        assert_eq!(exported["timeDeltas"], serde_json::json!([100, -28, 10]));
+        assert_eq!(exported["startTime"], 10000.0);
+        assert_eq!(exported["endTime"], 11000.0);
+    }
+
+    #[test]
     fn parses_cpu_profile_sampling_intervals() {
         assert_eq!(parse_cpu_profile_sampling_interval("1").unwrap(), 1_000);
         assert_eq!(parse_cpu_profile_sampling_interval("1ms").unwrap(), 1_000);

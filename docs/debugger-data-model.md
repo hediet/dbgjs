@@ -1276,9 +1276,27 @@ interface CpuProfileSummary {
 }
 ```
 
-The artifact preserves the raw node graph, samples, and measured time deltas.
+The artifact preserves the raw node graph, sample order, and signed CDP time
+deltas, including negative differences between out-of-order sample timestamps.
 Source projection, self/total aggregation, rendering, and export are pure
 operations over that immutable value.
+
+For analysis, reconstruct timestamps by cumulatively adding the signed deltas
+to the profile start, then stably sort sample/timestamp pairs. Attribute each
+interval from the previous chronological timestamp (initially the profile
+start) to its sample, without modifying the stored stream. This preserves sample
+counts and timestamp associations, unlike clamping negative deltas.
+
+V8's [`ProcessOneSample`](https://github.com/v8/v8/blob/main/src/profiler/cpu-profiler.cc)
+processes VM-thread samples separately from the sampler queue.
+[`CpuProfile::AddPath`](https://github.com/v8/v8/blob/main/src/profiler/profile-generator.cc)
+appends these samples, requiring timestamps at or after the profile start but
+not chronological order. The inspector
+[encodes timestamp differences](https://github.com/v8/v8/blob/main/src/inspector/v8-profiler-agent-impl.cc);
+DevTools likewise
+[reconstructs and sorts timestamps with samples](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/models/cpu_profile/CPUProfileDataModel.ts).
+Our interval attribution retains dbgjs's existing preceding-interval convention;
+it does not adopt DevTools's other presentation heuristics or sample replacement.
 
 ## 12. Immutable artifacts
 

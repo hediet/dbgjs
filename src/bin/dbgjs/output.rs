@@ -2872,7 +2872,11 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
 }
 
 fn print_cpu_profile_human(snapshot: &CpuProfileSnapshot, options: CpuProfileOutputOptions<'_>) {
-    let sampled_micros = snapshot.time_deltas_micros.iter().copied().sum::<u64>();
+    let sampled_micros = snapshot
+        .nodes
+        .iter()
+        .map(|node| node.self_time_micros)
+        .sum::<u64>();
     let elapsed_micros = (snapshot.end_time_micros - snapshot.start_time_micros).max(0.0) as u64;
     println!(
         "CPU profile {}: {} elapsed, {} sampled, {} samples",

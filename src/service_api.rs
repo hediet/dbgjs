@@ -1360,7 +1360,8 @@ pub struct CpuProfileSnapshot {
     pub end_time_micros: f64,
     pub nodes: Vec<CpuProfileNodeSnapshot>,
     pub samples: Vec<i64>,
-    pub time_deltas_micros: Vec<u64>,
+    /// Raw CDP timestamp differences in sample order, which need not be chronological.
+    pub time_deltas_micros: Vec<i64>,
     #[serde(default)]
     pub functions: Vec<CpuProfileFunctionSnapshot>,
     #[serde(default)]

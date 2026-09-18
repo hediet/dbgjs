@@ -3874,24 +3874,7 @@ fn cpu_profile_snapshot(
     profile: ProfilerProfile,
 ) -> Result<CpuProfileSnapshot, TargetDebuggerError> {
     let samples = profile.samples.unwrap_or_default();
-    let raw_time_deltas = profile.time_deltas.unwrap_or_default();
-    if samples.len() != raw_time_deltas.len() {
-        return Err(TargetDebuggerError::InvalidCpuProfile(format!(
-            "received {} samples but {} time deltas",
-            samples.len(),
-            raw_time_deltas.len()
-        )));
-    }
-    let time_deltas_micros = raw_time_deltas
-        .into_iter()
-        .map(|delta| {
-            u64::try_from(delta).map_err(|_| {
-                TargetDebuggerError::InvalidCpuProfile(format!(
-                    "received a negative sample time delta ({delta})"
-                ))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let time_deltas_micros = profile.time_deltas.unwrap_or_default();
     let nodes = profile
         .nodes
         .into_iter()
@@ -3947,7 +3930,7 @@ async fn project_cpu_profile(
 ) -> Result<(), TargetDebuggerError> {
     let node_indexes = cpu_profile_node_indexes(snapshot)?;
     let mut script_weights = BTreeMap::<String, u64>::new();
-    for (&sample_id, &delta) in snapshot.samples.iter().zip(&snapshot.time_deltas_micros) {
+    for (sample_id, delta) in cpu_profile_sample_durations(snapshot)? {
         let node = &snapshot.nodes[*node_indexes.get(&sample_id).ok_or_else(|| {
             TargetDebuggerError::InvalidCpuProfile(format!(
                 "sample references missing node {sample_id}"
@@ -4050,9 +4033,49 @@ fn cpu_profile_node_indexes(
     Ok(indexes)
 }
 
+fn cpu_profile_sample_durations(
+    snapshot: &CpuProfileSnapshot,
+) -> Result<Vec<(i64, u64)>, TargetDebuggerError> {
+    if snapshot.samples.len() != snapshot.time_deltas_micros.len() {
+        return Err(TargetDebuggerError::InvalidCpuProfile(format!(
+            "received {} samples but {} time deltas",
+            snapshot.samples.len(),
+            snapshot.time_deltas_micros.len()
+        )));
+    }
+
+    // V8 processes VM and sampler queues separately, so CDP deltas can be negative.
+    // Like DevTools, sort reconstructed timestamps with their samples, not the deltas.
+    // Use offsets from startTime to keep microsecond precision without f64 arithmetic.
+    let mut timestamp = 0_u64;
+    let mut samples = Vec::with_capacity(snapshot.samples.len());
+    for (index, (&sample, &delta)) in snapshot
+        .samples
+        .iter()
+        .zip(&snapshot.time_deltas_micros)
+        .enumerate()
+    {
+        timestamp = timestamp.checked_add_signed(delta).ok_or_else(|| {
+            TargetDebuggerError::InvalidCpuProfile(format!(
+                "sample {index} timestamp offset is outside 0..=u64::MAX ({timestamp} + {delta})"
+            ))
+        })?;
+        samples.push((sample, timestamp));
+    }
+    samples.sort_by_key(|&(_, timestamp)| timestamp);
+    let mut previous = 0;
+    for (_, timestamp) in &mut samples {
+        let current = *timestamp;
+        *timestamp = current - previous;
+        previous = current;
+    }
+    Ok(samples)
+}
+
 pub(crate) fn aggregate_cpu_profile(
     snapshot: &mut CpuProfileSnapshot,
 ) -> Result<(), TargetDebuggerError> {
+    let sample_durations = cpu_profile_sample_durations(snapshot)?;
     let node_indexes = cpu_profile_node_indexes(snapshot)?;
     let mut parents = BTreeMap::<i64, i64>::new();
     for node in &snapshot.nodes {
@@ -4088,7 +4111,7 @@ pub(crate) fn aggregate_cpu_profile(
     }
     let mut functions = function_templates;
 
-    for (&sample_id, &delta) in snapshot.samples.iter().zip(&snapshot.time_deltas_micros) {
+    for (sample_id, delta) in sample_durations {
         let sample_index = *node_indexes.get(&sample_id).ok_or_else(|| {
             TargetDebuggerError::InvalidCpuProfile(format!(
                 "sample references missing node {sample_id}"
@@ -6094,7 +6117,8 @@ mod tests {
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
-        complete_source_search_batch, effective_coverage_ranges, evaluated_remote_from_envelope,
+        complete_source_search_batch, cpu_profile_sample_durations, cpu_profile_snapshot,
+        effective_coverage_ranges, evaluated_remote_from_envelope,
         heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
         window_highlighted_line,
     };
@@ -7100,6 +7124,132 @@ mod tests {
             total_time_micros: 0,
             sample_count: 0,
         }
+    }
+
+    fn raw_cpu_profile(samples: Vec<i64>, time_deltas: Vec<i64>) -> crate::cdp::ProfilerProfile {
+        serde_json::from_value(serde_json::json!({
+            "startTime": 18_014_398_509_481_984.0,
+            "endTime": 18_014_398_509_482_984.0,
+            "nodes": [
+                {
+                    "id": 1,
+                    "callFrame": {
+                        "functionName": "(root)", "scriptId": "0", "url": "",
+                        "lineNumber": -1, "columnNumber": -1
+                    },
+                    "children": [2, 3]
+                },
+                {
+                    "id": 2,
+                    "callFrame": {
+                        "functionName": "outer", "scriptId": "1", "url": "app.js",
+                        "lineNumber": 0, "columnNumber": 0
+                    }
+                },
+                {
+                    "id": 3,
+                    "callFrame": {
+                        "functionName": "inner", "scriptId": "1", "url": "app.js",
+                        "lineNumber": 1, "columnNumber": 0
+                    }
+                }
+            ],
+            "samples": samples,
+            "timeDeltas": time_deltas
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn cpu_profile_preserves_signed_stream_and_aggregates_chronologically() {
+        let raw = raw_cpu_profile(vec![2, 3, 2, 3, 2], vec![100, -28, 0, 78, -10]);
+        let snapshot = cpu_profile_snapshot("typing-cpu".into(), Some(1_000), raw).unwrap();
+
+        assert_eq!(snapshot.samples, vec![2, 3, 2, 3, 2]);
+        assert_eq!(snapshot.time_deltas_micros, vec![100, -28, 0, 78, -10]);
+        assert_eq!(snapshot.sampling_interval_micros, Some(1_000));
+        assert_eq!(
+            cpu_profile_sample_durations(&snapshot).unwrap(),
+            vec![(3, 72), (2, 0), (2, 28), (2, 40), (3, 10)]
+        );
+        assert_eq!(snapshot.nodes[0].total_time_micros, 150);
+        assert_eq!(snapshot.nodes[1].self_time_micros, 68);
+        assert_eq!(snapshot.nodes[1].sample_count, 3);
+        assert_eq!(snapshot.nodes[2].self_time_micros, 82);
+        assert_eq!(snapshot.nodes[2].sample_count, 2);
+
+        let ordered = cpu_profile_snapshot(
+            "ordered".into(),
+            None,
+            raw_cpu_profile(vec![3, 2, 2, 2, 3], vec![72, 0, 28, 40, 10]),
+        )
+        .unwrap();
+        assert_eq!(snapshot.nodes, ordered.nodes);
+        assert_eq!(snapshot.functions, ordered.functions);
+
+        let mut restored: CpuProfileSnapshot =
+            serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+        aggregate_cpu_profile(&mut restored).unwrap();
+        assert_eq!(restored, snapshot);
+    }
+
+    #[test]
+    fn cpu_profile_keeps_empty_ordered_and_equal_timestamp_samples() {
+        for (samples, deltas) in [
+            (vec![], vec![]),
+            (vec![2], vec![0]),
+            (vec![2, 3, 2], vec![100, 50, 25]),
+            (vec![3, 2, 3], vec![0, 0, 0]),
+        ] {
+            let snapshot = cpu_profile_snapshot(
+                "test".into(),
+                None,
+                raw_cpu_profile(samples.clone(), deltas.clone()),
+            )
+            .unwrap();
+            let expected = samples
+                .iter()
+                .copied()
+                .zip(deltas.iter().map(|&delta| u64::try_from(delta).unwrap()))
+                .collect::<Vec<_>>();
+            assert_eq!(cpu_profile_sample_durations(&snapshot).unwrap(), expected);
+            assert_eq!(
+                snapshot.nodes.iter().map(|node| node.sample_count).sum::<u64>(),
+                samples.len() as u64
+            );
+            assert_eq!(snapshot.samples, samples);
+            assert_eq!(snapshot.time_deltas_micros, deltas);
+        }
+    }
+
+    #[test]
+    fn cpu_profile_rejects_invalid_timestamp_offsets_and_mismatched_streams() {
+        for deltas in [vec![-1], vec![10, -11], vec![i64::MAX, i64::MAX, 2]] {
+            let error = cpu_profile_snapshot(
+                "test".into(),
+                None,
+                raw_cpu_profile(vec![2; deltas.len()], deltas),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("timestamp offset is outside"));
+        }
+        for (samples, deltas) in [(vec![2], vec![]), (vec![], vec![10])] {
+            let error = cpu_profile_snapshot(
+                "test".into(),
+                None,
+                raw_cpu_profile(samples, deltas),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("samples but"));
+        }
+
+        let error = cpu_profile_snapshot(
+            "test".into(),
+            None,
+            raw_cpu_profile(vec![2, 99], vec![100, 0]),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sample references missing node 99"));
     }
 
     #[test]

@@ -504,6 +504,17 @@ export. Source-mapped function and file summaries are derived views of this raw
 value. Self time attributes each sample to its leaf frame; total time attributes
 it to that frame and its ancestors.
 
+CDP time deltas are signed timestamp differences, not sample durations. V8 can
+emit samples out of timestamp order. Storage and export retain the original
+sample order and signed deltas, including negative values. Analysis reconstructs
+timestamps relative to the profile start, stably sorts sample/timestamp pairs,
+and attributes each interval since the preceding timestamp (or profile start)
+to its sample. Equal timestamps retain all samples with zero-length intervals
+after the first. The sampled duration ends at the latest sample; the unsampled
+tail to the profile end is not attributed. Ordered profiles keep their existing
+attribution. Invalid array lengths or timestamp offsets outside the supported
+nonnegative microsecond range are reported rather than clamped.
+
 ### 4.16a Stored capture catalog
 
 Coverage, CPU-profile, and heap-snapshot names share one namespace per context.
