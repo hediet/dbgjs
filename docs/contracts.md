@@ -97,6 +97,9 @@ dependencies; CI does not check out a sibling repository, use relative
 `file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
 be published before their versions are selected in this repository.
 
+The Rust generator requires LinkRPC 0.1.1 or newer. The published 0.1.0 crate
+predates the provider-generation options used by this project.
+
 For opt-in development across both repositories, a developer may use a local
 sibling checkout by temporarily overriding the relevant npm and Cargo
 dependencies in their working tree. Build any required LinkRPC package outputs

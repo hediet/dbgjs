@@ -5,12 +5,12 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-linkrpc = { version = "0.1.0", path = "../../../linkrpc/rust/crates/linkrpc" }
+linkrpc = "0.1.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 
 [build-dependencies]
-linkrpc = { version = "0.1.0", path = "../../../linkrpc/rust/crates/linkrpc" }
+linkrpc = "0.1.1"
 serde_json = "1"
 thiserror = "2"
