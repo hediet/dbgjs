@@ -737,41 +737,53 @@ fn source_formatting_mode_label(mode: SourceFormattingMode) -> &'static str {
 
 impl HumanOutput for SourceSearchSnapshot {
     fn print_human(&self) {
-        for item in &self.matches {
-            let first_context_line = item.line.saturating_sub(item.before_context.len() as u32);
-            for (index, line) in item.before_context.iter().enumerate() {
-                println!(
-                    "{}-{}-{}",
-                    item.path,
-                    first_context_line + index as u32,
-                    line
-                );
-            }
-            println!("{}:{}:{}:{}", item.path, item.line, item.column, item.text);
-            for (index, line) in item.after_context.iter().enumerate() {
-                println!("{}-{}-{}", item.path, item.line + index as u32 + 1, line);
-            }
-            if !item.before_context.is_empty() || !item.after_context.is_empty() {
-                println!("--");
-            }
-        }
-        if self.omitted_matches > 0 {
-            println!(
-                "... {} additional matches omitted; increase --max-results",
-                self.omitted_matches
-            );
-        }
-        if let Some(message) = source_search_incomplete_message(self) {
-            println!("{message}");
-        }
-        println!(
-            "{} source(s) searched, {} skipped",
-            self.searched_sources, self.skipped_sources
-        );
-        for source in &self.skipped {
-            println!("Skipped {} ({}): {}", source.path, source.kind, source.reason);
-        }
+        print!("{}", render_source_search(self));
     }
+}
+
+fn render_source_search(snapshot: &SourceSearchSnapshot) -> String {
+    let mut output = String::new();
+    for item in &snapshot.matches {
+        writeln!(output, "{}:{}:{}", item.path, item.line, item.column).unwrap();
+        let first_context_line = item.line.saturating_sub(item.before_context.len() as u32);
+        let width = (item.line + item.after_context.len() as u32).to_string().len();
+        for (index, text) in item.before_context.iter().enumerate() {
+            let line = first_context_line + index as u32;
+            writeln!(output, "    {line:>width$} | {text}").unwrap();
+        }
+        writeln!(output, "  > {:>width$} | {}", item.line, item.text).unwrap();
+        for (index, text) in item.after_context.iter().enumerate() {
+            let line = item.line + index as u32 + 1;
+            writeln!(output, "    {line:>width$} | {text}").unwrap();
+        }
+        output.push('\n');
+    }
+    if snapshot.omitted_matches > 0 {
+        writeln!(
+            output,
+            "... {} additional matches omitted; increase --max-results",
+            snapshot.omitted_matches
+        )
+        .unwrap();
+    }
+    if let Some(message) = source_search_incomplete_message(snapshot) {
+        writeln!(output, "{message}").unwrap();
+    }
+    writeln!(
+        output,
+        "{} source(s) searched, {} skipped",
+        snapshot.searched_sources, snapshot.skipped_sources
+    )
+    .unwrap();
+    for source in &snapshot.skipped {
+        writeln!(
+            output,
+            "Skipped {} ({}): {}",
+            source.path, source.kind, source.reason
+        )
+        .unwrap();
+    }
+    output
 }
 
 fn source_search_incomplete_message(snapshot: &SourceSearchSnapshot) -> Option<String> {
@@ -4322,7 +4334,8 @@ mod tests {
         eval_truncation_guidance, heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
         page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
-        render_heap_classes_human, render_uncompacted_source_graph, render_value_snapshot,
+        render_heap_classes_human, render_source_search, render_uncompacted_source_graph,
+        render_value_snapshot,
         source_search_incomplete_message, source_tree_lines, style_process_label,
         style_session_label, target_tree_selector, terminal_text,
     };
@@ -4334,7 +4347,8 @@ mod tests {
         HeapInstanceSnapshot, HeapNodeSnapshot, HeapPathSnapshot, HeapPathStepSnapshot,
         HeapReferenceDirection, HeapReferenceSnapshot, HeapReferencesSnapshot, HeapSnapshotTiming,
         HeapTraversalDirection, ProcessRole, ProcessRootKind, ProcessSnapshot,
-        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceSearchSkip,
+        ProcessTargetSnapshot, ProcessTreeSnapshot, SourceLocation, SourceMatchSnapshot,
+        SourceSearchSkip,
         SourceSearchSnapshot, SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot,
         TargetSnapshot, UncompactedProjectionSnapshot,
         UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
@@ -4507,6 +4521,134 @@ mod tests {
         );
     }
 
+    fn source_search_match(path: &str, line: u32, column: u32, text: &str) -> SourceMatchSnapshot {
+        SourceMatchSnapshot {
+            path: path.to_owned(),
+            content_hash: "hash".to_owned(),
+            kind: "authored".to_owned(),
+            provenance: "source map".to_owned(),
+            connection_id: Some("connection".to_owned()),
+            target_id: Some("target".to_owned()),
+            line,
+            column,
+            match_length: 3,
+            text: text.to_owned(),
+            before_context: Vec::new(),
+            after_context: Vec::new(),
+        }
+    }
+
+    fn source_search_snapshot(matches: Vec<SourceMatchSnapshot>) -> SourceSearchSnapshot {
+        SourceSearchSnapshot {
+            matches,
+            omitted_matches: 0,
+            searched_sources: 1,
+            searched_contents: 1,
+            skipped_sources: 0,
+            skipped: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn source_search_renders_context_with_one_path_header_and_aligned_line_numbers() {
+        let mut item = source_search_match("webpack:///src/app.ts", 99, 3, "  hit();");
+        item.before_context = vec!["function run() {".to_owned()];
+        item.after_context = vec!["}".to_owned(), String::new()];
+
+        assert_eq!(
+            render_source_search(&source_search_snapshot(vec![item])),
+            concat!(
+                "webpack:///src/app.ts:99:3\n",
+                "     98 | function run() {\n",
+                "  >  99 |   hit();\n",
+                "    100 | }\n",
+                "    101 | \n",
+                "\n",
+                "1 source(s) searched, 0 skipped\n",
+            )
+        );
+    }
+
+    #[test]
+    fn source_search_renders_without_context() {
+        let item = source_search_match("file:///src/app.ts", 1, 8, "return hit();");
+        assert_eq!(
+            render_source_search(&source_search_snapshot(vec![item])),
+            concat!(
+                "file:///src/app.ts:1:8\n",
+                "  > 1 | return hit();\n",
+                "\n",
+                "1 source(s) searched, 0 skipped\n",
+            )
+        );
+    }
+
+    #[test]
+    fn source_search_keeps_distinct_occurrences_and_files_with_overlapping_context() {
+        let mut first = source_search_match("first.ts", 1, 1, "hit(hit());");
+        first.after_context = vec!["done();".to_owned()];
+        let second = SourceMatchSnapshot {
+            column: 5,
+            ..first.clone()
+        };
+        let mut third = source_search_match("second.ts", 2, 1, "hit();");
+        third.before_context = vec!["start();".to_owned()];
+        let snapshot = SourceSearchSnapshot {
+            searched_sources: 2,
+            searched_contents: 2,
+            ..source_search_snapshot(vec![first, second, third])
+        };
+        assert_eq!(
+            render_source_search(&snapshot),
+            concat!(
+                "first.ts:1:1\n",
+                "  > 1 | hit(hit());\n",
+                "    2 | done();\n",
+                "\n",
+                "first.ts:1:5\n",
+                "  > 1 | hit(hit());\n",
+                "    2 | done();\n",
+                "\n",
+                "second.ts:2:1\n",
+                "    1 | start();\n",
+                "  > 2 | hit();\n",
+                "\n",
+                "2 source(s) searched, 0 skipped\n",
+            )
+        );
+    }
+
+    #[test]
+    fn source_search_preserves_omitted_counts_and_source_map_diagnostics() {
+        let snapshot = SourceSearchSnapshot {
+            omitted_matches: 4,
+            skipped_sources: 1,
+            skipped: vec![SourceSearchSkip {
+                path: "broken.js.map".to_owned(),
+                kind: "sourceMap".to_owned(),
+                connection_id: Some("connection".to_owned()),
+                target_id: Some("target".to_owned()),
+                reason: "invalid source map JSON".to_owned(),
+            }],
+            ..source_search_snapshot(vec![source_search_match("app.ts", 1, 1, "hit();")])
+        };
+        assert_eq!(
+            render_source_search(&snapshot),
+            concat!(
+                "app.ts:1:1\n",
+                "  > 1 | hit();\n",
+                "\n",
+                "... 4 additional matches omitted; increase --max-results\n",
+                "1 source(s) searched, 1 skipped\n",
+                "Skipped broken.js.map (sourceMap): invalid source map JSON\n",
+            )
+        );
+        assert_eq!(
+            render_source_search(&source_search_snapshot(Vec::new())),
+            "1 source(s) searched, 0 skipped\n",
+        );
+    }
+
     #[test]
     fn fully_skipped_source_search_is_reported_as_incomplete() {
         let snapshot = SourceSearchSnapshot {
@@ -4524,6 +4666,14 @@ mod tests {
             }],
         };
 
+        assert_eq!(
+            render_source_search(&snapshot),
+            concat!(
+                "Search incomplete: no sources were searched because all 1 candidate source(s) were skipped.\n",
+                "0 source(s) searched, 1 skipped\n",
+                "Skipped missing.js (runtime): script was collected\n",
+            )
+        );
         assert_eq!(
             source_search_incomplete_message(&snapshot).as_deref(),
             Some(

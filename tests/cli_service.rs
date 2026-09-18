@@ -1279,11 +1279,15 @@ fn cli_manages_lifecycle_concurrency_and_sources() {
     assert_eq!(
         transcript,
         format!(
-            "{source}:1:14:export const validationValue = 42;\n\
-             {source}-2-console.log(validationValue);\n\
-             --\n\
-             ... 2 additional matches omitted; increase --max-results\n\
-             1 source(s) searched, 0 skipped\n"
+            concat!(
+                "{source}:1:14\n",
+                "  > 1 | export const validationValue = 42;\n",
+                "    2 | console.log(validationValue);\n",
+                "\n",
+                "... 2 additional matches omitted; increase --max-results\n",
+                "1 source(s) searched, 0 skipped\n",
+            ),
+            source = source,
         )
     );
     let source_graph = run_json(

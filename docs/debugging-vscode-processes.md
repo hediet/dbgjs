@@ -347,6 +347,11 @@ Search projected authored and generated sources:
 dbgjs source grep 'hubRpcConnection'
 ```
 
+Human output shows each occurrence as a source excerpt: one `path:line:column`
+header, followed by numbered lines with `>` marking the matching line. Use
+`--context-lines <count>` to include surrounding lines. A blank line separates
+occurrences, including distinct matches on the same source line.
+
 Use `--path` to select logical paths before content is loaded and
 `--timeout-ms` to bound the complete search. JSON matches include content
 identity, provenance, endpoint applicability, and match length; identical
