@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hubrpc::connection::channel::{Channel, RequestHandler};
-use hubrpc::prelude::{JsonRpcError, MuxError};
+use hubrpc::prelude::{JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, TransportError};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -117,17 +117,15 @@ impl CdpConnection {
         let source_map_resources = SourceMapResources::new(
             mux.open_root().map_err(CdpRuntimeError::OpenSession)?,
         );
-        let root_channel = Channel::new(
-            Box::new(source_map_resources.transport()),
-            Box::new(CdpEventHandler {
-                session: session.clone(),
-                sender: event_sender,
-                heap_snapshot: heap_snapshot.clone(),
-                heap_snapshot_progress: heap_snapshot_progress.clone(),
-                raw_events: raw_events.clone(),
-                raw_event_history: raw_event_history.clone(),
-            }),
-        );
+        let root_channel = CdpEventHandler {
+            session: session.clone(),
+            sender: event_sender,
+            heap_snapshot: heap_snapshot.clone(),
+            heap_snapshot_progress: heap_snapshot_progress.clone(),
+            raw_events: raw_events.clone(),
+            raw_event_history: raw_event_history.clone(),
+        }
+        .into_channel(source_map_resources.transport());
         let root = CdpClient::root(root_channel.clone());
         let debugger = CdpDebuggerSession {
             session,
@@ -174,17 +172,15 @@ impl CdpConnection {
                 .open_session(session.session_id.clone())
                 .map_err(CdpRuntimeError::OpenSession)?,
         );
-        let channel = Channel::new(
-            Box::new(source_map_resources.transport()),
-            Box::new(CdpEventHandler {
-                session: session.clone(),
-                sender: event_sender,
-                heap_snapshot: heap_snapshot.clone(),
-                heap_snapshot_progress: heap_snapshot_progress.clone(),
-                raw_events: raw_events.clone(),
-                raw_event_history: raw_event_history.clone(),
-            }),
-        );
+        let channel = CdpEventHandler {
+            session: session.clone(),
+            sender: event_sender,
+            heap_snapshot: heap_snapshot.clone(),
+            heap_snapshot_progress: heap_snapshot_progress.clone(),
+            raw_events: raw_events.clone(),
+            raw_event_history: raw_event_history.clone(),
+        }
+        .into_channel(source_map_resources.transport());
         let client = CdpClient::root(channel.clone());
         let run_channel = channel.clone();
         tokio::spawn(async move { run_channel.run().await });
@@ -1032,6 +1028,7 @@ impl CdpRuntimeEvent {
     }
 }
 
+#[derive(Clone)]
 struct CdpEventHandler {
     session: SessionKey,
     sender: mpsc::UnboundedSender<Result<CdpRuntimeEvent, CdpRuntimeEventError>>,
@@ -1039,6 +1036,53 @@ struct CdpEventHandler {
     heap_snapshot_progress: watch::Sender<Option<HeapSnapshotStreamProgress>>,
     raw_events: broadcast::Sender<RawCdpEvent>,
     raw_event_history: Arc<std::sync::Mutex<Vec<RawCdpEvent>>>,
+}
+
+impl CdpEventHandler {
+    fn into_channel(self, transport: impl MessageTransport + 'static) -> Channel {
+        Channel::new(
+            Box::new(HeapSnapshotTransport {
+                transport: Box::new(transport),
+                handler: self.clone(),
+            }),
+            Box::new(self),
+        )
+    }
+}
+
+struct HeapSnapshotTransport {
+    transport: Box<dyn MessageTransport>,
+    handler: CdpEventHandler,
+}
+
+#[async_trait]
+impl MessageTransport for HeapSnapshotTransport {
+    async fn send(&self, message: JsonRpcMessage) -> Result<(), TransportError> {
+        self.transport.send(message).await
+    }
+
+    async fn recv(&self) -> Option<JsonRpcMessage> {
+        loop {
+            match self.transport.recv().await? {
+                JsonRpcMessage::Notification(notification)
+                    if matches!(
+                        notification.method.as_str(),
+                        "HeapProfiler.addHeapSnapshotChunk" | "HeapProfiler.reportHeapSnapshotProgress"
+                    ) =>
+                {
+                    // Channel dispatches notifications concurrently with responses. Consume heap
+                    // events in wire order before it can resolve takeHeapSnapshot and close the writer.
+                    self.handler
+                        .handle_notification(
+                            notification.method,
+                            notification.params.unwrap_or(Value::Null),
+                        )
+                        .await;
+                }
+                message => return Some(message),
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1590,6 +1634,10 @@ impl CdpRuntimeError {
 #[cfg(test)]
 #[path = "cdp_source_map_resource_tests.rs"]
 mod source_map_resource_tests;
+
+#[cfg(test)]
+#[path = "cdp_heap_snapshot_tests.rs"]
+mod heap_snapshot_tests;
 
 #[cfg(test)]
 mod tests {

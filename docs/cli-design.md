@@ -525,6 +525,13 @@ ID, owning connection and generation, and an opaque immutable storage ID.
 Concurrent losers fail before receiving a storage path. Heap staging and final
 paths are unique to that reservation.
 
+Heap chunk and progress notifications are processed in CDP wire order before
+the `takeHeapSnapshot` response is delivered to capture finalization. A progress
+event reporting 100% is not stream completion: serialization chunks can follow
+it. Finalization waits for all preceding chunk writes, flushes and synchronizes
+the file, and only then publishes the capture. Chunk decoding or write failures
+fail the capture instead of publishing a truncated snapshot.
+
 If a completed capture cannot be added to the durable catalog, its reservation
 retains the completed payload in memory. Repeating the same capture request
 promotes that payload into the catalog without running the capture again;
