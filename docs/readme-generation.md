@@ -75,7 +75,10 @@ select a smaller set than the walkthroughs.
   heap measurements, and bounded tree membership can vary. Each command has an
   explicit evidence check in the runner. Further checks require executed
   authored coverage ranges, mapped CPU samples, a real PNG, actual heap buffer
-  instances, and unchanged coverage after disconnecting.
+  instances, JavaScript calls on a live buffer resolved from its heap instance
+  ID, and unchanged coverage after disconnecting. The live-object example must
+  return the exact text prefix typed earlier; it cannot pass by evaluating a
+  similarly shaped replacement object.
 - **Readability:** Prefer CLI bounds such as `--max-lines` and `--max-results`.
   A few long source/breakpoint excerpts use a recorded `maxOutputLines`; omitted
   lines are explicitly counted. Verbose heap source-map diagnostics are folded

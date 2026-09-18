@@ -210,23 +210,64 @@ try {
 	], "exact", (text) => assert.match(JSON.parse(text).result.value, /Untitled-1.*readme-demo/));
 	await command("heap-capture", ["heap", "capture", "--id", "editor"], "live",
 		(text) => assert.match(text, /Captured editor/));
-	let bufferReference;
+	let bufferReferences;
 	await command("heap-classes", [
 		"heap", "classes", "editor", "--filter", "^PieceTreeTextBuffer$", "--instances", "--max-lines", "16",
 	], "live", (text) => {
 		assert.match(text, /PieceTreeTextBuffer@\d+\s+id \d+/);
 		assert.match(text, /pieceTreeTextBuffer\.ts/);
 		assert.ok(text.trimEnd().split(/\r?\n/).length <= 16);
-		const instance = text.match(/PieceTreeTextBuffer@\d+\s+id (\d+)/);
-		bufferReference = `editor#${instance[1]}`;
-		replacements.push([bufferReference, "BUFFER"]);
+		bufferReferences = [...text.matchAll(/PieceTreeTextBuffer@\d+\s+id (\d+)/g)]
+			.map((instance) => `editor#${instance[1]}`);
 	}, { foldMappingDiagnostics: true });
+	const heapObjectGroup = "readme-heap";
+	const inspectBuffer = 'function () { return { lineCount: this.getLineCount(), firstLine: this.getLineContent(1).slice(0, 17) }; }';
+	const expectedBuffer = { lineCount: 1, firstLine: "hello from dbgjs!" };
+	let bufferReference;
+	for (const reference of bufferReferences) {
+		const object = await json(["target", "cdp", "HeapProfiler.getObjectByHeapObjectId", "--params",
+			JSON.stringify({ objectId: reference.split("#")[1], objectGroup: heapObjectGroup })]);
+		assert.equal(typeof object.result?.objectId, "string", "The heap instance must resolve to a live object.");
+		const inspected = await json(["target", "cdp", "Runtime.callFunctionOn", "--params",
+			JSON.stringify({ objectId: object.result.objectId, functionDeclaration: inspectBuffer, returnByValue: true })]);
+		assert.equal(inspected.exceptionDetails, undefined, "Calling the heap object's methods must not throw.");
+		if (inspected.result?.value?.firstLine === expectedBuffer.firstLine) {
+			bufferReference = reference;
+			break;
+		}
+	}
+	assert.ok(bufferReference, "The snapshot must expose the buffer containing the text we typed.");
+	replacements.push([bufferReference, "BUFFER"]);
 	await command("heap-refs", [
 		"heap", "refs", bufferReference, "--incoming", "--limit", "4",
 	], "live", (text) => {
 		assert.ok(text.includes(bufferReference));
 		assert.match(text, /property/);
 	});
+	const heapObjectId = bufferReference.split("#")[1];
+	replacements.push([`"objectId":"${heapObjectId}"`, "HEAP_OBJECT_ID_FIELD"]);
+	let remoteObjectId;
+	await command("heap-object", [
+		"target", "cdp", "HeapProfiler.getObjectByHeapObjectId", "--params",
+		JSON.stringify({ objectId: heapObjectId, objectGroup: heapObjectGroup }),
+	], "live", (text) => {
+		const object = JSON.parse(text).result;
+		assert.equal(object?.type, "object");
+		assert.equal(typeof object.objectId, "string");
+		remoteObjectId = object.objectId;
+		replacements.push([remoteObjectId, "HEAP_REMOTE_OBJECT"]);
+	});
+	await command("heap-eval", [
+		"target", "cdp", "Runtime.callFunctionOn", "--params",
+		JSON.stringify({ objectId: remoteObjectId, functionDeclaration: inspectBuffer, returnByValue: true }),
+	], "exact", (text) => {
+		const result = JSON.parse(text);
+		assert.equal(result.exceptionDetails, undefined);
+		assert.deepEqual(result.result.value, expectedBuffer,
+			"JavaScript must execute on the live text buffer found through the heap snapshot.");
+	});
+	await json(["target", "cdp", "Runtime.releaseObjectGroup", "--params",
+		JSON.stringify({ objectGroup: heapObjectGroup })]);
 	await command("disconnect", [
 		"connection", "disconnect", "--connection", target.target.connectionId,
 	], "live", (text) => assert.match(text, /disconnected/));

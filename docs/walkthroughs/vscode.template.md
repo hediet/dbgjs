@@ -90,6 +90,20 @@ Use `editor#<instance-id>` with an ID printed above.
 
 {{example:heap-refs}}
 
+## Run JavaScript against the discovered object
+
+Resolve the heap instance ID to a live object using
+`HeapProfiler.getObjectByHeapObjectId`. Pass the returned remote `objectId` to
+`Runtime.callFunctionOn`; `this` is the actual `PieceTreeTextBuffer` instance,
+not a copy of the snapshot data. Its methods return the text typed earlier.
+
+{{example:heap-object,heap-eval}}
+
+The instance is selected from the buffer IDs printed above. Replay verifies
+its line count and text prefix, then releases the temporary remote object
+group. This step requires the same live target and a surviving object; the
+stored snapshot remains useful offline, but cannot run code on its own.
+
 ## Disconnect and retain the evidence
 
 Disconnect the runtime. The coverage capture is still queryable and contains

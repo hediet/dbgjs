@@ -17,14 +17,14 @@ Context readme-web  rev 1
   Name: Local website
   Connections: none
 
-$ dbgjs connection add --playwright http://127.0.0.1:57673/ --connection browser --connect --set
+$ dbgjs connection add --playwright http://127.0.0.1:54082/ --connection browser --connect --set
 Context readme-web  rev 4
   Name: Local website
   Connections:
     browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]
-      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/
+      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:54082/
       Targets:
-        page  dbgjs local website  http://127.0.0.1:57673/  [a CDP client is attached]
+        page  dbgjs local website  http://127.0.0.1:54082/  [a CDP client is attached]
 ````
 
 Interact through real page input and inspect the result:
@@ -50,7 +50,7 @@ Context readme-web  rev 7
   Name: Local website
   Connections:
     browser  [disconnected; generation 1]
-      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/
+      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:54082/
       Targets: none
 ````
 
@@ -66,18 +66,17 @@ Context readme-chrome  rev 1
   Name: Installed Chrome
   Connections: none
 
-$ dbgjs connection add --chrome http://127.0.0.1:57673/ --connection chrome --executable 'C:\Program Files\Google\Chrome\Application\chrome.exe' --user-data-dir 'D:\dev\hediet\cdp-client\artifacts\readme-connections-final\connections-state-aEKDbH\chrome-profile' --connect --set
-Context readme-chrome  rev 7
+$ dbgjs connection add --chrome http://127.0.0.1:54082/ --connection chrome --executable 'C:\Program Files\Google\Chrome\Application\chrome.exe' --user-data-dir 'D:\dev\hediet\cdp-client\artifacts\readme\connections-state-x2RfRJ\chrome-profile' --connect --set
+Context readme-chrome  rev 6
   Name: Installed Chrome
   Connections:
     chrome  [connected to Chrome/152.0.7977.83; CDP 1.3; generation 1]
-      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:57673/
+      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:54082/
       Targets:
-        page  (untitled)  http://127.0.0.1:57673/  [a CDP client is attached]
-        8A0A2D07CE41738198066107A23C2485  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html
         background_page  Google Hangouts  chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html
-        service_worker  Service Worker chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js  chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js
-        CDC1C677FD0E0F454E761A318604A4CA  Omnibox Popup  chrome://omnibox-popup.top-chrome/
+        3A1720AC6B76335115B2B6AAA3F8F3F3  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html
+        page  (untitled)  http://127.0.0.1:54082/  [a CDP client is attached]
+        C099C2649436DEF22ADCFC36C4125A93  Omnibox Popup  chrome://omnibox-popup.top-chrome/
 ````
 
 The selected page supports the same evaluation, debugger, coverage, screenshot,
@@ -90,11 +89,11 @@ dbgjs local website / Waiting for input
 
 ````console
 $ dbgjs connection disconnect --connection chrome
-Context readme-chrome  rev 14
+Context readme-chrome  rev 12
   Name: Installed Chrome
   Connections:
     chrome  [disconnected; generation 1]
-      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:57673/
+      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:54082/
       Targets: none
 ````
 

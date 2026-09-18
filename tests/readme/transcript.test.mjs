@@ -111,6 +111,29 @@ test("coverage progress timing can vary without hiding other stderr changes", ()
 	assert.throws(() => compareRecordings(after, before));
 });
 
+test("heap object identities vary without weakening CDP method or JavaScript comparison", () => {
+	const capture = (heapId, remoteId) => ({
+		normalization: { demo: [[`"objectId":"${heapId}"`, "HEAP_OBJECT_ID_FIELD"], [remoteId, "HEAP_REMOTE_OBJECT"]] },
+		steps: [
+			{ id: "heap-object", scenario: "demo", args: ["target", "cdp", "HeapProfiler.getObjectByHeapObjectId", "--params",
+				JSON.stringify({ objectId: heapId, objectGroup: "readme-heap" })], output: "", stderr: "", comparison: "live" },
+			{ id: "heap-eval", scenario: "demo", args: ["target", "cdp", "Runtime.callFunctionOn", "--params",
+				JSON.stringify({ objectId: remoteId, functionDeclaration: "function () { return this.getLineCount(); }", returnByValue: true })],
+			output: '{"result":{"type":"number","value":1}}', stderr: "", comparison: "exact" },
+		],
+	});
+	const before = capture("12345", "-123.1.10");
+	const after = capture("67890", "-456.1.20");
+	compareRecordings(after, before);
+	assert.match(renderSteps(before.steps), /"objectId":"12345"/);
+	assert.match(renderSteps(before.steps), /"objectId":"-123\.1\.10"/);
+	const changed = structuredClone(after);
+	changed.steps[1].args[4] = changed.steps[1].args[4].replace("getLineCount", "getLineContent");
+	assert.throws(() => compareRecordings(changed, before));
+	after.steps[0].args[4] = after.steps[0].args[4].replace("readme-heap", "different-group");
+	assert.throws(() => compareRecordings(after, before));
+});
+
 test("excerpt checks retain source formatting while allowing unshown diagnostics to vary", () => {
 	const before = recording("excerpt", "file.ts:3:1\n  3 | run();\nold diagnostic");
 	const after = recording("excerpt", "file.ts:3:1\n  3 | run();\nnew diagnostic");
