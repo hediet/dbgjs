@@ -120,6 +120,20 @@ reference, `editor#<instance-id>`.
 
 {{example:heap-refs}}
 
+### Run JavaScript on an object found in the heap
+
+Use the instance ID from the snapshot to obtain a live object handle, then run
+JavaScript with that object as `this`. Here we call the discovered text buffer's
+methods to read the text typed earlier, without needing a global variable that
+points to it.
+
+{{example:heap-object,heap-eval}}
+
+These are raw CDP calls through dbgjs. The first `objectId` is the heap instance
+ID; the second is the remote handle returned by that call. This requires the
+original target to remain connected and the object to still be alive; an
+offline snapshot alone cannot execute JavaScript.
+
 ## Screenshots
 
 Capture the selected page as a PNG.

@@ -12,9 +12,9 @@
         "vscode",
         "--no-cmd-line",
         "--filter",
-        "p:40836"
+        "p:33216"
       ],
-      "output": "VS Code process tree 40836  (6 attachable processes; window metadata available)\n└─ p:40836  Code.exe  [vscode-main]\n   ├─ w:40836/1  window  readme-demo - Visual Studio Code\n   │  ├─ p:5292  renderer  [renderer]\n   │  ├─ p:39176  extension-host  [extension-host]\n   │  └─ p:42620  file-watcher  [file-watcher]\n   ├─ p:31984  agent-host  [agent-host]\n   │  └─ p:42168  Code.exe  [copilot]\n   │     └─ p:40304  git.exe  [other]\n   │        ├─ p:40612  conhost.exe  [other]\n   │        └─ p:41736  git.exe  [other]\n   ├─ p:35988  Code.exe  [gpu]\n   ├─ p:38904  Code.exe  [network-service]\n   └─ p:41540  shared-process  [node-utility]\n",
+      "output": "VS Code process tree 33216  (6 attachable processes; window metadata available)\n└─ p:33216  Code.exe  [vscode-main]\n   ├─ w:33216/1  window  readme-demo - Visual Studio Code\n   │  ├─ p:10904  extension-host  [extension-host]\n   │  ├─ p:22260  file-watcher  [file-watcher]\n   │  └─ p:35668  renderer  [renderer]\n   ├─ p:12004  cmd.exe  [other]\n   │  ├─ p:34684  conhost.exe  [other]\n   │  └─ p:37728  wsl.exe  [other]\n   ├─ p:19784  Code.exe  [network-service]\n   ├─ p:27948  shared-process  [node-utility]\n   ├─ p:37388  Code.exe  [gpu]\n   └─ p:42028  agent-host  [agent-host]\n      ├─ p:5368  Code.exe  [copilot]\n      └─ p:36964  whoami.exe  [other]\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -40,10 +40,10 @@
       "args": [
         "process",
         "attach",
-        "5292",
+        "35668",
         "--set"
       ],
-      "output": "Attachment: created\nTarget renderer-1  [running]  readme/process-tree-40836  gen 1  rev 3\n  Pause: none\n",
+      "output": "Attachment: created\nTarget renderer-1  [running]  readme/process-tree-33216  gen 1  rev 3\n  Pause: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -115,7 +115,7 @@
         "background"
       ],
       "output": "Captured background.\n",
-      "stderr": "dbgjs: Still waiting after 20s. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope. It skips source-map lookup and symbol enrichment. The current command is continuing.\n",
+      "stderr": "",
       "comparison": "exact"
     },
     {
@@ -160,7 +160,7 @@
         "--max-lines",
         "16"
       ],
-      "output": "Capture typing\n66978 RL (run lines), 3465 HL (hit lines)\n└─ src/vs/editor/common/model/  [28 files, 3465 HL, 66978 RL]\n   ├─ bracketPairsTextModelPart/  [12 files, 1114 HL, 12979 RL]  [2 children pruned]\n   ├─ pieceTreeTextBuffer/  [3 files, 981 HL, 36812 RL]  [3 children pruned]\n   ├─ textModel.ts  377 HL, 6654 RL [indentOfLine 11 HL, 11 RL]  [children pruned]\n   ├─ guidesTextModelPart.ts  273 HL, 317 RL  [children pruned]\n   ├─ intervalTree.ts  272 HL, 5105 RL  [children pruned]\n   ├─ tokens/  [5 files, 261 HL, 3499 RL]  [5 children pruned]\n   ├─ editStack.ts  150 HL, 1187 RL  [children pruned]\n   ├─ utils.ts  23 HL, 115 RL [computeIndentLevel 23 HL, 115 RL]  [children pruned]\n   ├─ textModelStringEdit.ts  6 HL, 192 RL [offsetEditFromContentChanges 6 HL, 192 RL]  [children pruned]\n   ├─ textModelPart.ts  5 HL, 70 RL  [children pruned]\n   └─ prefixSumComputer.ts  3 HL, 48 RL  [children pruned]\n",
+      "output": "Capture typing\n185803 RL (run lines), 5427 HL (hit lines)\n└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185803 RL]\n   ├─ pieceTreeTextBuffer/  [3 files, 1347 HL, 73771 RL]  [3 children pruned]\n   ├─ bracketPairsTextModelPart/  [13 files, 1141 HL, 13033 RL]  [3 children pruned]\n   ├─ textModel.ts  1091 HL, 56014 RL  [children pruned]\n   ├─ intervalTree.ts  863 HL, 18289 RL  [children pruned]\n   ├─ tokens/  [5 files, 467 HL, 7210 RL]  [5 children pruned]\n   ├─ guidesTextModelPart.ts  273 HL, 317 RL  [children pruned]\n   ├─ editStack.ts  155 HL, 1297 RL  [children pruned]\n   ├─ prefixSumComputer.ts  56 HL, 15495 RL  [children pruned]\n   ├─ utils.ts  23 HL, 115 RL [computeIndentLevel 23 HL, 115 RL]  [children pruned]\n   ├─ textModelStringEdit.ts  6 HL, 192 RL [offsetEditFromContentChanges 6 HL, 192 RL]  [children pruned]\n   └─ textModelPart.ts  5 HL, 70 RL  [children pruned]\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -175,7 +175,7 @@
         "src/vs/editor/common/model/textModel.ts",
         "1505"
       ],
-      "output": "Breakpoint edit  src/vs/editor/common/model/textModel.ts:1505:1  [bound; 1 application(s)]\n  bound on process-tree-40836/renderer-1: CDP confirmed script 9 v1 at vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1512 via source map MapId(0) (Ordinary)\n\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;\n",
+      "output": "Breakpoint edit  src/vs/editor/common/model/textModel.ts:1505:1  [bound; 1 application(s)]\n  bound on process-tree-33216/renderer-1: CDP confirmed script 9 v1 at vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1512 via source map MapId(0) (Ordinary)\n\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 12
@@ -204,7 +204,7 @@
         "0",
         "30000"
       ],
-      "output": "Target renderer-1  [paused at epoch 1]  readme/process-tree-40836  gen 1  rev 219\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: epoch 1 (other)\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;\n  Frames:\n    #0 TextModel._doApplyEdits — ../../../src/vs/editor/common/model/textModel.ts:1505:29\n    #1 TextModel.applyEdits — ../../../src/vs/editor/common/model/textModel.ts:1496:16\n    #2 EditStack.pushEditOperation — ../../../src/vs/editor/common/model/editStack.ts:430:1\n    #3 TextModel._pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1438:31\n    #4 TextModel.pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1344:16\n    #5 CommandExecutor._innerExecuteCommands — ../../../src/vs/editor/common/cursor/cursor.ts:810:35\n    #6 CommandExecutor.executeCommands — ../../../src/vs/editor/common/cursor/cursor.ts:768:23\n    #7 CursorsController._executeEditOperation — ../../../src/vs/editor/common/cursor/cursor.ts:361:34\n    #8 CursorsController.type → callback — ../../../src/vs/editor/common/cursor/cursor.ts:570:11\n    #9 CursorsController._executeEdit — ../../../src/vs/editor/common/cursor/cursor.ts:521:4\n    #10 CursorsController.type — ../../../src/vs/editor/common/cursor/cursor.ts:559:8\n    #11 ViewModel.type → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:59\n    #12 ViewModel._emitViewEvent — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1271:11\n    #13 ViewModel._withViewEventsCollector → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1264:16\n    #14 CodeEditorWidget._attachModel — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1778:1\n    #15 ViewModel._withViewEventsCollector — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1263:36\n    #16 ViewModel._executeCursorEdit — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1201:8\n    #17 ViewModel.type — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:8\n    #18 CodeEditorWidget._type — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1194:1\n    #19 CodeEditorWidget.trigger — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1122:1\n    #20 EditorHandlerCommand.runCommand — ../../../src/vs/editor/browser/coreCommands.ts:2149:1\n    #21 Command.register — ../../../src/vs/editor/browser/editorExtensions.ts:159:1\n    #22 registerCommand — ../../../src/vs/platform/commands/common/commands.ts:96:12\n    #23 InstantiationService.invokeFunction — ../../../src/vs/platform/instantiation/common/instantiationService.ts:109:11\n    #24 CommandService._tryExecuteCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:99:46\n    #25 CommandService.executeCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:63:17\n    #26 CodeEditorWidget._createView — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1954:1\n    #27 ViewController.type — ../../../src/vs/editor/browser/view/viewController.ts:75:24\n    #28 NativeEditContext._onType — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:473:19\n    #29 NativeEditContext._emitTypeEvent — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:466:8\n    #30 NativeEditContext.constructor → callback — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:219:9\n",
+      "output": "Target renderer-1  [paused at epoch 1]  readme/process-tree-33216  gen 1  rev 179\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: epoch 1 (other)\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;\n  Frames:\n    #0 TextModel._doApplyEdits — ../../../src/vs/editor/common/model/textModel.ts:1505:29\n    #1 TextModel.applyEdits — ../../../src/vs/editor/common/model/textModel.ts:1496:16\n    #2 EditStack.pushEditOperation — ../../../src/vs/editor/common/model/editStack.ts:430:1\n    #3 TextModel._pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1438:31\n    #4 TextModel.pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1344:16\n    #5 CommandExecutor._innerExecuteCommands — ../../../src/vs/editor/common/cursor/cursor.ts:810:35\n    #6 CommandExecutor.executeCommands — ../../../src/vs/editor/common/cursor/cursor.ts:768:23\n    #7 CursorsController._executeEditOperation — ../../../src/vs/editor/common/cursor/cursor.ts:361:34\n    #8 CursorsController.type → callback — ../../../src/vs/editor/common/cursor/cursor.ts:570:11\n    #9 CursorsController._executeEdit — ../../../src/vs/editor/common/cursor/cursor.ts:521:4\n    #10 CursorsController.type — ../../../src/vs/editor/common/cursor/cursor.ts:559:8\n    #11 ViewModel.type → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:59\n    #12 ViewModel._emitViewEvent — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1271:11\n    #13 ViewModel._withViewEventsCollector → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1264:16\n    #14 CodeEditorWidget._attachModel — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1778:1\n    #15 ViewModel._withViewEventsCollector — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1263:36\n    #16 ViewModel._executeCursorEdit — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1201:8\n    #17 ViewModel.type — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:8\n    #18 CodeEditorWidget._type — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1194:1\n    #19 CodeEditorWidget.trigger — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1122:1\n    #20 EditorHandlerCommand.runCommand — ../../../src/vs/editor/browser/coreCommands.ts:2149:1\n    #21 Command.register — ../../../src/vs/editor/browser/editorExtensions.ts:159:1\n    #22 registerCommand — ../../../src/vs/platform/commands/common/commands.ts:96:12\n    #23 InstantiationService.invokeFunction — ../../../src/vs/platform/instantiation/common/instantiationService.ts:109:11\n    #24 CommandService._tryExecuteCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:99:46\n    #25 CommandService.executeCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:63:17\n    #26 CodeEditorWidget._createView — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1954:1\n    #27 ViewController.type — ../../../src/vs/editor/browser/view/viewController.ts:75:24\n    #28 NativeEditContext._onType — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:473:19\n    #29 NativeEditContext._emitTypeEvent — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:466:8\n    #30 NativeEditContext.constructor → callback — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:219:9\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 15
@@ -230,7 +230,7 @@
         "target",
         "resume"
       ],
-      "output": "Target renderer-1  [running]  readme/process-tree-40836  gen 1  rev 224\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: none\n",
+      "output": "Target renderer-1  [running]  readme/process-tree-33216  gen 1  rev 184\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -243,7 +243,7 @@
         "delete",
         "edit"
       ],
-      "output": "Context readme  rev 20\n  Name: VS Code typing\n  Connections:\n    process-tree-40836  [connected to Process 40836; CDP 1.3; generation 1]\n      Configuration: process tree rooted at PID 40836\n      Targets:\n        Process 40836  Process 40836  process:40836\n          browser  Chrome/148.0.7778.280  http://127.0.0.1:50710\n          Code.exe (31984)  Code.exe (31984)  process:31984\n          Code.exe (39176)  Code.exe (39176)  process:39176\n          Code.exe (41540)  Code.exe (41540)  process:41540\n          Code.exe (42620)  Code.exe (42620)  process:42620\n          page  ● hello from dbgjs! • Untitled-1 - readme-demo - Visual Studio Code  vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/code/electron-browser/workbench/workbench.html  [a CDP client is attached]\n",
+      "output": "Context readme  rev 20\n  Name: VS Code typing\n  Connections:\n    process-tree-33216  [connected to Process 33216; CDP 1.3; generation 1]\n      Configuration: process tree rooted at PID 33216\n      Targets:\n        Process 33216  Process 33216  process:33216\n          browser  Chrome/148.0.7778.280  http://127.0.0.1:51534\n          Code.exe (10904)  Code.exe (10904)  process:10904\n          Code.exe (22260)  Code.exe (22260)  process:22260\n          Code.exe (27948)  Code.exe (27948)  process:27948\n          Code.exe (42028)  Code.exe (42028)  process:42028\n          page  ● hello from dbgjs! • Untitled-1 - readme-demo - Visual Studio Code  vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/code/electron-browser/workbench/workbench.html  [a CDP client is attached]\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 8
@@ -305,7 +305,7 @@
         "--max-lines",
         "8"
       ],
-      "output": "CPU profile typing-cpu: 4.31s elapsed, 4.31s sampled, 2719 samples\nSelf       Total      Samples  Function\n6.09ms     39.76ms          4  ViewModelEventDispatcher._doConsumeQueue  ../../../src/vs/editor/common/viewModelEventDispatcher.ts:142:10\n4.73ms     4.73ms           3  PieceTreeBase.appendToNode  ../../../src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeBase.ts:1455:10\n3.21ms     3.21ms           2  InlineCompletionsModel.constructor → callback  ../../../src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsModel.ts:143:42\n3.19ms     3.19ms           2  EditStack.pushEditOperation → callback  ../../../src/vs/editor/common/model/editStack.ts:439:1\n3.15ms     83.80ms          2  TextModel.onDidChangeContent → callback  ../../../src/vs/editor/common/model/textModel.ts:246:36\n3.14ms     10.37ms          2  NativeEditContext._onKeyUp  ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:394:10\n",
+      "output": "CPU profile typing-cpu: 4.95s elapsed, 4.95s sampled, 2996 samples\nSelf       Total      Samples  Function\n9.39ms     21.39ms          6  ViewLayerRenderer._finishRenderingInvalidLines  ../../../src/vs/editor/browser/view/viewLayer.ts:536:10\n6.28ms     6.28ms           4  _findRegexMatchEnclosingPosition  ../../../src/vs/editor/common/core/wordHelper.ts:164:10\n4.54ms     27.78ms          3  ViewEventHandler.handleEvents  ../../../src/vs/editor/common/viewEventHandler.ts:93:9\n4.20ms     17.16ms          3  InlineCompletionsSource.fetch → callback  ../../../src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsSource.ts:181:20\n3.11ms     4.62ms           2  View._scheduleRender  ../../../src/vs/editor/browser/view.ts:523:10\n3.11ms     3.11ms           2  ViewOverlayLine.renderLine  ../../../src/vs/editor/browser/view/viewOverlays.ts:163:9\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -348,8 +348,8 @@
         "--id",
         "editor"
       ],
-      "output": "Captured editor (157.6 MiB) in 5.862s: taking 2.065s, retrieving 3.797s.\n",
-      "stderr": "Heap snapshot: 0/0 objects, 0 bytes\nHeap snapshot: 60000/1382180 (4.3%), 0 bytes\nHeap snapshot: 140000/1382180 (10.1%), 0 bytes\nHeap snapshot: 200000/1382180 (14.5%), 0 bytes\nHeap snapshot: 270000/1382180 (19.5%), 0 bytes\nHeap snapshot: 330000/1382180 (23.9%), 0 bytes\nHeap snapshot: 400000/1382180 (28.9%), 0 bytes\nHeap snapshot: 500000/1382180 (36.2%), 0 bytes\nHeap snapshot: 580000/1382180 (42.0%), 0 bytes\nHeap snapshot: 700000/1382180 (50.6%), 0 bytes\nHeap snapshot: 790000/1382180 (57.2%), 0 bytes\nHeap snapshot: 850000/1382180 (61.5%), 0 bytes\nHeap snapshot: 940000/1382180 (68.0%), 0 bytes\nHeap snapshot: 1060000/1382180 (76.7%), 0 bytes\nHeap snapshot: 1200000/1382180 (86.8%), 0 bytes\nHeap snapshot: 1380000/1382180 (99.8%), 0 bytes\nHeap snapshot: 1382179/1382180 (100.0%), 0 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 0 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 14680044 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 26214360 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 35651535 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 45088705 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 55574443 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 70254494 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 79691666 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 91225991 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 101711730 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 113246047 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 125828929 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 137363251 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 148897554 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 158334724 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 164626180 bytes\nHeap snapshot: 1382180/1382180 (100.0%), 165269379 bytes\n",
+      "output": "Captured editor (165.4 MiB) in 6.093s: taking 2.530s, retrieving 3.563s.\n",
+      "stderr": "Heap snapshot: 0/0 objects, 0 bytes\nHeap snapshot: 10000/1467815 (0.7%), 0 bytes\nHeap snapshot: 80000/1467815 (5.5%), 0 bytes\nHeap snapshot: 130000/1467815 (8.9%), 0 bytes\nHeap snapshot: 220000/1467815 (15.0%), 0 bytes\nHeap snapshot: 310000/1467815 (21.1%), 0 bytes\nHeap snapshot: 380000/1467815 (25.9%), 0 bytes\nHeap snapshot: 450000/1467815 (30.7%), 0 bytes\nHeap snapshot: 530000/1467815 (36.1%), 0 bytes\nHeap snapshot: 570000/1467815 (38.8%), 0 bytes\nHeap snapshot: 660000/1467815 (45.0%), 0 bytes\nHeap snapshot: 750000/1467815 (51.1%), 0 bytes\nHeap snapshot: 830000/1467815 (56.5%), 0 bytes\nHeap snapshot: 930000/1467815 (63.4%), 0 bytes\nHeap snapshot: 1030000/1467815 (70.2%), 0 bytes\nHeap snapshot: 1110000/1467815 (75.6%), 0 bytes\nHeap snapshot: 1220000/1467815 (83.1%), 0 bytes\nHeap snapshot: 1310000/1467815 (89.2%), 0 bytes\nHeap snapshot: 1460000/1467815 (99.5%), 0 bytes\nHeap snapshot: 1467814/1467815 (100.0%), 0 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 0 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 6291451 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 14680059 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 23068644 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 31457247 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 39845846 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 42991569 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 53477320 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 63963053 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 75497371 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 84934535 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 96468846 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 108003154 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 117440325 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 127926072 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 139460387 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 147848984 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 150994708 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 153091860 bytes\nHeap snapshot: 1467815/1467815 (100.0%), 173401786 bytes\n",
       "comparison": "live"
     },
     {
@@ -366,7 +366,7 @@
         "--max-lines",
         "16"
       ],
-      "output": "1 classes, 2 instances, 80 B shallow size\nAnalysis 26.153s (parse 10.560s, projection 15.593s; mapping mapped (captured metadata); 4051 constructor groups)\nMapping script:13 (vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js): map loading failed — failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some(\"net::ERR_HTTP_RESPONSE_CODE_FAILURE\")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))\nMapping script:18 (): no map supplied\nMapping script:19 (): no map supplied\nMapping script:4 (node:electron/js2c/sandbox_bundle): no map supplied\n└─ https:/main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts  2 instances, 80 B\n   └─ PieceTreeTextBuffer [frame:F17BAE531CC2B00122463596505ACEC1, context:1]  2 instances, 80 B\n      ├─ PieceTreeTextBuffer@1  id 1777169  40 B\n      └─ PieceTreeTextBuffer@2  id 2402103  40 B\n",
+      "output": "1 classes, 2 instances, 80 B shallow size\nAnalysis 29.182s (parse 11.688s, projection 17.494s; mapping mapped (captured metadata); 4051 constructor groups)\nMapping script:13 (vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js): map loading failed — failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some(\"net::ERR_HTTP_RESPONSE_CODE_FAILURE\")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))\nMapping script:18 (): no map supplied\nMapping script:19 (): no map supplied\nMapping script:4 (node:electron/js2c/sandbox_bundle): no map supplied\n└─ https:/main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts  2 instances, 80 B\n   └─ PieceTreeTextBuffer [frame:5F734B00AAA717C88444058AB6C337F2, context:1]  2 instances, 80 B\n      ├─ PieceTreeTextBuffer@1  id 2526171  40 B\n      └─ PieceTreeTextBuffer@2  id 3151931  40 B\n",
       "stderr": "",
       "comparison": "live",
       "foldMappingDiagnostics": true
@@ -378,14 +378,44 @@
       "args": [
         "heap",
         "refs",
-        "editor#1777169",
+        "editor#3151931",
         "--incoming",
         "--limit",
         "4"
       ],
-      "output": "editor#1777169  type:object, value:s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}, shallow:40 B, in:2, out:9\n  source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#1608781  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_buffer\"--> editor#1777169  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#1608781:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    editor#1777169:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#1608781  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_bufferDisposable\"--> editor#1777169  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#1608781:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    editor#1777169:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n",
+      "output": "editor#3151931  type:object, value:s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}, shallow:40 B, in:2, out:9\n  source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#2393497  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_buffer\"--> editor#3151931  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#2393497:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    editor#3151931:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#2393497  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_bufferDisposable\"--> editor#3151931  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#2393497:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    editor#3151931:\n      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n",
       "stderr": "",
       "comparison": "live"
+    },
+    {
+      "id": "heap-object",
+      "scenario": "vscode",
+      "executable": "dbgjs",
+      "args": [
+        "target",
+        "cdp",
+        "HeapProfiler.getObjectByHeapObjectId",
+        "--params",
+        "{\"objectId\":\"3151931\",\"objectGroup\":\"readme-heap\"}"
+      ],
+      "output": "{\n  \"result\": {\n    \"type\": \"object\",\n    \"className\": \"s\",\n    \"description\": \"s\",\n    \"objectId\": \"5915318683987910857.1.167\"\n  }\n}\n",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "heap-eval",
+      "scenario": "vscode",
+      "executable": "dbgjs",
+      "args": [
+        "target",
+        "cdp",
+        "Runtime.callFunctionOn",
+        "--params",
+        "{\"objectId\":\"5915318683987910857.1.167\",\"functionDeclaration\":\"function () { return { lineCount: this.getLineCount(), firstLine: this.getLineContent(1).slice(0, 17) }; }\",\"returnByValue\":true}"
+      ],
+      "output": "{\n  \"result\": {\n    \"type\": \"object\",\n    \"value\": {\n      \"lineCount\": 1,\n      \"firstLine\": \"hello from dbgjs!\"\n    }\n  }\n}\n",
+      "stderr": "",
+      "comparison": "exact"
     },
     {
       "id": "disconnect",
@@ -395,9 +425,9 @@
         "connection",
         "disconnect",
         "--connection",
-        "process-tree-40836"
+        "process-tree-33216"
       ],
-      "output": "Context readme  rev 30\n  Name: VS Code typing\n  Connections:\n    process-tree-40836  [disconnected; generation 1]\n      Configuration: process tree rooted at PID 40836\n      Targets: none\n",
+      "output": "Context readme  rev 30\n  Name: VS Code typing\n  Connections:\n    process-tree-33216  [disconnected; generation 1]\n      Configuration: process tree rooted at PID 33216\n      Targets: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -416,7 +446,7 @@
         "--max-lines",
         "8"
       ],
-      "output": "Capture typing\n66978 RL (run lines), 3465 HL (hit lines)\n└─ src/vs/editor/common/model/  [28 files, 3465 HL, 66978 RL]  [11 children pruned]\n",
+      "output": "Capture typing\n185803 RL (run lines), 5427 HL (hit lines)\n└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185803 RL]  [11 children pruned]\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -443,13 +473,13 @@
         "connection",
         "add",
         "--playwright",
-        "http://127.0.0.1:57673/",
+        "http://127.0.0.1:54082/",
         "--connection",
         "browser",
         "--connect",
         "--set"
       ],
-      "output": "Context readme-web  rev 4\n  Name: Local website\n  Connections:\n    browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]\n      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/\n      Targets:\n        page  dbgjs local website  http://127.0.0.1:57673/  [a CDP client is attached]\n",
+      "output": "Context readme-web  rev 4\n  Name: Local website\n  Connections:\n    browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]\n      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:54082/\n      Targets:\n        page  dbgjs local website  http://127.0.0.1:54082/  [a CDP client is attached]\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 14
@@ -476,7 +506,7 @@
         "--connection",
         "browser"
       ],
-      "output": "Context readme-web  rev 7\n  Name: Local website\n  Connections:\n    browser  [disconnected; generation 1]\n      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/\n      Targets: none\n",
+      "output": "Context readme-web  rev 7\n  Name: Local website\n  Connections:\n    browser  [disconnected; generation 1]\n      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:54082/\n      Targets: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -503,17 +533,17 @@
         "connection",
         "add",
         "--chrome",
-        "http://127.0.0.1:57673/",
+        "http://127.0.0.1:54082/",
         "--connection",
         "chrome",
         "--executable",
         "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
         "--user-data-dir",
-        "D:\\dev\\hediet\\cdp-client\\artifacts\\readme-connections-final\\connections-state-aEKDbH\\chrome-profile",
+        "D:\\dev\\hediet\\cdp-client\\artifacts\\readme\\connections-state-x2RfRJ\\chrome-profile",
         "--connect",
         "--set"
       ],
-      "output": "Context readme-chrome  rev 7\n  Name: Installed Chrome\n  Connections:\n    chrome  [connected to Chrome/152.0.7977.83; CDP 1.3; generation 1]\n      Configuration: Chrome at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe headless opening http://127.0.0.1:57673/\n      Targets:\n        page  (untitled)  http://127.0.0.1:57673/  [a CDP client is attached]\n        8A0A2D07CE41738198066107A23C2485  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html\n        background_page  Google Hangouts  chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html\n        service_worker  Service Worker chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js  chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js\n        CDC1C677FD0E0F454E761A318604A4CA  Omnibox Popup  chrome://omnibox-popup.top-chrome/\n",
+      "output": "Context readme-chrome  rev 6\n  Name: Installed Chrome\n  Connections:\n    chrome  [connected to Chrome/152.0.7977.83; CDP 1.3; generation 1]\n      Configuration: Chrome at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe headless opening http://127.0.0.1:54082/\n      Targets:\n        background_page  Google Hangouts  chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html\n        3A1720AC6B76335115B2B6AAA3F8F3F3  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html\n        page  (untitled)  http://127.0.0.1:54082/  [a CDP client is attached]\n        C099C2649436DEF22ADCFC36C4125A93  Omnibox Popup  chrome://omnibox-popup.top-chrome/\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 14
@@ -541,7 +571,7 @@
         "--connection",
         "chrome"
       ],
-      "output": "Context readme-chrome  rev 14\n  Name: Installed Chrome\n  Connections:\n    chrome  [disconnected; generation 1]\n      Configuration: Chrome at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe headless opening http://127.0.0.1:57673/\n      Targets: none\n",
+      "output": "Context readme-chrome  rev 12\n  Name: Installed Chrome\n  Connections:\n    chrome  [disconnected; generation 1]\n      Configuration: Chrome at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe headless opening http://127.0.0.1:54082/\n      Targets: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -567,10 +597,10 @@
       "args": [
         "process",
         "attach",
-        "35764",
+        "35912",
         "--set"
       ],
-      "output": "Attachment: created\nTarget $node-root:process-35764  [running]  readme-node/process-35764  gen 1  rev 3\n  Pause: none\n",
+      "output": "Attachment: created\nTarget $node-root:process-35912  [running]  readme-node/process-35912  gen 1  rev 3\n  Pause: none\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 14
@@ -597,7 +627,7 @@
         "--fail",
         "--max-time",
         "60",
-        "http://127.0.0.1:62998/quote/notebook?quantity=3"
+        "http://127.0.0.1:58001/quote/notebook?quantity=3"
       ],
       "output": "{\"product\":\"Notebook\",\"quantity\":3,\"subtotal\":36,\"discount\":3.6,\"total\":32.4}",
       "stderr": "",
@@ -645,7 +675,7 @@
         "file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs",
         "23"
       ],
-      "output": "Breakpoint quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [bound; 1 application(s)]\n  bound on process-35764/$node-root:process-35764: CDP confirmed script 120 v1 at file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27 via identity\n\n  Source: file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs — quote\n      19 |     if (!Number.isInteger(quantity) || quantity < 1) {\n      20 |         response.status(400).json({ error: \"Quantity must be a positive integer\" });\n      21 |         return;\n      22 |     }\n    > 23 |     const subtotal = product.price * quantity;\n         |                              ^^^^^\n      24 |     const discount = quantity >= 3 ? subtotal * 0.1 : 0;\n      25 |     requests++;\n      26 |     response.json({ product: product.name, quantity, subtotal, discount, total: subtotal - discount });\n      27 | });\n",
+      "output": "Breakpoint quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [bound; 1 application(s)]\n  bound on process-35912/$node-root:process-35912: CDP confirmed script 120 v1 at file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27 via identity\n\n  Source: file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs — quote\n      19 |     if (!Number.isInteger(quantity) || quantity < 1) {\n      20 |         response.status(400).json({ error: \"Quantity must be a positive integer\" });\n      21 |         return;\n      22 |     }\n    > 23 |     const subtotal = product.price * quantity;\n         |                              ^^^^^\n      24 |     const discount = quantity >= 3 ? subtotal * 0.1 : 0;\n      25 |     requests++;\n      26 |     response.json({ product: product.name, quantity, subtotal, discount, total: subtotal - discount });\n      27 | });\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 12
@@ -660,7 +690,7 @@
         "--fail",
         "--max-time",
         "60",
-        "http://127.0.0.1:62998/quote/notebook?quantity=2"
+        "http://127.0.0.1:58001/quote/notebook?quantity=2"
       ],
       "output": "{\"product\":\"Notebook\",\"quantity\":2,\"subtotal\":24,\"discount\":0,\"total\":24}",
       "stderr": "",
@@ -677,7 +707,7 @@
         "0",
         "30000"
       ],
-      "output": "Target $node-root:process-35764  [paused at epoch 1]  readme-node/process-35764  gen 1  rev 339\n  Breakpoints:\n    quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]\n      script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity\n  Pause: epoch 1 (other)\n  Source: file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs — quote\n      19 |     if (!Number.isInteger(quantity) || quantity < 1) {\n      20 |         response.status(400).json({ error: \"Quantity must be a positive integer\" });\n      21 |         return;\n      22 |     }\n    > 23 |     const subtotal = product.price * quantity;\n         |                              ^^^^^\n      24 |     const discount = quantity >= 3 ? subtotal * 0.1 : 0;\n      25 |     requests++;\n      26 |     response.json({ product: product.name, quantity, subtotal, discount, total: subtotal - discount });\n      27 | });\n  Frames:\n    #0 quote — file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27\n    #1 handleRequest — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/layer.js:152:17\n    #2 dispatch.next — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/route.js:157:13\n    #3 dispatch — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/route.js:117:3\n    #4 route.handle — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:435:11\n    #5 handleRequest — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/layer.js:152:17\n    #6 handle.next → callback — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:295:15\n    #7 processParams.param — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:600:14\n    #8 processParams.param — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:610:14\n    #9 processParams — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:664:3\n    #10 handle.next — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:291:5\n    #11 handle — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:186:3\n    #12 handle — file:///D:/dev/hediet/cdp-client/node_modules/express/lib/application.js:177:15\n    #13 createApplication — file:///D:/dev/hediet/cdp-client/node_modules/express/lib/express.js:38:9\n    #14 emit — node:events:519:28\n    #15 parserOnIncoming — node:_http_server:1186:12\n    #16 parserOnHeadersComplete — node:_http_common:122:17\n",
+      "output": "Target $node-root:process-35912  [paused at epoch 1]  readme-node/process-35912  gen 1  rev 339\n  Breakpoints:\n    quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]\n      script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity\n  Pause: epoch 1 (other)\n  Source: file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs — quote\n      19 |     if (!Number.isInteger(quantity) || quantity < 1) {\n      20 |         response.status(400).json({ error: \"Quantity must be a positive integer\" });\n      21 |         return;\n      22 |     }\n    > 23 |     const subtotal = product.price * quantity;\n         |                              ^^^^^\n      24 |     const discount = quantity >= 3 ? subtotal * 0.1 : 0;\n      25 |     requests++;\n      26 |     response.json({ product: product.name, quantity, subtotal, discount, total: subtotal - discount });\n      27 | });\n  Frames:\n    #0 quote — file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27\n    #1 handleRequest — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/layer.js:152:17\n    #2 dispatch.next — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/route.js:157:13\n    #3 dispatch — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/route.js:117:3\n    #4 route.handle — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:435:11\n    #5 handleRequest — file:///D:/dev/hediet/cdp-client/node_modules/router/lib/layer.js:152:17\n    #6 handle.next → callback — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:295:15\n    #7 processParams.param — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:600:14\n    #8 processParams.param — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:610:14\n    #9 processParams — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:664:3\n    #10 handle.next — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:291:5\n    #11 handle — file:///D:/dev/hediet/cdp-client/node_modules/router/index.js:186:3\n    #12 handle — file:///D:/dev/hediet/cdp-client/node_modules/express/lib/application.js:177:15\n    #13 createApplication — file:///D:/dev/hediet/cdp-client/node_modules/express/lib/express.js:38:9\n    #14 emit — node:events:519:28\n    #15 parserOnIncoming — node:_http_server:1186:12\n    #16 parserOnHeadersComplete — node:_http_common:122:17\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 15
@@ -703,7 +733,7 @@
         "target",
         "resume"
       ],
-      "output": "Target $node-root:process-35764  [running]  readme-node/process-35764  gen 1  rev 344\n  Breakpoints:\n    quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]\n      script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity\n  Pause: none\n",
+      "output": "Target $node-root:process-35912  [running]  readme-node/process-35912  gen 1  rev 344\n  Breakpoints:\n    quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]\n      script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity\n  Pause: none\n",
       "stderr": "",
       "comparison": "live"
     },
@@ -716,7 +746,7 @@
         "delete",
         "quote-handler"
       ],
-      "output": "Context readme-node  rev 8\n  Name: Existing Node application\n  Connections:\n    process-35764  [connected to Process 35764; CDP 1.3; generation 1]\n      Configuration: process 35764\n      Targets:\n        node  Process 35764  process:35764  [a CDP client is attached]\n",
+      "output": "Context readme-node  rev 8\n  Name: Existing Node application\n  Connections:\n    process-35912  [connected to Process 35912; CDP 1.3; generation 1]\n      Configuration: process 35912\n      Targets:\n        node  Process 35912  process:35912  [a CDP client is attached]\n",
       "stderr": "",
       "comparison": "live",
       "maxOutputLines": 8
@@ -729,9 +759,9 @@
         "connection",
         "disconnect",
         "--connection",
-        "process-35764"
+        "process-35912"
       ],
-      "output": "Context readme-node  rev 10\n  Name: Existing Node application\n  Connections:\n    process-35764  [disconnected; generation 1]\n      Configuration: process 35764\n      Targets: none\n",
+      "output": "Context readme-node  rev 10\n  Name: Existing Node application\n  Connections:\n    process-35912  [disconnected; generation 1]\n      Configuration: process 35912\n      Targets: none\n",
       "stderr": "",
       "comparison": "live"
     }
@@ -739,7 +769,7 @@
   "normalization": {
     "vscode": [
       [
-        "C:\\Users\\HDIETE~1\\AppData\\Local\\Temp\\dbgjs-readme-tNEcWu",
+        "C:\\Users\\HDIETE~1\\AppData\\Local\\Temp\\dbgjs-readme-AX6lZ7",
         "DEMO_DIR"
       ],
       [
@@ -767,52 +797,60 @@
         "VSCODE_INSTALL"
       ],
       [
-        "40836",
+        "33216",
         "VSCODE_PID"
       ],
       [
-        "5292",
-        "RENDERER_PID"
-      ],
-      [
-        "31984",
+        "19784",
         "PROCESS_1"
       ],
       [
-        "42168",
+        "22260",
         "PROCESS_2"
       ],
       [
-        "35988",
+        "27948",
         "PROCESS_3"
       ],
       [
-        "38904",
+        "35668",
+        "RENDERER_PID"
+      ],
+      [
+        "37388",
         "PROCESS_4"
       ],
       [
-        "39176",
+        "42028",
         "PROCESS_5"
       ],
       [
-        "41540",
+        "31912",
         "PROCESS_6"
       ],
       [
-        "42620",
+        "10904",
         "PROCESS_7"
       ],
       [
-        "40304",
+        "12004",
         "PROCESS_8"
       ],
       [
-        "40612",
+        "34684",
         "PROCESS_9"
       ],
       [
-        "41736",
+        "37728",
         "PROCESS_10"
+      ],
+      [
+        "5368",
+        "PROCESS_11"
+      ],
+      [
+        "36964",
+        "PROCESS_12"
       ],
       [
         "renderer-1",
@@ -827,21 +865,29 @@
         "VSCODE_SOURCE/"
       ],
       [
-        "editor#1777169",
+        "editor#3151931",
         "BUFFER"
+      ],
+      [
+        "\"objectId\":\"3151931\"",
+        "HEAP_OBJECT_ID_FIELD"
+      ],
+      [
+        "5915318683987910857.1.167",
+        "HEAP_REMOTE_OBJECT"
       ]
     ],
     "connections": [
       [
-        "D:\\dev\\hediet\\cdp-client\\artifacts\\readme-connections-final\\connections-state-aEKDbH",
+        "D:\\dev\\hediet\\cdp-client\\artifacts\\readme\\connections-state-x2RfRJ",
         "CONNECTIONS_DIR"
       ],
       [
-        "http://127.0.0.1:57673/",
+        "http://127.0.0.1:54082/",
         "WEBSITE_URL"
       ],
       [
-        "ED8FF9250232D825C3BF285C19A96298",
+        "126744F2D40A35C820A9BCA24C2DAA43",
         "PLAYWRIGHT_TARGET"
       ],
       [
@@ -849,7 +895,7 @@
         "CHROME_EXE"
       ],
       [
-        "412909DA7E70A5B60C57247A98683C0E",
+        "6038D16DC84521AAA06C4ABFFE9B9FD2",
         "CHROME_TARGET"
       ],
       [
@@ -865,11 +911,11 @@
         "EXPRESS_FIXTURE"
       ],
       [
-        "http://127.0.0.1:62998",
+        "http://127.0.0.1:58001",
         "EXPRESS_URL"
       ],
       [
-        "35764",
+        "35912",
         "NODE_PID"
       ]
     ]

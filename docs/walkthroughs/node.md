@@ -74,9 +74,9 @@ Context readme-node  rev 1
   Name: Existing Node application
   Connections: none
 
-$ dbgjs process attach 35764 --set
+$ dbgjs process attach 35912 --set
 Attachment: created
-Target $node-root:process-35764  [running]  readme-node/process-35764  gen 1  rev 3
+Target $node-root:process-35912  [running]  readme-node/process-35912  gen 1  rev 3
   Pause: none
 ````
 
@@ -89,7 +89,7 @@ Filter the view to the server's source file instead of Express internals.
 $ dbgjs coverage start
 Coverage recording started.
 
-$ curl.exe --silent --show-error --fail --max-time 60 'http://127.0.0.1:62998/quote/notebook?quantity=3'
+$ curl.exe --silent --show-error --fail --max-time 60 'http://127.0.0.1:58001/quote/notebook?quantity=3'
 {"product":"Notebook","quantity":3,"subtotal":36,"discount":3.6,"total":32.4}
 
 $ dbgjs coverage stop --id quote
@@ -112,7 +112,7 @@ Set a breakpoint in the request handler.
 ````console
 $ dbgjs breakpoint set quote-handler file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs 23
 Breakpoint quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [bound; 1 application(s)]
-  bound on process-35764/$node-root:process-35764: CDP confirmed script 120 v1 at file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27 via identity
+  bound on process-35912/$node-root:process-35912: CDP confirmed script 120 v1 at file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:27 via identity
 
   Source: file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs — quote
       19 |     if (!Number.isInteger(quantity) || quantity < 1) {
@@ -130,7 +130,7 @@ In another terminal, start this request. It waits at the breakpoint; the
 response shown here is what curl receives **after** the resume command below.
 
 ````console
-$ curl.exe --silent --show-error --fail --max-time 60 'http://127.0.0.1:62998/quote/notebook?quantity=2'
+$ curl.exe --silent --show-error --fail --max-time 60 'http://127.0.0.1:58001/quote/notebook?quantity=2'
 {"product":"Notebook","quantity":2,"subtotal":24,"discount":0,"total":24}
 ````
 
@@ -139,7 +139,7 @@ state before allowing the handler to finish.
 
 ````console
 $ dbgjs target wait paused 0 30000
-Target $node-root:process-35764  [paused at epoch 1]  readme-node/process-35764  gen 1  rev 339
+Target $node-root:process-35912  [paused at epoch 1]  readme-node/process-35912  gen 1  rev 339
   Breakpoints:
     quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]
       script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity
@@ -160,7 +160,7 @@ $ dbgjs target eval 'product.name + " x " + quantity'
 Notebook x 2
 
 $ dbgjs target resume
-Target $node-root:process-35764  [running]  readme-node/process-35764  gen 1  rev 344
+Target $node-root:process-35912  [running]  readme-node/process-35912  gen 1  rev 344
   Breakpoints:
     quote-handler  file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1  [installed; 1 binding]
       script 120 v1 -> file:///D:/dev/hediet/cdp-client/tests/readme/express-server.mjs:23:1 via identity
@@ -174,21 +174,21 @@ $ dbgjs breakpoint delete quote-handler
 Context readme-node  rev 8
   Name: Existing Node application
   Connections:
-    process-35764  [connected to Process 35764; CDP 1.3; generation 1]
-      Configuration: process 35764
+    process-35912  [connected to Process 35912; CDP 1.3; generation 1]
+      Configuration: process 35912
       Targets:
-        node  Process 35764  process:35764  [a CDP client is attached]
+        node  Process 35912  process:35912  [a CDP client is attached]
 ````
 
 ## Disconnect without stopping the server
 
 ````console
-$ dbgjs connection disconnect --connection process-35764
+$ dbgjs connection disconnect --connection process-35912
 Context readme-node  rev 10
   Name: Existing Node application
   Connections:
-    process-35764  [disconnected; generation 1]
-      Configuration: process 35764
+    process-35912  [disconnected; generation 1]
+      Configuration: process 35912
       Targets: none
 ````
 
