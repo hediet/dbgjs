@@ -31,7 +31,7 @@ if (typeof cliEntry !== "string") {
 const linkrpc = resolve(dirname(packagePath), cliEntry);
 if (!existsSync(linkrpc)) {
 	throw new Error(
-		`The built sibling-installed LinkRPC CLI is missing at ${linkrpc}. Run npm install after building ../linkrpc.`,
+		`The installed LinkRPC CLI is missing at ${linkrpc}. Run npm ci; for a local development override, build the linked CLI first.`,
 	);
 }
 
