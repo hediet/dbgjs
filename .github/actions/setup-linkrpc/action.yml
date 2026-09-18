@@ -1,0 +1,54 @@
+name: Set up LinkRPC
+description: Check out the pinned sibling LinkRPC tree and optionally build its TypeScript packages
+inputs:
+  typescript-package:
+    description: TypeScript package to build (none, linkrpc, or linkrpc-cli)
+    required: false
+    default: none
+runs:
+  using: composite
+  steps:
+    - name: Check out pinned LinkRPC sibling
+      shell: bash
+      env:
+        LINKRPC_REVISION: 52131e27d96b464cd4be8d1671108f7ba09afccd
+      run: |
+        set -euo pipefail
+        linkrpc_dir="$(cd "$GITHUB_WORKSPACE/.." && pwd)/linkrpc"
+        if [ -e "$linkrpc_dir" ]; then
+          echo "::error::Refusing to replace existing LinkRPC path: $linkrpc_dir"
+          exit 1
+        fi
+        git init --quiet "$linkrpc_dir"
+        git -C "$linkrpc_dir" remote add origin https://github.com/hediet/linkrpc.git
+        git -C "$linkrpc_dir" fetch --quiet --depth=1 origin "$LINKRPC_REVISION"
+        git -C "$linkrpc_dir" checkout --quiet --detach FETCH_HEAD
+        actual_revision="$(git -C "$linkrpc_dir" rev-parse HEAD)"
+        if [ "$actual_revision" != "$LINKRPC_REVISION" ]; then
+          echo "::error::Expected LinkRPC $LINKRPC_REVISION, got $actual_revision"
+          exit 1
+        fi
+    - name: Validate TypeScript package selection
+      if: inputs.typescript-package != 'none' && inputs.typescript-package != 'linkrpc' && inputs.typescript-package != 'linkrpc-cli'
+      shell: bash
+      run: |
+        echo "::error::typescript-package must be none, linkrpc, or linkrpc-cli"
+        exit 1
+    - name: Set up pnpm
+      if: inputs.typescript-package != 'none'
+      uses: pnpm/action-setup@v4
+      with:
+        version: 11.10.0
+        run_install: false
+    - name: Install LinkRPC TypeScript workspace
+      if: inputs.typescript-package != 'none'
+      shell: bash
+      run: pnpm --dir "$GITHUB_WORKSPACE/../linkrpc/typescript" install --frozen-lockfile
+    - name: Build LinkRPC package
+      if: inputs.typescript-package == 'linkrpc'
+      shell: bash
+      run: pnpm --dir "$GITHUB_WORKSPACE/../linkrpc/typescript" --filter @hediet/linkrpc build
+    - name: Build LinkRPC CLI and dependencies
+      if: inputs.typescript-package == 'linkrpc-cli'
+      shell: bash
+      run: pnpm --dir "$GITHUB_WORKSPACE/../linkrpc/typescript" --filter "@hediet/linkrpc-cli..." build

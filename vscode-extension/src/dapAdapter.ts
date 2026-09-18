@@ -11,6 +11,10 @@ import type {
 	TargetSnapshot,
 	VariableSnapshot,
 } from "./apiTypes.js";
+import {
+	breakpointStatusError,
+	breakpointStatusKind,
+} from "./apiTypes.js";
 import type { DebugSessionReconciler } from "./debugSessionReconciler.js";
 import {
 	resolveLaunch,
@@ -309,7 +313,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			await this.controller.refresh();
 			const root = this.controller.snapshot?.targetForest.find(
 				(candidate) =>
-					candidate.parentTargetId === undefined
+					candidate.parentTargetId === null
 					&& (connectionId === undefined || candidate.connectionId === connectionId),
 			);
 			if (root !== undefined) {
@@ -357,6 +361,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			this.controller.contextId,
 			reference.connectionId,
 			reference.targetId,
+			reference.connectionGeneration,
 		);
 		this.targetBinding = {
 			connectionId: reference.connectionId,
@@ -450,7 +455,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			binding.target.targetId,
 		);
 		const pause = target.pause;
-		if (pause === undefined) {
+		if (pause == null) {
 			this.sendResponse(request, { stackFrames: [], totalFrames: 0 });
 			return;
 		}
@@ -567,7 +572,8 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 					line: requested.line,
 					column: requested.column ?? 1,
 					enabled: true,
-					...(requested.condition === undefined ? {} : { condition: requested.condition }),
+					condition: requested.condition ?? null,
+					targetSelector: null,
 				},
 				`dap:${request.seq}:${id}`,
 			);
@@ -637,7 +643,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				?? evaluation.unserializableValue
 				?? formatEvaluationValue(evaluation.value),
 			type: evaluation.kind,
-			variablesReference: evaluation.objectId === undefined
+			variablesReference: evaluation.objectId == null
 				? 0
 				: this.bindVariables({
 					kind: "object",
@@ -665,7 +671,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 				?? variable.unserializableValue
 				?? formatEvaluationValue(variable.value),
 			type: variable.kind,
-			variablesReference: variable.objectId === undefined
+			variablesReference: variable.objectId == null
 				? 0
 				: this.bindVariables({
 					kind: "object",
@@ -829,7 +835,7 @@ export class DbgjsDebugAdapter implements vscode.DebugAdapter, vscode.Disposable
 			}
 			await this.scheduleSourceRefresh();
 			if (snapshot.phase.kind === "paused"
-				&& snapshot.pause !== undefined
+				&& snapshot.pause != null
 				&& (!paused || snapshot.pause.epoch > lastPauseEpoch)) {
 				this.clearInspectionBindings();
 				lastPauseEpoch = snapshot.pause.epoch;
@@ -1013,8 +1019,8 @@ function toDapBreakpoint(
 			message: "dbgjs did not return breakpoint state",
 		};
 	}
-	const verified = breakpoint.status.kind === "bound"
-		|| breakpoint.status.kind === "partiallyBound";
+	const status = breakpointStatusKind(breakpoint.status);
+	const verified = status === "bound" || status === "partiallyBound";
 	return {
 		id: numericBreakpointId(breakpoint.id),
 		verified,
@@ -1029,25 +1035,25 @@ function numericBreakpointId(id: string): number {
 }
 
 function breakpointStatusMessage(breakpoint: BreakpointSnapshot): string {
-	if (breakpoint.status.kind === "failed" && typeof breakpoint.status.message === "string") {
-		return breakpoint.status.message;
+	const error = breakpointStatusError(breakpoint.status);
+	if (error !== undefined) {
+		return error;
 	}
-	return `dbgjs breakpoint is ${breakpoint.status.kind}`;
+	return `dbgjs breakpoint is ${breakpointStatusKind(breakpoint.status)}`;
 }
 
 function requirePauseEpoch(target: TargetDebuggerSnapshot): number {
-	const epoch = target.phase.epoch;
-	if (target.phase.kind !== "paused" || typeof epoch !== "number") {
+	if (target.phase.kind !== "paused") {
 		throw new Error(`Target '${target.targetId}' is not paused`);
 	}
-	return epoch;
+	return target.phase.epoch;
 }
 
 function formatEvaluationValue(value: unknown): string {
 	if (typeof value === "string") {
 		return value;
 	}
-	if (value === undefined) {
+	if (value === undefined || value === null) {
 		return "undefined";
 	}
 	return JSON.stringify(value);

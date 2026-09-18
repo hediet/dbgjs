@@ -782,6 +782,7 @@ impl ConnectionRuntime {
             .target_attach_to_target(TargetAttachToTargetParams {
                 target_id: target_id.to_owned(),
                 flatten: Some(true),
+                dbgjs_auto_attach: None,
             })
             .await
             .map_err(|error| {

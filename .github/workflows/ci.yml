@@ -58,10 +58,42 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: vscode-extension/package-lock.json
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc
       - name: Install extension dependencies
         run: npm --prefix vscode-extension ci
       - name: Typecheck, build, and test extension
         run: npm --prefix vscode-extension test
+
+  contracts:
+    name: Check generated contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc-cli
+      - name: Install JavaScript build inputs
+        run: npm ci
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: contracts-debug
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build contract exporters
+        run: cargo build --locked --bin export_contracts
+      - name: Check generated contracts
+        run: npm run check:contracts
 
   rust:
     name: Test (${{ matrix.target }})
@@ -80,6 +112,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc-cli
       - name: Install JavaScript build inputs
         run: npm ci
       - name: Install pinned Rust toolchain
@@ -129,6 +164,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc-cli
       - name: Install JavaScript build inputs
         run: npm ci
       - name: Install pinned Rust toolchain
@@ -275,6 +313,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc-cli
       - run: npm ci
       - name: Install Linux desktop runtime
         if: runner.os == 'Linux'
@@ -316,6 +357,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - uses: ./.github/actions/setup-linkrpc
+        with:
+          typescript-package: linkrpc-cli
       - run: npm ci
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
@@ -343,7 +387,7 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [changes, extension, rust, packages, package-smoke-linux, package-smoke-windows-macos, vscode-e2e, readme]
+    needs: [changes, extension, contracts, rust, packages, package-smoke-linux, package-smoke-windows-macos, vscode-e2e, readme]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -361,6 +405,9 @@ jobs:
           }
           if (results.extension.result !== "success") {
             throw new Error(`VS Code extension ${results.extension.result}`);
+          }
+          if (results.contracts.result !== "success") {
+            throw new Error(`Generated contracts ${results.contracts.result}`);
           }
           const requiredOutputs = {
             rust: "tests",

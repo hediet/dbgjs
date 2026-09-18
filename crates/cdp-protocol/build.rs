@@ -1,35 +1,71 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use linkrpc::prelude::{GenerateRustOptions, generate_rust_interface};
-
-#[path = "src/protocol_schema.rs"]
-mod protocol_schema;
+use linkrpc::prelude::{
+    GenerateRustOptions, LinkRpcInterfaceSchema, compute_interface_hash, generate_rust_interface,
+};
 
 fn main() {
     let crate_root =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
-    let repository_root = crate_root.join("..").join("..");
-    let protocol_root = repository_root
-        .join("node_modules")
-        .join("devtools-protocol")
-        .join("json");
-    let browser_protocol = protocol_root.join("browser_protocol.json");
-    let js_protocol = protocol_root.join("js_protocol.json");
-    println!("cargo:rerun-if-changed={}", browser_protocol.display());
-    println!("cargo:rerun-if-changed={}", js_protocol.display());
-    println!("cargo:rerun-if-changed=src/protocol_schema.rs");
+    let bundle_path = crate_root
+        .join("..")
+        .join("..")
+        .join("schemas")
+        .join("dbgjs.interfaces.json");
+    println!("cargo:rerun-if-changed={}", bundle_path.display());
 
-    let browser = read_protocol(&browser_protocol);
-    let js = read_protocol(&js_protocol);
-    let interface = protocol_schema::import_typed_cdp_protocol(&browser, &js)
-        .expect("CDP protocol must import as a typed LinkRPC interface");
+    let bundle: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&bundle_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read canonical contract bundle {}: {error}. \
+                 Run `node scripts/generate-contracts.mjs` first",
+                bundle_path.display()
+            )
+        }))
+        .expect("canonical contract bundle must be valid JSON");
+    let schemas = bundle["interfaceSchemas"]
+        .as_array()
+        .expect("canonical contract bundle must contain interfaceSchemas");
+    let matches = schemas
+        .iter()
+        .filter(|schema| schema["id"] == "cdp.protocol")
+        .collect::<Vec<_>>();
+    let [schema] = matches.as_slice() else {
+        panic!(
+            "canonical contract bundle must contain exactly one cdp.protocol interface, found {}",
+            matches.len()
+        );
+    };
+    let interface: LinkRpcInterfaceSchema = serde_json::from_value((*schema).clone())
+        .expect("canonical cdp.protocol contract must be a valid LinkRPC interface schema");
+    let actual_hash = compute_interface_hash(&interface);
+    assert_eq!(
+        interface.hash, actual_hash,
+        "canonical cdp.protocol contract has a stale interface hash"
+    );
+    assert_eq!(
+        interface.methods.len(),
+        896,
+        "canonical CDP contract method count changed unexpectedly"
+    );
+    assert_eq!(
+        interface
+            .components
+            .as_ref()
+            .and_then(|components| components.schemas.as_ref())
+            .map(|schemas| schemas.len()),
+        Some(607),
+        "canonical CDP contract component count changed unexpectedly"
+    );
     let generated = generate_rust_interface(
         &interface,
         &GenerateRustOptions {
             client_name: Some("CdpClient".into()),
+            generate_server: true,
+            default_server_methods: true,
             ..GenerateRustOptions::default()
         },
     );
@@ -72,13 +108,4 @@ fn verify_expected_fallbacks(unsupported: &[String]) {
             unsupported.join("\n")
         );
     }
-}
-
-fn read_protocol(path: &Path) -> String {
-    fs::read_to_string(path).unwrap_or_else(|error| {
-        panic!(
-            "failed to read pinned CDP schema {}: {error}. Run `npm ci` first",
-            path.display()
-        )
-    })
 }

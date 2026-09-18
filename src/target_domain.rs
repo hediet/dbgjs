@@ -3,8 +3,7 @@
 //! browser root that fronts a process tree ([`crate::virtual_browser_root`]).
 
 use linkrpc::prelude::{JsonRpcError, error_codes};
-use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::cdp::TargetTargetInfo;
 use crate::service_api::TargetSnapshot;
@@ -39,15 +38,14 @@ pub fn target_snapshot_from_info(target: TargetTargetInfo) -> TargetSnapshot {
     }
 }
 
-pub fn to_json(value: impl serde::Serialize) -> Result<Value, JsonRpcError> {
-    serde_json::to_value(value)
-        .map_err(|error| JsonRpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))
-}
-
-pub fn from_json<T: DeserializeOwned>(params: Value) -> Result<T, JsonRpcError> {
-    serde_json::from_value(params).map_err(|error| invalid_params(error.to_string()))
-}
-
 pub fn invalid_params(message: impl Into<String>) -> JsonRpcError {
     JsonRpcError::new(error_codes::INVALID_PARAMS, message.into())
+}
+
+pub fn normalize_typed_cdp_params(params: Value) -> Value {
+    if params.is_null() {
+        Value::Object(Map::new())
+    } else {
+        params
+    }
 }

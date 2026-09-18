@@ -15,6 +15,8 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{accept_hdr_async_with_config, connect_async_with_config};
 
+use crate::cdp::TargetAttachToTargetParams;
+
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -339,14 +341,14 @@ async fn bridge(
                             id_key(&internal_id)?,
                             InternalRequest::AutoAttach { request_id },
                         )?;
+                        let mut params =
+                            TargetAttachToTargetParams::new(scope.page.target_id.clone());
+                        params.flatten = Some(true);
+                        params.dbgjs_auto_attach = Some(true);
                         upstream_sender.send(json_message(json!({
                             "id": internal_id,
                             "method": "Target.attachToTarget",
-                            "params": {
-                                "targetId": scope.page.target_id,
-                                "flatten": true,
-                                "__dbgjsAutoAttach": true
-                            }
+                            "params": params
                         }))?).await?;
                     }
                     ClientAction::Drop => {}

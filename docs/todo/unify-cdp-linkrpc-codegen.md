@@ -1,12 +1,14 @@
 # Refactoring: one trait-centered LinkRPC codegen path for CDP
 
-Status: desired design direction, not yet implemented. The exact LinkRPC
-generator API and the representation of server-to-client notifications still
-need to be decided.
+Status: historical design proposal. The implemented contract pipeline and
+current sources of truth are documented in [RPC contracts and code
+generation](../contracts.md). The discussion below describes the earlier
+architecture and a broader possible refactoring; it is not the current build
+or regeneration specification.
 
-The dependency migration to LinkRPC does not implement this separate
-trait-unification proposal. LinkRPC already supports standalone generated server
-traits; this proposal concerns sharing their generation path with the macros.
+Using generated CDP provider traits does not require unifying LinkRPC's
+standalone generator with its Rust trait macro. Build-target partitioning,
+macro/backend unification, and cache-policy changes below remain separate work.
 
 ## Motivation
 

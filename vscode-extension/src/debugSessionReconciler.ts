@@ -137,7 +137,7 @@ export class DebugSessionReconciler implements vscode.Disposable {
 	private isCurrentRoot(target: TargetReference): boolean {
 		return (this.controller.snapshot?.targetForest ?? [])
 			.some((root) =>
-				root.parentTargetId === undefined
+				root.parentTargetId === null
 				&& targetKey(targetReference(this.controller.contextId, root))
 					=== targetKey(target)
 			);
@@ -160,7 +160,7 @@ export class DebugSessionReconciler implements vscode.Disposable {
 			return;
 		}
 		const roots = snapshot.targetForest.filter(
-			(node) => node.parentTargetId === undefined,
+			(node) => node.parentTargetId === null,
 		);
 		const rootKeys = new Set(
 			roots.map((root) =>

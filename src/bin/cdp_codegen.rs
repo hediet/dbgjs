@@ -1,18 +1,35 @@
 use std::fs;
 use std::path::PathBuf;
 
-use dbgjs::protocol_schema::import_typed_cdp_protocol;
-use linkrpc::prelude::{GenerateRustOptions, generate_rust_interface};
+use linkrpc::prelude::{
+    GenerateRustOptions, LinkRpcInterfaceSchema, compute_interface_hash, generate_rust_interface,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repository_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let schema_root = repository_root
-        .join("node_modules")
-        .join("devtools-protocol")
-        .join("json");
-    let browser_protocol = fs::read_to_string(schema_root.join("browser_protocol.json"))?;
-    let js_protocol = fs::read_to_string(schema_root.join("js_protocol.json"))?;
-    let interface = import_typed_cdp_protocol(&browser_protocol, &js_protocol)?;
+    let bundle: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        repository_root
+            .join("schemas")
+            .join("dbgjs.interfaces.json"),
+    )?)?;
+    let schemas = bundle["interfaceSchemas"]
+        .as_array()
+        .ok_or("contract bundle has no interfaceSchemas array")?;
+    let matching = schemas
+        .iter()
+        .filter(|schema| schema["id"] == "cdp.protocol")
+        .collect::<Vec<_>>();
+    let [schema] = matching.as_slice() else {
+        return Err(format!(
+            "contract bundle must contain exactly one cdp.protocol interface, found {}",
+            matching.len()
+        )
+        .into());
+    };
+    let interface: LinkRpcInterfaceSchema = serde_json::from_value((*schema).clone())?;
+    if compute_interface_hash(&interface) != interface.hash {
+        return Err("canonical cdp.protocol interface hash is stale".into());
+    }
     let method_count = interface.methods.len();
     let type_count = interface
         .components
@@ -23,6 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &interface,
         &GenerateRustOptions {
             client_name: Some("CdpClient".into()),
+            generate_server: true,
+            default_server_methods: true,
             ..GenerateRustOptions::default()
         },
     );

@@ -12,7 +12,6 @@ export function classifyChanges(paths) {
 			path.startsWith("todo/") ||
 			path.startsWith(".github/skills/") ||
 			path.startsWith("vscode-extension/") ||
-			path === "external/README.md" ||
 			(!path.includes("/") && path.endsWith(".md"))
 		) {
 			continue;

@@ -761,6 +761,18 @@ fn context_relay_exposes_virtual_browser_root_and_enforces_exclusivity() {
     assert_eq!(target_infos.len(), 1);
     assert_eq!(target_infos[0]["targetId"], canonical_target_id);
 
+    relay.send(&serde_json::json!({ "id": 0, "method": "Target.attachToTarget" }));
+    let missing_target = relay.recv_line(Duration::from_secs(10));
+    assert_eq!(missing_target["id"], 0);
+    assert_eq!(missing_target["error"]["code"], -32602);
+    assert!(
+        missing_target["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("targetId"),
+        "unexpected missing-target response: {missing_target}"
+    );
+
     relay.send(&serde_json::json!({
         "id": 3,
         "method": "Target.attachToTarget",

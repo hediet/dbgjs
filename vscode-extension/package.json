@@ -240,7 +240,7 @@
     "test:vscode": "npm run compile && node test/runIntegration.mjs"
   },
   "dependencies": {
-    "@hediet/linkrpc": "file:../external/linkrpc/npm/hediet-linkrpc.tgz",
+    "@hediet/linkrpc": "file:../../linkrpc/typescript/packages/linkrpc",
     "zod": "^4.4.3"
   },
   "devDependencies": {

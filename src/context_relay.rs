@@ -12,18 +12,21 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use linkrpc::connection::channel::{Channel, RequestHandler};
-use linkrpc::prelude::{JsonRpcError, error_codes};
+use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, error_codes};
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionResult, TargetAttachToTargetParams, TargetAttachToTargetResult,
-    TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
-    TargetDetachedFromTargetParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
-    TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
-    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, CdpServer, CdpService,
+    TargetAttachToBrowserTargetParams, TargetAttachToBrowserTargetResult,
+    TargetAttachToTargetParams, TargetAttachToTargetResult, TargetAttachedToTargetParams,
+    TargetDetachFromTargetParams, TargetDetachFromTargetResult, TargetDetachedFromTargetParams,
+    TargetGetTargetInfoParams, TargetGetTargetInfoResult, TargetGetTargetsParams,
+    TargetGetTargetsResult, TargetSetAutoAttachParams, TargetSetAutoAttachResult,
+    TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult, TargetTargetCreatedParams,
+    TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::cdp_transport::ManagedCdpTransport;
@@ -32,7 +35,7 @@ use crate::relay_transport::{DEFAULT_ACCEPT_TIMEOUT, RelayListener, RelayServerT
 use crate::service_api::TargetSnapshot;
 use crate::session_transport::CdpSessionMux;
 use crate::target_debugger::TargetDebuggerHandle;
-use crate::target_domain::{from_json, invalid_params, target_info_from_snapshot, to_json};
+use crate::target_domain::{invalid_params, normalize_typed_cdp_params, target_info_from_snapshot};
 
 /// A running relay's control handle. `websocket_url` is returned to the RPC caller; `cancel`
 /// lets the service force the relay closed (explicit `close_relay`, context deletion, service
@@ -208,7 +211,7 @@ async fn run_context_relay(
     ));
     let root_channel = Channel::new(
         Box::new(root_transport),
-        Box::new(RootHandler(state.clone())),
+        Box::new(RootHandler::new(state.clone())),
     );
     state.set_root_channel(root_channel.clone());
     let Ok((targets, mut revision)) = state
@@ -370,7 +373,10 @@ impl ContextRelayState {
             .mux
             .open_session(session_id.clone())
             .map_err(|error| JsonRpcError::new(error_codes::INTERNAL_ERROR, error.to_string()))?;
-        let channel = Channel::new(Box::new(transport), Box::new(RootHandler(self.clone())));
+        let channel = Channel::new(
+            Box::new(transport),
+            Box::new(RootHandler::new(self.clone())),
+        );
         let task = tokio::spawn(async move { channel.run().await });
         self.browser_sessions
             .lock()
@@ -558,12 +564,9 @@ impl ContextRelayState {
                 target_info,
                 waiting_for_debugger,
             };
-            if let Ok(value) = serde_json::to_value(params) {
-                let _ = self
-                    .root_channel()
-                    .notify("Target.attachedToTarget", value)
-                    .await;
-            }
+            let _ = CdpClient::root(self.root_channel().clone())
+                .target_attached_to_target(params)
+                .await;
         }
         session_id
     }
@@ -695,12 +698,9 @@ impl ContextRelayState {
                 session_id: session_id.clone(),
                 target_id: Some(session.target_id),
             };
-            if let Ok(value) = serde_json::to_value(params) {
-                let _ = self
-                    .root_channel()
-                    .notify("Target.detachedFromTarget", value)
-                    .await;
-            }
+            let _ = CdpClient::root(self.root_channel().clone())
+                .target_detached_from_target(params)
+                .await;
         }
     }
 
@@ -722,174 +722,197 @@ impl ContextRelayState {
         let params = TargetTargetCreatedParams {
             target_info: target_info_from_snapshot(snapshot),
         };
-        if let Ok(value) = serde_json::to_value(params) {
-            let _ = self
-                .root_channel()
-                .notify("Target.targetCreated", value)
-                .await;
-        }
+        let _ = CdpClient::root(self.root_channel().clone())
+            .target_target_created(params)
+            .await;
     }
 
     async fn notify_target_changed(&self, snapshot: &TargetSnapshot) {
         let params = TargetTargetInfoChangedParams {
             target_info: target_info_from_snapshot(snapshot),
         };
-        if let Ok(value) = serde_json::to_value(params) {
-            let _ = self
-                .root_channel()
-                .notify("Target.targetInfoChanged", value)
-                .await;
-        }
+        let _ = CdpClient::root(self.root_channel().clone())
+            .target_target_info_changed(params)
+            .await;
     }
 
     async fn notify_target_destroyed(&self, target_id: &str) {
         let params = TargetTargetDestroyedParams {
             target_id: target_id.to_owned(),
         };
-        if let Ok(value) = serde_json::to_value(params) {
-            let _ = self
-                .root_channel()
-                .notify("Target.targetDestroyed", value)
-                .await;
-        }
+        let _ = CdpClient::root(self.root_channel().clone())
+            .target_target_destroyed(params)
+            .await;
+    }
+}
+
+struct ContextRelayProvider(Arc<ContextRelayState>);
+
+#[async_trait]
+impl CdpService for ContextRelayProvider {
+    async fn browser_get_version(
+        &self,
+        _ctx: &CallCtx,
+        _params: BrowserGetVersionParams,
+    ) -> Result<BrowserGetVersionResult, JsonRpcError> {
+        Ok(BrowserGetVersionResult {
+            protocol_version: "1.3".to_owned(),
+            product: format!("dbgjs-context-relay/{}", env!("CARGO_PKG_VERSION")),
+            revision: String::new(),
+            user_agent: "dbgjs-context-relay".to_owned(),
+            js_version: String::new(),
+        })
     }
 
-    async fn handle_root_request(
-        self: &Arc<Self>,
-        method: String,
-        params: Value,
-    ) -> Result<Value, JsonRpcError> {
-        match method.as_str() {
-            "Browser.getVersion" => to_json(BrowserGetVersionResult {
-                protocol_version: "1.3".to_owned(),
-                product: format!("dbgjs-context-relay/{}", env!("CARGO_PKG_VERSION")),
-                revision: String::new(),
-                user_agent: "dbgjs-context-relay".to_owned(),
-                js_version: String::new(),
-            }),
-            "Target.getTargets" => {
-                let targets = self.targets().await?;
-                to_json(TargetGetTargetsResult {
-                    target_infos: targets
-                        .iter()
-                        .map(|(_, snapshot)| target_info_from_snapshot(snapshot))
-                        .collect(),
-                })
+    async fn target_get_targets(
+        &self,
+        _ctx: &CallCtx,
+        _params: TargetGetTargetsParams,
+    ) -> Result<TargetGetTargetsResult, JsonRpcError> {
+        let targets = self.0.targets().await?;
+        Ok(TargetGetTargetsResult {
+            target_infos: targets
+                .iter()
+                .map(|(_, snapshot)| target_info_from_snapshot(snapshot))
+                .collect(),
+        })
+    }
+
+    async fn target_get_target_info(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetGetTargetInfoParams,
+    ) -> Result<TargetGetTargetInfoResult, JsonRpcError> {
+        let target_id = params
+            .target_id
+            .ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
+        let Some((_, snapshot)) = self.0.lookup_target(&target_id).await else {
+            return Err(invalid_params(format!(
+                "no such target '{target_id}' in this relay's scope"
+            )));
+        };
+        Ok(TargetGetTargetInfoResult {
+            target_info: target_info_from_snapshot(&snapshot),
+        })
+    }
+
+    async fn target_attach_to_browser_target(
+        &self,
+        _ctx: &CallCtx,
+        _params: TargetAttachToBrowserTargetParams,
+    ) -> Result<TargetAttachToBrowserTargetResult, JsonRpcError> {
+        Ok(TargetAttachToBrowserTargetResult {
+            session_id: self.0.open_browser_session().await?,
+        })
+    }
+
+    async fn target_set_discover_targets(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetSetDiscoverTargetsParams,
+    ) -> Result<TargetSetDiscoverTargetsResult, JsonRpcError> {
+        let was_enabled = self.0.discover.swap(params.discover, Ordering::Relaxed);
+        if params.discover && !was_enabled {
+            let targets = self
+                .0
+                .known_targets
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for (_, snapshot) in &targets {
+                self.0.notify_target_created(snapshot).await;
             }
-            "Target.getTargetInfo" => {
-                let target_id = params
-                    .get("targetId")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
-                let Some((_, snapshot)) = self.lookup_target(target_id).await else {
-                    return Err(invalid_params(format!(
-                        "no such target '{target_id}' in this relay's scope"
-                    )));
-                };
-                Ok(serde_json::json!({
-                    "targetInfo": target_info_from_snapshot(&snapshot)
-                }))
-            }
-            "Target.attachToBrowserTarget" => {
-                let session_id = self.open_browser_session().await?;
-                Ok(serde_json::json!({ "sessionId": session_id }))
-            }
-            "Target.setDiscoverTargets" => {
-                let request: TargetSetDiscoverTargetsParams = from_json(params)?;
-                let was_enabled = self.discover.swap(request.discover, Ordering::Relaxed);
-                if request.discover && !was_enabled {
-                    let targets = self
-                        .known_targets
-                        .lock()
-                        .await
-                        .values()
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    for (_, snapshot) in &targets {
-                        self.notify_target_created(snapshot).await;
-                    }
-                }
-                to_json(TargetSetDiscoverTargetsResult::new())
-            }
-            "Target.setAutoAttach" => {
-                let request: TargetSetAutoAttachParams = from_json(params)?;
-                let was_enabled = self
-                    .auto_attach
-                    .swap(request.auto_attach, Ordering::Relaxed);
-                if request.auto_attach && !was_enabled {
-                    let targets = self
-                        .known_targets
-                        .lock()
-                        .await
-                        .values()
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    for (connection_id, snapshot) in &targets {
-                        self.ensure_session(
-                            connection_id,
-                            snapshot,
-                            request.wait_for_debugger_on_start,
-                        )
-                        .await;
-                    }
-                }
-                to_json(TargetSetAutoAttachResult::new())
-            }
-            "Target.attachToTarget" => {
-                let notify_attached = params
-                    .get("__dbgjsAutoAttach")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let request: TargetAttachToTargetParams = from_json(params)?;
-                let Some((connection_id, snapshot)) = self.lookup_target(&request.target_id).await
-                else {
-                    return Err(invalid_params(format!(
-                        "no such target '{}' in this relay's context",
-                        request.target_id
-                    )));
-                };
-                let (handle, created) = self
-                    .service
-                    .relay_ensure_attached(
-                        &self.owner_id,
-                        &self.context_id,
-                        &connection_id,
-                        &snapshot.target_id,
-                    )
-                    .await?;
-                if created {
-                    self.owned_attachments.lock().await.insert(
-                        (connection_id.clone(), snapshot.target_id.clone()),
-                        handle.clone(),
-                    );
-                }
-                let session_id = self
-                    .open_session(&connection_id, &snapshot, handle, false, notify_attached)
-                    .await;
-                to_json(TargetAttachToTargetResult { session_id })
-            }
-            "Target.detachFromTarget" => {
-                let request: TargetDetachFromTargetParams = from_json(params)?;
-                if let Some(session_id) = request.session_id.as_deref()
-                    && self.detach_browser_session(session_id).await
-                {
-                    return to_json(TargetDetachFromTargetResult::new());
-                }
-                self.detach(
-                    request.session_id.as_deref(),
-                    request.target_id.as_deref(),
-                    false,
-                )
-                .await;
-                to_json(TargetDetachFromTargetResult::new())
-            }
-            _ => Err(JsonRpcError::new(
-                error_codes::METHOD_NOT_FOUND,
-                format!(
-                    "dbgjs context relay's virtual root does not implement '{method}'; attach to a target and send target-scoped commands instead"
-                ),
-            )),
         }
+        Ok(TargetSetDiscoverTargetsResult::new())
+    }
+
+    async fn target_set_auto_attach(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetSetAutoAttachParams,
+    ) -> Result<TargetSetAutoAttachResult, JsonRpcError> {
+        let was_enabled = self
+            .0
+            .auto_attach
+            .swap(params.auto_attach, Ordering::Relaxed);
+        if params.auto_attach && !was_enabled {
+            let targets = self
+                .0
+                .known_targets
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for (connection_id, snapshot) in &targets {
+                self.0
+                    .ensure_session(connection_id, snapshot, params.wait_for_debugger_on_start)
+                    .await;
+            }
+        }
+        Ok(TargetSetAutoAttachResult::new())
+    }
+
+    async fn target_attach_to_target(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetAttachToTargetParams,
+    ) -> Result<TargetAttachToTargetResult, JsonRpcError> {
+        let Some((connection_id, snapshot)) = self.0.lookup_target(&params.target_id).await else {
+            return Err(invalid_params(format!(
+                "no such target '{}' in this relay's context",
+                params.target_id
+            )));
+        };
+        let (handle, created) = self
+            .0
+            .service
+            .relay_ensure_attached(
+                &self.0.owner_id,
+                &self.0.context_id,
+                &connection_id,
+                &snapshot.target_id,
+            )
+            .await?;
+        if created {
+            self.0.owned_attachments.lock().await.insert(
+                (connection_id.clone(), snapshot.target_id.clone()),
+                handle.clone(),
+            );
+        }
+        let session_id = self
+            .0
+            .open_session(
+                &connection_id,
+                &snapshot,
+                handle,
+                false,
+                params.dbgjs_auto_attach.unwrap_or(false),
+            )
+            .await;
+        Ok(TargetAttachToTargetResult { session_id })
+    }
+
+    async fn target_detach_from_target(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetDetachFromTargetParams,
+    ) -> Result<TargetDetachFromTargetResult, JsonRpcError> {
+        if let Some(session_id) = params.session_id.as_deref()
+            && self.0.detach_browser_session(session_id).await
+        {
+            return Ok(TargetDetachFromTargetResult::new());
+        }
+        self.0
+            .detach(
+                params.session_id.as_deref(),
+                params.target_id.as_deref(),
+                false,
+            )
+            .await;
+        Ok(TargetDetachFromTargetResult::new())
     }
 }
 
@@ -935,12 +958,24 @@ fn index_targets(
         .collect()
 }
 
-struct RootHandler(Arc<ContextRelayState>);
+struct RootHandler(CdpServer<ContextRelayProvider>);
+
+impl RootHandler {
+    fn new(state: Arc<ContextRelayState>) -> Self {
+        Self(CdpServer::new(Arc::new(ContextRelayProvider(state))))
+    }
+}
 
 #[async_trait]
 impl RequestHandler for RootHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        self.0.handle_root_request(method, params).await
+        self.0
+            .handle_request(
+                &method,
+                normalize_typed_cdp_params(params),
+                CallCtx::default(),
+            )
+            .await
     }
 }
 

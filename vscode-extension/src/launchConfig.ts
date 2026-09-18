@@ -80,10 +80,10 @@ export async function resolveLaunch(
 				configuration: {
 					kind: "node",
 					program: configuration.program,
-					args: configuration.args ?? [],
+					args: [...configuration.args ?? []],
 					cwd,
 					runtimeExecutable: configuration.runtimeExecutable ?? "node",
-					runtimeArgs: configuration.runtimeArgs ?? [],
+					runtimeArgs: [...configuration.runtimeArgs ?? []],
 					env,
 				},
 			};
@@ -96,7 +96,8 @@ export async function resolveLaunch(
 					kind: "playwright",
 					url: normalizeRuntimeUrl(configuration.url),
 					playwrightPackage: configuration.playwrightPackage
-						?? await findWorkspacePlaywright(),
+						?? await findWorkspacePlaywright()
+						?? null,
 					channel: configuration.channel ?? "bundled",
 					headless: configuration.headless ?? true,
 					ignoreHttpsErrors: configuration.ignoreHttpsErrors ?? false,
@@ -112,10 +113,8 @@ export async function resolveLaunch(
 					url: normalizeRuntimeUrl(configuration.url),
 					executable: configuration.executablePath ?? await findInstalledChrome(),
 					headless: configuration.headless ?? false,
-					...(configuration.userDataDir === undefined
-						? {}
-						: { userDataDir: configuration.userDataDir }),
-					args: configuration.args ?? [],
+					userDataDir: configuration.userDataDir ?? null,
+					args: [...configuration.args ?? []],
 				},
 			};
 		}

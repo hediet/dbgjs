@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use dbgjs::cdp::{
-    CdpClient, DebuggerPausedParams, DebuggerScriptParsedParams, DebuggerSetBreakpointByUrlParams,
-    RuntimeEvaluateParams, RuntimeRemoteObjectType, TargetAttachToTargetParams,
+    CdpClient, CdpService, DebuggerPausedParams, DebuggerScriptParsedParams,
+    DebuggerSetBreakpointByUrlParams, RuntimeEvaluateParams, RuntimeRemoteObjectType,
+    TargetAttachToTargetParams,
 };
 use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
 use linkrpc::connection::channel::{Channel, RejectingHandler};
@@ -35,6 +36,31 @@ fn debugger_paused_accepts_node_specific_reasons() {
     }))
     .unwrap();
     assert_eq!(event.reason, "Break on start");
+}
+
+#[test]
+fn attach_to_target_accepts_the_dbgjs_auto_attach_hint() {
+    let params: TargetAttachToTargetParams = serde_json::from_value(json!({
+        "targetId": "target-1",
+        "flatten": true,
+        "__dbgjsAutoAttach": true
+    }))
+    .unwrap();
+    assert_eq!(params.dbgjs_auto_attach, Some(true));
+    assert_eq!(
+        serde_json::to_value(params).unwrap()["__dbgjsAutoAttach"],
+        true
+    );
+}
+
+struct DefaultCdpService;
+
+impl CdpService for DefaultCdpService {}
+
+#[test]
+fn generated_cdp_provider_trait_can_use_default_methods() {
+    fn assert_provider<T: CdpService>() {}
+    assert_provider::<DefaultCdpService>();
 }
 
 #[tokio::test]

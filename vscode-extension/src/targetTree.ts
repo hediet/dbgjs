@@ -83,7 +83,7 @@ implements vscode.TreeDataProvider<TreeElement>, vscode.Disposable {
 			return (this.controller.snapshot?.targetForest ?? [])
 				.filter((node) =>
 					node.connectionId === element.connection.id
-					&& node.parentTargetId === undefined
+					&& node.parentTargetId === null
 				)
 				.map((node) => ({
 					kind: "target",
@@ -129,8 +129,8 @@ function targetTreeItem(target: TargetSnapshot, hasChildren: boolean): vscode.Tr
 	item.tooltip = [
 		target.url,
 		`Target: ${target.targetId}`,
-		target.parentId === undefined ? undefined : `Parent: ${target.parentId}`,
-		target.openerId === undefined ? undefined : `Opener: ${target.openerId}`,
+		target.parentId === null ? undefined : `Parent: ${target.parentId}`,
+		target.openerId === null ? undefined : `Opener: ${target.openerId}`,
 	].filter((value): value is string => value !== undefined).join("\n");
 	item.contextValue = target.attached ? "dbgjs.attachedTarget" : "dbgjs.target";
 	item.iconPath = new vscode.ThemeIcon(targetIcon(target.targetType));

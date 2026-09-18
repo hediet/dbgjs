@@ -1,6 +1,5 @@
 [workspace]
 members = ["crates/cdp-protocol", "crates/dbgjs-tui"]
-exclude = ["external/linkrpc/rust"]
 resolver = "3"
 
 [package]
@@ -25,8 +24,8 @@ getrandom = "0.3"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-linkrpc = { path = "external/linkrpc/rust/crates/linkrpc" }
-linkrpc-tokio = { path = "external/linkrpc/rust/crates/linkrpc-tokio" }
+linkrpc = { version = "0.1.0", path = "../linkrpc/rust/crates/linkrpc" }
+linkrpc-tokio = { version = "0.1.0", path = "../linkrpc/rust/crates/linkrpc-tokio" }
 im = "15.1"
 libc = "0.2"
 schemars = "1"

@@ -6,10 +6,15 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseObservationResult, parseTargetDebuggerSnapshot } from "../apiTypes.js";
+import { parse } from "zod/v4/core";
+import {
+	breakpointStatusKind,
+	observationSnapshot,
+} from "../apiTypes.js";
 import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../daemonClient.js";
 import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { connectDaemon } from "../daemonTransport.js";
+import { DebuggerService } from "../generated/debuggerService.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
@@ -46,12 +51,18 @@ test("workspace context identity uses lexical lowercase absolute paths", () => {
 });
 
 test("empty context observations represent idle long-poll timeouts", () => {
-	assert.deepEqual(parseObservationResult({ kind: "items", items: [] }), {});
+	const result = parse(DebuggerService.members.observe_context.resultSchema, {
+		kind: "items",
+		items: [],
+	});
+	assert.equal(observationSnapshot(result), undefined);
 });
 
-test("unit enum states parse from their daemon string representation", () => {
-	const observation = parseObservationResult({
+test("generated schemas validate Rust enum wire representations", () => {
+	const observation = parse(DebuggerService.members.observe_context.resultSchema, {
 		kind: "historyGap",
+		requested_revision: 0,
+		oldest_available_revision: 1,
 		current: {
 			agentInstanceId: "agent",
 			id: "workspace",
@@ -66,6 +77,8 @@ test("unit enum states parse from their daemon string representation", () => {
 				column: 1,
 				status: "pending",
 				enabled: true,
+				condition: null,
+				targetSelector: null,
 			}, {
 				id: "bound-breakpoint",
 				sourcePath: "file:///workspace/app.js",
@@ -73,13 +86,20 @@ test("unit enum states parse from their daemon string representation", () => {
 				column: 1,
 				status: { bound: { application_count: 1 } },
 				enabled: true,
+				condition: null,
+				targetSelector: null,
 			}],
 		},
 	});
-	assert.equal(observation.snapshot?.breakpoints[0]?.status.kind, "pending");
-	assert.deepEqual(observation.snapshot?.breakpoints[1]?.status, {
-		kind: "bound",
-		application_count: 1,
+	const snapshot = observationSnapshot(observation);
+	assert.equal(
+		snapshot?.breakpoints[0] === undefined
+			? undefined
+			: breakpointStatusKind(snapshot.breakpoints[0].status),
+		"pending",
+	);
+	assert.deepEqual(snapshot?.breakpoints[1]?.status, {
+		bound: { application_count: 1 },
 	});
 });
 
@@ -95,10 +115,11 @@ test("unit enum states parse from their daemon string representation", () => {
 			browserContextId: null,
 			subtype: null,
 		});
-		const snapshot = parseObservationResult({
+		const snapshot = observationSnapshot(
+			parse(DebuggerService.members.observe_context.resultSchema, {
 			kind: "historyGap",
-			requestedRevision: 0,
-			oldestAvailableRevision: 1,
+			requested_revision: 0,
+			oldest_available_revision: 1,
 			current: {
 				agentInstanceId: "agent",
 				id: "workspace",
@@ -110,15 +131,17 @@ test("unit enum states parse from their daemon string representation", () => {
 					connectionGeneration: 3,
 					target: target("parent"),
 					parentTargetId: null,
+					attachment: "detached",
 				}, {
 					connectionId: "node",
 					connectionGeneration: 3,
 					target: target("child"),
 					parentTargetId: "parent",
+					attachment: "detached",
 				}],
 				breakpoints: [],
 			},
-		}).snapshot;
+		}));
 
 		assert.ok(snapshot);
 		const parent = snapshot.targetForest[0];
@@ -140,7 +163,7 @@ test("unit enum states parse from their daemon string representation", () => {
 });
 
 test("target snapshots preserve ordered console messages", () => {
-	const snapshot = parseTargetDebuggerSnapshot({
+	const snapshot = parse(DebuggerService.members.get_target.resultSchema, {
 		contextId: "workspace",
 		connectionId: "node",
 		targetId: "process",

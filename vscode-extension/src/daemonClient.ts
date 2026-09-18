@@ -1,4 +1,3 @@
-import type { JsonValue } from "@hediet/linkrpc";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
@@ -7,27 +6,25 @@ import {
 	type ConnectionConfiguration,
 	type ContextSnapshot,
 	type ContextSummary,
+	type ContextKind,
+	type ObservationCursor,
 	type EvaluationSnapshot,
 	type SourceContentSnapshot,
 	type SourceSnapshotInfo,
 	type TargetDebuggerSnapshot,
+	type TargetWaitPredicate,
+	type StepKind,
 	type VariableSnapshot,
-	parseContextSnapshot,
-	parseContextSummaries,
-	parseEvaluation,
-	parseObservationResult,
-	parseSourceContent,
-	parseSourceInfos,
-	parseTargetDebuggerSnapshot,
-	parseVariables,
+	type DebuggerServiceClient,
+	observationSnapshot,
 } from "./apiTypes.js";
 import { connectDaemon, type DaemonConnection } from "./daemonTransport.js";
-
-const debuggerInterface = "dev.dbgjs.cdp-debugger";
+import { DebuggerService } from "./generated/debuggerService.js";
 
 export class DaemonClient {
 	private constructor(
 		private readonly hub: DaemonConnection,
+		private readonly _service: DebuggerServiceClient,
 		public readonly stateFile: string,
 	) {}
 
@@ -36,7 +33,7 @@ export class DaemonClient {
 		log?: (message: string) => void,
 	): Promise<DaemonClient> {
 		const hub = await connectDaemonHub(stateFile, "commands", log);
-		return new DaemonClient(hub, stateFile);
+		return new DaemonClient(hub, hub.connection.get(DebuggerService), stateFile);
 	}
 
 	public onClose(listener: () => void): { dispose(): void } {
@@ -48,25 +45,25 @@ export class DaemonClient {
 	}
 
 	public async listContexts(cwd?: string): Promise<readonly ContextSummary[]> {
-		return parseContextSummaries(await this.call("list_contexts", {
+		return this._service.list_contexts({
 			cwd: cwd ?? null,
-		}));
+		});
 	}
 
 	public async putContext(
 		contextId: string,
-		kind: "path" | "named",
+		kind: ContextKind,
 		displayName: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("put_context", {
+		return this._service.put_context({
 			contextId,
 			kind,
 			displayName,
-		}));
+		});
 	}
 
 	public async getContext(contextId: string): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("get_context", { contextId }));
+		return this._service.get_context({ contextId });
 	}
 
 	public async putConnection(
@@ -74,31 +71,31 @@ export class DaemonClient {
 		connectionId: string,
 		configuration: ConnectionConfiguration,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("put_connection", {
+		return this._service.put_connection({
 			contextId,
 			connectionId,
-			configuration: connectionConfigurationJson(configuration),
-		}));
+			configuration,
+		});
 	}
 
 	public async connectConnection(
 		contextId: string,
 		connectionId: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("connect_connection", {
+		return this._service.connect_connection({
 			contextId,
 			connectionId,
-		}));
+		});
 	}
 
 	public async disconnectConnection(
 		contextId: string,
 		connectionId: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("disconnect_connection", {
+		return this._service.disconnect_connection({
 			contextId,
 			connectionId,
-		}));
+		});
 	}
 
 	public async deleteConnection(
@@ -106,11 +103,11 @@ export class DaemonClient {
 		connectionId: string,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("delete_connection", {
+		return this._service.delete_connection({
 			contextId,
 			connectionId,
-			options: { requestId },
-		}));
+			options: { expectedRevision: null, requestId },
+		});
 	}
 
 	public async observeContext(
@@ -118,14 +115,14 @@ export class DaemonClient {
 		revision: number | undefined,
 		timeoutMs: number,
 	): Promise<ContextSnapshot | undefined> {
-		const cursor = revision === undefined
+		const cursor: ObservationCursor = revision === undefined
 			? { kind: "current" }
 			: { kind: "after", revision };
-		return parseObservationResult(await this.call("observe_context", {
+		return observationSnapshot(await this._service.observe_context({
 			contextId,
 			cursor,
 			timeoutMs,
-		})).snapshot;
+		}));
 	}
 
 	public async getTarget(
@@ -133,41 +130,45 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("get_target", {
+		return this._service.get_target({
 			contextId,
 			connectionId,
 			targetId,
-		}));
+		});
 	}
 
 	public async attachTarget(
 		contextId: string,
 		connectionId: string,
 		targetId: string,
+		expectedConnectionGeneration: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("attach_target", {
+		const result = await this._service.attach_target({
 			contextId,
 			connectionId,
 			targetId,
-		}));
+			options: {
+				force: false,
+				expectedConnectionGeneration,
+			},
+		});
+		return result.target;
 	}
 
 	public async waitTarget(
 		contextId: string,
 		connectionId: string,
 		targetId: string,
-		predicate:
-			| { readonly kind: "running"; }
-			| { readonly kind: "paused"; readonly afterEpoch: number; },
+		predicate: TargetWaitPredicate,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("wait_target", {
+		return this._service.wait_target({
 			contextId,
 			connectionId,
 			targetId,
 			predicate,
 			timeoutMs,
-		}));
+		});
 	}
 
 	public async observeTarget(
@@ -177,14 +178,14 @@ export class DaemonClient {
 		afterRevision: number,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot | undefined> {
-		const result = await this.call("observe_target", {
+		const result = await this._service.observe_target({
 			contextId,
 			connectionId,
 			targetId,
 			afterRevision,
 			timeoutMs,
 		});
-		return result === null ? undefined : parseTargetDebuggerSnapshot(result);
+		return result ?? undefined;
 	}
 
 	public async releaseTarget(
@@ -192,11 +193,11 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("release_target", {
+		return this._service.release_target({
 			contextId,
 			connectionId,
 			targetId,
-		}));
+		});
 	}
 
 	public async resumeTarget(
@@ -205,12 +206,12 @@ export class DaemonClient {
 		targetId: string,
 		pauseEpoch: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("resume_target", {
+		return this._service.resume_target({
 			contextId,
 			connectionId,
 			targetId,
 			pauseEpoch,
-		}));
+		});
 	}
 
 	public async stepTarget(
@@ -218,15 +219,15 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 		pauseEpoch: number,
-		kind: "into" | "over" | "out",
+		kind: StepKind,
 	): Promise<TargetDebuggerSnapshot> {
-		return parseTargetDebuggerSnapshot(await this.call("step_target", {
+		return this._service.step_target({
 			contextId,
 			connectionId,
 			targetId,
 			pauseEpoch,
 			kind,
-		}));
+		});
 	}
 
 	public async evaluateTarget(
@@ -237,14 +238,14 @@ export class DaemonClient {
 		frameIndex: number,
 		expression: string,
 	): Promise<EvaluationSnapshot> {
-		return parseEvaluation(await this.call("evaluate_target", {
+		return this._service.evaluate_target({
 			contextId,
 			connectionId,
 			targetId,
 			pauseEpoch: pauseEpoch ?? null,
 			frameIndex,
 			expression,
-		}));
+		});
 	}
 
 	public async getScopeVariables(
@@ -255,14 +256,14 @@ export class DaemonClient {
 		frameIndex: number,
 		scopeIndex: number,
 	): Promise<readonly VariableSnapshot[]> {
-		return parseVariables(await this.call("get_scope_variables", {
+		return this._service.get_scope_variables({
 			contextId,
 			connectionId,
 			targetId,
 			pauseEpoch,
 			frameIndex,
 			scopeIndex,
-		}));
+		});
 	}
 
 	public async getObjectProperties(
@@ -272,13 +273,13 @@ export class DaemonClient {
 		pauseEpoch: number | undefined,
 		objectId: string,
 	): Promise<readonly VariableSnapshot[]> {
-		return parseVariables(await this.call("get_object_properties", {
+		return this._service.get_object_properties({
 			contextId,
 			connectionId,
 			targetId,
 			pauseEpoch: pauseEpoch ?? null,
 			objectId,
-		}));
+		});
 	}
 
 	public async putBreakpoint(
@@ -287,23 +288,12 @@ export class DaemonClient {
 		specification: BreakpointSpec,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("put_breakpoint_spec", {
+		return this._service.put_breakpoint_spec({
 			contextId,
 			breakpointId,
-			specification: {
-				sourcePath: specification.sourcePath,
-				line: specification.line,
-				column: specification.column,
-				enabled: specification.enabled,
-				...(specification.condition === undefined
-					? {}
-					: { condition: specification.condition }),
-				...(specification.targetSelector === undefined
-					? {}
-					: { targetSelector: specification.targetSelector }),
-			},
-			options: { requestId },
-		}));
+			specification,
+			options: { expectedRevision: null, requestId },
+		});
 	}
 
 	public async deleteBreakpoint(
@@ -311,70 +301,30 @@ export class DaemonClient {
 		breakpointId: string,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return parseContextSnapshot(await this.call("delete_breakpoint", {
+		return this._service.delete_breakpoint({
 			contextId,
 			breakpointId,
-			options: { requestId },
-		}));
+			options: { expectedRevision: null, requestId },
+		});
 	}
 
 	public async listSources(contextId: string): Promise<readonly SourceSnapshotInfo[]> {
-		return parseSourceInfos(await this.call("list_sources", {
+		return this._service.list_sources({
 			contextId,
 			path: null,
-		}));
+		});
 	}
 
 	public async showSource(contextId: string, path: string): Promise<SourceContentSnapshot> {
-		return parseSourceContent(await this.call("show_source", { contextId, path }));
-	}
-
-	private async call(member: string, params: JsonValue): Promise<JsonValue> {
-		return this.hub.connection.channel.sendRequest(
-			`${debuggerInterface}::${member}`,
-			params,
-		);
-	}
-}
-
-function connectionConfigurationJson(
-	configuration: ConnectionConfiguration,
-): Record<string, JsonValue> {
-	switch (configuration.kind) {
-		case "directCdp":
-		case "nodeInspector":
-		case "process":
-			return configuration;
-		case "processTree":
-			return configuration;
-		case "playwright":
-			return {
-				kind: configuration.kind,
-				url: configuration.url,
-				playwrightPackage: configuration.playwrightPackage ?? null,
-				channel: configuration.channel,
-				headless: configuration.headless,
-				ignoreHttpsErrors: configuration.ignoreHttpsErrors,
-			};
-		case "chrome":
-			return {
-				kind: configuration.kind,
-				url: configuration.url,
-				executable: configuration.executable,
-				headless: configuration.headless,
-				userDataDir: configuration.userDataDir ?? null,
-				args: [...configuration.args],
-			};
-		case "node":
-			return {
-				kind: configuration.kind,
-				program: configuration.program,
-				args: [...configuration.args],
-				cwd: configuration.cwd,
-				runtimeExecutable: configuration.runtimeExecutable,
-				runtimeArgs: [...configuration.runtimeArgs],
-				env: { ...configuration.env },
-			};
+		return this._service.show_source({
+			contextId,
+			path,
+			options: {
+				line: null,
+				contextLines: 0,
+				view: "policy",
+			},
+		});
 	}
 }
 

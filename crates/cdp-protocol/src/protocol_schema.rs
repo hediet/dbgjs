@@ -47,11 +47,7 @@ pub fn import_cdp_protocol(
                     let type_name = required_str(type_definition, "id")?;
                     let mut schema = convert_schema(type_definition, domain_name);
                     apply_type_compatibility_overrides(domain_name, type_name, &mut schema);
-                    insert_unique(
-                        &mut schemas,
-                        format!("{domain_name}.{type_name}"),
-                        schema,
-                    )?;
+                    insert_unique(&mut schemas, format!("{domain_name}.{type_name}"), schema)?;
                 }
             }
 
@@ -205,6 +201,18 @@ fn compatibility_optional_fields(wire_method: &str) -> &'static [&'static str] {
 }
 
 fn apply_compatibility_overrides(wire_method: &str, params: &mut Value) {
+    if wire_method == "Target.attachToTarget" {
+        params["properties"]["__dbgjsAutoAttach"] = json!({
+            "type": "boolean",
+            CODEGEN_KEY: {
+                "cdpType": "boolean",
+                "originalRef": Value::Null,
+                "optional": true,
+                "experimental": false,
+                "deprecated": false,
+            },
+        });
+    }
     if wire_method == "Debugger.paused" {
         params["properties"]["reason"]
             .as_object_mut()
@@ -214,11 +222,19 @@ fn apply_compatibility_overrides(wire_method: &str, params: &mut Value) {
 }
 
 fn apply_type_compatibility_overrides(domain: &str, name: &str, schema: &mut Value) {
-    if domain == "Runtime" && name == "RemoteObject"
-        && let Some(subtypes) = schema.pointer_mut("/properties/subtype/enum").and_then(Value::as_array_mut)
+    if domain == "Runtime"
+        && name == "RemoteObject"
+        && let Some(subtypes) = schema
+            .pointer_mut("/properties/subtype/enum")
+            .and_then(Value::as_array_mut)
     {
         // V8 emits these internal-property subtypes but omits them from the public PDL.
-        for subtype in ["internal#location", "internal#scope", "internal#scopeList", "internal#entry"] {
+        for subtype in [
+            "internal#location",
+            "internal#scope",
+            "internal#scopeList",
+            "internal#entry",
+        ] {
             let subtype = Value::String(subtype.into());
             if !subtypes.contains(&subtype) {
                 subtypes.push(subtype);
@@ -414,7 +430,7 @@ mod tests {
     fn imports_a_hashed_typed_interface_for_generic_code_generation() {
         let typed = import_typed_cdp_protocol(BROWSER_PROTOCOL, JS_PROTOCOL).unwrap();
         assert_eq!(typed.id, "cdp.protocol");
-        assert_eq!(typed.hash, "f4103a602d4212c9");
+        assert_eq!(typed.hash, "140c9802834490c9");
         assert_eq!(linkrpc::prelude::compute_interface_hash(&typed), typed.hash);
         assert_eq!(typed.methods.len(), 896);
         assert_eq!(typed.components.unwrap().schemas.unwrap().len(), 607);
@@ -476,6 +492,23 @@ mod tests {
                 true
             );
         }
+    }
+
+    #[test]
+    fn adds_the_dbgjs_auto_attach_compatibility_parameter() {
+        let interface = imported();
+        let params = &interface["methods"]["Target.attachToTarget"]["params"];
+        assert_eq!(params["properties"]["__dbgjsAutoAttach"]["type"], "boolean");
+        assert_eq!(
+            params["properties"]["__dbgjsAutoAttach"][CODEGEN_KEY]["optional"],
+            true
+        );
+        assert!(
+            !params["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("__dbgjsAutoAttach"))
+        );
     }
 
     #[test]

@@ -16,22 +16,25 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use linkrpc::connection::channel::{Channel, RequestHandler};
-use linkrpc::prelude::{JsonRpcError, MessageTransport, TransportError, error_codes};
+use linkrpc::prelude::{
+    CallCtx, InterfaceHandler, JsonRpcError, MessageTransport, TransportError, error_codes,
+};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionResult, CdpClient, TargetAttachToTargetParams, TargetAttachToTargetResult,
-    TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
-    TargetDetachedFromTargetParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, CdpServer, CdpService,
+    TargetAttachToTargetParams, TargetAttachToTargetResult, TargetAttachedToTargetParams,
+    TargetDetachFromTargetParams, TargetDetachFromTargetResult, TargetDetachedFromTargetParams,
+    TargetGetTargetsParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
     TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
     TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
 use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::service_api::TargetSnapshot;
 use crate::session_transport::{CdpEnvelope, CdpSessionMux};
-use crate::target_domain::{from_json, invalid_params, target_info_from_snapshot, to_json};
+use crate::target_domain::{invalid_params, normalize_typed_cdp_params, target_info_from_snapshot};
 
 /// One target a [`TargetSource`] knows about. `snapshot` is the provider-neutral CDP `TargetInfo`;
 /// the remaining fields carry per-target state the debugger service needs but
@@ -324,7 +327,7 @@ impl VirtualBrowserRoot {
         let state = Arc::new(VirtualRootState::new(source, mux.clone()));
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(|error| error.to_string())?),
-            Box::new(RootHandler(state.clone())),
+            Box::new(RootHandler::new(state.clone())),
         );
         let _ = state.root_channel.set(root_channel.clone());
         state.track(tokio::spawn({
@@ -366,7 +369,12 @@ impl VirtualBrowserRoot {
     }
 
     pub fn target_primary_window_id(&self, target_id: &str) -> Option<u32> {
-        self.state.known.lock().unwrap().get(target_id)?.primary_window_id
+        self.state
+            .known
+            .lock()
+            .unwrap()
+            .get(target_id)?
+            .primary_window_id
     }
 
     /// Whether `target_id` is genuinely paused waiting for a debugger to resume it.
@@ -490,10 +498,13 @@ impl VirtualRootState {
         self.tasks.lock().unwrap().push(task);
     }
 
-    async fn notify_root(&self, method: &str, params: Result<Value, JsonRpcError>) {
-        if let (Some(channel), Ok(params)) = (self.root_channel.get(), params) {
-            let _ = channel.notify(method, params).await;
-        }
+    fn root_client(&self) -> CdpClient<Channel> {
+        CdpClient::root(
+            self.root_channel
+                .get()
+                .expect("root channel is set before target events are emitted")
+                .clone(),
+        )
     }
 
     /// Discovery only runs while a client asked for it, either explicitly or implicitly by
@@ -576,21 +587,19 @@ impl VirtualRootState {
                 };
                 if self.discover.load(Ordering::Relaxed) && changed {
                     if is_new {
-                        self.notify_root(
-                            "Target.targetCreated",
-                            to_json(TargetTargetCreatedParams {
+                        let _ = self
+                            .root_client()
+                            .target_target_created(TargetTargetCreatedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
-                            }),
-                        )
-                        .await;
+                            })
+                            .await;
                     } else {
-                        self.notify_root(
-                            "Target.targetInfoChanged",
-                            to_json(TargetTargetInfoChangedParams {
+                        let _ = self
+                            .root_client()
+                            .target_target_info_changed(TargetTargetInfoChangedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
-                            }),
-                        )
-                        .await;
+                            })
+                            .await;
                     }
                 }
                 if is_new && self.auto_attach.load(Ordering::Relaxed) {
@@ -608,13 +617,12 @@ impl VirtualRootState {
                 };
                 self.detach_sessions_for_target(&target_id).await;
                 if existed && self.discover.load(Ordering::Relaxed) {
-                    self.notify_root(
-                        "Target.targetDestroyed",
-                        to_json(TargetTargetDestroyedParams {
+                    let _ = self
+                        .root_client()
+                        .target_target_destroyed(TargetTargetDestroyedParams {
                             target_id: target_id.clone(),
-                        }),
-                    )
-                    .await;
+                        })
+                        .await;
                 }
             }
         }
@@ -677,15 +685,14 @@ impl VirtualRootState {
         }
         let mut target_info = target_info_from_snapshot(&target.snapshot);
         target_info.attached = true;
-        self.notify_root(
-            "Target.attachedToTarget",
-            to_json(TargetAttachedToTargetParams {
+        let _ = self
+            .root_client()
+            .target_attached_to_target(TargetAttachedToTargetParams {
                 session_id: session_id.clone(),
                 target_info,
                 waiting_for_debugger: target.waiting_for_debugger,
-            }),
-        )
-        .await;
+            })
+            .await;
         Ok(AttachedSession {
             session_id,
             stole_external_owner: attachment.stole_external_owner,
@@ -733,14 +740,13 @@ impl VirtualRootState {
         {
             known.snapshot.attached = false;
         }
-        self.notify_root(
-            "Target.detachedFromTarget",
-            to_json(TargetDetachedFromTargetParams {
+        let _ = self
+            .root_client()
+            .target_detached_from_target(TargetDetachedFromTargetParams {
                 session_id,
                 target_id: Some(session.target_id),
-            }),
-        )
-        .await;
+            })
+            .await;
     }
 
     async fn detach_sessions_for_target(&self, target_id: &str) {
@@ -754,87 +760,6 @@ impl VirtualRootState {
             .collect::<Vec<_>>();
         for session_id in matching {
             self.detach(Some(&session_id), None).await;
-        }
-    }
-
-    async fn handle_root_request(
-        &self,
-        method: String,
-        params: Value,
-    ) -> Result<Value, JsonRpcError> {
-        match method.as_str() {
-            "Browser.getVersion" => to_json(BrowserGetVersionResult {
-                protocol_version: "1.3".to_owned(),
-                product: self.source.product(),
-                revision: String::new(),
-                user_agent: format!("dbgjs-virtual-browser-root/{}", env!("CARGO_PKG_VERSION")),
-                js_version: String::new(),
-            }),
-            "Target.getTargets" => {
-                let targets = self.refresh_known().await;
-                to_json(TargetGetTargetsResult {
-                    target_infos: targets
-                        .iter()
-                        .map(|target| target_info_from_snapshot(&target.snapshot))
-                        .collect(),
-                })
-            }
-            "Target.setDiscoverTargets" => {
-                let request: TargetSetDiscoverTargetsParams = from_json(params)?;
-                let was_enabled = self.discover.swap(request.discover, Ordering::Relaxed);
-                self.sync_discovery_demand().await;
-                if request.discover && !was_enabled {
-                    for target in self.refresh_known().await {
-                        self.notify_root(
-                            "Target.targetCreated",
-                            to_json(TargetTargetCreatedParams {
-                                target_info: target_info_from_snapshot(&target.snapshot),
-                            }),
-                        )
-                        .await;
-                    }
-                }
-                to_json(TargetSetDiscoverTargetsResult::new())
-            }
-            "Target.setAutoAttach" => {
-                let request: TargetSetAutoAttachParams = from_json(params)?;
-                let was_enabled = self
-                    .auto_attach
-                    .swap(request.auto_attach, Ordering::Relaxed);
-                self.sync_discovery_demand().await;
-                self.source
-                    .set_wait_for_debugger_on_start(
-                        request.auto_attach && request.wait_for_debugger_on_start,
-                    )
-                    .await;
-                if request.auto_attach && !was_enabled {
-                    for target in self.refresh_known().await {
-                        if !target.snapshot.attached {
-                            let _ = self.attach_target(target.target_id(), false).await;
-                        }
-                    }
-                }
-                to_json(TargetSetAutoAttachResult::new())
-            }
-            "Target.attachToTarget" => {
-                let request: TargetAttachToTargetParams = from_json(params)?;
-                let attached = self.attach_target(&request.target_id, false).await?;
-                to_json(TargetAttachToTargetResult {
-                    session_id: attached.session_id,
-                })
-            }
-            "Target.detachFromTarget" => {
-                let request: TargetDetachFromTargetParams = from_json(params)?;
-                self.detach(request.session_id.as_deref(), request.target_id.as_deref())
-                    .await;
-                to_json(TargetDetachFromTargetResult::new())
-            }
-            _ => Err(JsonRpcError::new(
-                error_codes::METHOD_NOT_FOUND,
-                format!(
-                    "dbgjs's virtual browser root does not implement '{method}'; attach to a target and send target-scoped commands instead"
-                ),
-            )),
         }
     }
 
@@ -852,12 +777,116 @@ impl VirtualRootState {
     }
 }
 
-struct RootHandler(Arc<VirtualRootState>);
+#[async_trait]
+impl CdpService for VirtualRootState {
+    async fn browser_get_version(
+        &self,
+        _ctx: &CallCtx,
+        _params: BrowserGetVersionParams,
+    ) -> Result<BrowserGetVersionResult, JsonRpcError> {
+        Ok(BrowserGetVersionResult {
+            protocol_version: "1.3".to_owned(),
+            product: self.source.product(),
+            revision: String::new(),
+            user_agent: format!("dbgjs-virtual-browser-root/{}", env!("CARGO_PKG_VERSION")),
+            js_version: String::new(),
+        })
+    }
+
+    async fn target_get_targets(
+        &self,
+        _ctx: &CallCtx,
+        _params: TargetGetTargetsParams,
+    ) -> Result<TargetGetTargetsResult, JsonRpcError> {
+        let targets = self.refresh_known().await;
+        Ok(TargetGetTargetsResult {
+            target_infos: targets
+                .iter()
+                .map(|target| target_info_from_snapshot(&target.snapshot))
+                .collect(),
+        })
+    }
+
+    async fn target_set_discover_targets(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetSetDiscoverTargetsParams,
+    ) -> Result<TargetSetDiscoverTargetsResult, JsonRpcError> {
+        let was_enabled = self.discover.swap(params.discover, Ordering::Relaxed);
+        self.sync_discovery_demand().await;
+        if params.discover && !was_enabled {
+            for target in self.refresh_known().await {
+                let _ = self
+                    .root_client()
+                    .target_target_created(TargetTargetCreatedParams {
+                        target_info: target_info_from_snapshot(&target.snapshot),
+                    })
+                    .await;
+            }
+        }
+        Ok(TargetSetDiscoverTargetsResult::new())
+    }
+
+    async fn target_set_auto_attach(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetSetAutoAttachParams,
+    ) -> Result<TargetSetAutoAttachResult, JsonRpcError> {
+        let was_enabled = self.auto_attach.swap(params.auto_attach, Ordering::Relaxed);
+        self.sync_discovery_demand().await;
+        self.source
+            .set_wait_for_debugger_on_start(params.auto_attach && params.wait_for_debugger_on_start)
+            .await;
+        if params.auto_attach && !was_enabled {
+            for target in self.refresh_known().await {
+                if !target.snapshot.attached {
+                    let _ = self.attach_target(target.target_id(), false).await;
+                }
+            }
+        }
+        Ok(TargetSetAutoAttachResult::new())
+    }
+
+    async fn target_attach_to_target(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetAttachToTargetParams,
+    ) -> Result<TargetAttachToTargetResult, JsonRpcError> {
+        let attached = self.attach_target(&params.target_id, false).await?;
+        Ok(TargetAttachToTargetResult {
+            session_id: attached.session_id,
+        })
+    }
+
+    async fn target_detach_from_target(
+        &self,
+        _ctx: &CallCtx,
+        params: TargetDetachFromTargetParams,
+    ) -> Result<TargetDetachFromTargetResult, JsonRpcError> {
+        self.detach(params.session_id.as_deref(), params.target_id.as_deref())
+            .await;
+        Ok(TargetDetachFromTargetResult::new())
+    }
+}
+
+struct RootHandler(CdpServer<VirtualRootState>);
+
+impl RootHandler {
+    fn new(state: Arc<VirtualRootState>) -> Self {
+        Self(CdpServer::new(state))
+    }
+}
 
 #[async_trait]
 impl RequestHandler for RootHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        self.0.handle_root_request(method, params).await
+        self.0
+            .handle_request(
+                &method,
+                normalize_typed_cdp_params(params),
+                CallCtx::default(),
+            )
+            .await
     }
 }
 
@@ -1144,6 +1173,33 @@ mod tests {
         let harness = Harness::start(vec![host_target("$node-root", 4242)]);
         let version = harness.call("Browser.getVersion", json!({})).await;
         assert_eq!(version["product"], "Process 4242");
+    }
+
+    #[tokio::test]
+    async fn typed_root_accepts_null_for_parameterless_methods_but_not_required_params() {
+        let harness = Harness::start(vec![host_target("$node-root", 4242)]);
+
+        let version = harness
+            .client
+            .call("Browser.getVersion", Value::Null)
+            .await
+            .unwrap();
+        assert_eq!(version["product"], "Process 4242");
+
+        let targets = harness
+            .client
+            .call("Target.getTargets", Value::Null)
+            .await
+            .unwrap();
+        assert_eq!(targets["targetInfos"].as_array().unwrap().len(), 1);
+
+        let error = harness
+            .client
+            .call("Target.attachToTarget", Value::Null)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, error_codes::INVALID_PARAMS);
+        assert!(error.message.contains("targetId"), "{error:?}");
     }
 
     #[tokio::test]

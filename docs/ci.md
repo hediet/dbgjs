@@ -9,12 +9,16 @@ preserve unrelated work when moving or committing changes.
 ## Change detection and caches
 
 The small change-detection job always runs. Changes confined to `docs/`, `todo/`,
-root Markdown files, the external-dependency README, or agent skills do not
+root Markdown files or agent skills do not
 start Rust or packaging jobs. The VS Code extension has a separate build and
 unit-test job, including its LinkRPC socket transport tests, on every CI run.
+The separate required contract-check job builds the LinkRPC CLI and Rust
+exporter, then checks that the canonical bundle and generated TypeScript match
+their authored sources. While dependencies use development links, a shared
+setup action checks out the pinned LinkRPC revision beside this repository.
 Extension-only changes still skip the native build and packaging jobs.
 Documentation inside an npm package still triggers packaging. Unknown paths,
-Rust sources, embedded JavaScript, test fixtures, vendored sources, dependency
+Rust sources, embedded JavaScript, test fixtures, contract schemas, dependency
 manifests, and workflow changes conservatively trigger both jobs.
 
 Set **CI result** as the required branch-protection check, not individual matrix
@@ -29,8 +33,11 @@ save caches; pull requests and manually dispatched feature branches are
 restore-only, preventing unmerged changes from modifying caches consumed by
 `main`. The Rust version is pinned in
 [rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
-downloads; `npm ci` still installs the locked build dependencies before Cargo
-embeds the protocol schemas.
+downloads; `npm ci` installs the locked development dependencies. Cargo consumes
+the checked-in interface bundle rather than importing npm CDP schemas during
+ordinary builds. See [RPC contracts and code generation](./contracts.md) for
+source ownership, regeneration checks, and the temporary sibling LinkRPC
+development dependencies used until publication.
 
 An npm-only change skips Linux/Windows x64 Rust unit tests but still verifies and
 packs release binaries, reusing unchanged workspace outputs from the trusted

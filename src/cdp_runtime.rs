@@ -12,17 +12,17 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use linkrpc::connection::channel::{Channel, RequestHandler};
 use linkrpc::prelude::{JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, TransportError};
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 use crate::cdp::{
-    CdpClient, DebuggerDisableParams, DebuggerEnableParams, DebuggerGetScriptSourceParams,
-    DebuggerLocation, DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
-    DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
-    DebuggerStepOutParams, DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
+    CdpClient, CdpServer, CdpService, DebuggerDisableParams, DebuggerEnableParams,
+    DebuggerGetScriptSourceParams, DebuggerLocation, DebuggerPausedParams,
+    DebuggerRemoveBreakpointParams, DebuggerResumeParams, DebuggerScriptParsedParams,
+    DebuggerSetBreakpointParams, DebuggerStepIntoParams, DebuggerStepOutParams,
+    DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
     HeapProfilerReportHeapSnapshotProgressParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
     RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
@@ -114,9 +114,8 @@ impl CdpConnection {
         let (heap_snapshot_progress, _) = watch::channel(None);
         let (raw_events, _) = broadcast::channel(RAW_EVENT_BUFFER);
         let raw_event_history = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let source_map_resources = SourceMapResources::new(
-            mux.open_root().map_err(CdpRuntimeError::OpenSession)?,
-        );
+        let source_map_resources =
+            SourceMapResources::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?);
         let root_channel = CdpEventHandler {
             session: session.clone(),
             sender: event_sender,
@@ -239,8 +238,39 @@ pub enum RootCdpEvent {
     TargetDestroyed(TargetTargetDestroyedParams),
 }
 
+#[derive(Clone)]
 struct RootCdpEventHandler {
     sender: mpsc::UnboundedSender<Result<RootCdpEvent, CdpRuntimeEventError>>,
+}
+
+#[async_trait]
+impl CdpService for RootCdpEventHandler {
+    async fn target_target_created(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: TargetTargetCreatedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(RootCdpEvent::TargetCreated(params)));
+        Ok(())
+    }
+
+    async fn target_target_info_changed(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: TargetTargetInfoChangedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(RootCdpEvent::TargetChanged(params)));
+        Ok(())
+    }
+
+    async fn target_target_destroyed(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: TargetTargetDestroyedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(RootCdpEvent::TargetDestroyed(params)));
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -253,17 +283,13 @@ impl RequestHandler for RootCdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
-        let event = match method.as_str() {
-            "Target.targetCreated" => deserialize(&method, params).map(RootCdpEvent::TargetCreated),
-            "Target.targetInfoChanged" => {
-                deserialize(&method, params).map(RootCdpEvent::TargetChanged)
-            }
-            "Target.targetDestroyed" => {
-                deserialize(&method, params).map(RootCdpEvent::TargetDestroyed)
-            }
-            _ => return,
-        };
-        let _ = self.sender.send(event);
+        let server = CdpServer::new(Arc::new(self.clone()));
+        if let Err(error) = server.dispatch_notification(&method, params).await {
+            let _ = self.sender.send(Err(CdpRuntimeEventError::Decode {
+                method,
+                message: error.message,
+            }));
+        }
     }
 }
 
@@ -542,7 +568,12 @@ impl CdpDebuggerSession {
                 let (source_map, resolved_source_map_url, source_map_error) = match source_map_url {
                     Some(source_map_url) => {
                         match self
-                            .load_source_map(generated_url, script_hash, source_map_url, frame_id.as_deref())
+                            .load_source_map(
+                                generated_url,
+                                script_hash,
+                                source_map_url,
+                                frame_id.as_deref(),
+                            )
                             .await
                         {
                             Ok((source_map, resolved_url)) => {
@@ -780,25 +811,28 @@ impl CdpDebuggerSession {
         );
         params.frame_id = Some(frame_id);
         let mut params = serde_json::to_value(params).expect("CDP resource parameters serialize");
-        let resource = self.source_map_resources.register(&mut params).map_err(|message| {
-            CdpRuntimeError::SourceMapProtocol {
+        let resource = self
+            .source_map_resources
+            .register(&mut params)
+            .map_err(|message| CdpRuntimeError::SourceMapProtocol {
                 url: resolved_url.to_owned(),
                 source: Box::new(CdpRuntimeError::Transport(message.to_owned())),
-            }
-        })?;
+            })?;
         let loaded = tokio::time::timeout(
             SOURCE_MAP_RESOURCE_TIMEOUT,
             self.channel.call("Network.loadNetworkResource", params),
         )
-            .await
-            .map_err(|_| CdpRuntimeError::SourceMapProtocol {
-                url: resolved_url.to_owned(),
-                source: Box::new(CdpRuntimeError::Transport("resource load timed out".to_owned())),
-            })?
-            .map_err(|error| CdpRuntimeError::SourceMapProtocol {
-                url: resolved_url.to_owned(),
-                source: Box::new(CdpRuntimeError::protocol(error)),
-            })?;
+        .await
+        .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+            url: resolved_url.to_owned(),
+            source: Box::new(CdpRuntimeError::Transport(
+                "resource load timed out".to_owned(),
+            )),
+        })?
+        .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+            url: resolved_url.to_owned(),
+            source: Box::new(CdpRuntimeError::protocol(error)),
+        })?;
         let loaded: crate::cdp::NetworkLoadNetworkResourcePageResult =
             serde_json::from_value(loaded["resource"].clone()).map_err(|error| {
                 CdpRuntimeError::SourceMapProtocol {
@@ -821,18 +855,19 @@ impl CdpDebuggerSession {
             loop {
                 let mut params = IoReadParams::new(stream.clone());
                 params.size = Some(8 * 1024 * 1024);
-                let chunk = tokio::time::timeout(
-                    SOURCE_MAP_RESOURCE_TIMEOUT,
-                    self.client.io_read(params),
-                ).await.map_err(|_| CdpRuntimeError::SourceMapProtocol {
-                    url: resolved_url.to_owned(),
-                    source: Box::new(CdpRuntimeError::Transport("resource read timed out".to_owned())),
-                })?.map_err(|error| {
-                    CdpRuntimeError::SourceMapProtocol {
-                        url: resolved_url.to_owned(),
-                        source: Box::new(CdpRuntimeError::protocol(error)),
-                    }
-                })?;
+                let chunk =
+                    tokio::time::timeout(SOURCE_MAP_RESOURCE_TIMEOUT, self.client.io_read(params))
+                        .await
+                        .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+                            url: resolved_url.to_owned(),
+                            source: Box::new(CdpRuntimeError::Transport(
+                                "resource read timed out".to_owned(),
+                            )),
+                        })?
+                        .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+                            url: resolved_url.to_owned(),
+                            source: Box::new(CdpRuntimeError::protocol(error)),
+                        })?;
                 if chunk.base64_encoded.unwrap_or(false) {
                     bytes.extend(
                         BASE64_STANDARD
@@ -852,15 +887,18 @@ impl CdpDebuggerSession {
         let close_result = tokio::time::timeout(
             SOURCE_MAP_RESOURCE_TIMEOUT,
             self.client.io_close(IoCloseParams::new(stream)),
-        ).await
-            .map_err(|_| CdpRuntimeError::SourceMapProtocol {
-                url: resolved_url.to_owned(),
-                source: Box::new(CdpRuntimeError::Transport("resource close timed out".to_owned())),
-            })?
-            .map_err(|error| CdpRuntimeError::SourceMapProtocol {
-                url: resolved_url.to_owned(),
-                source: Box::new(CdpRuntimeError::protocol(error)),
-            });
+        )
+        .await
+        .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+            url: resolved_url.to_owned(),
+            source: Box::new(CdpRuntimeError::Transport(
+                "resource close timed out".to_owned(),
+            )),
+        })?
+        .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+            url: resolved_url.to_owned(),
+            source: Box::new(CdpRuntimeError::protocol(error)),
+        });
         if close_result.is_ok() {
             resource.disarm();
         }
@@ -949,10 +987,14 @@ impl CdpRuntimeEvent {
             Self::ScriptParsed { session, params } => Ok(Some(Input::ScriptParsedWithProvenance {
                 provenance: crate::service_api::ScriptProvenance {
                     execution_context_id: Some(params.execution_context_id),
-                    frame_id: params.execution_context_aux_data.as_ref()
+                    frame_id: params
+                        .execution_context_aux_data
+                        .as_ref()
                         .and_then(|data| data.get("frameId"))
-                        .and_then(Value::as_str).map(str::to_owned),
-                    execution_context_aux_data: params.execution_context_aux_data
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    execution_context_aux_data: params
+                        .execution_context_aux_data
                         .map(|data| serde_json::Value::Object(data.into_iter().collect())),
                 },
                 session,
@@ -1067,7 +1109,8 @@ impl MessageTransport for HeapSnapshotTransport {
                 JsonRpcMessage::Notification(notification)
                     if matches!(
                         notification.method.as_str(),
-                        "HeapProfiler.addHeapSnapshotChunk" | "HeapProfiler.reportHeapSnapshotProgress"
+                        "HeapProfiler.addHeapSnapshotChunk"
+                            | "HeapProfiler.reportHeapSnapshotProgress"
                     ) =>
                 {
                     // Channel dispatches notifications concurrently with responses. Consume heap
@@ -1082,6 +1125,109 @@ impl MessageTransport for HeapSnapshotTransport {
                 message => return Some(message),
             }
         }
+    }
+}
+
+#[async_trait]
+impl CdpService for CdpEventHandler {
+    async fn debugger_script_parsed(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: DebuggerScriptParsedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(CdpRuntimeEvent::ScriptParsed {
+            session: self.session.clone(),
+            params,
+        }));
+        Ok(())
+    }
+
+    async fn debugger_paused(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: DebuggerPausedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(CdpRuntimeEvent::Paused {
+            session: self.session.clone(),
+            params,
+        }));
+        Ok(())
+    }
+
+    async fn debugger_resumed(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        _params: crate::cdp::DebuggerResumedParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(CdpRuntimeEvent::Resumed {
+            session: self.session.clone(),
+        }));
+        Ok(())
+    }
+
+    async fn runtime_console_apicalled(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: RuntimeConsoleApicalledParams,
+    ) -> Result<(), JsonRpcError> {
+        let _ = self.sender.send(Ok(CdpRuntimeEvent::Console {
+            session: self.session.clone(),
+            params,
+        }));
+        Ok(())
+    }
+
+    async fn heap_profiler_add_heap_snapshot_chunk(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: HeapProfilerAddHeapSnapshotChunkParams,
+    ) -> Result<(), JsonRpcError> {
+        let mut snapshot = self.heap_snapshot.lock().await;
+        if let Some(snapshot) = snapshot.as_mut()
+            && snapshot.write_error.is_none()
+        {
+            match snapshot.file.write_all(params.chunk.as_bytes()).await {
+                Ok(()) => {
+                    snapshot.bytes_written = snapshot
+                        .bytes_written
+                        .saturating_add(params.chunk.len() as u64);
+                    let mut progress = self
+                        .heap_snapshot_progress
+                        .borrow()
+                        .clone()
+                        .unwrap_or_default();
+                    progress.bytes_written = snapshot.bytes_written;
+                    self.heap_snapshot_progress.send_replace(Some(progress));
+                }
+                Err(error) => snapshot.write_error = Some(error),
+            }
+        }
+        Ok(())
+    }
+
+    async fn heap_profiler_report_heap_snapshot_progress(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        params: HeapProfilerReportHeapSnapshotProgressParams,
+    ) -> Result<(), JsonRpcError> {
+        let mut snapshot = self.heap_snapshot.lock().await;
+        let bytes_written = snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.bytes_written);
+        if let Some(snapshot) = snapshot.as_mut()
+            && snapshot.taking_finished_at.is_none()
+            && (params.finished == Some(true) || (params.total > 0 && params.done >= params.total))
+        {
+            snapshot.taking_finished_at = Some(Instant::now());
+        }
+        self.heap_snapshot_progress
+            .send_replace(Some(HeapSnapshotStreamProgress {
+                done: params.done,
+                total: params.total,
+                finished: params.finished,
+                bytes_written,
+            }));
+        Ok(())
     }
 }
 
@@ -1128,93 +1274,54 @@ impl RequestHandler for CdpEventHandler {
                 params: params.clone(),
             });
         }
-        if method == "HeapProfiler.addHeapSnapshotChunk" {
-            match deserialize::<HeapProfilerAddHeapSnapshotChunkParams>(&method, params) {
-                Ok(params) => {
-                    let mut snapshot = self.heap_snapshot.lock().await;
-                    if let Some(snapshot) = snapshot.as_mut()
-                        && snapshot.write_error.is_none()
-                    {
-                        match snapshot.file.write_all(params.chunk.as_bytes()).await {
-                            Ok(()) => {
-                                snapshot.bytes_written = snapshot
-                                    .bytes_written
-                                    .saturating_add(params.chunk.len() as u64);
-                                let mut progress = self
-                                    .heap_snapshot_progress
-                                    .borrow()
-                                    .clone()
-                                    .unwrap_or_default();
-                                progress.bytes_written = snapshot.bytes_written;
-                                self.heap_snapshot_progress.send_replace(Some(progress));
-                            }
-                            Err(error) => snapshot.write_error = Some(error),
-                        }
-                    }
-                }
-                Err(error) => {
-                    record_heap_snapshot_error(&self.heap_snapshot, error.to_string()).await;
-                }
-            }
-            return;
-        }
-        if method == "HeapProfiler.reportHeapSnapshotProgress" {
-            match deserialize::<HeapProfilerReportHeapSnapshotProgressParams>(&method, params) {
-                Ok(params) => {
-                    let mut snapshot = self.heap_snapshot.lock().await;
-                    let bytes_written = snapshot
-                        .as_ref()
-                        .map_or(0, |snapshot| snapshot.bytes_written);
-                    if let Some(snapshot) = snapshot.as_mut()
-                        && snapshot.taking_finished_at.is_none()
-                        && (params.finished == Some(true)
-                            || (params.total > 0 && params.done >= params.total))
-                    {
-                        snapshot.taking_finished_at = Some(Instant::now());
-                    }
-                    self.heap_snapshot_progress
-                        .send_replace(Some(HeapSnapshotStreamProgress {
-                            done: params.done,
-                            total: params.total,
-                            finished: params.finished,
-                            bytes_written,
-                        }));
-                }
-                Err(error) => {
-                    record_heap_snapshot_error(&self.heap_snapshot, error.to_string()).await;
-                }
-            }
-            return;
-        }
-        let event = match method.as_str() {
-            "Debugger.scriptParsed" => deserialize(&method, normalize_script_parsed_params(params))
-                .map(|params| CdpRuntimeEvent::ScriptParsed {
-                    session: self.session.clone(),
-                    params,
-                }),
-
-            "Debugger.paused" => {
-                deserialize(&method, params).map(|params| CdpRuntimeEvent::Paused {
-                    session: self.session.clone(),
-                    params,
-                })
-            }
-            "Debugger.resumed" => Ok(CdpRuntimeEvent::Resumed {
-                session: self.session.clone(),
-            }),
-            "Runtime.consoleAPICalled" => {
-                deserialize(&method, params).map(|params| CdpRuntimeEvent::Console {
-                    session: self.session.clone(),
-                    params,
-                })
-            }
-            _ => Ok(CdpRuntimeEvent::Other {
+        let params = if method == "Debugger.scriptParsed" {
+            normalize_script_parsed_params(params)
+        } else {
+            params
+        };
+        if !matches!(
+            method.as_str(),
+            "Debugger.scriptParsed"
+                | "Debugger.paused"
+                | "Debugger.resumed"
+                | "Runtime.consoleAPICalled"
+                | "HeapProfiler.addHeapSnapshotChunk"
+                | "HeapProfiler.reportHeapSnapshotProgress"
+        ) {
+            let _ = self.sender.send(Ok(CdpRuntimeEvent::Other {
                 session: self.session.clone(),
                 method,
                 params,
-            }),
-        };
-        let _ = self.sender.send(event);
+            }));
+            return;
+        }
+        let server = CdpServer::new(Arc::new(self.clone()));
+        match server.dispatch_notification(&method, params.clone()).await {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = self.sender.send(Ok(CdpRuntimeEvent::Other {
+                    session: self.session.clone(),
+                    method,
+                    params,
+                }));
+            }
+            Err(error) => {
+                if matches!(
+                    method.as_str(),
+                    "HeapProfiler.addHeapSnapshotChunk" | "HeapProfiler.reportHeapSnapshotProgress"
+                ) {
+                    record_heap_snapshot_error(
+                        &self.heap_snapshot,
+                        format!("{method}: {}", error.message),
+                    )
+                    .await;
+                }
+                let _ = self.sender.send(Err(CdpRuntimeEventError::Decode {
+                    method,
+                    message: error.message,
+                }));
+            }
+        }
     }
 }
 
@@ -1317,16 +1424,6 @@ async fn record_heap_snapshot_error(
     }
 }
 
-fn deserialize<T: DeserializeOwned>(
-    method: &str,
-    params: Value,
-) -> Result<T, CdpRuntimeEventError> {
-    serde_json::from_value(params).map_err(|source| CdpRuntimeEventError::Deserialize {
-        method: method.to_owned(),
-        source,
-    })
-}
-
 fn to_u32(field: &'static str, value: i64) -> Result<u32, CdpRuntimeEventError> {
     u32::try_from(value).map_err(|_| CdpRuntimeEventError::InvalidPosition { field, value })
 }
@@ -1382,13 +1479,9 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
             .parent()
             .map(|parent| parent.join("source-map-cache"))?
     } else if let Some(path) = env::var_os("LOCALAPPDATA") {
-        PathBuf::from(path)
-            .join("dbgjs")
-            .join("source-map-cache")
+        PathBuf::from(path).join("dbgjs").join("source-map-cache")
     } else if let Some(path) = env::var_os("XDG_CACHE_HOME") {
-        PathBuf::from(path)
-            .join("dbgjs")
-            .join("source-map-cache")
+        PathBuf::from(path).join("dbgjs").join("source-map-cache")
     } else if let Some(path) = env::var_os("HOME") {
         PathBuf::from(path)
             .join(".cache")
@@ -1404,7 +1497,10 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
     Some(directory.join(format!("{:x}.map", hasher.finalize())))
 }
 
-async fn write_source_map_cache(path: &Path, source_map: &SourceMapData) -> Result<(), std::io::Error> {
+async fn write_source_map_cache(
+    path: &Path,
+    source_map: &SourceMapData,
+) -> Result<(), std::io::Error> {
     const MAGIC: &[u8] = b"dbgjs-source-map-v1\n";
     static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
     let Some(parent) = path.parent() else {
@@ -1650,13 +1746,25 @@ mod tests {
             "startLine": 0, "startColumn": 0, "endLine": 1, "endColumn": 0,
             "executionContextId": 23, "hash": "captured",
             "executionContextAuxData": {"frameId": "child-frame", "isDefault": true}
-        })).unwrap();
-        let session = SessionKey { connection_generation: 1, session_id: "test".into() };
-        let input = CdpRuntimeEvent::ScriptParsed { session, params }.into_input(None).unwrap().unwrap();
-        let Input::ScriptParsedWithProvenance { provenance, .. } = input else { panic!("script event lost provenance") };
+        }))
+        .unwrap();
+        let session = SessionKey {
+            connection_generation: 1,
+            session_id: "test".into(),
+        };
+        let input = CdpRuntimeEvent::ScriptParsed { session, params }
+            .into_input(None)
+            .unwrap()
+            .unwrap();
+        let Input::ScriptParsedWithProvenance { provenance, .. } = input else {
+            panic!("script event lost provenance")
+        };
         assert_eq!(provenance.execution_context_id, Some(23));
         assert_eq!(provenance.frame_id.as_deref(), Some("child-frame"));
-        assert_eq!(provenance.execution_context_aux_data.unwrap()["isDefault"], true);
+        assert_eq!(
+            provenance.execution_context_aux_data.unwrap()["isDefault"],
+            true
+        );
     }
 
     #[test]
@@ -1986,6 +2094,21 @@ mod tests {
             CdpRuntimeEvent::Resumed { .. }
         ));
 
+        // Recognized generated events still report typed decode failures instead of silently
+        // degrading to `Other`.
+        handler
+            .handle_notification(
+                "Debugger.paused".to_owned(),
+                serde_json::json!({ "reason": "other" }),
+            )
+            .await;
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Err(CdpRuntimeEventError::Decode { ref method, .. })
+                if method == "Debugger.paused"
+        ));
+        assert_eq!(subscriber.recv().await.unwrap().method, "Debugger.paused");
+
         // Subscribing late still only observes events sent afterward (broadcast semantics),
         // and a second independent subscriber receives its own copy of the same event.
         let mut second_subscriber = raw_events.subscribe();
@@ -2000,6 +2123,11 @@ mod tests {
             second_subscriber.recv().await.unwrap().method,
             "Network.loadingFinished"
         );
+        assert!(matches!(
+            events.try_recv().unwrap().unwrap(),
+            CdpRuntimeEvent::Other { ref method, .. }
+                if method == "Network.loadingFinished"
+        ));
     }
 }
 
@@ -2010,6 +2138,8 @@ pub enum CdpRuntimeEventError {
         method: String,
         source: serde_json::Error,
     },
+    #[error("failed to decode {method}: {message}")]
+    Decode { method: String, message: String },
     #[error("failed to serialize CDP event field: {0}")]
     Serialize(serde_json::Error),
     #[error("CDP event field {field} has invalid position {value}")]
