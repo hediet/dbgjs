@@ -89,37 +89,22 @@ type error by manually editing generated files or weakening a wire type.
 The checked-in bundle bootstraps the Rust exporter itself. This is why it is
 versioned even though the authored inputs above remain authoritative.
 
-## Development dependencies and published packages
+## Registry dependencies and local LinkRPC development
 
-LinkRPC is not vendored. While waiting for automatic crate/npm publication,
-development uses sibling checkouts:
+Ordinary installs and CI resolve LinkRPC from the public npm and Cargo
+registries. The checked-in manifests and lockfiles must contain only registry
+dependencies; CI does not check out a sibling repository, use relative
+`file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
+be published before their versions are selected in this repository.
 
-```text
-parent/
-  linkrpc/
-  cdp-client/
-```
-
-Cargo dependencies have relative `path` entries into `../linkrpc/rust` and
-registry versions. npm dependencies use relative `file:` links to the LinkRPC
-TypeScript packages. The linked TypeScript packages must be built before using
-their public exports or CLI; installing dbgjs does not silently modify the
-sibling checkout.
-
-Build the sibling CLI and its workspace dependencies from this repository:
-
-```sh
-pnpm --dir ../linkrpc/typescript install --frozen-lockfile
-pnpm --dir ../linkrpc/typescript --filter '@hediet/linkrpc-cli...' build
-npm ci
-npm --prefix vscode-extension ci
-```
-
-Once the required versions have been published, replace npm `file:` references
-with those verified registry versions, remove the corresponding Cargo `path`
-entries while retaining the published versions, and refresh the lockfiles.
-Remove the CI sibling-checkout setup only once no development links remain.
-Do not copy package sources or tarballs back into this repository.
+For opt-in development across both repositories, a developer may use a local
+sibling checkout by temporarily overriding the relevant npm and Cargo
+dependencies in their working tree. Build any required LinkRPC package outputs
+in that checkout before installing this repository. Keep those local manifest
+overrides and any resulting lockfile changes uncommitted and out of staging,
+then restore the registry manifests and lockfiles before running the ordinary
+install and contract drift check. Never commit local `file:`/`path` links or
+copy package sources or tarballs into this repository.
 
 ## Type-safety boundaries
 

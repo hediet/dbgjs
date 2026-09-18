@@ -12,10 +12,10 @@ The small change-detection job always runs. Changes confined to `docs/`, `todo/`
 root Markdown files or agent skills do not
 start Rust or packaging jobs. The VS Code extension has a separate build and
 unit-test job, including its LinkRPC socket transport tests, on every CI run.
-The separate required contract-check job builds the LinkRPC CLI and Rust
-exporter, then checks that the canonical bundle and generated TypeScript match
-their authored sources. While dependencies use development links, a shared
-setup action checks out the pinned LinkRPC revision beside this repository.
+The separate required contract-check job installs the LinkRPC CLI from the npm
+registry, builds the Rust exporter against registry dependencies, then checks
+that the canonical bundle and generated TypeScript match their authored
+sources. CI never checks out a sibling LinkRPC repository.
 Extension-only changes still skip the native build and packaging jobs.
 Documentation inside an npm package still triggers packaging. Unknown paths,
 Rust sources, embedded JavaScript, test fixtures, contract schemas, dependency
@@ -33,11 +33,12 @@ save caches; pull requests and manually dispatched feature branches are
 restore-only, preventing unmerged changes from modifying caches consumed by
 `main`. The Rust version is pinned in
 [rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
-downloads; `npm ci` installs the locked development dependencies. Cargo consumes
-the checked-in interface bundle rather than importing npm CDP schemas during
-ordinary builds. See [RPC contracts and code generation](./contracts.md) for
-source ownership, regeneration checks, and the temporary sibling LinkRPC
-development dependencies used until publication.
+downloads; `npm ci` installs the locked registry dependencies. Cargo likewise
+uses the registry packages selected by the checked-in manifests and lockfile.
+It consumes the checked-in interface bundle rather than importing npm CDP
+schemas during ordinary builds. See
+[RPC contracts and code generation](./contracts.md) for source ownership,
+regeneration checks, and the opt-in local LinkRPC development workflow.
 
 An npm-only change skips Linux/Windows x64 Rust unit tests but still verifies and
 packs release binaries, reusing unchanged workspace outputs from the trusted

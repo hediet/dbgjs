@@ -58,9 +58,6 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: vscode-extension/package-lock.json
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc
       - name: Install extension dependencies
         run: npm --prefix vscode-extension ci
       - name: Typecheck, build, and test extension
@@ -78,9 +75,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc-cli
       - name: Install JavaScript build inputs
         run: npm ci
       - name: Install pinned Rust toolchain
@@ -112,9 +106,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc-cli
       - name: Install JavaScript build inputs
         run: npm ci
       - name: Install pinned Rust toolchain
@@ -164,9 +155,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc-cli
       - name: Install JavaScript build inputs
         run: npm ci
       - name: Install pinned Rust toolchain
@@ -313,9 +301,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc-cli
       - run: npm ci
       - name: Install Linux desktop runtime
         if: runner.os == 'Linux'
@@ -357,9 +342,6 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - uses: ./.github/actions/setup-linkrpc
-        with:
-          typescript-package: linkrpc-cli
       - run: npm ci
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
