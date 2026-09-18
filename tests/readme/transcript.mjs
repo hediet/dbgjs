@@ -21,7 +21,7 @@ export function normalize(text, replacements, { argument = false } = {}) {
 		if (/^\d+$/.test(value)) {
 			if (argument && result === value) result = `$${name}`;
 			else result = result.replace(
-				new RegExp(`(p:|w:|process:|Process |Configuration: process |process-tree-|process tree |PID )${value}(?!\\d)`, "g"),
+				new RegExp(`(p:|w:|process:|Process |Configuration: process |process-tree-|process-|process tree |PID )${value}(?!\\d)`, "g"),
 				(_match, prefix) => `${prefix}$${name}`,
 			);
 		} else {
@@ -31,20 +31,18 @@ export function normalize(text, replacements, { argument = false } = {}) {
 	return result.trimEnd();
 }
 
-export function formatCommand(args) {
-	return "dbgjs " + args.map((arg) =>
-		/^[a-zA-Z0-9_./:=,#-]+$/.test(arg.replace(/\$[A-Z][A-Z_0-9]*/g, "placeholder")) ? arg
-			: /^\$[A-Z_]+\\[\w.-]+$/.test(arg) ? `"${arg}"`
-			: `'${arg.replaceAll("'", "''")}'`,
-	).join(" ");
+export function formatCommand(args, executable = "dbgjs") {
+	const quote = (arg) => /^[a-zA-Z0-9_./:=,#-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "''")}'`;
+	const invocation = quote(executable);
+	return `${invocation.startsWith("'") ? "& " : ""}${invocation} ${args.map(quote).join(" ")}`;
 }
 
-function renderSteps(steps) {
+export function renderSteps(steps) {
 	const fence = "````";
 	const transcripts = [];
 	const details = [];
 	for (const step of steps) {
-		const allLines = step.output.split("\n").map((line) => line.trimEnd());
+		const allLines = step.output.replaceAll("\r\n", "\n").trimEnd().split("\n").map((line) => line.trimEnd());
 		const mappingDiagnostics = step.foldMappingDiagnostics
 			? allLines.filter((line) => line.startsWith("Mapping "))
 			: [];
@@ -54,12 +52,12 @@ function renderSteps(steps) {
 		const excerpt = step.maxOutputLines && lines.length > step.maxOutputLines
 			? lines.slice(0, step.maxOutputLines).join("\n") + `\n... (${lines.length - step.maxOutputLines} more lines; full output in the recording)`
 			: lines.join("\n");
-		transcripts.push(`$ ${formatCommand(step.args)}${excerpt ? `\n${excerpt}` : ""}`);
+		transcripts.push(`$ ${formatCommand(step.args, step.executable)}${excerpt ? `\n${excerpt}` : ""}`);
 		if (mappingDiagnostics.length) {
 			details.push(`<details><summary>${mappingDiagnostics.length} source-map diagnostics</summary>\n\n${fence}text\n${mappingDiagnostics.join("\n")}\n${fence}\n\n</details>`);
 		}
-		if (step.stderr) {
-			details.push(`<details><summary>CLI stderr</summary>\n\n${fence}text\n${step.stderr}\n${fence}\n\n</details>`);
+		if (step.stderr.trim()) {
+			details.push(`<details><summary>CLI stderr</summary>\n\n${fence}text\n${step.stderr.replaceAll("\r\n", "\n").trimEnd()}\n${fence}\n\n</details>`);
 		}
 	}
 	return [`${fence}console\n${transcripts.join("\n\n")}\n${fence}`, ...details].join("\n\n");
@@ -75,7 +73,11 @@ export async function renderDocuments(recording) {
 	assert.equal(byId.size, recording.steps.length, "Recording contains duplicate command IDs.");
 	const rendered = new Map();
 	for (const [templatePath, outputPath] of documents) {
-		const template = (await readFile(resolve(repositoryRoot, templatePath), "utf8")).replaceAll("\r\n", "\n");
+		let template = (await readFile(resolve(repositoryRoot, templatePath), "utf8")).replaceAll("\r\n", "\n");
+		for (const [marker, path] of template.matchAll(/\{\{file:(tests\/readme\/[a-z.-]+\.mjs)\}\}/g)) {
+			const source = (await readFile(resolve(repositoryRoot, path), "utf8")).replaceAll("\r\n", "\n").trimEnd();
+			template = template.replace(marker, () => `\`\`\`\`js\n${source}\n\`\`\`\``);
+		}
 		const text = template.replaceAll("{{vscode-version}}", recording.vscodeVersion)
 			.replace(/\{\{example:([a-z,-]+)\}\}/g, (_match, ids) => {
 				const steps = ids.split(",").map((id) => {
@@ -105,11 +107,11 @@ export function compareRecordings(actual, expected) {
 	assert.equal(actual.vscodeVersion, expected.vscodeVersion);
 	assert.equal(actual.steps.length, expected.steps.length, "README walkthrough commands changed; regenerate.");
 	for (let index = 0; index < actual.steps.length; index++) {
-		const step = actual.steps[index];
-		const old = expected.steps[index];
+		const step = comparisonStep(actual, actual.steps[index]);
+		const old = comparisonStep(expected, expected.steps[index]);
 		assert.deepEqual(
-			{ id: step.id, args: step.args, comparison: step.comparison, maxOutputLines: step.maxOutputLines, foldMappingDiagnostics: step.foldMappingDiagnostics },
-			{ id: old.id, args: old.args, comparison: old.comparison, maxOutputLines: old.maxOutputLines, foldMappingDiagnostics: old.foldMappingDiagnostics },
+			{ id: step.id, scenario: step.scenario, executable: step.executable, args: step.args, comparison: step.comparison, maxOutputLines: step.maxOutputLines, foldMappingDiagnostics: step.foldMappingDiagnostics },
+			{ id: old.id, scenario: old.scenario, executable: old.executable, args: old.args, comparison: old.comparison, maxOutputLines: old.maxOutputLines, foldMappingDiagnostics: old.foldMappingDiagnostics },
 			`README command ${index + 1} changed; regenerate.`,
 		);
 		if (step.comparison === "exact") {
@@ -125,6 +127,23 @@ export function compareRecordings(actual, expected) {
 			);
 		} else {
 			assert.equal(step.comparison, "live", "Unknown comparison policy");
+		}
+
+		function comparisonStep(recording, step) {
+			const replacements = recording.normalization?.[step.scenario] ?? [];
+			let stderr = normalize(step.stderr, replacements);
+			if (step.args[0] === "coverage" && step.args[1] === "capture") {
+				stderr = stderr.replace(
+					/^dbgjs: Still waiting after \d+s\. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope\. It skips source-map lookup and symbol enrichment\. The current command is continuing\.(?:\n|$)/gm,
+					"",
+				).trimEnd();
+			}
+			return {
+				...step,
+				args: step.args.map((arg) => normalize(arg, replacements, { argument: true })),
+				output: normalize(step.output, replacements),
+				stderr,
+			};
 		}
 	}
 }

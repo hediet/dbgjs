@@ -2,8 +2,9 @@
 
 # Launch and automate a website
 
-These commands were recorded against a real local HTTP website. `$WEBSITE_URL`
-stands for its allocated address; use your application's URL when following
+These commands were recorded against a real local HTTP website. The URLs,
+installation paths, and process identities are the actual values from that
+run; use your application's URL and your installed browser when following
 along. Commands use PowerShell quoting.
 
 ## Launch with Playwright
@@ -16,14 +17,14 @@ Context readme-web  rev 1
   Name: Local website
   Connections: none
 
-$ dbgjs connection add --playwright $WEBSITE_URL --connection browser --connect --set
+$ dbgjs connection add --playwright http://127.0.0.1:57673/ --connection browser --connect --set
 Context readme-web  rev 4
   Name: Local website
   Connections:
     browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]
-      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL
+      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/
       Targets:
-        page  dbgjs local website  $WEBSITE_URL  [a CDP client is attached]
+        page  dbgjs local website  http://127.0.0.1:57673/  [a CDP client is attached]
 ````
 
 Interact through real page input and inspect the result:
@@ -49,30 +50,34 @@ Context readme-web  rev 7
   Name: Local website
   Connections:
     browser  [disconnected; generation 1]
-      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL
+      Configuration: Playwright bundled Chromium headless opening http://127.0.0.1:57673/
       Targets: none
 ````
 
-## Launch installed Chrome instead
+## Launch installed Chrome
 
-Point dbgjs at an installed Chrome executable. `$CHROME_EXE` is the path
-discovered on the machine that generated this recording.
+Start a fresh context and point dbgjs at an installed Chrome executable.
+This is an independent example, not a second connection added to the Playwright
+context above.
 
 ````console
-$ dbgjs connection add --chrome $WEBSITE_URL --connection chrome --executable $CHROME_EXE --user-data-dir "$CONNECTIONS_DIR\chrome-profile" --connect --set
-Context readme-web  rev 12
-  Name: Local website
+$ dbgjs context create :readme-chrome 'Installed Chrome' --set
+Context readme-chrome  rev 1
+  Name: Installed Chrome
+  Connections: none
+
+$ dbgjs connection add --chrome http://127.0.0.1:57673/ --connection chrome --executable 'C:\Program Files\Google\Chrome\Application\chrome.exe' --user-data-dir 'D:\dev\hediet\cdp-client\artifacts\readme-connections-final\connections-state-aEKDbH\chrome-profile' --connect --set
+Context readme-chrome  rev 7
+  Name: Installed Chrome
   Connections:
-    browser  [disconnected; generation 1]
-      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL
-      Targets: none
     chrome  [connected to Chrome/152.0.7977.83; CDP 1.3; generation 1]
-      Configuration: Chrome at $CHROME_EXE headless opening $WEBSITE_URL
+      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:57673/
       Targets:
+        page  (untitled)  http://127.0.0.1:57673/  [a CDP client is attached]
+        8A0A2D07CE41738198066107A23C2485  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html
         background_page  Google Hangouts  chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html
-        page  (untitled)  $WEBSITE_URL  [a CDP client is attached]
-        AF4F9EBDACE1D786E4B17DC95CBAA1AD  Omnibox Popup  chrome://omnibox-popup.top-chrome/
-        C2D9C5ADE80B6C93C23D79B3D1CB2CD9  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html
+        service_worker  Service Worker chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js  chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js
+        CDC1C677FD0E0F454E761A318604A4CA  Omnibox Popup  chrome://omnibox-popup.top-chrome/
 ````
 
 The selected page supports the same evaluation, debugger, coverage, screenshot,
@@ -85,14 +90,11 @@ dbgjs local website / Waiting for input
 
 ````console
 $ dbgjs connection disconnect --connection chrome
-Context readme-web  rev 18
-  Name: Local website
+Context readme-chrome  rev 14
+  Name: Installed Chrome
   Connections:
-    browser  [disconnected; generation 1]
-      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL
-      Targets: none
     chrome  [disconnected; generation 1]
-      Configuration: Chrome at $CHROME_EXE headless opening $WEBSITE_URL
+      Configuration: Chrome at C:\Program Files\Google\Chrome\Application\chrome.exe headless opening http://127.0.0.1:57673/
       Targets: none
 ````
 

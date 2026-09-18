@@ -741,14 +741,12 @@ impl TargetDebuggerHandle {
     pub async fn take_coverage(
         &self,
         capture_id: Option<String>,
-        exclude_capture_id: Option<String>,
         raw: bool,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::TakeCoverage {
                 capture_id,
-                exclude_capture_id,
                 raw,
                 response,
             })
@@ -759,19 +757,16 @@ impl TargetDebuggerHandle {
 
     pub async fn stop_coverage(
         &self,
-        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
-        self.stop_coverage_with_projection(exclude_capture_id).await
+        self.stop_coverage_with_projection().await
     }
 
     pub async fn finish_coverage(
         &self,
-        exclude_capture_id: Option<String>,
     ) -> Result<(), TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::FinishCoverage {
-                exclude_capture_id,
                 response,
             })
             .await
@@ -782,12 +777,10 @@ impl TargetDebuggerHandle {
 
     async fn stop_coverage_with_projection(
         &self,
-        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::StopCoverage {
-                exclude_capture_id,
                 response,
             })
             .await
@@ -1122,16 +1115,13 @@ enum TargetCommand {
     },
     TakeCoverage {
         capture_id: Option<String>,
-        exclude_capture_id: Option<String>,
         raw: bool,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
     StopCoverage {
-        exclude_capture_id: Option<String>,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
     FinishCoverage {
-        exclude_capture_id: Option<String>,
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
     },
     GetCoverage {
@@ -1724,7 +1714,6 @@ async fn run_target(
             }
             Next::Command(Some(TargetCommand::TakeCoverage {
                 capture_id,
-                exclude_capture_id,
                 raw,
                 response,
             })) => {
@@ -1735,7 +1724,6 @@ async fn run_target(
                             &session_key,
                             recording,
                             capture_id,
-                            exclude_capture_id,
                             raw,
                         )
                         .await
@@ -1745,19 +1733,14 @@ async fn run_target(
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::StopCoverage {
-                exclude_capture_id,
                 response,
             })) => {
                 let result = async {
                     if coverage.is_some() {
-                        let (completed, baseline) =
-                            finish_coverage_recording(&driver, &mut coverage, exclude_capture_id)
+                        let completed =
+                            finish_coverage_recording(&driver, &mut coverage)
                                 .await?;
                         let stored = completed.snapshot();
-                        let stored = match baseline {
-                            Some(baseline) => CoverageRecording::exclude_coverage(stored, &baseline),
-                            None => stored,
-                        };
                         completed_recordings.remove(".");
                         coverage_objects.insert(".".to_owned(), stored.clone());
                         pending_stopped_coverage = Some(stored);
@@ -1774,16 +1757,12 @@ async fn run_target(
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::FinishCoverage {
-                exclude_capture_id,
                 response,
             })) => {
                 let result = async {
-                    let (mut completed, baseline) =
-                        finish_coverage_recording(&driver, &mut coverage, exclude_capture_id)
+                    let completed =
+                        finish_coverage_recording(&driver, &mut coverage)
                             .await?;
-                    if let Some(baseline) = baseline {
-                        completed.exclude_baseline(&baseline);
-                    }
                     completed_recordings.insert(".".to_owned(), completed);
                     coverage_objects.remove(".");
                     pending_stopped_coverage = None;
@@ -3357,7 +3336,6 @@ async fn capture_coverage(
     session_key: &SessionKey,
     recording: &mut CoverageRecording,
     capture_id: Option<String>,
-    exclude_capture_id: Option<String>,
     raw: bool,
 ) -> Result<CoverageSnapshot, TargetDebuggerError> {
     if let Some(capture_id) = &capture_id
@@ -3368,13 +3346,6 @@ async fn capture_coverage(
         ));
     }
     let mut snapshot = take_coverage(driver, recording).await?;
-    if let Some(capture_id) = exclude_capture_id {
-        let baseline = recording
-            .captures
-            .get(&capture_id)
-            .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))?;
-        snapshot = CoverageRecording::exclude_coverage(snapshot, baseline);
-    }
     if !raw {
         project_coverage(driver, session_key, &mut snapshot, None, false).await?;
     }
@@ -3387,20 +3358,10 @@ async fn capture_coverage(
 async fn finish_coverage_recording(
     driver: &DebuggerDriver,
     recording: &mut Option<CoverageRecording>,
-    exclude_capture_id: Option<String>,
-) -> Result<(CoverageRecording, Option<CoverageSnapshot>), TargetDebuggerError> {
+) -> Result<CoverageRecording, TargetDebuggerError> {
     let active = recording
         .as_mut()
         .ok_or(TargetDebuggerError::CoverageNotActive)?;
-    let baseline = exclude_capture_id
-        .map(|capture_id| {
-            active
-                .captures
-                .get(&capture_id)
-                .cloned()
-                .ok_or(TargetDebuggerError::CoverageCaptureNotFound(capture_id))
-        })
-        .transpose()?;
     update_coverage(driver, active).await?;
     driver
         .client()
@@ -3410,7 +3371,7 @@ async fn finish_coverage_recording(
     let completed = recording
         .take()
         .ok_or(TargetDebuggerError::CoverageNotActive)?;
-    Ok((completed, baseline))
+    Ok(completed)
 }
 
 async fn project_stopped_coverage(
@@ -4251,88 +4212,74 @@ impl CoverageRecording {
             }
         }
     }
+}
 
-    fn exclude_coverage(
-        mut selected: CoverageSnapshot,
-        baseline: &CoverageSnapshot,
-    ) -> CoverageSnapshot {
-        for source in &mut selected.sources {
-            let Some(baseline_source) = baseline.sources.iter().find(|candidate| {
-                candidate.script_id == source.script_id
-                    && candidate.generated_url == source.generated_url
+pub(crate) fn exclude_coverage(
+    mut selected: CoverageSnapshot,
+    baseline: &CoverageSnapshot,
+) -> CoverageSnapshot {
+    for source in &mut selected.sources {
+        let Some(baseline_source) = baseline.sources.iter().find(|candidate| {
+            candidate.script_id == source.script_id
+                && candidate.generated_url == source.generated_url
+        }) else {
+            continue;
+        };
+        for function in &mut source.functions {
+            let identity = (
+                function.name.as_str(),
+                function.block_coverage,
+                function.root_start_offset,
+                function.root_end_offset,
+            );
+            let Some(baseline_function) = baseline_source.functions.iter().find(|candidate| {
+                (
+                    candidate.name.as_str(),
+                    candidate.block_coverage,
+                    candidate.root_start_offset,
+                    candidate.root_end_offset,
+                ) == identity
             }) else {
                 continue;
             };
-            for function in &mut source.functions {
-                let identity = function.ranges.first().map(|range| {
-                    (
-                        function.name.as_str(),
-                        function.block_coverage,
-                        range.start_offset,
-                        range.end_offset,
-                    )
-                });
-                let Some(baseline_function) = baseline_source.functions.iter().find(|candidate| {
-                    candidate.ranges.first().map(|range| {
-                        (
-                            candidate.name.as_str(),
-                            candidate.block_coverage,
-                            range.start_offset,
-                            range.end_offset,
-                        )
-                    }) == identity
-                }) else {
-                    continue;
-                };
-                function.ranges.retain(|range| {
-                    !baseline_function.ranges.iter().any(|candidate| {
-                        candidate.start_offset == range.start_offset
-                            && candidate.end_offset == range.end_offset
-                            && candidate.count > 0
-                    })
-                });
-            }
-
-            source
-                .functions
-                .retain(|function| !function.ranges.is_empty());
-        }
-        selected
-            .sources
-            .retain(|source| !source.functions.is_empty());
-        selected
-    }
-
-    fn exclude_baseline(&mut self, baseline: &CoverageSnapshot) {
-        for source in baseline.sources.iter() {
-            let Some(script) = self.scripts.get_mut(&source.script_id) else {
+            let original_ranges = function.ranges.clone();
+            function.ranges.retain(|range| {
+                !baseline_function.ranges.iter().any(|candidate| {
+                    candidate.start_offset == range.start_offset
+                        && candidate.end_offset == range.end_offset
+                        && candidate.count > 0
+                })
+            });
+            if function.ranges.len() == original_ranges.len() {
                 continue;
-            };
-            for function in &source.functions {
-                let Some(root) = function.ranges.first() else {
-                    continue;
-                };
-                let key = (
-                    function.name.clone(),
-                    function.block_coverage,
-                    root.start_offset,
-                    root.end_offset,
-                );
-                let Some(ranges) = script.functions.get_mut(&key) else {
-                    continue;
-                };
-                for range in &function.ranges {
-                    if range.count > 0 {
-                        ranges.remove(&(range.start_offset, range.end_offset));
-                    }
-                }
             }
-            script.functions.retain(|_, ranges| !ranges.is_empty());
+            // Rebuild derived ranges using persisted mappings, never a live target.
+            if !function.effective_ranges.is_empty() {
+                let projected = original_ranges.iter()
+                    .chain(&function.effective_ranges).collect::<Vec<_>>();
+                let mut effective = effective_coverage_ranges(&function.ranges);
+                for range in &mut effective {
+                    range.authored_start = projected.iter()
+                        .find(|original| original.start_offset == range.start_offset
+                            && original.authored_start.is_some())
+                        .and_then(|original| original.authored_start.clone());
+                    range.authored_end = projected.iter()
+                        .find(|original| original.end_offset == range.end_offset
+                            && original.authored_end.is_some())
+                        .and_then(|original| original.authored_end.clone());
+                }
+                function.authored_location = effective.iter()
+                    .find_map(|range| range.authored_start.clone());
+                function.effective_ranges = effective;
+            }
         }
-        self.scripts
-            .retain(|_, script| !script.functions.is_empty());
+        source.functions.retain(|function| !function.ranges.is_empty());
     }
+    selected.sources.retain(|source| !source.functions.is_empty());
+    selected
+}
 
+impl CoverageRecording {
     fn snapshot(&self) -> CoverageSnapshot {
         CoverageSnapshot {
             capture_id: None,

@@ -11,8 +11,8 @@ npm install --global @hediet/dbgjs@next
 
 The examples below are **recorded from real CLI runs**, not handwritten output.
 They use desktop VS Code {{vscode-version}}, a local website, and a running Node
-process. `$VARIABLES` abbreviate discovered identities and long paths; timings
-and measurements vary. Commands use PowerShell quoting. These are independent
+process. Process IDs, URLs, paths, and measurements are from that run, so use
+your own when following along. Commands use PowerShell quoting. These are independent
 feature examples; the [walkthroughs](#walkthroughs-and-documentation) include
 their setup and full execution order.
 
@@ -33,14 +33,17 @@ subsequent commands.
 Use Playwright's bundled browser, or point dbgjs at an installed Chrome
 executable. Both expose the same debugger commands.
 
-{{example:web-context,web-playwright-connect}}
+### Playwright Chromium
 
-Alternatively, launch installed Chrome:
+{{example:web-playwright-connect}}
+
+### Installed Chrome
+
+Launch an installed Chrome executable in a separate context:
 
 {{example:web-chrome-connect}}
 
-`$WEBSITE_URL` is the local test website and `$CHROME_EXE` is the discovered
-installation. See the [website walkthrough](docs/walkthroughs/website.md) for
+Both examples open the local demo website. See the [website walkthrough](docs/walkthroughs/website.md) for
 the full launch, interaction, and disconnect sequence.
 
 ## Attach to a running Node.js process
@@ -49,9 +52,10 @@ Attach to an existing process and inspect its live application state.
 You do not have to launch the application through dbgjs. This example's process
 was started with Node's Inspector enabled (`--inspect=127.0.0.1:0`).
 
-{{example:node-context,node-attach,node-target-attach,node-eval}}
+{{example:node-attach}}
 
-[Full Node walkthrough](docs/walkthroughs/node.md).
+No second target attachment is needed. The [Express walkthrough](docs/walkthroughs/node.md)
+uses HTTP requests to collect coverage and pause inside a request handler.
 
 ## Evaluate JavaScript
 
@@ -90,8 +94,9 @@ breakpoint, waiting for the pause, and resuming.
 
 ## Precise code coverage
 
-Record function and block execution, subtract a background capture, and inspect
-a bounded source-mapped tree. `HL` means hit lines; `RL` means run lines.
+Record function and block execution, then exclude a background capture when
+viewing the source-mapped tree. The stored capture stays intact; `--exclude` is
+a query option, not a recording option. `HL` means hit lines; `RL` means run lines.
 
 {{example:coverage-start,coverage-baseline,coverage-type,coverage-stop,coverage-show}}
 
@@ -110,8 +115,8 @@ Instance IDs let you inspect objects and follow references within that capture.
 
 {{example:heap-capture,heap-classes}}
 
-Follow incoming references to one returned instance. `$BUFFER` is its
-capture-qualified reference, `editor#<instance-id>`.
+Follow incoming references to one returned instance using its capture-qualified
+reference, `editor#<instance-id>`.
 
 {{example:heap-refs}}
 
@@ -138,7 +143,7 @@ after the live runtime has gone.
 
 - [Investigate typing in desktop VS Code](docs/walkthroughs/vscode.md)
 - [Launch and automate a website](docs/walkthroughs/website.md)
-- [Attach to a running Node.js process](docs/walkthroughs/node.md)
+- [Investigate an Express server with curl](docs/walkthroughs/node.md)
 - [CLI guide and command model](docs/cli-design.md)
 - [Architecture](docs/dbgjs-architecture-presentation.md)
 

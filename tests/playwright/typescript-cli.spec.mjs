@@ -358,13 +358,13 @@ test("CLI pauses at an authored TypeScript breakpoint through HubRPC", async () 
 				.ranges.some((range) => range.count > 0),
 		).toBe(true);
 		await runCli(
-			"We stop precise coverage and freeze the background-excluded capture.",
-			["coverage", "stop", "--exclude", "background"],
+			"We stop precise coverage and freeze the complete capture.",
+			["coverage", "stop"],
 			environment,
 		);
 		const coverage = await runCli(
-			"We render the stored source-mapped coverage capture.",
-			["coverage", "show", "."],
+			"We render a background-excluded view of the stored source-mapped coverage capture.",
+			["coverage", "show", ".", "--exclude", "background"],
 			environment,
 		);
 		expect(coverage).toContain("app.ts");

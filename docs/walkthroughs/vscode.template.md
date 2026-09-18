@@ -3,7 +3,8 @@
 This is a recorded investigation of **desktop VS Code {{vscode-version}}
 (Electron)**. The generator launches a separate profile and empty workspace;
 it never attaches to an existing user window. Commands use PowerShell quoting.
-`$VARIABLES` stand for discovered identities and long path prefixes.
+The IDs, paths, and source URLs below are the actual values from that run.
+Use the identities discovered on your own machine when following along.
 
 ## Discover, select, and inspect
 
@@ -34,8 +35,9 @@ Long diagnostics remain in the [full recording](../../tests/readme/recording.jso
 
 ## Measure the first edit
 
-Start precise coverage and capture a baseline. Type into the editor, then
-preserve only the coverage that remains after excluding the baseline.
+Start precise coverage and capture a baseline. Type into the editor and save
+the next capture. Exclude the baseline when viewing it, without modifying the
+stored capture.
 
 {{example:coverage-start,coverage-baseline,coverage-type,coverage-stop,coverage-show}}
 
@@ -84,7 +86,7 @@ resolved through source maps, rather than guessed from minified constructors.
 {{example:heap-capture,heap-classes}}
 
 Follow the incoming edges of a discovered instance to see who holds the buffer.
-`$BUFFER` abbreviates `editor#<instance-id>` using the first ID printed above.
+Use `editor#<instance-id>` with an ID printed above.
 
 {{example:heap-refs}}
 

@@ -1,7 +1,8 @@
 # Launch and automate a website
 
-These commands were recorded against a real local HTTP website. `$WEBSITE_URL`
-stands for its allocated address; use your application's URL when following
+These commands were recorded against a real local HTTP website. The URLs,
+installation paths, and process identities are the actual values from that
+run; use your application's URL and your installed browser when following
 along. Commands use PowerShell quoting.
 
 ## Launch with Playwright
@@ -18,12 +19,13 @@ Disconnect the owned browser when finished.
 
 {{example:web-playwright-disconnect}}
 
-## Launch installed Chrome instead
+## Launch installed Chrome
 
-Point dbgjs at an installed Chrome executable. `$CHROME_EXE` is the path
-discovered on the machine that generated this recording.
+Start a fresh context and point dbgjs at an installed Chrome executable.
+This is an independent example, not a second connection added to the Playwright
+context above.
 
-{{example:web-chrome-connect}}
+{{example:web-chrome-context,web-chrome-connect}}
 
 The selected page supports the same evaluation, debugger, coverage, screenshot,
 and Playwright commands as other page targets.

@@ -308,6 +308,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build walkthrough binaries
         run: cargo build --locked --bin dbgjs --bin dbgjs-service
+      - name: Validate README rendering and recording
+        run: npm run test:readme:render
       - name: Install Playwright Chromium
         run: npx playwright install chromium
       - name: Replay the generated README

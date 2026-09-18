@@ -1487,26 +1487,24 @@ Coverage exclusion derives a view containing execution represented by the
 selected object but not represented by the excluded baseline:
 
 ```text
-dbgjs coverage print --id . --exclude .2 --style blocks
+dbgjs coverage show . --exclude .2
 ```
 
-For counted coverage, exclusion subtracts aligned execution counts and clamps
-negative results to zero:
+Capturing and stopping always preserve full immutable captures; neither command
+accepts `--exclude`. Only `show` accepts a single baseline selector (a capture name
+or relative history selector). Both captures must belong to the same target,
+connection, and connection generation.
 
-```text
-result.count = max(selected.count - excluded.count, 0)
-```
+Exclusion retains the existing hit-range semantics: an aligned runtime range
+is omitted if its baseline count is positive. Other ranges retain their selected
+counts; this is not arithmetic count subtraction. Alignment uses script ID and
+generated URL, function identity (name, block-coverage mode and root offsets),
+and exact range offsets. Zero-count baseline ranges do not exclude execution.
 
-For binary coverage, this is ordinary set difference. Zero-count ranges are
-omitted from covered-only output.
-
-Coverage ranges align by stable source content and canonical runtime range, not
-by URL alone. A script at the same URL with different content is a different
-source identity. Source projection is applied after exclusion so approximate or
-ambiguous authored mappings do not corrupt the underlying comparison.
-
-An implementation may allow `--exclude` more than once. Each exclusion applies
-to the result of the preceding one.
+The derived view is computed from stored payloads, including their persisted
+source mappings. It works offline, composes with source filters and output
+budgets, and applies equally to human and `--json` output. Neither original
+capture is modified. Missing or incompatible baselines fail explicitly.
 
 ### 14.5 Printing
 

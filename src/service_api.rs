@@ -2028,6 +2028,7 @@ pub trait DebuggerServiceApi {
         target_id: Option<String>,
         connection_id: Option<String>,
         path_glob: Option<String>,
+        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
     async fn get_stored_cpu_profile(
@@ -2245,7 +2246,6 @@ pub trait DebuggerServiceApi {
         connection_id: String,
         target_id: String,
         capture_id: Option<String>,
-        exclude_capture_id: Option<String>,
         raw: Option<bool>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
@@ -2253,7 +2253,6 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
-        exclude_capture_id: Option<String>,
         capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError>;
 
@@ -2261,7 +2260,6 @@ pub trait DebuggerServiceApi {
         context_id: String,
         connection_id: String,
         target_id: String,
-        exclude_capture_id: Option<String>,
         capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError>;
 

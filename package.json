@@ -27,7 +27,7 @@
     "generate:readme": "node tests/readme/run.mjs --update",
     "render:readme": "node tests/readme/transcript.mjs",
     "test:readme": "node tests/readme/run.mjs",
-    "test:readme:render": "node --test tests/readme/transcript.test.mjs",
+    "test:readme:render": "node --test tests/readme/transcript.test.mjs tests/readme/recorder.test.mjs",
     "generate:cdp": "cargo run --bin cdp_codegen",
     "prototype:schema": "cargo run --bin cdp_codegen",
     "prototype:memory": "cargo run --bin source_memory",
@@ -40,6 +40,7 @@
     "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",
     "esbuild": "^0.28.2",
+    "express": "^5.1.0",
     "typescript": "5.9.2"
   }
 }

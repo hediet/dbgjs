@@ -168,7 +168,6 @@ async fn named_and_unnamed_non_raw_captures_project_but_raw_captures_do_not() {
             &session,
             &mut recording,
             capture_id.map(str::to_owned),
-            None,
             raw,
         )
         .await
@@ -204,7 +203,6 @@ async fn named_and_unnamed_non_raw_captures_project_but_raw_captures_do_not() {
                     &session,
                     &mut recording,
                     Some(capture_id.into()),
-                    None,
                     raw,
                 )
                 .await,
@@ -223,7 +221,6 @@ async fn non_raw_coverage_has_effective_ranges_without_source_metadata() {
         &session,
         &mut CoverageRecording::default(),
         Some("unmapped".into()),
-        None,
         false,
     )
     .await
@@ -239,7 +236,7 @@ async fn non_raw_coverage_has_effective_ranges_without_source_metadata() {
 async fn stop_precedes_projection_and_failed_projection_preserves_raw_evidence_for_retry() {
     let (mut driver, session, transport) = coverage_driver(false).await;
     let mut recording = Some(CoverageRecording::default());
-    let (completed, _) = finish_coverage_recording(&driver, &mut recording, None)
+    let completed = finish_coverage_recording(&driver, &mut recording)
         .await
         .unwrap();
     assert!(recording.is_none());
@@ -280,7 +277,6 @@ async fn failed_native_stop_retains_accumulated_counts_and_named_captures_for_re
         &session,
         &mut active,
         Some("baseline".into()),
-        None,
         true,
     )
     .await
@@ -288,7 +284,7 @@ async fn failed_native_stop_retains_accumulated_counts_and_named_captures_for_re
     let mut recording = Some(active);
     transport.stop_failures.store(1, Ordering::SeqCst);
     assert!(
-        finish_coverage_recording(&driver, &mut recording, None)
+        finish_coverage_recording(&driver, &mut recording)
             .await
             .is_err()
     );
@@ -298,7 +294,7 @@ async fn failed_native_stop_retains_accumulated_counts_and_named_captures_for_re
         retained.snapshot().sources[0].functions[0].ranges[0].count,
         2
     );
-    let (completed, _) = finish_coverage_recording(&driver, &mut recording, None)
+    let completed = finish_coverage_recording(&driver, &mut recording)
         .await
         .unwrap();
     assert!(recording.is_none());
@@ -310,13 +306,23 @@ async fn failed_native_stop_retains_accumulated_counts_and_named_captures_for_re
 }
 
 #[tokio::test]
-async fn invalid_stop_baseline_does_not_take_or_stop_coverage() {
-    let (driver, _, transport) = coverage_driver(false).await;
-    let mut recording = Some(CoverageRecording::default());
-    assert!(matches!(
-        finish_coverage_recording(&driver, &mut recording, Some("missing".into())).await,
-        Err(TargetDebuggerError::CoverageCaptureNotFound(_))
-    ));
-    assert!(recording.is_some());
-    assert!(transport.requests.lock().unwrap().is_empty());
+async fn successive_captures_and_stop_preserve_complete_cumulative_coverage() {
+    let (mut driver, session, _) = coverage_driver(false).await;
+    let mut active = CoverageRecording::default();
+    let baseline = capture_coverage(
+        &mut driver, &session, &mut active, Some("baseline".into()), true,
+    ).await.unwrap();
+    let selected = capture_coverage(
+        &mut driver, &session, &mut active, Some("selected".into()), true,
+    ).await.unwrap();
+    assert_eq!(baseline.sources[0].functions[0].ranges[0].count, 1);
+    assert_eq!(selected.sources[0].functions[0].ranges[0].count, 2);
+    assert!(exclude_coverage(selected.clone(), &baseline).sources.is_empty());
+    assert_eq!(active.captures["baseline"], baseline);
+    assert_eq!(active.captures["selected"], selected);
+    let mut recording = Some(active);
+    let completed = finish_coverage_recording(&driver, &mut recording).await.unwrap();
+    assert_eq!(completed.snapshot().sources[0].functions[0].ranges[0].count, 3);
+    assert_eq!(completed.captures["baseline"], baseline);
+    assert_eq!(completed.captures["selected"], selected);
 }

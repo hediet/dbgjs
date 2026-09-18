@@ -581,7 +581,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.connection,
                     scope.target,
                     options.capture_id.clone(),
-                    options.exclude_capture_id,
                     Some(options.raw),
                 )
                 .await)?;
@@ -613,7 +612,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     scope.context,
                     scope.connection,
                     scope.target,
-                    options.exclude_capture_id,
                     options.capture_id,
                 )
                 .await)?;
@@ -3554,6 +3552,7 @@ fn parse_logpoint_spec(
 
 struct CoverageShowOptions {
     capture_id: String,
+    exclude_capture_id: Option<String>,
     path: Option<String>,
     path_glob: Option<String>,
     deprecated_path: bool,
@@ -3564,7 +3563,6 @@ struct CoverageShowOptions {
 
 struct CoverageCaptureOptions {
     capture_id: Option<String>,
-    exclude_capture_id: Option<String>,
     raw: bool,
     path: Option<String>,
     path_glob: Option<String>,
@@ -3577,7 +3575,6 @@ struct CoverageCaptureOptions {
 
 struct CoverageStopOptions {
     capture_id: Option<String>,
-    exclude_capture_id: Option<String>,
 }
 
 struct CpuProfileShowOptions {
@@ -4780,6 +4777,7 @@ async fn show_stored_coverage(
         .get_stored_coverage(
             context, options.capture_id, None,
             scope.target.clone(), scope.connection.clone(), None,
+            options.exclude_capture_id,
         )
         .await)?;
     output.print_coverage(
@@ -4849,6 +4847,7 @@ async fn show_stored_heap_classes(
 
 fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions, io::Error> {
     let mut capture_id = None;
+    let mut exclude_capture_id = None;
     let mut path = None;
     let mut path_glob = None;
     let mut deprecated_path = false;
@@ -4858,6 +4857,21 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
+            "--exclude" => {
+                index += 1;
+                let value = values.get(index).filter(|value| {
+                    !value.is_empty() && !value.starts_with("--")
+                }).ok_or_else(|| io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--exclude requires a baseline capture selector",
+                ))?;
+                if exclude_capture_id.replace(value.clone()).is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--exclude may only be specified once",
+                    ));
+                }
+            }
             "--path" | "--path-prefix" | "--path-glob" => {
                 let option = values[index].as_str();
                 index += 1;
@@ -4931,6 +4945,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     Ok(CoverageShowOptions {
         capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        exclude_capture_id,
         path,
         path_glob,
         deprecated_path,
@@ -4942,12 +4957,16 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
 
 fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOptions, io::Error> {
     let mut capture_id = None;
-    let mut exclude_capture_id = None;
     let mut raw = false;
     let mut render_values = Vec::with_capacity(values.len());
     let mut index = 0;
     while index < values.len() {
-        if matches!(values[index].as_str(), "--id" | "--exclude") {
+        if values[index] == "--exclude" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--exclude is only supported by coverage show <capture> --exclude <baseline>",
+            ));
+        } else if values[index] == "--id" {
             let option = values[index].as_str();
             let value = values.get(index + 1).ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name"))
@@ -4955,8 +4974,7 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
             if value.starts_with("--") || value.is_empty() {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name")));
             }
-            let destination = if option == "--id" { &mut capture_id } else { &mut exclude_capture_id };
-            if destination.replace(value.clone()).is_some() {
+            if capture_id.replace(value.clone()).is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("{option} may only be specified once"),
@@ -4978,7 +4996,6 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
     let options = parse_coverage_show_options(&show_values)?;
     Ok(CoverageCaptureOptions {
         capture_id,
-        exclude_capture_id,
         raw,
         path: options.path,
         path_glob: options.path_glob,
@@ -4993,16 +5010,18 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
 fn parse_coverage_stop_options(values: &[String]) -> Result<CoverageStopOptions, io::Error> {
     let mut options = CoverageStopOptions {
         capture_id: None,
-        exclude_capture_id: None,
     };
     let mut arguments = values.iter();
     while let Some(option) = arguments.next() {
         let destination = match option.as_str() {
             "--id" => &mut options.capture_id,
-            "--exclude" => &mut options.exclude_capture_id,
+            "--exclude" => return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--exclude is only supported by coverage show <capture> --exclude <baseline>",
+            )),
             _ => return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("unknown coverage stop option '{option}'; expected --id or --exclude"),
+                format!("unknown coverage stop option '{option}'; expected --id"),
             )),
         };
         let value = arguments.next().filter(|value| {
@@ -5503,7 +5522,13 @@ fn process_attach_destination(
         .find_map(|tree| {
             tree.processes
                 .iter()
-                .find(|process| process.process_id == process_id && process.attachable)
+                .find(|process| {
+                    process.process_id == process_id
+                        && process.attachable
+                        // A terminal-launched Node app can be a descendant of the IDE
+                        // without belonging to its debugger-managed process tree.
+                        && (root_pid.is_some() || process.role != ProcessRole::Node)
+                })
                 .map(|process| (tree.root_process_id, process))
         });
     if let Some((root_pid, process)) = process_tree_target
@@ -6733,10 +6758,10 @@ commands:
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
-  dbgjs coverage capture [--id <name>] [--exclude <selector>] [--raw] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+  dbgjs coverage capture [--id <name>] [--raw] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     --raw collects counts and runtime offsets without source-map lookup or symbol enrichment
-  dbgjs coverage stop [--id <name>] [--exclude <selector>] [target scope]
-  dbgjs coverage show [<selector>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
+  dbgjs coverage stop [--id <name>] [target scope]
+  dbgjs coverage show [<selector>] [--exclude <baseline>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     filters match normalized source URLs, including authored ranges inside bundles
     --path is a deprecated prefix alias, not a substring match; example glob: '**/issue/**'
     captures have immutable IDs; . and .1 select latest by kind across the context, .2 the previous
@@ -6818,6 +6843,63 @@ mod tests {
 
     fn arguments(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn node_pid_attachment_does_not_attach_its_enclosing_ide() {
+        let tree: ProcessTreeSnapshot = serde_json::from_value(serde_json::json!({
+            "rootProcessId": 100,
+            "processes": [{
+                "processId": 200, "name": "node.exe", "commandLine": "node app.mjs",
+                "creationDate": "", "role": "node", "attachable": true,
+                "debugTargetId": "process-200-instance"
+            }, {
+                "processId": 300, "name": "Code.exe", "commandLine": "--type=renderer",
+                "creationDate": "", "role": "renderer", "attachable": true,
+                "debugTargetId": "process-300-instance"
+            }],
+            "runtimeMetadataAvailable": false
+        }))
+        .unwrap();
+        assert_eq!(
+            process_attach_destination(
+                ProcessAttachLocator::Process(200),
+                std::slice::from_ref(&tree),
+            )
+            .unwrap(),
+            (
+                "process-200".to_owned(),
+                ConnectionConfiguration::Process { process_id: 200 },
+                ProcessAttachTarget::Target("$node-root".to_owned()),
+            )
+        );
+        assert_eq!(
+            process_attach_destination(
+                ProcessAttachLocator::Process(300),
+                std::slice::from_ref(&tree),
+            )
+            .unwrap(),
+            (
+                "process-tree-100".to_owned(),
+                ConnectionConfiguration::ProcessTree { root_pid: 100 },
+                ProcessAttachTarget::Renderer(RendererAttachSelector::Process(300)),
+            )
+        );
+        assert_eq!(
+            process_attach_destination(
+                ProcessAttachLocator::ProcessTreeProcess {
+                    root_pid: 100,
+                    process_id: 200,
+                },
+                &[tree],
+            )
+            .unwrap(),
+            (
+                "process-tree-100".to_owned(),
+                ConnectionConfiguration::ProcessTree { root_pid: 100 },
+                ProcessAttachTarget::Target("process-200-instance".to_owned()),
+            )
+        );
     }
 
     fn renderer_resource(id: &str, process_id: u32, window_id: Option<u32>) -> ResourceSnapshot {
@@ -7948,21 +8030,42 @@ mod tests {
     }
 
     #[test]
-    fn parses_named_coverage_stop_with_exclusion() {
+    fn parses_named_coverage_stop_without_exclusion() {
         let options = super::parse_coverage_stop_options(&arguments(&[
-            "--id", "after-click", "--exclude", "before-click",
+            "--id", "after-click",
         ])).unwrap();
         assert_eq!(options.capture_id.as_deref(), Some("after-click"));
-        assert_eq!(options.exclude_capture_id.as_deref(), Some("before-click"));
         assert!(super::parse_coverage_stop_options(&[]).unwrap().capture_id.is_none());
         for values in [
             vec!["--id"],
             vec!["--id", "--exclude", "before"],
             vec!["--id", "one", "--id", "two"],
+            vec!["--exclude", "before"],
             vec!["--exclude", "one", "--exclude", "two"],
             vec!["--raw"],
         ] {
             assert!(super::parse_coverage_stop_options(&arguments(&values)).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_coverage_show_exclusion_with_rendering_options() {
+        let options = parse_coverage_show_options(&arguments(&[
+            ".1", "--exclude", ".2", "--path-glob", "**/src/**", "--all",
+        ])).unwrap();
+        assert_eq!(options.capture_id, ".1");
+        assert_eq!(options.exclude_capture_id.as_deref(), Some(".2"));
+        assert_eq!(options.path_glob.as_deref(), Some("**/src/**"));
+        assert!(options.all);
+        let latest = parse_coverage_show_options(&arguments(&["--exclude", "baseline"])).unwrap();
+        assert_eq!(latest.capture_id, ".");
+        for values in [
+            vec!["--exclude"],
+            vec!["--exclude", ""],
+            vec!["--exclude", "--all"],
+            vec!["--exclude", "one", "--exclude", "two"],
+        ] {
+            assert!(parse_coverage_show_options(&arguments(&values)).is_err());
         }
     }
 
@@ -8022,17 +8125,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_raw_coverage_independently_of_storage_exclusion_and_rendering() {
+    fn parses_raw_coverage_independently_of_storage_and_rendering() {
         let options = parse_coverage_capture_options(&arguments(&[
-            "--raw", "--id", "sample", "--exclude", "baseline", "--max-lines", "5",
+            "--raw", "--id", "sample", "--max-lines", "5",
         ])).unwrap();
         assert!(options.raw);
         assert_eq!(options.capture_id.as_deref(), Some("sample"));
-        assert_eq!(options.exclude_capture_id.as_deref(), Some("baseline"));
         assert_eq!(options.max_lines, 5);
         assert!(!parse_coverage_capture_options(&[]).unwrap().raw);
         assert!(parse_coverage_capture_options(&arguments(&["--id", "--raw"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude"])).is_err());
+        assert!(parse_coverage_capture_options(&arguments(&["--exclude", "baseline"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude", "a", "--exclude", "b"])).is_err());
     }
 

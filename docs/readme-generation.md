@@ -8,8 +8,9 @@ there is no separately maintained expected terminal output.
 
 [The runner](../tests/readme/run.mjs) downloads VS Code 1.137.0, starts a
 separate profile and workspace, and attaches only to its renderer. Additional
-scenarios launch a local website through Playwright and installed Chrome, then
-attach to an already running Node application.
+scenarios launch a local website through Playwright and installed Chrome in
+independent contexts, then attach to an already running Express server. Real
+curl requests exercise its handler under coverage and pause at a breakpoint.
 
 ## Regenerate or replay
 
@@ -46,19 +47,30 @@ select a smaller set than the walkthroughs.
 ## What is and is not deterministic
 
 - **Commands:** Recorded from the exact argument arrays passed to `dbgjs`.
+  The same recorder captures external curl invocations and their responses.
   The replay must execute the same commands in the same order. PowerShell
   quoting is generated, including doubled single quotes inside arguments.
-- **Identities:** The isolated process IDs, selected target ID, temporary
+  A request deliberately held at a breakpoint runs concurrently with debugger
+  commands; its recorded position reflects invocation, not completion.
+- **Published examples:** Argument values and stdout/stderr are recorded
+  verbatim, including process IDs, source URLs, and local paths. Rendering never
+  replaces these with variables. They document one real run, not portable
+  constants to paste unchanged.
+- **Replay comparison only:** The isolated process IDs, selected target ID, temporary
   directory, installation path, local website address, artifact directory, and authored-source URL
-  prefix get named replacements. The same replacement is used in commands and
-  outputs. Numbers elsewhere (including coverage counts) are never blanked out.
-  `$VSCODE_SOURCE/` abbreviates the discovered CDN prefix ending in `src/vs/`.
-  VS Code's `[Administrator]` title suffix is omitted on elevated hosted runners;
-  the rest of the title is still compared exactly.
+  prefix get named replacements in comparison copies. Each scenario records its
+  own replacement map, applied to both command arguments and outputs only when
+  comparing two runs. Numbers elsewhere (including coverage counts) are never
+  blanked out. VS Code's `[Administrator]` title suffix is ignored during
+  comparison on elevated hosted runners; the rest of the title is still
+  compared exactly. Neither normalization changes the recorded or published text.
 - **Stable output:** Acknowledgements, known editor state, and evaluation
   results must match the recording exactly after those replacements. The
   displayed authored-source excerpt is also compared exactly, without requiring
   unrelated source-map diagnostics below that excerpt to stay identical.
+  The known coverage-capture "Still waiting" progress notice may appear on
+  slower runs; replay ignores only that notice, not other stderr changes.
+  The published transcript still retains it when it occurred.
 - **Live output:** Process inventories, revisions, timing, coverage, profiles,
   heap measurements, and bounded tree membership can vary. Each command has an
   explicit evidence check in the runner. Further checks require executed
@@ -70,6 +82,9 @@ select a smaller set than the walkthroughs.
   into a details section. Rendered lines omit trailing whitespace; the full
   output remains in the recording.
   Stderr is retained, not silently discarded.
+
+The Express application shown in its walkthrough is read directly from the
+fixture, so its code cannot drift from the server used by replay.
 
 The checked-in README is a sample from one successful run, not a claim that
 timings or heap object IDs recur. Do not update it by typing plausible output
@@ -84,7 +99,7 @@ process tree, then removes its temporary directory.
 
 `artifacts/readme/*-commands.jsonl` contain raw argument vectors, stdout, stderr,
 exit statuses, and durations, including setup and verification queries.
-`artifacts/readme/recording.json` holds the normalized transcript.
+`artifacts/readme/recording.json` holds the raw transcript and replay comparison maps.
 `artifacts/readme/editor.png` is the real screenshot.
 `artifacts/readme/vscode.log` contains Electron diagnostics.
 These are uploaded even when hosted CI fails.

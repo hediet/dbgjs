@@ -159,10 +159,11 @@ dbgjs --json coverage capture --raw
 
 `--raw` skips source fetching, source-map lookup, formatting, and symbol
 enrichment for the capture. Runtime script identifiers/URLs, UTF-16 source offsets, and
-execution counts remain available. It composes with `--id`, `--exclude`, and
-generated-source output filters. Omitting it preserves the existing enriched
-live-capture behavior; named captures still retain their existing unprojected
-storage behavior.
+execution counts remain available. It composes with `--id` and
+generated-source output filters. Omitting it enriches both named and unnamed
+captures before storage. Capturing and stopping always retain full immutable
+coverage; derive an excluded view with
+`coverage show <capture> --exclude <baseline>` instead.
 
 Coverage commands that have not completed after 20 seconds print a one-time
 hint on **stderr** describing `coverage capture --raw`. The original operation

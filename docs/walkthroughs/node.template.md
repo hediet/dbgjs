@@ -1,36 +1,70 @@
-# Attach to a running Node.js process
+# Investigate an Express server with curl
 
-This example attaches to an already running Node application. The generator
-starts a small local process with Node's Inspector enabled
-(`--inspect=127.0.0.1:0`), discovers its PID, and only then attaches with dbgjs.
-`$NODE_PID` is that process's real PID, replaced for readability.
+Attach to an already running Node.js process, measure a real HTTP request, and
+pause inside the handler for the next one. The commands and responses below
+come from an actual run, including the PIDs and allocated URLs.
 Commands use PowerShell quoting.
 
-To reproduce the setup, run the included
-[Node application](../../tests/readme/node-target.mjs) in another terminal:
+## The application
+
+This small [Express server](../../tests/readme/express-server.mjs) calculates
+a notebook quote. Ordering three notebooks exercises the discount branch;
+ordering two does not. The code below is generated from the file used by replay.
+
+{{file:tests/readme/express-server.mjs}}
+
+With the repository dependencies installed, start it in another terminal:
 
 ```powershell
-node --inspect=127.0.0.1:0 tests\readme\node-target.mjs
+node --inspect=127.0.0.1:0 tests\readme\express-server.mjs
 ```
 
-Use that application's PID for `$NODE_PID` below.
+Use your server's PID and HTTP address in place of the recorded values below.
+The application is not launched through dbgjs.
 
-## Select a context and attach
+## Attach to the process
 
-{{example:node-context,node-attach,node-target-attach}}
+Create a context for this investigation, then attach and select the process in
+one command. There is no separate connection setup or second target attachment.
 
-## Inspect the live application
+{{example:node-context,node-attach}}
 
-The result comes from the application, not a debugger fixture response.
+## Measure a request
 
-{{example:node-eval}}
+Start precise coverage, send a request with curl, and save the capture.
+Filter the view to the server's source file instead of Express internals.
 
-## Disconnect without terminating the application
+{{example:node-coverage-start,node-coverage-request,node-coverage-stop,node-coverage-show}}
+
+The response and coverage come from the same HTTP request. The saved capture
+retains the complete data; the source filter only affects this view.
+
+## Pause inside the next request
+
+Set a breakpoint in the request handler.
+
+{{example:node-breakpoint-set}}
+
+In another terminal, start this request. It waits at the breakpoint; the
+response shown here is what curl receives **after** the resume command below.
+
+{{example:node-breakpoint-request}}
+
+Back in the debugger terminal, wait for the pause and inspect the live request
+state before allowing the handler to finish.
+
+{{example:node-breakpoint-wait,node-breakpoint-eval,node-breakpoint-resume}}
+
+The request now completes. Remove the breakpoint when finished.
+
+{{example:node-breakpoint-delete}}
+
+## Disconnect without stopping the server
 
 {{example:node-disconnect}}
 
-The replay verifies that the Node process remains alive after disconnecting;
-only the generator's final cleanup terminates the process it owns.
+Replay checks that the server remains responsive after disconnecting. Only
+the generator's final cleanup terminates the application it launched.
 
 [Back to the feature overview](../../README.md) ·
 [Generation and replay rules](../readme-generation.md)

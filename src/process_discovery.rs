@@ -15,7 +15,8 @@ use crate::service_api::{
 };
 
 #[cfg(windows)]
-const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(15);
+// Cold PowerShell/CIM startup on hosted Windows runners can exceed 15 seconds.
+const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_SESSION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const AGENT_SESSIONS_HELPER: &str = include_str!("providers/agent_sessions.mjs");
@@ -1518,6 +1519,20 @@ mod tests {
             command_argument(r#"code "--user-data-dir=/home/user/Code Profile""#, "--user-data-dir"),
             Some("/home/user/Code Profile".into())
         );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn discovers_current_windows_process_metadata() {
+        let processes = query_windows_processes().await.unwrap();
+        let current = processes
+            .iter()
+            .find(|process| process.process_id == std::process::id())
+            .expect("the current process must be observable");
+        assert!(!current.name.is_empty());
+        assert!(!current.command_line.is_empty());
+        assert!(!current.creation_date.is_empty());
+        assert!(!current.executable_path.is_empty());
     }
 
     #[cfg(unix)]

@@ -5,7 +5,8 @@
 This is a recorded investigation of **desktop VS Code 1.137.0
 (Electron)**. The generator launches a separate profile and empty workspace;
 it never attaches to an existing user window. Commands use PowerShell quoting.
-`$VARIABLES` stand for discovered identities and long path prefixes.
+The IDs, paths, and source URLs below are the actual values from that run.
+Use the identities discovered on your own machine when following along.
 
 ## Discover, select, and inspect
 
@@ -13,20 +14,21 @@ Find the isolated process tree. When following along manually, omit the filter
 to discover your own windows, then select a renderer PID from that output.
 
 ````console
-$ dbgjs process list --root vscode --no-cmd-line --filter p:$VSCODE_PID
-VS Code process tree $VSCODE_PID  (6 attachable processes; window metadata available)
-└─ p:$VSCODE_PID  Code.exe  [vscode-main]
-   ├─ w:$VSCODE_PID/1  window  readme-demo - Visual Studio Code
-   │  ├─ p:$PROCESS_1  file-watcher  [file-watcher]
-   │  ├─ p:$RENDERER_PID  renderer  [renderer]
-   │  └─ p:$PROCESS_4  extension-host  [extension-host]
-   ├─ p:$PROCESS_2  Code.exe  [gpu]
-   ├─ p:$PROCESS_3  Code.exe  [network-service]
-   ├─ p:$PROCESS_5  agent-host  [agent-host]
-   │  └─ p:$PROCESS_6  Code.exe  [copilot]
-   │     └─ p:$PROCESS_10  pwsh.exe  [other]
-   │        └─ p:$PROCESS_11  conhost.exe  [other]
-   └─ p:$PROCESS_9  shared-process  [node-utility]
+$ dbgjs process list --root vscode --no-cmd-line --filter p:40836
+VS Code process tree 40836  (6 attachable processes; window metadata available)
+└─ p:40836  Code.exe  [vscode-main]
+   ├─ w:40836/1  window  readme-demo - Visual Studio Code
+   │  ├─ p:5292  renderer  [renderer]
+   │  ├─ p:39176  extension-host  [extension-host]
+   │  └─ p:42620  file-watcher  [file-watcher]
+   ├─ p:31984  agent-host  [agent-host]
+   │  └─ p:42168  Code.exe  [copilot]
+   │     └─ p:40304  git.exe  [other]
+   │        ├─ p:40612  conhost.exe  [other]
+   │        └─ p:41736  git.exe  [other]
+   ├─ p:35988  Code.exe  [gpu]
+   ├─ p:38904  Code.exe  [network-service]
+   └─ p:41540  shared-process  [node-utility]
 ````
 
 Create a durable context, attach to that renderer, and evaluate inside it.
@@ -37,9 +39,9 @@ Context readme  rev 1
   Name: VS Code typing
   Connections: none
 
-$ dbgjs process attach $RENDERER_PID --set
+$ dbgjs process attach 5292 --set
 Attachment: created
-Target $RENDERER_TARGET  [running]  readme/process-tree-$VSCODE_PID  gen 1  rev 9
+Target renderer-1  [running]  readme/process-tree-40836  gen 1  rev 3
   Pause: none
 
 $ dbgjs target eval document.title
@@ -65,7 +67,7 @@ The source map provides the TypeScript; no VS Code checkout is needed.
 
 ````console
 $ dbgjs source grep 'private _doApplyEdits' --path textModel.ts --max-results 1 --context-lines 2
-$VSCODE_SOURCE/editor/common/model/textModel.ts:1503:2
+https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:1503:2
     1501 | 	}
     1502 |
   > 1503 | 	private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IValidEditOperation[] {
@@ -80,8 +82,9 @@ Long diagnostics remain in the [full recording](../../tests/readme/recording.jso
 
 ## Measure the first edit
 
-Start precise coverage and capture a baseline. Type into the editor, then
-preserve only the coverage that remains after excluding the baseline.
+Start precise coverage and capture a baseline. Type into the editor and save
+the next capture. Exclude the baseline when viewing it, without modifying the
+stored capture.
 
 ````console
 $ dbgjs coverage start
@@ -93,25 +96,33 @@ Captured background.
 $ dbgjs target type 'hello from dbgjs'
 Typed "hello from dbgjs"
 
-$ dbgjs coverage stop --id typing --exclude background
+$ dbgjs coverage stop --id typing
 Coverage recording stopped. Captured typing.
 
-$ dbgjs coverage show typing --path-prefix src/vs/editor/common/model --max-lines 16
+$ dbgjs coverage show typing --exclude background --path-prefix src/vs/editor/common/model --max-lines 16
 Capture typing
-185461 RL (run lines), 5427 HL (hit lines)
-└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185461 RL]
-   ├─ pieceTreeTextBuffer/  [3 files, 1347 HL, 73624 RL]  [3 children pruned]
-   ├─ bracketPairsTextModelPart/  [13 files, 1141 HL, 13033 RL]  [3 children pruned]
-   ├─ textModel.ts  1091 HL, 55819 RL  [children pruned]
-   ├─ intervalTree.ts  863 HL, 18289 RL  [children pruned]
-   ├─ tokens/  [5 files, 467 HL, 7210 RL]  [5 children pruned]
+66978 RL (run lines), 3465 HL (hit lines)
+└─ src/vs/editor/common/model/  [28 files, 3465 HL, 66978 RL]
+   ├─ bracketPairsTextModelPart/  [12 files, 1114 HL, 12979 RL]  [2 children pruned]
+   ├─ pieceTreeTextBuffer/  [3 files, 981 HL, 36812 RL]  [3 children pruned]
+   ├─ textModel.ts  377 HL, 6654 RL [indentOfLine 11 HL, 11 RL]  [children pruned]
    ├─ guidesTextModelPart.ts  273 HL, 317 RL  [children pruned]
-   ├─ editStack.ts  155 HL, 1297 RL  [children pruned]
-   ├─ prefixSumComputer.ts  56 HL, 15495 RL  [children pruned]
+   ├─ intervalTree.ts  272 HL, 5105 RL  [children pruned]
+   ├─ tokens/  [5 files, 261 HL, 3499 RL]  [5 children pruned]
+   ├─ editStack.ts  150 HL, 1187 RL  [children pruned]
    ├─ utils.ts  23 HL, 115 RL [computeIndentLevel 23 HL, 115 RL]  [children pruned]
    ├─ textModelStringEdit.ts  6 HL, 192 RL [offsetEditFromContentChanges 6 HL, 192 RL]  [children pruned]
-   └─ textModelPart.ts  5 HL, 70 RL  [children pruned]
+   ├─ textModelPart.ts  5 HL, 70 RL  [children pruned]
+   └─ prefixSumComputer.ts  3 HL, 48 RL  [children pruned]
 ````
+
+<details><summary>CLI stderr</summary>
+
+````text
+dbgjs: Still waiting after 20s. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope. It skips source-map lookup and symbol enrichment. The current command is continuing.
+````
+
+</details>
 
 The hit tree points into the real text model, its PieceTree buffer, and related
 editor machinery. The counts can vary between runs.
@@ -123,7 +134,7 @@ Set a breakpoint at the statement discovered by the source search.
 ````console
 $ dbgjs breakpoint set edit src/vs/editor/common/model/textModel.ts 1505
 Breakpoint edit  src/vs/editor/common/model/textModel.ts:1505:1  [bound; 1 application(s)]
-  bound on process-tree-$VSCODE_PID/$RENDERER_TARGET: CDP confirmed script 9 v1 at vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1512 via source map MapId(0) (Ordinary)
+  bound on process-tree-40836/renderer-1: CDP confirmed script 9 v1 at vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1512 via source map MapId(0) (Ordinary)
 
   Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits
       1501 |     }
@@ -146,10 +157,10 @@ $ dbgjs target type '!'
 Typed "!"
 
 $ dbgjs target wait paused 0 30000
-Target $RENDERER_TARGET  [paused at epoch 1]  readme/process-tree-$VSCODE_PID  gen 1  rev 177
+Target renderer-1  [paused at epoch 1]  readme/process-tree-40836  gen 1  rev 219
   Breakpoints:
     edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]
-      script 9 v1 -> vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)
+      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)
   Pause: epoch 1 (other)
   Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits
       1501 |     }
@@ -176,21 +187,21 @@ Resume, then remove the breakpoint before profiling more input.
 
 ````console
 $ dbgjs target resume
-Target $RENDERER_TARGET  [running]  readme/process-tree-$VSCODE_PID  gen 1  rev 182
+Target renderer-1  [running]  readme/process-tree-40836  gen 1  rev 224
   Breakpoints:
     edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]
-      script 9 v1 -> vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)
+      script 9 v1 -> vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)
   Pause: none
 
 $ dbgjs breakpoint delete edit
 Context readme  rev 20
   Name: VS Code typing
   Connections:
-    process-tree-$VSCODE_PID  [connected to Process $VSCODE_PID; CDP 1.3; generation 1]
-      Configuration: process tree rooted at PID $VSCODE_PID
+    process-tree-40836  [connected to Process 40836; CDP 1.3; generation 1]
+      Configuration: process tree rooted at PID 40836
       Targets:
-        Process $VSCODE_PID  Process $VSCODE_PID  process:$VSCODE_PID
-          browser  Chrome/148.0.7778.280  http://127.0.0.1:62441
+        Process 40836  Process 40836  process:40836
+          browser  Chrome/148.0.7778.280  http://127.0.0.1:50710
 ... (5 more lines; full output in the recording)
 ````
 
@@ -209,14 +220,14 @@ $ dbgjs profile stop --id typing-cpu
 CPU profile recording stopped. Captured typing-cpu.
 
 $ dbgjs profile show typing-cpu --view functions --sort self --path src/vs/editor --max-lines 8
-CPU profile typing-cpu: 4.52s elapsed, 4.52s sampled, 2850 samples
+CPU profile typing-cpu: 4.31s elapsed, 4.31s sampled, 2719 samples
 Self       Total      Samples  Function
-10.66ms    27.46ms          7  InlineCompletionsSource.fetch → callback  ../../../src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsSource.ts:181:20
-9.36ms     16.90ms          6  ViewLayerRenderer._finishRenderingInvalidLines  ../../../src/vs/editor/browser/view/viewLayer.ts:536:10
-4.77ms     43.27ms          3  TextModel.applyEdits  ../../../src/vs/editor/common/model/textModel.ts:1490:9
-4.76ms     40.20ms          3  ViewModelEventDispatcher._doConsumeQueue  ../../../src/vs/editor/common/viewModelEventDispatcher.ts:142:10
-3.72ms     3.72ms           1  CurrentLineHighlightOverlay._renderOne  ../../../src/vs/editor/browser/viewParts/currentLineHighlight/currentLineHighlight.ts:209:12
-3.25ms     4.79ms           2  StickyScrollWidget._updateWidgetWidth  ../../../src/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.ts:188:10
+6.09ms     39.76ms          4  ViewModelEventDispatcher._doConsumeQueue  ../../../src/vs/editor/common/viewModelEventDispatcher.ts:142:10
+4.73ms     4.73ms           3  PieceTreeBase.appendToNode  ../../../src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeBase.ts:1455:10
+3.21ms     3.21ms           2  InlineCompletionsModel.constructor → callback  ../../../src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsModel.ts:143:42
+3.19ms     3.19ms           2  EditStack.pushEditOperation → callback  ../../../src/vs/editor/common/model/editStack.ts:439:1
+3.15ms     83.80ms          2  TextModel.onDidChangeContent → callback  ../../../src/vs/editor/common/model/textModel.ts:246:36
+3.14ms     10.37ms          2  NativeEditContext._onKeyUp  ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:394:10
 ````
 
 ## Capture the screen and inspect through CDP
@@ -224,8 +235,8 @@ Self       Total      Samples  Function
 Save a real screenshot, then read the document title through a raw CDP call.
 
 ````console
-$ dbgjs screenshot capture --output "$ARTIFACTS\editor.png"
-Captured 2163x1355 screenshot to $ARTIFACTS\editor.png.
+$ dbgjs screenshot capture --output 'D:\dev\hediet\cdp-client\artifacts\readme\editor.png'
+Captured 2163x1355 screenshot to \\?\D:\dev\hediet\cdp-client\artifacts\readme\editor.png.
 
 $ dbgjs target cdp Runtime.evaluate --params '{"expression":"document.title","returnByValue":true}'
 {
@@ -243,60 +254,54 @@ resolved through source maps, rather than guessed from minified constructors.
 
 ````console
 $ dbgjs heap capture --id editor
-Captured editor (165.2 MiB) in 5.682s: taking 2.674s, retrieving 3.008s.
+Captured editor (157.6 MiB) in 5.862s: taking 2.065s, retrieving 3.797s.
 
 $ dbgjs heap classes editor --filter '^PieceTreeTextBuffer$' --instances --max-lines 16
 1 classes, 2 instances, 80 B shallow size
-Analysis 25.845s (parse 9.566s, projection 16.279s; mapping mapped (captured metadata); 4051 constructor groups)
-└─ $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts  2 instances, 80 B
-   └─ PieceTreeTextBuffer [frame:CB2F2F9740A0E5DCD4CAC41ACF4C9669, context:1]  2 instances, 80 B
-      ├─ PieceTreeTextBuffer@1  id 2901425  40 B
-      └─ PieceTreeTextBuffer@2  id 3295731  40 B
+Analysis 26.153s (parse 10.560s, projection 15.593s; mapping mapped (captured metadata); 4051 constructor groups)
+└─ https:/main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts  2 instances, 80 B
+   └─ PieceTreeTextBuffer [frame:F17BAE531CC2B00122463596505ACEC1, context:1]  2 instances, 80 B
+      ├─ PieceTreeTextBuffer@1  id 1777169  40 B
+      └─ PieceTreeTextBuffer@2  id 2402103  40 B
 ````
 
 <details><summary>CLI stderr</summary>
 
 ````text
 Heap snapshot: 0/0 objects, 0 bytes
-Heap snapshot: 70000/1466412 (4.8%), 0 bytes
-Heap snapshot: 140000/1466412 (9.5%), 0 bytes
-Heap snapshot: 210000/1466412 (14.3%), 0 bytes
-Heap snapshot: 260000/1466412 (17.7%), 0 bytes
-Heap snapshot: 370000/1466412 (25.2%), 0 bytes
-Heap snapshot: 420000/1466412 (28.6%), 0 bytes
-Heap snapshot: 480000/1466412 (32.7%), 0 bytes
-Heap snapshot: 550000/1466412 (37.5%), 0 bytes
-Heap snapshot: 610000/1466412 (41.6%), 0 bytes
-Heap snapshot: 690000/1466412 (47.1%), 0 bytes
-Heap snapshot: 790000/1466412 (53.9%), 0 bytes
-Heap snapshot: 870000/1466412 (59.3%), 0 bytes
-Heap snapshot: 970000/1466412 (66.1%), 0 bytes
-Heap snapshot: 1070000/1466412 (73.0%), 0 bytes
-Heap snapshot: 1150000/1466412 (78.4%), 0 bytes
-Heap snapshot: 1220000/1466412 (83.2%), 0 bytes
-Heap snapshot: 1300000/1466412 (88.7%), 0 bytes
-Heap snapshot: 1410000/1466412 (96.2%), 0 bytes
-Heap snapshot: 1460000/1466412 (99.6%), 0 bytes
-Heap snapshot: 1466411/1466412 (100.0%), 0 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 0 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 11534326 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 17825768 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 26214369 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 33554390 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 42991571 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 54525892 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 65011636 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 75497372 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 85983118 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 96468857 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 106954600 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 117440333 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 128974648 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 140508958 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 149946122 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 160431874 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 167771894 bytes
-Heap snapshot: 1466412/1466412 (100.0%), 173215119 bytes
+Heap snapshot: 60000/1382180 (4.3%), 0 bytes
+Heap snapshot: 140000/1382180 (10.1%), 0 bytes
+Heap snapshot: 200000/1382180 (14.5%), 0 bytes
+Heap snapshot: 270000/1382180 (19.5%), 0 bytes
+Heap snapshot: 330000/1382180 (23.9%), 0 bytes
+Heap snapshot: 400000/1382180 (28.9%), 0 bytes
+Heap snapshot: 500000/1382180 (36.2%), 0 bytes
+Heap snapshot: 580000/1382180 (42.0%), 0 bytes
+Heap snapshot: 700000/1382180 (50.6%), 0 bytes
+Heap snapshot: 790000/1382180 (57.2%), 0 bytes
+Heap snapshot: 850000/1382180 (61.5%), 0 bytes
+Heap snapshot: 940000/1382180 (68.0%), 0 bytes
+Heap snapshot: 1060000/1382180 (76.7%), 0 bytes
+Heap snapshot: 1200000/1382180 (86.8%), 0 bytes
+Heap snapshot: 1380000/1382180 (99.8%), 0 bytes
+Heap snapshot: 1382179/1382180 (100.0%), 0 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 0 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 14680044 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 26214360 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 35651535 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 45088705 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 55574443 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 70254494 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 79691666 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 91225991 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 101711730 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 113246047 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 125828929 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 137363251 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 148897554 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 158334724 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 164626180 bytes
+Heap snapshot: 1382180/1382180 (100.0%), 165269379 bytes
 ````
 
 </details>
@@ -304,7 +309,7 @@ Heap snapshot: 1466412/1466412 (100.0%), 173215119 bytes
 <details><summary>4 source-map diagnostics</summary>
 
 ````text
-Mapping script:13 (vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js): map loading failed — failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some("net::ERR_HTTP_RESPONSE_CODE_FAILURE")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))
+Mapping script:13 (vscode-file://vscode-app/d:/dev/hediet/cdp-client/artifacts/vscode-download/vscode-win32-arm64-archive-1.137.0/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js): map loading failed — failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some("net::ERR_HTTP_RESPONSE_CODE_FAILURE")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))
 Mapping script:18 (): no map supplied
 Mapping script:19 (): no map supplied
 Mapping script:4 (node:electron/js2c/sandbox_bundle): no map supplied
@@ -313,22 +318,22 @@ Mapping script:4 (node:electron/js2c/sandbox_bundle): no map supplied
 </details>
 
 Follow the incoming edges of a discovered instance to see who holds the buffer.
-`$BUFFER` abbreviates `editor#<instance-id>` using the first ID printed above.
+Use `editor#<instance-id>` with an ID printed above.
 
 ````console
-$ dbgjs heap refs $BUFFER --incoming --limit 4
-$BUFFER  type:object, value:s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}, shallow:40 B, in:2, out:9
-  source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
-  editor#230537  Nh {"_store": s {...}, "_undoRedoService": system / JSProxy, "_languageService": Yht {...}, ...} --property "_buffer"--> $BUFFER  s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}
-    editor#230537:
-      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/textModel.ts:305:2 -- TextModel.constructor
-    $BUFFER:
-      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
-  editor#230537  Nh {"_store": s {...}, "_undoRedoService": system / JSProxy, "_languageService": Yht {...}, ...} --property "_bufferDisposable"--> $BUFFER  s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}
-    editor#230537:
-      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/textModel.ts:305:2 -- TextModel.constructor
-    $BUFFER:
-      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
+$ dbgjs heap refs editor#1777169 --incoming --limit 4
+editor#1777169  type:object, value:s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}, shallow:40 B, in:2, out:9
+  source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
+  editor#1608781  Nh {"_store": s {...}, "_undoRedoService": system / JSProxy, "_languageService": Yht {...}, ...} --property "_buffer"--> editor#1777169  s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}
+    editor#1608781:
+      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor
+    editor#1777169:
+      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
+  editor#1608781  Nh {"_store": s {...}, "_undoRedoService": system / JSProxy, "_languageService": Yht {...}, ...} --property "_bufferDisposable"--> editor#1777169  s {"_store": s {...}, "_onDidChangeContent": D {...}, "_BOM": "", ...}
+    editor#1608781:
+      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/textModel.ts:305:2 -- TextModel.constructor
+    editor#1777169:
+      source [heapSnapshot; constructor; authored]: https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor
 ````
 
 ## Disconnect and retain the evidence
@@ -337,18 +342,18 @@ Disconnect the runtime. The coverage capture is still queryable and contains
 the same data as before disconnecting.
 
 ````console
-$ dbgjs connection disconnect --connection process-tree-$VSCODE_PID
+$ dbgjs connection disconnect --connection process-tree-40836
 Context readme  rev 30
   Name: VS Code typing
   Connections:
-    process-tree-$VSCODE_PID  [disconnected; generation 1]
-      Configuration: process tree rooted at PID $VSCODE_PID
+    process-tree-40836  [disconnected; generation 1]
+      Configuration: process tree rooted at PID 40836
       Targets: none
 
-$ dbgjs coverage show typing --path-prefix src/vs/editor/common/model --max-lines 8
+$ dbgjs coverage show typing --exclude background --path-prefix src/vs/editor/common/model --max-lines 8
 Capture typing
-185461 RL (run lines), 5427 HL (hit lines)
-└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185461 RL]  [11 children pruned]
+66978 RL (run lines), 3465 HL (hit lines)
+└─ src/vs/editor/common/model/  [28 files, 3465 HL, 66978 RL]  [11 children pruned]
 ````
 
 [Back to the feature overview](../../README.md) ·

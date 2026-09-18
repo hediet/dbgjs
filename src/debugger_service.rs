@@ -3347,14 +3347,30 @@ impl DebuggerServiceApi for DebuggerService {
         target_id: Option<String>,
         connection_id: Option<String>,
         path_glob: Option<String>,
+        exclude_capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
-        let (payload, name) = {
+        let (payload, name, baseline_payload) = {
             let state = self.state.lock().await;
             let capture = select_stored_capture(
                 &state, &context_id, &capture_name, Some(CaptureKind::Coverage),
                 target_id.as_deref(), connection_id.as_deref(),
             )?;
-            (capture.payload.clone(), capture.metadata.name.clone())
+            let baseline = exclude_capture_id.as_ref().map(|selector| {
+                let baseline = select_stored_capture(
+                    &state, &context_id, selector, Some(CaptureKind::Coverage),
+                    target_id.as_deref(), connection_id.as_deref(),
+                )?;
+                if baseline.metadata.target_id != capture.metadata.target_id
+                    || baseline.metadata.connection_id != capture.metadata.connection_id
+                    || baseline.metadata.connection_generation != capture.metadata.connection_generation
+                {
+                    return Err(invalid_params(
+                        "coverage exclusion requires captures from the same target and connection generation",
+                    ));
+                }
+                Ok(baseline.payload.clone())
+            }).transpose()?;
+            (capture.payload.clone(), capture.metadata.name.clone(), baseline)
         };
         let CapturePayload::Coverage(mut snapshot) =
             load_capture_payload(&payload, CaptureKind::Coverage)
@@ -3364,6 +3380,15 @@ impl DebuggerServiceApi for DebuggerService {
                 "capture '{capture_name}' is not a coverage capture"
             )));
         };
+        if let Some(payload) = baseline_payload {
+            let CapturePayload::Coverage(baseline) =
+                load_capture_payload(&payload, CaptureKind::Coverage)
+                    .map_err(capture_payload_rpc_error)?
+            else {
+                return Err(invalid_params("baseline is not a coverage capture"));
+            };
+            snapshot = crate::target_debugger::exclude_coverage(snapshot, &baseline);
+        }
         snapshot.capture_id = Some(name);
         crate::coverage_filter::filter_coverage(
             &mut snapshot, source_path.as_deref(), path_glob.as_deref(),
@@ -4336,7 +4361,6 @@ impl DebuggerServiceApi for DebuggerService {
         connection_id: String,
         target_id: String,
         capture_id: Option<String>,
-        exclude_capture_id: Option<String>,
         raw: Option<bool>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         if let Some(name) = capture_id.as_ref()
@@ -4396,7 +4420,6 @@ impl DebuggerServiceApi for DebuggerService {
         let mut snapshot = match debugger
             .take_coverage(
                 Some(reservation.reservation.metadata.name.clone()),
-                exclude_capture_id,
                 raw.unwrap_or(false),
             )
             .await
@@ -4423,7 +4446,6 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         connection_id: String,
         target_id: String,
-        exclude_capture_id: Option<String>,
         capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
         if let Some(name) = capture_id.as_ref()
@@ -4481,7 +4503,7 @@ impl DebuggerServiceApi for DebuggerService {
             return Ok(snapshot);
         }
         let mut snapshot = match debugger
-            .stop_coverage(exclude_capture_id)
+            .stop_coverage()
             .await
             .map_err(target_debugger_rpc_error)
         {
@@ -4506,7 +4528,6 @@ impl DebuggerServiceApi for DebuggerService {
         context_id: String,
         connection_id: String,
         target_id: String,
-        exclude_capture_id: Option<String>,
         capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError> {
         self.stop_coverage(
@@ -4514,7 +4535,6 @@ impl DebuggerServiceApi for DebuggerService {
             context_id,
             connection_id,
             target_id,
-            exclude_capture_id,
             capture_id,
         )
         .await?;
@@ -9275,7 +9295,7 @@ mod tests {
         service.store_capture(&second, empty_coverage(2)).await.unwrap();
         service.store_capture(&first, empty_coverage(1)).await.unwrap();
         let snapshot = service.get_stored_coverage(
-            &CallCtx::default(), "test".into(), ".1".into(), None, None, None, None,
+            &CallCtx::default(), "test".into(), ".1".into(), None, None, None, None, None,
         ).await.unwrap();
         assert_eq!(snapshot.capture_id.as_deref(), Some("cov-1"));
         let restored = load_state(&root.join("service.json")).unwrap();
@@ -9536,6 +9556,179 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    fn exclusion_test_coverage(root_count: u64, child_count: u64, enriched: bool) -> CoverageSnapshot {
+        let mut snapshot: CoverageSnapshot = serde_json::from_value(serde_json::json!({
+            "timestampMicros": 42,
+            "sources": [{
+                "scriptId": "1", "generatedUrl": "bundle.js",
+                "associatedAuthoredSource": "src/app.ts",
+                "functions": [{
+                    "name": "run", "blockCoverage": true,
+                    "rootStartOffset": 0, "rootEndOffset": 100,
+                    "ranges": [
+                        { "startOffset": 0, "endOffset": 100, "count": root_count },
+                        { "startOffset": 20, "endOffset": 40, "count": child_count }
+                    ]
+                }]
+            }]
+        })).unwrap();
+        if enriched {
+            let function = &mut snapshot.sources[0].functions[0];
+            for range in &mut function.ranges {
+                range.authored_start = Some(crate::service_api::SourceLocation {
+                    source_url: "src/app.ts".into(), line: range.start_offset + 1, column: 1,
+                });
+                range.authored_end = Some(crate::service_api::SourceLocation {
+                    source_url: "src/app.ts".into(), line: range.end_offset, column: 1,
+                });
+            }
+            function.effective_ranges = function.ranges.clone();
+            function.authored_location = function.ranges[0].authored_start.clone();
+        }
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn stored_coverage_exclusion_is_offline_and_preserves_both_captures() {
+        for enriched in [false, true] {
+            let (root, _) = capture_catalog_service();
+            let persistence_path = root.join("service.json");
+            let mut state = ServiceState::default();
+            let selected = exclusion_test_coverage(10, 4, enriched);
+            let baseline = exclusion_test_coverage(1, 0, false);
+            let mut payloads = Vec::new();
+            for (index, (name, snapshot)) in [
+                ("baseline", baseline.clone()), ("selected", selected.clone()),
+            ].into_iter().enumerate() {
+                let mut capture = stored_capture_from_payload(
+                    &persistence_path,
+                    capture_metadata("test", name, CaptureKind::Coverage, "target-a", "runtime"),
+                    CapturePayload::Coverage(snapshot),
+                );
+                capture.publication_order = index as u64 + 1;
+                payloads.push((capture.payload.clone(), fs::read(&capture.payload.path).unwrap()));
+                state.captures.insert(("test".into(), name.into()), capture);
+            }
+            // No contexts, connections, or live debuggers are needed to read stored captures.
+            persist_stored_state(&persistence_path, &StoredServiceState::from(&state)).unwrap();
+            let catalog_bytes = fs::read(&persistence_path).unwrap();
+            let restored = load_state(&persistence_path).unwrap();
+            let service = service_with_state(persistence_path.clone(), restored);
+            let shown = service.get_stored_coverage(
+                &CallCtx::default(), "test".into(), ".".into(), None, None, None,
+                Some("**/app.ts".into()), Some(".2".into()),
+            ).await.unwrap();
+            assert_eq!(shown.capture_id.as_deref(), Some("selected"));
+            let function = &shown.sources[0].functions[0];
+            assert_eq!(function.ranges.len(), 1);
+            assert_eq!(function.ranges[0].start_offset, 20);
+            assert_eq!(function.ranges[0].count, 4);
+            if enriched {
+                assert_eq!(function.effective_ranges, function.ranges);
+                assert_eq!(function.authored_location, function.ranges[0].authored_start);
+            } else {
+                assert!(function.effective_ranges.is_empty());
+            }
+            let json = serde_json::to_value(&shown).unwrap();
+            assert_eq!(json["sources"][0]["functions"][0]["ranges"][0]["count"], 4);
+            for (name, mut original) in [("selected", selected), ("baseline", baseline)] {
+                original.capture_id = Some(name.into());
+                let unchanged = service.get_stored_coverage(
+                    &CallCtx::default(), "test".into(), name.into(), None, None, None, None, None,
+                ).await.unwrap();
+                assert_eq!(unchanged, original);
+            }
+            let self_excluded = service.get_stored_coverage(
+                &CallCtx::default(), "test".into(), "selected".into(), None, None, None,
+                None, Some("selected".into()),
+            ).await.unwrap();
+            assert!(self_excluded.sources.is_empty());
+            for (payload, bytes) in payloads {
+                assert_eq!(fs::read(&payload.path).unwrap(), bytes);
+            }
+            assert_eq!(fs::read(&persistence_path).unwrap(), catalog_bytes);
+            let _ = fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn coverage_exclusion_matches_runtime_identity_and_ignores_zero_baseline_counts() {
+        let selected = exclusion_test_coverage(10, 4, true);
+        let zero_baseline = exclusion_test_coverage(0, 0, false);
+        assert_eq!(
+            crate::target_debugger::exclude_coverage(selected.clone(), &zero_baseline),
+            selected,
+        );
+        for different_identity in ["script", "url", "name", "mode", "root"] {
+            let mut baseline = exclusion_test_coverage(1, 1, false);
+            let source = &mut baseline.sources[0];
+            match different_identity {
+                "script" => source.script_id = "2".into(),
+                "url" => source.generated_url = "another.js".into(),
+                "name" => source.functions[0].name = "another".into(),
+                "mode" => source.functions[0].block_coverage = false,
+                "root" => source.functions[0].root_start_offset = 1,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                crate::target_debugger::exclude_coverage(selected.clone(), &baseline),
+                selected,
+                "{different_identity}",
+            );
+        }
+        let mut baseline = exclusion_test_coverage(1, 0, false);
+        baseline.sources[0].functions[0].ranges.reverse();
+        let excluded = crate::target_debugger::exclude_coverage(selected, &baseline);
+        assert_eq!(excluded.sources[0].functions[0].ranges.len(), 1);
+        assert_eq!(excluded.sources[0].functions[0].ranges[0].count, 4);
+    }
+
+    #[tokio::test]
+    async fn stored_coverage_exclusion_rejects_missing_or_incompatible_baselines() {
+        let (root, _) = capture_catalog_service();
+        let persistence_path = root.join("service.json");
+        let mut state = ServiceState::default();
+        for name in ["selected", "other-target", "other-connection", "other-generation", "wrong-kind"] {
+            let mut metadata =
+                capture_metadata("test", name, CaptureKind::Coverage, "target-a", "runtime");
+            match name {
+                "other-target" => metadata.target_id = "target-b".into(),
+                "other-connection" => metadata.connection_id = "another".into(),
+                "other-generation" => metadata.connection_generation = 2,
+                "wrong-kind" => metadata.kind = CaptureKind::CpuProfile,
+                _ => {}
+            }
+            let payload = if metadata.kind == CaptureKind::CpuProfile {
+                CapturePayload::CpuProfile(CpuProfileSnapshot {
+                    capture_id: name.into(),
+                    sampling_interval_micros: None,
+                    start_time_micros: 0.0,
+                    end_time_micros: 0.0,
+                    nodes: Vec::new(),
+                    samples: Vec::new(),
+                    time_deltas_micros: Vec::new(),
+                    functions: Vec::new(),
+                    analysis: None,
+                })
+            } else {
+                empty_coverage(1)
+            };
+            let capture = stored_capture_from_payload(&persistence_path, metadata, payload);
+            state.captures.insert(("test".into(), name.into()), capture);
+        }
+        let service = service_with_state(persistence_path, state);
+        for baseline in ["missing", "other-target", "other-connection", "other-generation", "wrong-kind"] {
+            let error = service.get_stored_coverage(
+                &CallCtx::default(), "test".into(), "selected".into(), None, None, None,
+                None, Some(baseline.into()),
+            ).await.unwrap_err();
+            if baseline.starts_with("other-") {
+                assert!(error.message.contains("same target and connection generation"), "{error:?}");
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn stored_coverage_path_filters_normalized_directory_descendants() {
         let root = std::env::current_dir()
@@ -9595,6 +9788,7 @@ mod tests {
                 "test".into(),
                 "coverage".into(),
                 Some("../src/".into()),
+                None,
                 None,
                 None,
                 None,

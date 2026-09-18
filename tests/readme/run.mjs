@@ -47,7 +47,7 @@ const replacements = [
 const { steps, command, json } = await createRecorder({
 	cli, environment, output, name: "vscode", replacements,
 });
-const recording = { vscodeVersion, steps };
+const recording = { vscodeVersion, steps, normalization: { vscode: replacements } };
 let codeProcess;
 let codeExited;
 let codeOutput = "";
@@ -144,10 +144,10 @@ try {
 		(text) => assert.match(text, /Captured background/));
 	await command("coverage-type", ["target", "type", "hello from dbgjs"], "exact",
 		(text) => assert.match(text, /Typed/));
-	await command("coverage-stop", ["coverage", "stop", "--id", "typing", "--exclude", "background"], "exact",
+	await command("coverage-stop", ["coverage", "stop", "--id", "typing"], "exact",
 		(text) => assert.match(text, /Captured typing/));
 	await command("coverage-show", [
-		"coverage", "show", "typing", "--path-prefix", "src/vs/editor/common/model", "--max-lines", "16",
+		"coverage", "show", "typing", "--exclude", "background", "--path-prefix", "src/vs/editor/common/model", "--max-lines", "16",
 	], "live", (text) => {
 		assert.match(text, /\d+ RL \(run lines\), \d+ HL \(hit lines\)/);
 		assert.match(text, /textModel\.ts/);
@@ -231,7 +231,7 @@ try {
 		"connection", "disconnect", "--connection", target.target.connectionId,
 	], "live", (text) => assert.match(text, /disconnected/));
 	await command("offline-coverage", [
-		"coverage", "show", "typing", "--path-prefix", "src/vs/editor/common/model", "--max-lines", "8",
+		"coverage", "show", "typing", "--exclude", "background", "--path-prefix", "src/vs/editor/common/model", "--max-lines", "8",
 	], "live", (text) => assert.match(text, /src\/vs\/editor\/common\/model/));
 	const offline = await json(["coverage", "show", "typing"]);
 	assert.deepEqual(offline.sources, coverage.sources, "Disconnecting must preserve the coverage evidence.");
@@ -256,7 +256,9 @@ try {
 	}
 }
 
-recording.steps.push(...(await recordConnections({ cli, service, output })).steps);
+const connections = await recordConnections({ cli, service, output });
+recording.steps.push(...connections.steps);
+recording.normalization.connections = connections.replacements;
 await writeFile(join(output, "recording.json"), JSON.stringify(recording, null, 2) + "\n");
 if (values.update) {
 	await saveReadme(recording);

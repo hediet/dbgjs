@@ -395,8 +395,8 @@ dbgjs coverage start
 # Collection-only lower bound: no source/map lookup or symbol enrichment
 dbgjs --json coverage capture --raw
 dbgjs coverage capture --id baseline
-dbgjs coverage stop --id after-click --exclude baseline
-dbgjs coverage show after-click --all
+dbgjs coverage stop --id after-click
+dbgjs coverage show after-click --exclude baseline --all
 dbgjs coverage show . --path-glob '**/contrib/issue/**'
 dbgjs coverage show .2 --target renderer-4
 
@@ -454,8 +454,12 @@ deprecated prefix alias, not a substring search.
 
 `coverage capture --raw` retains execution counts and runtime ranges while
 skipping capture-time source acquisition and enrichment. It also accepts
-`--id` and `--exclude`. Without `--raw`, named and unnamed captures are both
-enriched. Stored captures are immutable; `coverage show --no-cache` is not
+`--id`. Without `--raw`, named and unnamed captures are both
+enriched. Capturing and stopping always store full immutable captures.
+Use `coverage show <capture> --exclude <baseline>` to derive an excluded view,
+including offline and JSON output, without modifying either capture.
+The baseline must belong to the same target and connection generation.
+Stored captures are immutable; `coverage show --no-cache` is not
 supported. Coverage operations still pending after 20 seconds print
 a one-time stderr hint about this mode without interrupting the operation or
 mixing progress text into JSON stdout.

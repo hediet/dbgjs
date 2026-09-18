@@ -136,14 +136,14 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		expect(sampledAfterCleanup).toContain("top: 0px");
 		await new Promise((resolve_) => setTimeout(resolve_, 250));
 		const stoppedCoverage = await runCli(
-			"Stop coverage and freeze the background-excluded immutable capture.",
-			["coverage", "stop", "--exclude", "background"],
+			"Stop coverage and freeze the complete immutable capture.",
+			["coverage", "stop"],
 			environment,
 		);
 		expect(stoppedCoverage).toMatch(/Captured cov-\d+\./);
 		const report = await runCli(
-			"Analyze the stored capture and render its source-mapped symbol tree.",
-			["coverage", "show", "."],
+			"Exclude background coverage while rendering the stored capture's source-mapped symbol tree.",
+			["coverage", "show", ".", "--exclude", "background"],
 			environment,
 			90_000,
 		);
@@ -155,12 +155,12 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 		expect(report).not.toMatch(/\n[ │]+└─ … \[all \d+ children pruned/);
 		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(300);
 		const bounded = await runTextSilent(
-			["coverage", "show", ".", "--max-lines", "40"],
+			["coverage", "show", ".", "--exclude", "background", "--max-lines", "40"],
 			environment,
 		);
 		expect(bounded.trimEnd().split("\n").length).toBeLessThanOrEqual(40);
 		const delta = await runJsonSilent(
-			["coverage", "show", "."],
+			["coverage", "show", ".", "--exclude", "background"],
 			environment,
 		);
 		const authoredRanges = delta.sources
@@ -179,13 +179,13 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			.join("/");
 		const drilldown = await runCli(
 			`Drill into the measured typing path \`${pathPrefix}\`.`,
-			["coverage", "show", ".", "--path-prefix", pathPrefix],
+			["coverage", "show", ".", "--exclude", "background", "--path-prefix", pathPrefix],
 			environment,
 		);
 		expect(drilldown).not.toContain("additional hit ranges omitted");
 		expect(drilldown).toMatch(/TextModel|PieceTreeTextBuffer|Cursor/);
 		const exhaustive = await runTextSilent(
-			["coverage", "show", ".", "--path-prefix", pathPrefix, "--all"],
+			["coverage", "show", ".", "--exclude", "background", "--path-prefix", pathPrefix, "--all"],
 			environment,
 		);
 		expect(exhaustive).toContain(
