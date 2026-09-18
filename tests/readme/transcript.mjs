@@ -14,7 +14,8 @@ const documents = [
 ];
 
 export function normalize(text, replacements, { argument = false } = {}) {
-	let result = text.replaceAll("\r\n", "\n");
+	let result = text.replaceAll("\r\n", "\n")
+		.replaceAll(" - Visual Studio Code [Administrator]", " - Visual Studio Code");
 	for (const [value, name] of [...replacements].sort((a, b) => b[0].length - a[0].length)) {
 		assert.ok(value.length > 0, "Cannot normalize an empty identity");
 		if (/^\d+$/.test(value)) {

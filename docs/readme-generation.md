@@ -53,6 +53,8 @@ select a smaller set than the walkthroughs.
   prefix get named replacements. The same replacement is used in commands and
   outputs. Numbers elsewhere (including coverage counts) are never blanked out.
   `$VSCODE_SOURCE/` abbreviates the discovered CDN prefix ending in `src/vs/`.
+  VS Code's `[Administrator]` title suffix is omitted on elevated hosted runners;
+  the rest of the title is still compared exactly.
 - **Stable output:** Acknowledgements, known editor state, and evaluation
   results must match the recording exactly after those replacements. The
   displayed authored-source excerpt is also compared exactly, without requiring

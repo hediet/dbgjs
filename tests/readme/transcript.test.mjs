@@ -41,6 +41,12 @@ test("commands quote actual argument vectors for PowerShell", () => {
 		'dbgjs screenshot capture --output "$ARTIFACTS\\editor.png"');
 });
 
+test("hosted runner elevation does not change the recorded VS Code title", () => {
+	assert.equal(normalize('"Untitled-1 - readme-demo - Visual Studio Code [Administrator]"', []),
+		'"Untitled-1 - readme-demo - Visual Studio Code"');
+	assert.equal(normalize("application state [Administrator]", []), "application state [Administrator]");
+});
+
 function recording(comparison, output = "recorded output") {
 	return {
 		vscodeVersion: "test",
