@@ -36,8 +36,8 @@ jobs:
         with:
           node-version: "22"
           package-manager-cache: false
-      - name: Test change detection
-        run: node --test scripts/ci-changes.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs tests/process_tree_platform.test.mjs
+      - name: Test change detection and generated documentation
+        run: node --test scripts/ci-changes.test.mjs tests/readme/transcript.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs tests/process_tree_platform.test.mjs
       - name: Detect changes
         id: changes
         env:
@@ -286,10 +286,44 @@ jobs:
           path: artifacts/vscode-discovery
           if-no-files-found: warn
 
+  readme:
+    name: Replay README in real runtimes
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc-debug
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build walkthrough binaries
+        run: cargo build --locked --bin dbgjs --bin dbgjs-service
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+      - name: Replay the generated README
+        run: npm run test:readme
+      - name: Upload README investigation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: readme-examples
+          path: artifacts/readme
+          if-no-files-found: warn
+
   result:
     name: CI result
     if: always()
-    needs: [changes, rust, packages, package-smoke-linux, package-smoke-windows-macos, vscode-e2e]
+    needs: [changes, rust, packages, package-smoke-linux, package-smoke-windows-macos, vscode-e2e, readme]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -301,6 +335,9 @@ jobs:
           const results = JSON.parse(process.env.RESULTS);
           if (results.changes.result !== "success") {
             throw new Error(`Change detection ${results.changes.result}`);
+          }
+          if (results.readme.result !== "success") {
+            throw new Error(`README replay ${results.readme.result}`);
           }
           const requiredOutputs = {
             rust: "tests",

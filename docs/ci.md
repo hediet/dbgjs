@@ -34,7 +34,8 @@ An npm-only change skips Linux/Windows x64 Rust unit tests but still verifies an
 packs release binaries, reusing unchanged workspace outputs from the trusted
 `main` cache. Windows and macOS ARM64 run their full suites for npm-only changes.
 Ordinary docs-only changes, including a root `README.md` change, schedule no
-Rust or packaging jobs, so their total Rust compilation and test time is zero.
+Rust test matrix or packaging jobs. The dedicated README replay below still
+builds its two binaries (using the Rust cache) and runs the real investigation.
 Cache misses only affect speed, never correctness.
 
 ## Checks and candidate artifacts
@@ -81,12 +82,21 @@ evaluation against one deterministic golden transcript. It uses a local fixture,
 not live vscode.dev or a user's existing editor. These sanity checks run in
 addition to the full Windows and macOS ARM64 Rust suites on nightly and stable builds.
 
+The [executable README](./readme-generation.md) also runs on every change in a
+dedicated Windows x64 job, including documentation-only changes. It launches
+isolated desktop VS Code, Playwright Chromium, installed Chrome, and Node,
+replays the commands shown in the README and walkthroughs, compares
+stable output, and checks real evidence for variable measurements. The
+change-detection job checks the deterministic Markdown render on Linux.
+Both checks are required by **CI result**; the README job uploads raw commands,
+outputs, its screenshot, and Electron diagnostics even on failure.
+
 ## Nightly and stable packages
 
 [Release packages](../.github/workflows/release.yml) runs after successful CI
 on this repository's `main`, including manual CI dispatch on `main`. It rejects
 PRs, forks, other workflows, and failed runs. Documentation-only CI with no
-package artifacts produces no release and still spends zero time on Rust.
+package artifacts produces no release; only the README replay builds Rust.
 Missing parts of a package set and expired artifacts are errors, not releases.
 
 Every eligible package-producing run creates six nightly packages. When the

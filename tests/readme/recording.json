@@ -1,0 +1,529 @@
+{
+  "vscodeVersion": "1.137.0",
+  "steps": [
+    {
+      "id": "discover",
+      "args": [
+        "process",
+        "list",
+        "--root",
+        "vscode",
+        "--no-cmd-line",
+        "--filter",
+        "p:$VSCODE_PID"
+      ],
+      "output": "VS Code process tree $VSCODE_PID  (6 attachable processes; window metadata available)\n└─ p:$VSCODE_PID  Code.exe  [vscode-main]\n   ├─ w:$VSCODE_PID/1  window  readme-demo - Visual Studio Code\n   │  ├─ p:$PROCESS_1  file-watcher  [file-watcher]\n   │  ├─ p:$RENDERER_PID  renderer  [renderer]\n   │  └─ p:$PROCESS_4  extension-host  [extension-host]\n   ├─ p:$PROCESS_2  Code.exe  [gpu]\n   ├─ p:$PROCESS_3  Code.exe  [network-service]\n   ├─ p:$PROCESS_5  agent-host  [agent-host]\n   │  └─ p:$PROCESS_6  Code.exe  [copilot]\n   │     └─ p:$PROCESS_10  pwsh.exe  [other]\n   │        └─ p:$PROCESS_11  conhost.exe  [other]\n   └─ p:$PROCESS_9  shared-process  [node-utility]",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "context",
+      "args": [
+        "context",
+        "create",
+        ":readme",
+        "VS Code typing",
+        "--set"
+      ],
+      "output": "Context readme  rev 1\n  Name: VS Code typing\n  Connections: none",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "attach",
+      "args": [
+        "process",
+        "attach",
+        "$RENDERER_PID",
+        "--set"
+      ],
+      "output": "Attachment: created\nTarget $RENDERER_TARGET  [running]  readme/process-tree-$VSCODE_PID  gen 1  rev 9\n  Pause: none",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "evaluate",
+      "args": [
+        "target",
+        "eval",
+        "document.title"
+      ],
+      "output": "readme-demo - Visual Studio Code",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "playwright",
+      "args": [
+        "playwright",
+        "await page.locator(\".monaco-workbench\").click();\nawait page.keyboard.press(\"Control+n\");\nawait page.locator(\".editor-group-container .monaco-editor\").waitFor();\nreturn await page.title();"
+      ],
+      "output": "\"Untitled-1 - readme-demo - Visual Studio Code\"",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "source",
+      "args": [
+        "source",
+        "grep",
+        "private _doApplyEdits",
+        "--path",
+        "textModel.ts",
+        "--max-results",
+        "1",
+        "--context-lines",
+        "2"
+      ],
+      "output": "$VSCODE_SOURCE/editor/common/model/textModel.ts:1503:2\n    1501 | \t}\n    1502 | \n  > 1503 | \tprivate _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IValidEditOperation[] {\n    1504 | \n    1505 | \t\tconst oldLineCount = this._buffer.getLineCount();\n\n1 source(s) searched, 2 skipped\nSkipped $VSCODE_INSTALL\\645f29cc31\\resources\\app\\out\\vs\\base\\parts\\sandbox\\electron-browser\\preload.js (source-map): could not discover authored sources: failed to resolve source-map URL \"preload.js.map\" against generated URL \"$VSCODE_INSTALL\\\\645f29cc31\\\\resources\\\\app\\\\out\\\\vs\\\\base\\\\parts\\\\sandbox\\\\electron-browser\\\\preload.js\": relative URL with a cannot-be-a-base base\nSkipped vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js (source-map): could not discover authored sources: failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some(\"net::ERR_HTTP_RESPONSE_CODE_FAILURE\")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))",
+      "stderr": "",
+      "comparison": "excerpt",
+      "maxOutputLines": 7
+    },
+    {
+      "id": "coverage-start",
+      "args": [
+        "coverage",
+        "start"
+      ],
+      "output": "Coverage recording started.",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "coverage-baseline",
+      "args": [
+        "coverage",
+        "capture",
+        "--id",
+        "background"
+      ],
+      "output": "Captured background.",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "coverage-type",
+      "args": [
+        "target",
+        "type",
+        "hello from dbgjs"
+      ],
+      "output": "Typed \"hello from dbgjs\"",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "coverage-stop",
+      "args": [
+        "coverage",
+        "stop",
+        "--id",
+        "typing",
+        "--exclude",
+        "background"
+      ],
+      "output": "Coverage recording stopped. Captured typing.",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "coverage-show",
+      "args": [
+        "coverage",
+        "show",
+        "typing",
+        "--path-prefix",
+        "src/vs/editor/common/model",
+        "--max-lines",
+        "16"
+      ],
+      "output": "Capture typing\n185461 RL (run lines), 5427 HL (hit lines)\n└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185461 RL]\n   ├─ pieceTreeTextBuffer/  [3 files, 1347 HL, 73624 RL]  [3 children pruned]\n   ├─ bracketPairsTextModelPart/  [13 files, 1141 HL, 13033 RL]  [3 children pruned]\n   ├─ textModel.ts  1091 HL, 55819 RL  [children pruned]\n   ├─ intervalTree.ts  863 HL, 18289 RL  [children pruned]\n   ├─ tokens/  [5 files, 467 HL, 7210 RL]  [5 children pruned]\n   ├─ guidesTextModelPart.ts  273 HL, 317 RL  [children pruned]\n   ├─ editStack.ts  155 HL, 1297 RL  [children pruned]\n   ├─ prefixSumComputer.ts  56 HL, 15495 RL  [children pruned]\n   ├─ utils.ts  23 HL, 115 RL [computeIndentLevel 23 HL, 115 RL]  [children pruned]\n   ├─ textModelStringEdit.ts  6 HL, 192 RL [offsetEditFromContentChanges 6 HL, 192 RL]  [children pruned]\n   └─ textModelPart.ts  5 HL, 70 RL  [children pruned]",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "breakpoint-set",
+      "args": [
+        "breakpoint",
+        "set",
+        "edit",
+        "src/vs/editor/common/model/textModel.ts",
+        "1505"
+      ],
+      "output": "Breakpoint edit  src/vs/editor/common/model/textModel.ts:1505:1  [bound; 1 application(s)]\n  bound on process-tree-$VSCODE_PID/$RENDERER_TARGET: CDP confirmed script 9 v1 at vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1512 via source map MapId(0) (Ordinary)\n\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 12
+    },
+    {
+      "id": "breakpoint-type",
+      "args": [
+        "target",
+        "type",
+        "!"
+      ],
+      "output": "Typed \"!\"",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "breakpoint-wait",
+      "args": [
+        "target",
+        "wait",
+        "paused",
+        "0",
+        "30000"
+      ],
+      "output": "Target $RENDERER_TARGET  [paused at epoch 1]  readme/process-tree-$VSCODE_PID  gen 1  rev 177\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: epoch 1 (other)\n  Source: ../../../src/vs/editor/common/model/textModel.ts — TextModel._doApplyEdits\n      1501 |     }\n      1502 | \n      1503 |     private _doApplyEdits(rawOperations: model.ValidAnnotatedEditOperation[], computeUndoEdits: boolean, reason: TextModelEditSource, resultingSelection: Selection[] | null = null): void | model.IVali…\n      1504 | \n    > 1505 |         const oldLineCount = this._buffer.getLineCount();\n           |                                   ^^^^^^^\n      1506 |         const result = this._buffer.applyEdits(rawOperations, this._options.trimAutoWhitespace, computeUndoEdits);\n      1507 |         const newLineCount = this._buffer.getLineCount();\n      1508 | \n      1509 |         const contentChanges = result.changes;\n  Frames:\n    #0 TextModel._doApplyEdits — ../../../src/vs/editor/common/model/textModel.ts:1505:29\n    #1 TextModel.applyEdits — ../../../src/vs/editor/common/model/textModel.ts:1496:16\n    #2 EditStack.pushEditOperation — ../../../src/vs/editor/common/model/editStack.ts:430:1\n    #3 TextModel._pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1438:31\n    #4 TextModel.pushEditOperations — ../../../src/vs/editor/common/model/textModel.ts:1344:16\n    #5 CommandExecutor._innerExecuteCommands — ../../../src/vs/editor/common/cursor/cursor.ts:810:35\n    #6 CommandExecutor.executeCommands — ../../../src/vs/editor/common/cursor/cursor.ts:768:23\n    #7 CursorsController._executeEditOperation — ../../../src/vs/editor/common/cursor/cursor.ts:361:34\n    #8 CursorsController.type → callback — ../../../src/vs/editor/common/cursor/cursor.ts:570:11\n    #9 CursorsController._executeEdit — ../../../src/vs/editor/common/cursor/cursor.ts:521:4\n    #10 CursorsController.type — ../../../src/vs/editor/common/cursor/cursor.ts:559:8\n    #11 ViewModel.type → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:59\n    #12 ViewModel._emitViewEvent — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1271:11\n    #13 ViewModel._withViewEventsCollector → callback — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1264:16\n    #14 CodeEditorWidget._attachModel — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1778:1\n    #15 ViewModel._withViewEventsCollector — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1263:36\n    #16 ViewModel._executeCursorEdit — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1201:8\n    #17 ViewModel.type — ../../../src/vs/editor/common/viewModel/viewModelImpl.ts:1213:8\n    #18 CodeEditorWidget._type — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1194:1\n    #19 CodeEditorWidget.trigger — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1122:1\n    #20 EditorHandlerCommand.runCommand — ../../../src/vs/editor/browser/coreCommands.ts:2149:1\n    #21 Command.register — ../../../src/vs/editor/browser/editorExtensions.ts:159:1\n    #22 registerCommand — ../../../src/vs/platform/commands/common/commands.ts:96:12\n    #23 InstantiationService.invokeFunction — ../../../src/vs/platform/instantiation/common/instantiationService.ts:109:11\n    #24 CommandService._tryExecuteCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:99:46\n    #25 CommandService.executeCommand — ../../../src/vs/workbench/services/commands/common/commandService.ts:63:17\n    #26 CodeEditorWidget._createView — ../../../src/vs/editor/browser/widget/codeEditor/codeEditorWidget.ts:1954:1\n    #27 ViewController.type — ../../../src/vs/editor/browser/view/viewController.ts:75:24\n    #28 NativeEditContext._onType — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:473:19\n    #29 NativeEditContext._emitTypeEvent — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:466:8\n    #30 NativeEditContext.constructor → callback — ../../../src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts:219:9",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 15
+    },
+    {
+      "id": "breakpoint-eval",
+      "args": [
+        "target",
+        "eval",
+        "this.getValue()"
+      ],
+      "output": "hello from dbgjs",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "resume",
+      "args": [
+        "target",
+        "resume"
+      ],
+      "output": "Target $RENDERER_TARGET  [running]  readme/process-tree-$VSCODE_PID  gen 1  rev 182\n  Breakpoints:\n    edit  src/vs/editor/common/model/textModel.ts:1505:1  [installed; 1 binding]\n      script 9 v1 -> vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/workbench/workbench.desktop.main.js:708:1500 via source map MapId(0) (Ordinary)\n  Pause: none",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "breakpoint-delete",
+      "args": [
+        "breakpoint",
+        "delete",
+        "edit"
+      ],
+      "output": "Context readme  rev 20\n  Name: VS Code typing\n  Connections:\n    process-tree-$VSCODE_PID  [connected to Process $VSCODE_PID; CDP 1.3; generation 1]\n      Configuration: process tree rooted at PID $VSCODE_PID\n      Targets:\n        Process $VSCODE_PID  Process $VSCODE_PID  process:$VSCODE_PID\n          browser  Chrome/148.0.7778.280  http://127.0.0.1:62441\n          Code.exe (30476)  Code.exe (30476)  process:$PROCESS_4\n          Code.exe (40244)  Code.exe (40244)  process:$PROCESS_5\n          Code.exe (42564)  Code.exe (42564)  process:$PROCESS_9\n          Code.exe (9976)  Code.exe (9976)  process:$PROCESS_1\n          page  ● hello from dbgjs! • Untitled-1 - readme-demo - Visual Studio Code  vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/out/vs/code/electron-browser/workbench/workbench.html  [a CDP client is attached]",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 8
+    },
+    {
+      "id": "profile-start",
+      "args": [
+        "profile",
+        "start",
+        "--sampling-interval",
+        "1ms"
+      ],
+      "output": "CPU profile recording started (1000us sampling interval).",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "profile-type",
+      "args": [
+        "playwright",
+        "await page.keyboard.type(\" profiling the editor\".repeat(20));"
+      ],
+      "output": "",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "profile-stop",
+      "args": [
+        "profile",
+        "stop",
+        "--id",
+        "typing-cpu"
+      ],
+      "output": "CPU profile recording stopped. Captured typing-cpu.",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "profile-show",
+      "args": [
+        "profile",
+        "show",
+        "typing-cpu",
+        "--view",
+        "functions",
+        "--sort",
+        "self",
+        "--path",
+        "src/vs/editor",
+        "--max-lines",
+        "8"
+      ],
+      "output": "CPU profile typing-cpu: 4.52s elapsed, 4.52s sampled, 2850 samples\nSelf       Total      Samples  Function\n10.66ms    27.46ms          7  InlineCompletionsSource.fetch → callback  ../../../src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsSource.ts:181:20\n9.36ms     16.90ms          6  ViewLayerRenderer._finishRenderingInvalidLines  ../../../src/vs/editor/browser/view/viewLayer.ts:536:10\n4.77ms     43.27ms          3  TextModel.applyEdits  ../../../src/vs/editor/common/model/textModel.ts:1490:9\n4.76ms     40.20ms          3  ViewModelEventDispatcher._doConsumeQueue  ../../../src/vs/editor/common/viewModelEventDispatcher.ts:142:10\n3.72ms     3.72ms           1  CurrentLineHighlightOverlay._renderOne  ../../../src/vs/editor/browser/viewParts/currentLineHighlight/currentLineHighlight.ts:209:12\n3.25ms     4.79ms           2  StickyScrollWidget._updateWidgetWidth  ../../../src/vs/editor/contrib/stickyScroll/browser/stickyScrollWidget.ts:188:10",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "screenshot",
+      "args": [
+        "screenshot",
+        "capture",
+        "--output",
+        "$ARTIFACTS\\editor.png"
+      ],
+      "output": "Captured 2163x1355 screenshot to $ARTIFACTS\\editor.png.",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "raw-cdp",
+      "args": [
+        "target",
+        "cdp",
+        "Runtime.evaluate",
+        "--params",
+        "{\"expression\":\"document.title\",\"returnByValue\":true}"
+      ],
+      "output": "{\n  \"result\": {\n    \"type\": \"string\",\n    \"value\": \"● hello from dbgjs! profiling the editor p • Untitled-1 - readme-demo - Visual Studio Code\"\n  }\n}",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "heap-capture",
+      "args": [
+        "heap",
+        "capture",
+        "--id",
+        "editor"
+      ],
+      "output": "Captured editor (165.2 MiB) in 5.682s: taking 2.674s, retrieving 3.008s.",
+      "stderr": "Heap snapshot: 0/0 objects, 0 bytes\nHeap snapshot: 70000/1466412 (4.8%), 0 bytes\nHeap snapshot: 140000/1466412 (9.5%), 0 bytes\nHeap snapshot: 210000/1466412 (14.3%), 0 bytes\nHeap snapshot: 260000/1466412 (17.7%), 0 bytes\nHeap snapshot: 370000/1466412 (25.2%), 0 bytes\nHeap snapshot: 420000/1466412 (28.6%), 0 bytes\nHeap snapshot: 480000/1466412 (32.7%), 0 bytes\nHeap snapshot: 550000/1466412 (37.5%), 0 bytes\nHeap snapshot: 610000/1466412 (41.6%), 0 bytes\nHeap snapshot: 690000/1466412 (47.1%), 0 bytes\nHeap snapshot: 790000/1466412 (53.9%), 0 bytes\nHeap snapshot: 870000/1466412 (59.3%), 0 bytes\nHeap snapshot: 970000/1466412 (66.1%), 0 bytes\nHeap snapshot: 1070000/1466412 (73.0%), 0 bytes\nHeap snapshot: 1150000/1466412 (78.4%), 0 bytes\nHeap snapshot: 1220000/1466412 (83.2%), 0 bytes\nHeap snapshot: 1300000/1466412 (88.7%), 0 bytes\nHeap snapshot: 1410000/1466412 (96.2%), 0 bytes\nHeap snapshot: 1460000/1466412 (99.6%), 0 bytes\nHeap snapshot: 1466411/1466412 (100.0%), 0 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 0 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 11534326 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 17825768 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 26214369 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 33554390 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 42991571 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 54525892 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 65011636 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 75497372 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 85983118 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 96468857 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 106954600 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 117440333 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 128974648 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 140508958 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 149946122 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 160431874 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 167771894 bytes\nHeap snapshot: 1466412/1466412 (100.0%), 173215119 bytes",
+      "comparison": "live"
+    },
+    {
+      "id": "heap-classes",
+      "args": [
+        "heap",
+        "classes",
+        "editor",
+        "--filter",
+        "^PieceTreeTextBuffer$",
+        "--instances",
+        "--max-lines",
+        "16"
+      ],
+      "output": "1 classes, 2 instances, 80 B shallow size\nAnalysis 25.845s (parse 9.566s, projection 16.279s; mapping mapped (captured metadata); 4051 constructor groups)\nMapping script:13 (vscode-file://vscode-app/$VSCODE_INSTALL/645f29cc31/resources/app/node_modules.asar/vscode-textmate/release/main.js): map loading failed — failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map through CDP (failed to load source map https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map: HTTP status Some(404.0), network error Some(\"net::ERR_HTTP_RESPONSE_CODE_FAILURE\")) and direct resource loading (HTTP status client error (404 The requested content does not exist.) for url (https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/node_modules/vscode-textmate/release/main.js.map))\nMapping script:18 (): no map supplied\nMapping script:19 (): no map supplied\nMapping script:4 (node:electron/js2c/sandbox_bundle): no map supplied\n└─ $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts  2 instances, 80 B\n   └─ PieceTreeTextBuffer [frame:CB2F2F9740A0E5DCD4CAC41ACF4C9669, context:1]  2 instances, 80 B\n      ├─ PieceTreeTextBuffer@1  id 2901425  40 B\n      └─ PieceTreeTextBuffer@2  id 3295731  40 B",
+      "stderr": "",
+      "comparison": "live",
+      "foldMappingDiagnostics": true
+    },
+    {
+      "id": "heap-refs",
+      "args": [
+        "heap",
+        "refs",
+        "$BUFFER",
+        "--incoming",
+        "--limit",
+        "4"
+      ],
+      "output": "$BUFFER  type:object, value:s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}, shallow:40 B, in:2, out:9\n  source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#230537  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_buffer\"--> $BUFFER  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#230537:\n      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    $BUFFER:\n      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor\n  editor#230537  Nh {\"_store\": s {...}, \"_undoRedoService\": system / JSProxy, \"_languageService\": Yht {...}, ...} --property \"_bufferDisposable\"--> $BUFFER  s {\"_store\": s {...}, \"_onDidChangeContent\": D {...}, \"_BOM\": \"\", ...}\n    editor#230537:\n      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/textModel.ts:305:2 -- TextModel.constructor\n    $BUFFER:\n      source [heapSnapshot; constructor; authored]: $VSCODE_SOURCE/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBuffer.ts:44:2 -- PieceTreeTextBuffer.constructor",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "disconnect",
+      "args": [
+        "connection",
+        "disconnect",
+        "--connection",
+        "process-tree-$VSCODE_PID"
+      ],
+      "output": "Context readme  rev 30\n  Name: VS Code typing\n  Connections:\n    process-tree-$VSCODE_PID  [disconnected; generation 1]\n      Configuration: process tree rooted at PID $VSCODE_PID\n      Targets: none",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "offline-coverage",
+      "args": [
+        "coverage",
+        "show",
+        "typing",
+        "--path-prefix",
+        "src/vs/editor/common/model",
+        "--max-lines",
+        "8"
+      ],
+      "output": "Capture typing\n185461 RL (run lines), 5427 HL (hit lines)\n└─ src/vs/editor/common/model/  [29 files, 5427 HL, 185461 RL]  [11 children pruned]",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "web-context",
+      "args": [
+        "context",
+        "create",
+        ":readme-web",
+        "Local website",
+        "--set"
+      ],
+      "output": "Context readme-web  rev 1\n  Name: Local website\n  Connections: none",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "web-playwright-connect",
+      "args": [
+        "connection",
+        "add",
+        "--playwright",
+        "$WEBSITE_URL",
+        "--connection",
+        "browser",
+        "--connect",
+        "--set"
+      ],
+      "output": "Context readme-web  rev 4\n  Name: Local website\n  Connections:\n    browser  [connected to HeadlessChrome/151.0.7922.34; CDP 1.3; generation 1]\n      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL\n      Targets:\n        page  dbgjs local website  $WEBSITE_URL  [a CDP client is attached]",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 14
+    },
+    {
+      "id": "web-playwright-input",
+      "args": [
+        "playwright",
+        "await page.getByLabel(\"Name\", { exact: true }).fill(\"Ada\");\nawait page.getByLabel(\"Name\", { exact: true }).press(\"Enter\");\nawait page.getByRole(\"status\").filter({ hasText: \"Hello, Ada!\" }).waitFor();\nreturn { greeting: await page.getByRole(\"status\").textContent(), ...await page.evaluate(() => websiteState) };"
+      ],
+      "output": "{\n  \"greeting\": \"Hello, Ada!\",\n  \"inputEvents\": 1,\n  \"submissions\": 1,\n  \"name\": \"Ada\"\n}",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "web-playwright-disconnect",
+      "args": [
+        "connection",
+        "disconnect",
+        "--connection",
+        "browser"
+      ],
+      "output": "Context readme-web  rev 7\n  Name: Local website\n  Connections:\n    browser  [disconnected; generation 1]\n      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL\n      Targets: none",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "web-chrome-connect",
+      "args": [
+        "connection",
+        "add",
+        "--chrome",
+        "$WEBSITE_URL",
+        "--connection",
+        "chrome",
+        "--executable",
+        "$CHROME_EXE",
+        "--user-data-dir",
+        "$CONNECTIONS_DIR\\chrome-profile",
+        "--connect",
+        "--set"
+      ],
+      "output": "Context readme-web  rev 12\n  Name: Local website\n  Connections:\n    browser  [disconnected; generation 1]\n      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL\n      Targets: none\n    chrome  [connected to Chrome/152.0.7977.83; CDP 1.3; generation 1]\n      Configuration: Chrome at $CHROME_EXE headless opening $WEBSITE_URL\n      Targets:\n        background_page  Google Hangouts  chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html\n        page  (untitled)  $WEBSITE_URL  [a CDP client is attached]\n        AF4F9EBDACE1D786E4B17DC95CBAA1AD  Omnibox Popup  chrome://omnibox-popup.top-chrome/\n        C2D9C5ADE80B6C93C23D79B3D1CB2CD9  Omnibox Popup  chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 14
+    },
+    {
+      "id": "web-chrome-eval",
+      "args": [
+        "target",
+        "eval",
+        "document.querySelector(\"h1\").textContent + \" / \" + document.querySelector(\"#result\").textContent"
+      ],
+      "output": "dbgjs local website / Waiting for input",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "web-chrome-disconnect",
+      "args": [
+        "connection",
+        "disconnect",
+        "--connection",
+        "chrome"
+      ],
+      "output": "Context readme-web  rev 18\n  Name: Local website\n  Connections:\n    browser  [disconnected; generation 1]\n      Configuration: Playwright bundled Chromium headless opening $WEBSITE_URL\n      Targets: none\n    chrome  [disconnected; generation 1]\n      Configuration: Chrome at $CHROME_EXE headless opening $WEBSITE_URL\n      Targets: none",
+      "stderr": "",
+      "comparison": "live"
+    },
+    {
+      "id": "node-context",
+      "args": [
+        "context",
+        "create",
+        ":readme-node",
+        "Existing Node application",
+        "--set"
+      ],
+      "output": "Context readme-node  rev 1\n  Name: Existing Node application\n  Connections: none",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "node-attach",
+      "args": [
+        "connection",
+        "add",
+        "--process",
+        "$NODE_PID",
+        "--connection",
+        "app",
+        "--connect"
+      ],
+      "output": "Context readme-node  rev 4\n  Name: Existing Node application\n  Connections:\n    app  [connected to Process $NODE_PID; CDP 1.3; generation 1]\n      Configuration: process $NODE_PID\n      Targets:\n        node  Process $NODE_PID  process:$NODE_PID  [a CDP client is attached]",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 14
+    },
+    {
+      "id": "node-target-attach",
+      "args": [
+        "target",
+        "attach",
+        "--connection",
+        "app"
+      ],
+      "output": "Attachment: created\nTarget $node-root:app  [running]  readme-node/app  gen 1  rev 3\n  Pause: none",
+      "stderr": "",
+      "comparison": "live",
+      "maxOutputLines": 14
+    },
+    {
+      "id": "node-eval",
+      "args": [
+        "target",
+        "eval",
+        "readmeApp.orders.reduce((total, order) => total + order.total, 0)",
+        "--connection",
+        "app"
+      ],
+      "output": "42",
+      "stderr": "",
+      "comparison": "exact"
+    },
+    {
+      "id": "node-disconnect",
+      "args": [
+        "connection",
+        "disconnect",
+        "--connection",
+        "app"
+      ],
+      "output": "Context readme-node  rev 7\n  Name: Existing Node application\n  Connections:\n    app  [disconnected; generation 1]\n      Configuration: process $NODE_PID\n      Targets: none",
+      "stderr": "",
+      "comparison": "live"
+    }
+  ]
+}

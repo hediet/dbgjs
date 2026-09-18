@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>dbgjs local website</title>
+</head>
+<body>
+	<h1>dbgjs local website</h1>
+	<form id="greeting">
+		<label for="name">Name</label>
+		<input id="name" name="name" autocomplete="off">
+		<button type="submit">Greet</button>
+	</form>
+	<p id="result" role="status">Waiting for input</p>
+	<script>
+		const input = document.querySelector("#name");
+		const result = document.querySelector("#result");
+		globalThis.websiteState = { inputEvents: 0, submissions: 0, name: "" };
+		input.addEventListener("input", () => {
+			websiteState.inputEvents++;
+			websiteState.name = input.value;
+		});
+		document.querySelector("#greeting").addEventListener("submit", (event) => {
+			event.preventDefault();
+			websiteState.submissions++;
+			result.textContent = `Hello, ${websiteState.name}!`;
+		});
+	</script>
+</body>
+</html>
