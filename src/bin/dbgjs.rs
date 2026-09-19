@@ -22,7 +22,7 @@ use dbgjs::promise_debugging::{
 use dbgjs::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
     ContextSummary, CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot,
-    HeapAggregateBy, HeapCaptureResult, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
+    HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
     MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
     ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
@@ -681,16 +681,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let operation = client.capture_heap_snapshot(
+            let call = rpc(client.capture_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
                 scope.target.clone(),
                 options.capture_id,
                 options.capture_numeric_value,
                 options.expose_internals,
-            );
-            tokio::pin!(operation);
-            let result = wait_for_heap_capture(&output, &client, &scope, &mut operation).await?;
+            ).await)?;
+            let (result, _, progress, _) = call.into_parts();
+            let result = wait_for_heap_stream(&output, result, progress).await?;
             output.print(&result)?;
         }
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
@@ -700,16 +700,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let selection = load_selection(&selection_file)?;
             if options.capture {
                 let scope = resolve_scope(&client, &selection, &scope_options).await?;
-                let operation = client.capture_heap_snapshot(
+                let call = rpc(client.capture_heap_snapshot(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
                     (capture_id != ".").then(|| capture_id.clone()),
                     false,
                     false,
-                );
-                tokio::pin!(operation);
-                capture_id = wait_for_heap_capture(&output, &client, &scope, &mut operation).await?.capture_id;
+                ).await)?;
+                let (result, _, progress, _) = call.into_parts();
+                capture_id = wait_for_heap_stream(&output, result, progress).await?.capture_id;
             }
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
@@ -1058,48 +1058,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let operation = client.take_heap_snapshot(
+            let call = rpc(client.take_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
                 scope.target.clone(),
                 destination.to_string_lossy().into_owned(),
                 options.capture_numeric_value,
                 options.expose_internals,
-            );
-            tokio::pin!(operation);
-            let mut last_progress = None::<HeapSnapshotProgress>;
-            let result = loop {
-                tokio::select! {
-                    result = &mut operation => break rpc(result)?,
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                        let progress = rpc(client
-                            .get_heap_snapshot_progress(
-                                scope.context.clone(),
-                                scope.connection.clone(),
-                                scope.target.clone(),
-                            )
-                            .await)?;
-                        if let Some(progress) = progress
-                            && last_progress.as_ref() != Some(&progress)
-                        {
-                            output.print_heap_snapshot_progress(&progress)?;
-                            last_progress = Some(progress);
-                        }
-                    }
-                }
-            };
-            let progress = rpc(client
-                .get_heap_snapshot_progress(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
-            if let Some(progress) = progress
-                && last_progress.as_ref() != Some(&progress)
-            {
-                output.print_heap_snapshot_progress(&progress)?;
-            }
+            ).await)?;
+            let (result, _, progress, _) = call.into_parts();
+            let result = wait_for_heap_stream(&output, result, progress).await?;
             output.print(&result)?;
         }
         [target, watch, expression] if target == "target" && watch == "watch" => {
@@ -4721,49 +4689,35 @@ fn absolute_path(path: &Path) -> Result<std::path::PathBuf, io::Error> {
     }
 }
 
-async fn wait_for_heap_capture<F>(
+async fn wait_for_heap_stream<T>(
     output: &OutputFormat,
-    client: &DebuggerServiceApiClient,
-    scope: &ResolvedScope,
-    operation: &mut std::pin::Pin<&mut F>,
-) -> Result<HeapCaptureResult, Box<dyn std::error::Error>>
-where
-    F: std::future::Future<Output = Result<HeapCaptureResult, linkrpc::prelude::JsonRpcError>>,
-{
+    mut result: linkrpc::prelude::CallResult<T>,
+    mut progress: linkrpc::prelude::StreamReceiver<HeapSnapshotProgress>,
+) -> Result<T, Box<dyn std::error::Error>> {
     let mut last_progress = None::<HeapSnapshotProgress>;
-    let result = loop {
+    let mut final_result = None;
+    loop {
         tokio::select! {
-            result = operation.as_mut() => break rpc(result)?,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                let progress = rpc(client
-                    .get_heap_snapshot_progress(
-                        scope.context.clone(),
-                        scope.connection.clone(),
-                        scope.target.clone(),
-                    )
-                    .await)?;
-                if let Some(progress) = progress
-                    && last_progress.as_ref() != Some(&progress)
+            result = &mut result, if final_result.is_none() => {
+                final_result = Some(result);
+            }
+            update = progress.recv() => {
+                let Some(update) = update else {
+                    break;
+                };
+                if last_progress.as_ref() != Some(&update)
                 {
-                    output.print_heap_snapshot_progress(&progress)?;
-                    last_progress = Some(progress);
+                    output.print_heap_snapshot_progress(&update)?;
+                    last_progress = Some(update);
                 }
             }
         }
-    };
-    let progress = rpc(client
-        .get_heap_snapshot_progress(
-            scope.context.clone(),
-            scope.connection.clone(),
-            scope.target.clone(),
-        )
-        .await)?;
-    if let Some(progress) = progress
-        && last_progress.as_ref() != Some(&progress)
-    {
-        output.print_heap_snapshot_progress(&progress)?;
     }
-    Ok(result)
+    let final_result = match final_result {
+        Some(result) => result,
+        None => result.await,
+    };
+    Ok(rpc(final_result)?)
 }
 
 async fn show_stored_coverage(

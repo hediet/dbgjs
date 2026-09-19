@@ -100,6 +100,15 @@ be published before their versions are selected in this repository.
 The Rust generator requires LinkRPC 0.1.1 or newer. The published 0.1.0 crate
 predates the provider-generation options used by this project.
 
+**Streaming feature integration is release-blocked:** the typed heap-progress
+methods require the Rust streaming implementation on LinkRPC's
+`feature/typed-rust-streaming` branch, which is not in the currently published
+0.1.1 crates. Publish the corresponding LinkRPC crates, then update this
+repository's registry versions and lockfile before integrating this feature.
+This branch deliberately does not invent a future registry version. The
+published TypeScript runtime and CLI 0.0.1 already support the streaming wire
+contract and code generation.
+
 For opt-in development across both repositories, a developer may use a local
 sibling checkout by temporarily overriding the relevant npm and Cargo
 dependencies in their working tree. Build any required LinkRPC package outputs
@@ -108,6 +117,56 @@ overrides and any resulting lockfile changes uncommitted and out of staging,
 then restore the registry manifests and lockfiles before running the ordinary
 install and contract drift check. Never commit local `file:`/`path` links or
 copy package sources or tarballs into this repository.
+
+For the isolated sibling development layout, an **uncommitted**
+`.cargo/config.toml` can contain:
+
+```toml
+[patch.crates-io]
+linkrpc = { path = "../linkrpc/rust/crates/linkrpc" }
+linkrpc-macros = { path = "../linkrpc/rust/crates/linkrpc-macros" }
+linkrpc-tokio = { path = "../linkrpc/rust/crates/linkrpc-tokio" }
+```
+
+Resolve the local patch once without `--locked`, then run the locked build,
+generation, and tests. Remove this config and restore the registry lockfile
+before committing. Until the release above exists, a registry-only Rust build
+of this feature branch is intentionally not an integration-ready build.
+
+## Typed heap-progress streams
+
+`capture_heap_snapshot` and `take_heap_snapshot` declare
+`#[incoming_stream(HeapSnapshotProgress)]` on the Rust trait. The annotation is
+named from the caller's viewpoint: it exports `serverStream`, generates a
+provider-side `StreamSender<HeapSnapshotProgress>`, and gives Rust and TypeScript
+clients typed progress on the capture call alongside its final result.
+The CLI consumes this stream rather than issuing 100 ms snapshot polls.
+
+Progress comes from the existing CDP capture watch and is scoped to the actual
+capture operation. The final progress update precedes the RPC response; the
+underlying CDP snapshot chunks still finish writing before success is reported.
+`get_heap_snapshot_progress` remains an independent last-known snapshot query,
+not the transport for capture progress.
+
+Cancellation is advisory: CDP has no interoperable heap-capture cancellation
+command. A cancelled or disconnected LinkRPC caller must not interrupt raw CDP
+chunk ingestion or leave a writer or capture reservation behind. The active CDP
+operation is drained safely; the cancelled LinkRPC call reports cancellation.
+Cancelled named captures are cleaned up before their reservation is released.
+Subsequent captures can then run with their own progress. Cancellation is not
+transaction rollback: `take_heap_snapshot` can have already atomically replaced
+the requested destination file, which is retained after cancellation.
+
+The generated TypeScript integration test starts the real Rust daemon and a
+Node inspector, exercises completion/cancellation/disconnect/recovery, and runs
+both CLI heap capture and snapshot commands:
+
+```sh
+cargo build --locked --bin dbgjs --bin dbgjs-service
+npm --prefix vscode-extension ci
+npm --prefix vscode-extension run test:heap-streaming
+npm run check:contracts
+```
 
 ## Type-safety boundaries
 

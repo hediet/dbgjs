@@ -486,6 +486,7 @@ impl TargetDebuggerHandle {
         path: String,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: mpsc::Sender<HeapSnapshotProgress>,
     ) -> Result<HeapSnapshotResult, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
@@ -493,6 +494,7 @@ impl TargetDebuggerHandle {
                 path,
                 capture_numeric_value,
                 expose_internals,
+                progress,
                 response,
             })
             .await
@@ -505,6 +507,7 @@ impl TargetDebuggerHandle {
         capture_id: Option<String>,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: mpsc::Sender<HeapSnapshotProgress>,
     ) -> Result<HeapCaptureResult, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
@@ -512,6 +515,7 @@ impl TargetDebuggerHandle {
                 capture_id,
                 capture_numeric_value,
                 expose_internals,
+                progress,
                 response,
             })
             .await
@@ -721,12 +725,7 @@ impl TargetDebuggerHandle {
         self.heap_snapshot_progress
             .borrow()
             .clone()
-            .map(|progress| HeapSnapshotProgress {
-                done: progress.done,
-                total: progress.total,
-                finished: progress.finished,
-                bytes_written: progress.bytes_written,
-            })
+            .map(heap_snapshot_progress)
     }
 
     pub async fn start_coverage(&self) -> Result<(), TargetDebuggerError> {
@@ -1038,12 +1037,14 @@ enum TargetCommand {
         path: String,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: mpsc::Sender<HeapSnapshotProgress>,
         response: oneshot::Sender<Result<HeapSnapshotResult, TargetDebuggerError>>,
     },
     CaptureHeapSnapshot {
         capture_id: Option<String>,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: mpsc::Sender<HeapSnapshotProgress>,
         response: oneshot::Sender<Result<HeapCaptureResult, TargetDebuggerError>>,
     },
     CopyHeapCapture {
@@ -1905,6 +1906,7 @@ async fn run_target(
                 path,
                 capture_numeric_value,
                 expose_internals,
+                progress,
                 response,
             })) => {
                 let result = async {
@@ -1916,10 +1918,11 @@ async fn run_target(
                     params.report_progress = Some(true);
                     params.capture_numeric_value = capture_numeric_value.then_some(true);
                     params.expose_internals = expose_internals.then_some(true);
-                    if let Err(error) = driver
-                        .client()
-                        .heap_profiler_take_heap_snapshot(params)
-                        .await
+                    let mut progress_updates = driver.heap_snapshot_progress();
+                    let snapshot = driver.client().heap_profiler_take_heap_snapshot(params);
+                    tokio::pin!(snapshot);
+                    if let Err(error) =
+                        forward_heap_snapshot_progress(&mut progress_updates, &progress, &mut snapshot).await
                     {
                         driver.abort_heap_snapshot().await;
                         return Err(TargetDebuggerError::HeapSnapshot(format!("{error:?}")));
@@ -1928,6 +1931,7 @@ async fn run_target(
                         .finish_heap_snapshot()
                         .await
                         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+                    send_finished_heap_snapshot_progress(&progress_updates, &progress, written.bytes_written).await?;
                     Ok(HeapSnapshotResult {
                         path,
                         bytes_written: written.bytes_written,
@@ -1941,6 +1945,7 @@ async fn run_target(
                 capture_id,
                 capture_numeric_value,
                 expose_internals,
+                progress,
                 response,
             })) => {
                 let capture_id = capture_id.unwrap_or_else(|| ".".to_owned());
@@ -1951,6 +1956,7 @@ async fn run_target(
                     path.clone(),
                     capture_numeric_value,
                     expose_internals,
+                    &progress,
                 )
                 .await
                 .map(|written| HeapCaptureResult {
@@ -1973,7 +1979,14 @@ async fn run_target(
                     heap_graphs.remove(&capture_id);
                     heap_aliases.retain(|(stored_capture, _), _| stored_capture != &capture_id);
                 }
-                let _ = response.send(result);
+                if let Err(Ok(_)) = response.send(result) {
+                    if let Some(capture) = heap_captures.remove(&capture_id)
+                        && let Err(error) = tokio::fs::remove_file(&capture.path).await
+                        && error.kind() != std::io::ErrorKind::NotFound
+                    {
+                        eprintln!("failed to remove orphaned heap capture '{}': {error}", capture.path.display());
+                    }
+                }
             }
             Next::Command(Some(TargetCommand::CopyHeapCapture {
                 capture_id,
@@ -2915,6 +2928,7 @@ async fn take_heap_snapshot(
     path: PathBuf,
     capture_numeric_value: bool,
     expose_internals: bool,
+    progress: &mpsc::Sender<HeapSnapshotProgress>,
 ) -> Result<crate::cdp_runtime::HeapSnapshotWriteResult, TargetDebuggerError> {
     driver
         .begin_heap_snapshot(path)
@@ -2924,18 +2938,93 @@ async fn take_heap_snapshot(
     params.report_progress = Some(true);
     params.capture_numeric_value = capture_numeric_value.then_some(true);
     params.expose_internals = expose_internals.then_some(true);
-    if let Err(error) = driver
-        .client()
-        .heap_profiler_take_heap_snapshot(params)
-        .await
+    let mut progress_updates = driver.heap_snapshot_progress();
+    let snapshot = driver.client().heap_profiler_take_heap_snapshot(params);
+    tokio::pin!(snapshot);
+    if let Err(error) =
+        forward_heap_snapshot_progress(&mut progress_updates, progress, &mut snapshot).await
     {
         driver.abort_heap_snapshot().await;
         return Err(TargetDebuggerError::HeapSnapshot(format!("{error:?}")));
     }
-    driver
+    let written = driver
         .finish_heap_snapshot()
         .await
-        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))
+        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+    send_finished_heap_snapshot_progress(&progress_updates, progress, written.bytes_written).await?;
+    Ok(written)
+}
+
+async fn forward_heap_snapshot_progress<F, T, E>(
+    updates: &mut watch::Receiver<Option<crate::cdp_runtime::HeapSnapshotStreamProgress>>,
+    output: &mpsc::Sender<HeapSnapshotProgress>,
+    operation: &mut std::pin::Pin<&mut F>,
+) -> Result<T, E>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    let mut last = None;
+    loop {
+        let current = updates.borrow().clone().map(heap_snapshot_progress);
+        if current != last {
+            if let Some(current) = current.clone() {
+                send_heap_progress(output, current).await;
+            }
+            last = current;
+        }
+        tokio::select! {
+            result = operation.as_mut() => {
+                let current = updates.borrow().clone().map(heap_snapshot_progress);
+                if current != last
+                    && let Some(current) = current
+                {
+                    send_heap_progress(output, current).await;
+                }
+                return result;
+            }
+            changed = updates.changed() => {
+                if changed.is_err() {
+                    return operation.as_mut().await;
+                }
+            }
+        }
+    }
+}
+
+fn heap_snapshot_progress(
+    progress: crate::cdp_runtime::HeapSnapshotStreamProgress,
+) -> HeapSnapshotProgress {
+    HeapSnapshotProgress {
+        done: progress.done,
+        total: progress.total,
+        finished: progress.finished,
+        bytes_written: progress.bytes_written,
+    }
+}
+
+async fn send_heap_progress(
+    output: &mpsc::Sender<HeapSnapshotProgress>,
+    progress: HeapSnapshotProgress,
+) {
+    // Losing the RPC observer must not interrupt CDP chunk ingestion or writer cleanup.
+    if !output.is_closed() && output.send(progress).await.is_err() {
+        eprintln!("heap progress receiver disconnected; completing the CDP snapshot");
+    }
+}
+
+async fn send_finished_heap_snapshot_progress(
+    updates: &watch::Receiver<Option<crate::cdp_runtime::HeapSnapshotStreamProgress>>,
+    output: &mpsc::Sender<HeapSnapshotProgress>,
+    bytes_written: u64,
+) -> Result<(), TargetDebuggerError> {
+    let current = updates.borrow().clone();
+    let mut finished = current.map(heap_snapshot_progress).ok_or_else(|| {
+        TargetDebuggerError::HeapSnapshot("completed snapshot has no progress state".to_owned())
+    })?;
+    finished.finished = Some(true);
+    finished.bytes_written = bytes_written;
+    send_heap_progress(output, finished).await;
+    Ok(())
 }
 
 struct ProjectedHeapClass {
@@ -6065,7 +6154,7 @@ mod tests {
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
         complete_source_search_batch, cpu_profile_sample_durations, cpu_profile_snapshot,
-        effective_coverage_ranges, evaluated_remote_from_envelope,
+        effective_coverage_ranges, evaluated_remote_from_envelope, forward_heap_snapshot_progress,
         heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
         window_highlighted_line,
     };
@@ -6092,6 +6181,86 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn heap_progress_forwarding_is_command_scoped_and_flushes_final_update() {
+        use crate::cdp_runtime::HeapSnapshotStreamProgress;
+        use tokio::sync::{mpsc, watch};
+
+        let (updates_tx, mut updates) = watch::channel(Some(HeapSnapshotStreamProgress {
+            done: 99,
+            total: 100,
+            finished: Some(false),
+            bytes_written: 99,
+        }));
+        updates_tx.send_replace(Some(HeapSnapshotStreamProgress::default()));
+        let (output, mut received) = mpsc::channel(16);
+        let operation = async {
+            updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
+                done: 5, total: 10, finished: Some(false), bytes_written: 50,
+            }));
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
+                done: 10, total: 10, finished: Some(true), bytes_written: 100,
+            }));
+            Ok::<_, ()>(())
+        };
+        tokio::pin!(operation);
+        forward_heap_snapshot_progress(&mut updates, &output, &mut operation).await.unwrap();
+        drop(output);
+        let mut progress = Vec::new();
+        while let Some(update) = received.recv().await {
+            progress.push(update);
+        }
+
+        assert_eq!(progress.first().unwrap().bytes_written, 0);
+        assert!(!progress.iter().any(|update| update.bytes_written == 99));
+        assert_eq!(progress.last().unwrap().bytes_written, 100);
+        assert_eq!(progress.last().unwrap().finished, Some(true));
+    }
+
+    #[tokio::test]
+    async fn heap_progress_always_emits_completion_after_writer_finalization() {
+        use crate::cdp_runtime::HeapSnapshotStreamProgress;
+        use tokio::sync::{mpsc, watch};
+
+        for finished in [None, Some(true)] {
+            let (_updates_tx, updates) = watch::channel(Some(HeapSnapshotStreamProgress {
+                done: 10, total: 10, finished, bytes_written: 100,
+            }));
+            let (output, mut received) = mpsc::channel(1);
+            super::send_finished_heap_snapshot_progress(&updates, &output, 100).await.unwrap();
+            let progress = received.try_recv().expect("terminal progress must be sent");
+            assert_eq!(progress.finished, Some(true));
+            assert_eq!(progress.bytes_written, 100);
+        }
+    }
+
+    #[tokio::test]
+    async fn heap_progress_receiver_disconnect_does_not_abort_or_mask_command_error() {
+        use crate::cdp_runtime::HeapSnapshotStreamProgress;
+        use tokio::sync::{mpsc, watch};
+
+        let (updates_tx, mut updates) =
+            watch::channel(Some(HeapSnapshotStreamProgress::default()));
+        let (output, received) = mpsc::channel(16);
+        drop(received);
+        let operation = async {
+            updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
+                done: 1, total: 1, finished: Some(true), bytes_written: 12,
+            }));
+            Err::<(), _>("expected command failure")
+        };
+        tokio::pin!(operation);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            forward_heap_snapshot_progress(&mut updates, &output, &mut operation),
+        )
+        .await
+        .expect("disconnected progress receiver must not block CDP cleanup");
+        assert_eq!(result, Err("expected command failure"));
+    }
 
     #[test]
     fn rejects_non_retained_existing_remote_object_inspection() {

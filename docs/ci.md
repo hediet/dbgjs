@@ -57,6 +57,14 @@ nightly builds, stable builds, and feature-branch manual dispatches. Stable-tag
 existence no longer gates macOS tests. Installed-package smoke checks remain
 enabled on both ARM64 platforms as well. Intel macOS is not supported or built.
 
+The Linux Rust job also runs the generated TypeScript heap-streaming client
+against the freshly built daemon and a real Node inspector, including CLI
+capture/snapshot progress, cancellation, disconnect, and recovery. It installs
+only the registry dependencies from the extension lockfile. The unreleased Rust
+streaming prerequisite and local-only development overrides are documented in
+[the contract integration notes](./contracts.md#registry-dependencies-and-local-linkrpc-development);
+CI never substitutes a sibling checkout for a missing published release.
+
 The native package matrix builds Windows x64/ARM64, Linux
 x64/ARM64 (GNU), and macOS ARM64. Each npm package has its own GitHub
 artifact: `npm-dbgjs` contains the entry-package candidate, while each

@@ -5,14 +5,14 @@
       "interfaces": [
         {
           "interfaceId": "dev.dbgjs.cdp-debugger",
-          "interfaceHash": "57e5bec5caac6e1f"
+          "interfaceHash": "ae04352ccd402cfd"
         }
       ]
     }
   ],
   "defaultInterface": {
     "interfaceId": "dev.dbgjs.cdp-debugger",
-    "interfaceHash": "57e5bec5caac6e1f"
+    "interfaceHash": "ae04352ccd402cfd"
   },
   "interfaceSchemas": [
     {
@@ -81565,7 +81565,7 @@
     },
     {
       "id": "dev.dbgjs.cdp-debugger",
-      "hash": "57e5bec5caac6e1f",
+      "hash": "ae04352ccd402cfd",
       "methods": {
         "add_source_formatting_rule": {
           "params": {
@@ -83098,6 +83098,32 @@
               "bytesWritten",
               "captureId",
               "timing"
+            ],
+            "additionalProperties": false
+          },
+          "serverStream": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "finished": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "bytesWritten": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bytesWritten",
+              "done",
+              "total"
             ],
             "additionalProperties": false
           }
@@ -122991,6 +123017,32 @@
               "bytesWritten",
               "path",
               "timing"
+            ],
+            "additionalProperties": false
+          },
+          "serverStream": {
+            "type": "object",
+            "properties": {
+              "done": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              },
+              "finished": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "bytesWritten": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "bytesWritten",
+              "done",
+              "total"
             ],
             "additionalProperties": false
           }

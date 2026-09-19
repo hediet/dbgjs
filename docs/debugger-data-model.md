@@ -1878,9 +1878,9 @@ The following target-model pieces are not yet implemented:
 - Unconnected LinkRPC/DAP breakpoint workflows.
 - Source-map path catalog discovery independent of full source hydration.
 - Immutable detail artifacts for scopes, properties, and coverage.
-- Native LinkRPC server streaming and cancellation. The debugger currently
-  exposes the same cursor semantics through cancellation-safe unary long
-  polling.
+- Native LinkRPC streaming for target observation. Heap capture progress already
+  uses typed server streaming and advisory cancellation; target cursor
+  observation still uses cancellation-safe unary long polling.
 - Explicit attachment-incarnation identities and selector policies spanning
   related workers and OOPIFs.
 - A standalone per-context coordinator replacing the service-wide serialization

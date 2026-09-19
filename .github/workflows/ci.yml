@@ -121,6 +121,11 @@ jobs:
         run: cargo test --locked --workspace
       - name: Test offline recordings
         run: npm run test:offline
+      - name: Test generated TypeScript heap streaming against Rust daemon
+        if: runner.os == 'Linux'
+        run: |
+          npm --prefix vscode-extension ci
+          npm --prefix vscode-extension run test:heap-streaming
 
   packages:
     name: Package (${{ matrix.platform }})

@@ -9,10 +9,10 @@ use std::time::Duration;
 use atomic_write_file::AtomicWriteFile;
 use futures_util::{StreamExt, future::join_all, stream};
 use globset::{Glob, GlobMatcher};
-use linkrpc::prelude::{CallCtx, JsonRpcError, error_codes};
+use linkrpc::prelude::{CallCtx, JsonRpcError, StreamSender, error_codes};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::{Instant, timeout_at};
 
 use crate::capability::{
@@ -747,6 +747,7 @@ struct PromotedCapture {
 struct CaptureReservationGuard {
     service: DebuggerService,
     reservation: CaptureReservation,
+    heap_debugger: Option<TargetDebuggerHandle>,
 }
 
 struct CaptureDeletionGuard {
@@ -801,7 +802,13 @@ impl CaptureReservationGuard {
         Self {
             service,
             reservation,
+            heap_debugger: None,
         }
+    }
+
+    fn with_heap_debugger(mut self, debugger: TargetDebuggerHandle) -> Self {
+        self.heap_debugger = Some(debugger);
+        self
     }
 }
 
@@ -809,8 +816,24 @@ impl Drop for CaptureReservationGuard {
     fn drop(&mut self) {
         let service = self.service.clone();
         let reservation = self.reservation.clone();
+        let heap_debugger = self.heap_debugger.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                if let Some(debugger) = heap_debugger {
+                    // Keep the name reserved until the serialized target command and scratch cleanup finish.
+                    let metadata = &reservation.metadata;
+                    let pending = service.state.lock().await.capture_reservations
+                        .get(&(metadata.context_id.clone(), metadata.name.clone()))
+                        .is_some_and(|current| {
+                            current.metadata.storage_id == metadata.storage_id
+                                && current.completed.is_none()
+                        });
+                    if pending
+                        && let Err(error) = debugger.delete_stored_capture(metadata.name.clone()).await
+                    {
+                        eprintln!("failed to clean up interrupted heap capture '{}': {error}", metadata.name);
+                    }
+                }
                 if service.abandon_capture(&reservation).await
                     && reservation.metadata.kind == CaptureKind::HeapSnapshot
                 {
@@ -4678,30 +4701,40 @@ impl DebuggerServiceApi for DebuggerService {
 
     async fn take_heap_snapshot(
         &self,
-        _ctx: &CallCtx,
+        ctx: &CallCtx,
         context_id: String,
         connection_id: String,
         target_id: String,
         path: String,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapSnapshotResult, JsonRpcError> {
-        self.target_debugger(&context_id, &connection_id, &target_id)
-            .await?
-            .take_heap_snapshot(path, capture_numeric_value, expose_internals)
-            .await
-            .map_err(target_debugger_rpc_error)
+        let debugger = self.target_debugger(&context_id, &connection_id, &target_id).await?;
+        let (progress_tx, progress_rx) = mpsc::channel(16);
+        finish_heap_streamed_call(ctx, drain_heap_progress(
+            ctx,
+            progress,
+            progress_rx,
+            debugger.take_heap_snapshot(
+                path,
+                capture_numeric_value,
+                expose_internals,
+                progress_tx,
+            ),
+        ).await).await
     }
 
     async fn capture_heap_snapshot(
         &self,
-        _ctx: &CallCtx,
+        ctx: &CallCtx,
         context_id: String,
         connection_id: String,
         target_id: String,
         capture_id: Option<String>,
         capture_numeric_value: bool,
         expose_internals: bool,
+        progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
@@ -4738,7 +4771,7 @@ impl DebuggerServiceApi for DebuggerService {
                 CaptureKind::HeapSnapshot,
             )
             .await?,
-        );
+        ).with_heap_debugger(debugger.clone());
         let name = reservation.reservation.metadata.name.clone();
         if reservation.reservation.completed.is_some() {
             let completed = self
@@ -4761,17 +4794,47 @@ impl DebuggerServiceApi for DebuggerService {
                 .ok_or_else(|| invalid_state("completed heap capture result is missing"))?;
             return Ok(result);
         }
-        let result = match debugger
-            .capture_heap_snapshot(Some(name.clone()), capture_numeric_value, expose_internals)
-            .await
-            .map_err(target_debugger_rpc_error)
-        {
+        let (progress_tx, progress_rx) = mpsc::channel(16);
+        let outcome = drain_heap_progress(
+            ctx,
+            progress,
+            progress_rx,
+            debugger.capture_heap_snapshot(
+                Some(name.clone()),
+                capture_numeric_value,
+                expose_internals,
+                progress_tx,
+            ),
+        ).await;
+        let cancellation = outcome.cancellation;
+        let delivery_error = outcome.delivery_error;
+        let result = match outcome.result.map_err(target_debugger_rpc_error) {
             Ok(result) => result,
             Err(error) => {
                 self.abandon_capture(&reservation.reservation).await;
+                if cancellation.is_some() || ctx.is_cancelled() {
+                    let reason = match &cancellation {
+                        Some(reason) => reason.clone(),
+                        None => ctx.cancelled().await,
+                    };
+                    return Err(cancelled_heap_call(reason));
+                }
                 return Err(error);
             }
         };
+        let interruption = if cancellation.is_some() || ctx.is_cancelled() {
+            Some(cancelled_heap_call(match &cancellation {
+                Some(reason) => reason.clone(),
+                None => ctx.cancelled().await,
+            }))
+        } else {
+            delivery_error
+        };
+        if let Some(error) = interruption {
+            debugger.delete_stored_capture(name).await.map_err(target_debugger_rpc_error)?;
+            self.abandon_capture(&reservation.reservation).await;
+            return Err(error);
+        }
         let (staging_path, final_path) = self.heap_capture_paths(&reservation.reservation);
         if let Err(error) = debugger
             .copy_heap_capture(name, staging_path.to_string_lossy().into_owned())
@@ -4820,6 +4883,20 @@ impl DebuggerServiceApi for DebuggerService {
                 remove_capture_payload_files([final_path]);
             }
             return Err(error);
+        }
+        if cancellation.is_some() || ctx.is_cancelled() {
+            let reason = match &cancellation {
+                Some(reason) => reason.clone(),
+                None => ctx.cancelled().await,
+            };
+            self
+                .delete_capture(
+                    &CallCtx::default(),
+                    context_id,
+                    result.capture_id.clone(),
+                )
+                .await?;
+            return Err(cancelled_heap_call(reason));
         }
         Ok(result)
     }
@@ -8804,6 +8881,77 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::Driver(_) => error_codes::INTERNAL_ERROR,
     };
     JsonRpcError::new(code, error.to_string())
+}
+
+struct HeapStreamOutcome<T> {
+    result: Result<T, TargetDebuggerError>,
+    cancellation: Option<Option<String>>,
+    delivery_error: Option<JsonRpcError>,
+}
+
+async fn drain_heap_progress<T, F>(
+    ctx: &CallCtx,
+    progress: StreamSender<HeapSnapshotProgress>,
+    mut updates: mpsc::Receiver<HeapSnapshotProgress>,
+    operation: F,
+) -> HeapStreamOutcome<T>
+where
+    F: std::future::Future<Output = Result<T, TargetDebuggerError>>,
+{
+    tokio::pin!(operation);
+    let cancelled = ctx.cancelled();
+    tokio::pin!(cancelled);
+    let mut cancellation = None;
+    let mut delivery_error = None;
+    let mut updates_open = true;
+    let result = loop {
+        tokio::select! {
+            result = &mut operation => break result,
+            reason = &mut cancelled, if cancellation.is_none() => {
+                cancellation = Some(reason);
+            }
+            update = updates.recv(), if updates_open => {
+                if let Some(update) = update {
+                    if delivery_error.is_none() {
+                        delivery_error = progress.send(update).await.err();
+                    }
+                } else {
+                    updates_open = false;
+                }
+            }
+        }
+    };
+    while let Some(update) = updates.recv().await {
+        if delivery_error.is_none() {
+            delivery_error = progress.send(update).await.err();
+        }
+    }
+    HeapStreamOutcome { result, cancellation, delivery_error }
+}
+
+async fn finish_heap_streamed_call<T>(
+    ctx: &CallCtx,
+    outcome: HeapStreamOutcome<T>,
+) -> Result<T, JsonRpcError> {
+    if outcome.cancellation.is_some() || ctx.is_cancelled() {
+        let reason = match outcome.cancellation {
+            Some(reason) => reason,
+            None => ctx.cancelled().await,
+        };
+        return Err(cancelled_heap_call(reason));
+    }
+    let result = outcome.result.map_err(target_debugger_rpc_error)?;
+    if let Some(error) = outcome.delivery_error {
+        return Err(error);
+    }
+    Ok(result)
+}
+
+fn cancelled_heap_call(reason: Option<String>) -> JsonRpcError {
+    JsonRpcError::new(
+        error_codes::CANCELLED,
+        reason.unwrap_or_else(|| "heap snapshot call cancelled".to_owned()),
+    )
 }
 
 fn target_source_search_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
