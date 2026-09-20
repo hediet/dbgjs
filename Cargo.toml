@@ -28,7 +28,7 @@ linkrpc = "0.1.1"
 linkrpc-tokio = "0.1.1"
 im = "15.1"
 libc = "0.2"
-schemars = "1"
+schemars = "0.8"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "=0.10.9"

@@ -273,30 +273,32 @@ pub struct ConnectionSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConnectionConfiguration {
+    #[serde(rename_all = "camelCase")]
     DirectCdp {
         endpoint: String,
     },
+    #[serde(rename_all = "camelCase")]
     NodeInspector {
         endpoint: String,
     },
+    #[serde(rename_all = "camelCase")]
     Process {
         process_id: u32,
     },
+    #[serde(rename_all = "camelCase")]
     ProcessTree {
         root_pid: u32,
     },
     /// Uses the process tree rooted at `root_pid` as the access path while exposing only
     /// `target_id` and its descendants as this connection's public target scope.
+    #[serde(rename_all = "camelCase")]
     ScopedProcessTree {
         root_pid: u32,
         target_id: String,
     },
+    #[serde(rename_all = "camelCase")]
     Playwright {
         url: String,
         #[serde(default, alias = "playwright_package")]
@@ -306,6 +308,7 @@ pub enum ConnectionConfiguration {
         #[serde(default, alias = "ignore_https_errors")]
         ignore_https_errors: bool,
     },
+    #[serde(rename_all = "camelCase")]
     Chrome {
         url: String,
         executable: String,
@@ -314,6 +317,7 @@ pub enum ConnectionConfiguration {
         user_data_dir: Option<String>,
         args: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
     Node {
         program: String,
         args: Vec<String>,
@@ -324,6 +328,7 @@ pub enum ConnectionConfiguration {
         runtime_args: Vec<String>,
         env: BTreeMap<String, String>,
     },
+    #[serde(rename_all = "camelCase")]
     Stdio {
         command: String,
         args: Vec<String>,
@@ -827,17 +832,19 @@ pub struct UncompactedSourceEdgeSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UncompactedProjectionSnapshot {
+    #[serde(rename_all = "camelCase")]
     IdentityEqualContent { content_hash: String },
+    #[serde(rename_all = "camelCase")]
     IdentityDeclaredByProvider { provider: String },
+    #[serde(rename_all = "camelCase")]
     SourceMap { map_hash: String, source_index: u32 },
+    #[serde(rename_all = "camelCase")]
     Format { formatter: String },
+    #[serde(rename_all = "camelCase")]
     Edit { edit: String },
+    #[serde(rename_all = "camelCase")]
     Offset { line_delta: i64, column_delta: i64 },
 }
 
@@ -1830,21 +1837,20 @@ pub enum FrameProjectionSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TargetWaitPredicate {
+    #[serde(rename_all = "camelCase")]
     Changed {
         #[serde(alias = "after_revision")]
         after_revision: u64,
     },
     Running,
+    #[serde(rename_all = "camelCase")]
     BreakpointInstalled {
         #[serde(alias = "breakpoint_id")]
         breakpoint_id: String,
     },
+    #[serde(rename_all = "camelCase")]
     Paused {
         #[serde(alias = "after_epoch")]
         after_epoch: u64,
@@ -2427,6 +2433,59 @@ mod tests {
             .unwrap(),
             predicate
         );
+    }
+
+    #[test]
+    fn enum_schemas_preserve_camel_case_wire_fields() {
+        fn check<T: schemars::JsonSchema + serde::de::DeserializeOwned + serde::Serialize>(
+            examples: &[serde_json::Value],
+        ) {
+            let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+            let validator = jsonschema::validator_for(&schema).unwrap();
+            for example in examples {
+                let value: T = serde_json::from_value(example.clone()).unwrap();
+                let wire = serde_json::to_value(value).unwrap();
+                validator.validate(&wire).unwrap();
+                let variant = schema["oneOf"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|variant| variant["properties"]["kind"]["enum"][0] == wire["kind"])
+                    .unwrap();
+                let fields = variant["properties"].as_object().unwrap();
+                for key in wire.as_object().unwrap().keys() {
+                    assert!(fields.contains_key(key), "missing schema field: {key}");
+                }
+            }
+        }
+
+        check::<ConnectionConfiguration>(&[
+            serde_json::json!({ "kind": "process", "processId": 1 }),
+            serde_json::json!({ "kind": "processTree", "rootPid": 1 }),
+            serde_json::json!({
+                "kind": "scopedProcessTree", "rootPid": 1, "targetId": "target"
+            }),
+            serde_json::json!({
+                "kind": "playwright", "url": "", "channel": "bundled", "headless": true
+            }),
+            serde_json::json!({
+                "kind": "chrome", "url": "", "executable": "", "headless": true, "args": []
+            }),
+            serde_json::json!({
+                "kind": "node", "program": "", "args": [], "cwd": "",
+                "runtimeExecutable": "node", "env": {}
+            }),
+        ]);
+        check::<super::UncompactedProjectionSnapshot>(&[
+            serde_json::json!({ "kind": "identityEqualContent", "contentHash": "hash" }),
+            serde_json::json!({ "kind": "sourceMap", "mapHash": "hash", "sourceIndex": 0 }),
+            serde_json::json!({ "kind": "offset", "lineDelta": 1, "columnDelta": 2 }),
+        ]);
+        check::<TargetWaitPredicate>(&[
+            serde_json::json!({ "kind": "changed", "afterRevision": 1 }),
+            serde_json::json!({ "kind": "breakpointInstalled", "breakpointId": "breakpoint" }),
+            serde_json::json!({ "kind": "paused", "afterEpoch": 1 }),
+        ]);
     }
 
     #[test]

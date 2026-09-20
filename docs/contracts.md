@@ -99,6 +99,8 @@ be published before their versions are selected in this repository.
 
 The Rust generator requires LinkRPC 0.1.1 or newer. The published 0.1.0 crate
 predates the provider-generation options used by this project.
+Rust trait models use the same schemars 0.8 version as LinkRPC's shared-schema
+collector; schemars 1 derives implement a different `JsonSchema` trait.
 
 **Registry-only builds require a coordinated LinkRPC release:** the typed
 heap-progress methods require the Rust streaming implementation merged into
