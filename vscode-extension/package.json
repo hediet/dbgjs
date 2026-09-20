@@ -241,7 +241,7 @@
     "test:vscode": "npm run compile && node test/runIntegration.mjs"
   },
   "dependencies": {
-    "@hediet/linkrpc": "0.0.1",
+    "@hediet/linkrpc": "0.0.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {

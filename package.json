@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@hediet/dbgjs": "^0.1.0-next.20260915.3",
-    "@hediet/linkrpc-cli": "0.0.1",
+    "@hediet/linkrpc-cli": "0.0.2",
     "@playwright/test": "^1.62.1",
     "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",

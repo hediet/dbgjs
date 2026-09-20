@@ -97,20 +97,11 @@ dependencies; CI does not check out a sibling repository, use relative
 `file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
 be published before their versions are selected in this repository.
 
-The Rust generator requires LinkRPC 0.1.1 or newer. The published 0.1.0 crate
-predates the provider-generation options used by this project.
+The Rust dependencies require LinkRPC 0.2.0 or newer for typed heap-progress
+streams and shared trait schemas. The published TypeScript runtime and CLI
+dependencies are pinned to 0.0.2.
 Rust trait models use the same schemars 0.8 version as LinkRPC's shared-schema
 collector; schemars 1 derives implement a different `JsonSchema` trait.
-
-**Registry-only builds require a coordinated LinkRPC release:** the typed
-heap-progress methods require the Rust streaming implementation merged into
-LinkRPC's `main` branch, which is not in the currently published 0.1.1 crates.
-These changes are being integrated ahead of that release alongside other
-incoming changes. Publish the corresponding LinkRPC crates, then update this
-repository's registry versions and lockfile to restore registry-only builds
-and CI. This repository deliberately does not invent a future registry version. The
-published TypeScript runtime and CLI 0.0.1 already support the streaming wire
-contract and code generation.
 
 For opt-in development across both repositories, a developer may use a local
 sibling checkout by temporarily overriding the relevant npm and Cargo
@@ -133,8 +124,8 @@ linkrpc-tokio = { path = "../linkrpc/rust/crates/linkrpc-tokio" }
 
 Resolve the local patch once without `--locked`, then run the locked build,
 generation, and tests. Remove this config and restore the registry lockfile
-before committing. Until the release and dependency update above are complete,
-a registry-only Rust build cannot compile the streaming methods.
+before committing. Ordinary builds, contract generation, and CI use only the
+published registry dependencies.
 
 ## Typed heap-progress streams
 
