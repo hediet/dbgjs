@@ -100,12 +100,13 @@ be published before their versions are selected in this repository.
 The Rust generator requires LinkRPC 0.1.1 or newer. The published 0.1.0 crate
 predates the provider-generation options used by this project.
 
-**Streaming feature integration is release-blocked:** the typed heap-progress
-methods require the Rust streaming implementation on LinkRPC's
-`feature/typed-rust-streaming` branch, which is not in the currently published
-0.1.1 crates. Publish the corresponding LinkRPC crates, then update this
-repository's registry versions and lockfile before integrating this feature.
-This branch deliberately does not invent a future registry version. The
+**Registry-only builds require a coordinated LinkRPC release:** the typed
+heap-progress methods require the Rust streaming implementation merged into
+LinkRPC's `main` branch, which is not in the currently published 0.1.1 crates.
+These changes are being integrated ahead of that release alongside other
+incoming changes. Publish the corresponding LinkRPC crates, then update this
+repository's registry versions and lockfile to restore registry-only builds
+and CI. This repository deliberately does not invent a future registry version. The
 published TypeScript runtime and CLI 0.0.1 already support the streaming wire
 contract and code generation.
 
@@ -130,14 +131,14 @@ linkrpc-tokio = { path = "../linkrpc/rust/crates/linkrpc-tokio" }
 
 Resolve the local patch once without `--locked`, then run the locked build,
 generation, and tests. Remove this config and restore the registry lockfile
-before committing. Until the release above exists, a registry-only Rust build
-of this feature branch is intentionally not an integration-ready build.
+before committing. Until the release and dependency update above are complete,
+a registry-only Rust build cannot compile the streaming methods.
 
 ## Typed heap-progress streams
 
 `capture_heap_snapshot` and `take_heap_snapshot` declare
-`#[incoming_stream(HeapSnapshotProgress)]` on the Rust trait. The annotation is
-named from the caller's viewpoint: it exports `serverStream`, generates a
+`#[output_stream(HeapSnapshotProgress)]` on the Rust trait. The annotation
+describes the method's output: it exports `serverStream`, generates a
 provider-side `StreamSender<HeapSnapshotProgress>`, and gives Rust and TypeScript
 clients typed progress on the capture call alongside its final result.
 The CLI consumes this stream rather than issuing 100 ms snapshot polls.

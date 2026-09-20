@@ -2296,7 +2296,7 @@ pub trait DebuggerServiceApi {
         project: bool,
     ) -> Result<CpuProfileSnapshot, JsonRpcError>;
 
-    #[incoming_stream(HeapSnapshotProgress)]
+    #[output_stream(HeapSnapshotProgress)]
     async fn take_heap_snapshot(
         context_id: String,
         connection_id: String,
@@ -2306,7 +2306,7 @@ pub trait DebuggerServiceApi {
         expose_internals: bool,
     ) -> Result<HeapSnapshotResult, JsonRpcError>;
 
-    #[incoming_stream(HeapSnapshotProgress)]
+    #[output_stream(HeapSnapshotProgress)]
     async fn capture_heap_snapshot(
         context_id: String,
         connection_id: String,
