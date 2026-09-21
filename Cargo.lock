@@ -1329,9 +1329,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "linkrpc"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d5c1c9c99555903e4739878a4d56ca986c621e1587040cf5b7f48ba59464c4f"
+checksum = "0387272778158c1183c56006306494123e6d7fd10eecc4729e6796b58f7d5eba"
 dependencies = [
  "async-trait",
  "futures",
@@ -1349,20 +1349,21 @@ dependencies = [
 
 [[package]]
 name = "linkrpc-macros"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08845d7a18543950f99549110ac18035d936107e2e26c87fdf9116cbc5888895"
+checksum = "0f506de27904c9c70f82a917bcee1873f4e3a22c5e51463ae5fadc92ebacb42a"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
 ]
 
 [[package]]
 name = "linkrpc-tokio"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e3a587b067950ba260d9b3d33c821094a407dd52b635a783d5cc0b499ca11f4"
+checksum = "22e96b8ed9ad108e41f46f4cae56de1dfc0c0ce43c457c77d065c1dd05675429"
 dependencies = [
  "async-trait",
  "futures-util",

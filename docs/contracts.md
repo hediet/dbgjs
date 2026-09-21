@@ -31,8 +31,12 @@ Rust daemon trait + models -> exported schema -----+
                    |                                      |
           LinkRPC Rust generator                 LinkRPC CLI codegen
                    |                                      |
-       CDP types, client, provider trait,        extension TypeScript
-       server adapter, notification methods      contract and typed client
+       CDP types + macro-annotated trait         extension TypeScript
+                   |                            contract and typed client
+       LinkRPC trait macro (preserves JSON/hash)
+                   |
+       client, provider, server adapter,
+       notification and streaming methods
 ```
 
 The Rust daemon client and server are generated directly from the same annotated
@@ -97,8 +101,13 @@ dependencies; CI does not check out a sibling repository, use relative
 `file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
 be published before their versions are selected in this repository.
 
-The Rust dependencies require LinkRPC 0.2.0 or newer for typed heap-progress
-streams and shared trait schemas. The published TypeScript runtime and CLI
+The Rust dependencies require LinkRPC 0.2.1 or newer for schema-preserving,
+macro-backed CDP bindings, typed heap-progress streams, and shared trait schemas.
+The Rust generator emits a trait annotated with
+`#[link_rpc_interface(schema_json = "...")]`; the same macro used by the daemon
+trait generates the CDP client and provider infrastructure. The imported CDP
+schema and hash are preserved rather than re-derived from generated Rust types.
+The published TypeScript runtime and CLI
 dependencies are pinned to 0.0.2.
 Rust trait models use the same schemars 0.8 version as LinkRPC's shared-schema
 collector; schemars 1 derives implement a different `JsonSchema` trait.
