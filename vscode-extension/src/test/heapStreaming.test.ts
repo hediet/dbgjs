@@ -10,10 +10,11 @@ import { promisify } from "node:util";
 import { ErrorCode, RpcError } from "@hediet/linkrpc";
 import { parseEndpointFile } from "../daemonClient.js";
 import { connectDaemon, type DaemonConnection } from "../daemonTransport.js";
-import { DebuggerService } from "../generated/debuggerService.js";
+import { DbgServiceClient } from "../dbgServiceClient.js";
+import { HeapProfilerApi } from "../generated/heapProfilerApi.js";
 
 const execute = promisify(execFile);
-type Progress = typeof DebuggerService.members.capture_heap_snapshot._serverStream;
+type Progress = typeof HeapProfilerApi.members.capture_heap_snapshot._serverStream;
 
 test("generated TS streams real heap progress from the Rust daemon and CLI", { timeout: 180_000 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "dbgjs-heap-streaming-"));
@@ -50,26 +51,26 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 			return link;
 		};
 		const link = await connect();
-		const client = link.connection.get(DebuggerService);
+		const client = new DbgServiceClient(link.connection);
 		const scope = {
 			contextId: "heap-streaming",
 			connectionId: "runtime",
 			targetId: "$node-root:runtime",
 		};
-		await client.put_context({ contextId: scope.contextId, kind: "named", displayName: null });
-		await client.put_connection({
+		await client.contexts.put_context({ contextId: scope.contextId, kind: "named", displayName: null });
+		await client.contexts.put_connection({
 			contextId: scope.contextId,
 			connectionId: scope.connectionId,
 			configuration: { kind: "nodeInspector", endpoint: inspector },
 		});
-		await client.connect_connection({ contextId: scope.contextId, connectionId: scope.connectionId });
-		await client.attach_target({ ...scope, options: { force: false, expectedConnectionGeneration: null } });
+		await client.contexts.connect_connection({ contextId: scope.contextId, connectionId: scope.connectionId });
+		await client.targets.attach_target({ ...scope, options: { force: false, expectedConnectionGeneration: null } });
 
 		const parameters = {
 			...scope, captureId: "typescript", captureNumericValue: false, exposeInternals: false,
 		};
 		const messages: Progress[] = [];
-		const call = client.capture_heap_snapshot(parameters, { onMessage: message => messages.push(message) });
+		const call = client.heap.capture_heap_snapshot(parameters, { onMessage: message => messages.push(message) });
 		const result = await call;
 		assert.ok(messages.length > 1, "progress arrives before the final response");
 		assert.equal(messages[0]?.bytesWritten, 0, "a new capture does not replay stale progress");
@@ -77,11 +78,11 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		assert.equal(messages.at(-1)?.bytesWritten, result.bytesWritten);
 		assert.ok(result.bytesWritten > 0);
 		assert.ok(!wire.some(message => message.includes("::get_heap_snapshot_progress")));
-		assert.deepEqual(await client.get_heap_snapshot_progress(scope), messages.at(-1));
+		assert.deepEqual(await client.heap.get_heap_snapshot_progress(scope), messages.at(-1));
 
 		let firstProgress!: () => void;
 		const observed = new Promise<void>(resolve => { firstProgress = resolve; });
-		const cancelled = client.capture_heap_snapshot(
+		const cancelled = client.heap.capture_heap_snapshot(
 			{ ...parameters, captureId: "cancelled" },
 			{ onMessage: () => firstProgress() },
 		);
@@ -95,7 +96,7 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		const disconnectedLink = await connect();
 		let disconnectProgress!: () => void;
 		const disconnectObserved = new Promise<void>(resolve => { disconnectProgress = resolve; });
-		const disconnected = disconnectedLink.connection.get(DebuggerService).capture_heap_snapshot(
+		const disconnected = new DbgServiceClient(disconnectedLink.connection).heap.capture_heap_snapshot(
 			{ ...parameters, captureId: "disconnected" },
 			{ onMessage: () => disconnectProgress() },
 		);
@@ -109,7 +110,7 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		// A new command must work after cancelled/orphaned CDP operations drain their chunks.
 		for (const captureId of ["cancelled", "disconnected"]) {
 			const recovered: Progress[] = [];
-			const recovery = await client.capture_heap_snapshot(
+			const recovery = await client.heap.capture_heap_snapshot(
 				{ ...parameters, captureId },
 				{ onMessage: message => recovered.push(message) },
 			);
@@ -121,7 +122,7 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		const cancelledPath = join(root, "cancelled.heapsnapshot");
 		let snapshotProgress!: () => void;
 		const snapshotObserved = new Promise<void>(resolve => { snapshotProgress = resolve; });
-		const cancelledSnapshot = client.take_heap_snapshot({
+		const cancelledSnapshot = client.heap.take_heap_snapshot({
 			...scope, path: cancelledPath, captureNumericValue: false, exposeInternals: false,
 		}, { onMessage: () => snapshotProgress() });
 		const cancelledSnapshotResult = cancelledSnapshot.then(() => null, (error: unknown) => error);

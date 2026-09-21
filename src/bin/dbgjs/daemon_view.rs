@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use dbgjs::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
-    ConnectionStatus, ContextSnapshot, DebuggerServiceApiClient, FrameProjectionSnapshot,
+    ConnectionStatus, ContextSnapshot, DbgServiceClient, FrameProjectionSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
     breakpoint_applies_to_target,
 };
@@ -18,7 +18,7 @@ pub struct ContextView {
 }
 
 pub async fn run(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     context_id: Option<&str>,
     all_contexts: bool,
     interactive: bool,
@@ -42,12 +42,12 @@ pub async fn run(
 }
 
 async fn capture(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     context_id: Option<&str>,
     all_contexts: bool,
 ) -> Result<Vec<ContextView>, io::Error> {
     let context_ids = if all_contexts {
-        client
+        client.contexts
             .list_contexts(None)
             .await
             .map_err(rpc_error)?
@@ -64,14 +64,14 @@ async fn capture(
 
     let mut contexts = Vec::with_capacity(context_ids.len());
     for context_id in context_ids {
-        let snapshot = match client.get_context(context_id.clone()).await {
+        let snapshot = match client.contexts.get_context(context_id.clone()).await {
             Ok(snapshot) => snapshot,
             Err(_) if all_contexts => continue,
             Err(error) => return Err(rpc_error(error)),
         };
         let mut debuggers = BTreeMap::new();
         for target in &snapshot.target_forest {
-            let debugger = client
+            let debugger = client.targets
                 .get_target(
                     snapshot.id.clone(),
                     target.connection_id.clone(),
@@ -146,7 +146,7 @@ fn next_observation_request(
 }
 
 async fn wait_for_change(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     contexts: &[ContextView],
     next_observer: &mut usize,
 ) {
@@ -155,7 +155,7 @@ async fn wait_for_change(
             context_id,
             revision,
         }) => {
-            let _ = client
+            let _ = client.contexts
                 .observe_context(
                     context_id,
                     dbgjs::service_api::ObservationCursor::After { revision },
@@ -169,7 +169,7 @@ async fn wait_for_change(
             target_id,
             revision,
         }) => {
-            let _ = client
+            let _ = client.targets
                 .observe_target(
                     context_id,
                     connection_id,

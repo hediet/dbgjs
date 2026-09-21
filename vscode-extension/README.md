@@ -195,8 +195,13 @@ built-in WebSocket support.
 ## Transport
 
 The extension uses `@hediet/linkrpc` for its JSON-RPC connection and public
-Node NDJSON transport, with its typed `DebuggerService` client generated from
-the shared contract.
+Node NDJSON transport, with typed interfaces generated from the shared contract.
+`DbgServiceClient` groups these generated clients into readonly `service`,
+`contexts`, `sources`, `captures`, `targets`, `cdp`, `relay`, `browser`,
+`coverage`, `cpu`, and `heap` facets on one caller-owned `LinkRpcConnection`.
+For example, `client.contexts.list_contexts({ cwd: null })` and
+`client.heap.capture_heap_snapshot(params, { onMessage })` share the same
+connection; streamed calls retain their generated cancellation support.
 See [RPC contracts and code generation](../docs/contracts.md) for ownership,
 regeneration, drift checks, and development links. The daemon still expects the one-line
 `{"hello":1,"token":"..."}` preamble before JSON-RPC traffic, so the extension

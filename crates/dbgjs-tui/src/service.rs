@@ -8,7 +8,7 @@ use dbgjs::context_identity::{
 };
 use dbgjs::local_rpc::{default_state_file, ensure_service};
 use dbgjs::service_api::{
-    ConnectionStatus, ContextSnapshot, ContextSummary, DebuggerServiceApiClient, MutationOptions,
+    ConnectionStatus, ContextSnapshot, ContextSummary, DbgServiceClient, MutationOptions,
     ObservationCursor, ObservationResult, ProcessTreeSnapshot, ResourceGraphSnapshot,
     SourceContentSnapshot, SourceDisplayOptions, SourceTreeKind, SourceTreeSnapshot,
     SourceViewPreference, TargetAttachOptions, TargetDebuggerSnapshot,
@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use crate::app::{ConnectionPathRef, Section, TargetRef, UiAction, connection_path_spec};
 
 pub struct Bootstrap {
-    pub client: Arc<DebuggerServiceApiClient>,
+    pub client: Arc<DbgServiceClient>,
     pub cwd: String,
     pub contexts: Vec<ContextSummary>,
     pub context_index: usize,
@@ -36,7 +36,7 @@ impl Bootstrap {
         );
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let normalized_cwd = normalize_absolute_path(&cwd).map_err(|error| error.to_string())?;
-        let contexts = client
+        let contexts = client.contexts
             .list_contexts(Some(normalized_cwd.clone()))
             .await
             .map_err(rpc_error)?;
@@ -84,7 +84,7 @@ impl Bootstrap {
                 })
                 .unwrap_or(0)
         };
-        let context = client
+        let context = client.contexts
             .get_context(contexts[context_index].id.clone())
             .await
             .map_err(rpc_error)?;
@@ -130,7 +130,7 @@ pub enum ServiceEvent {
 }
 
 pub struct ServiceController {
-    client: Arc<DebuggerServiceApiClient>,
+    client: Arc<DbgServiceClient>,
     events: mpsc::Sender<ServiceEvent>,
     context_task: Option<JoinHandle<()>>,
     target_tasks: BTreeMap<(String, String), JoinHandle<()>>,
@@ -143,7 +143,7 @@ pub struct ServiceController {
 
 impl ServiceController {
     pub fn new(
-        client: Arc<DebuggerServiceApiClient>,
+        client: Arc<DbgServiceClient>,
         events: mpsc::Sender<ServiceEvent>,
         cwd: String,
     ) -> Self {
@@ -181,7 +181,7 @@ impl ServiceController {
             let events = self.events.clone();
             let task_target = target.clone();
             let task = tokio::spawn(async move {
-                let mut snapshot = match client
+                let mut snapshot = match client.targets
                     .get_target(
                         task_target.context_id.clone(),
                         task_target.connection_id.clone(),
@@ -213,7 +213,7 @@ impl ServiceController {
                     return;
                 }
                 loop {
-                    match client
+                    match client.targets
                         .observe_target(
                             task_target.context_id.clone(),
                             task_target.connection_id.clone(),
@@ -277,27 +277,27 @@ impl ServiceController {
         tokio::spawn(async move {
             let load = async {
                 match section {
-                    Section::Contexts => client
+                    Section::Contexts => client.contexts
                         .list_contexts(Some(cwd))
                         .await
                         .map(Data::Contexts)
                         .map_err(rpc_error),
-                    Section::Processes => client
+                    Section::Processes => client.service
                         .get_process_projection(context_id.clone(), expanded_process_roots)
                         .await
                         .map(Data::Processes)
                         .map_err(rpc_error),
-                    Section::Connections => client
+                    Section::Connections => client.contexts
                         .get_resource_graph(context_id.clone())
                         .await
                         .map(Data::Resources)
                         .map_err(rpc_error),
-                    Section::Sources => client
+                    Section::Sources => client.sources
                         .show_source_tree(context_id.clone(), source_kind)
                         .await
                         .map(Data::Sources)
                         .map_err(rpc_error),
-                    Section::Captures => client
+                    Section::Captures => client.captures
                         .list_captures(context_id.clone())
                         .await
                         .map(Data::Captures)
@@ -354,7 +354,7 @@ impl ServiceController {
         self.source_task = Some(tokio::spawn(async move {
             let result = match tokio::time::timeout(
                 Duration::from_secs(30),
-                client.show_source(
+                client.sources.show_source(
                     context_id.clone(),
                     path.clone(),
                     SourceDisplayOptions {
@@ -401,7 +401,7 @@ impl ServiceController {
         let events = self.events.clone();
         self.context_task = Some(tokio::spawn(async move {
             loop {
-                match client
+                match client.contexts
                     .observe_context(context_id.clone(), cursor.clone(), 1_000)
                     .await
                 {
@@ -459,7 +459,7 @@ impl Drop for ServiceController {
 }
 
 async fn perform_action(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     action: UiAction,
 ) -> Result<(String, ContextSnapshot), String> {
     match action {
@@ -473,11 +473,11 @@ async fn perform_action(
             connected,
         } => {
             let snapshot = if connected {
-                client
+                client.contexts
                     .connect_connection(context_id, connection_id.clone())
                     .await
             } else {
-                client
+                client.contexts
                     .disconnect_connection(context_id, connection_id.clone())
                     .await
             }
@@ -499,7 +499,7 @@ async fn perform_action(
             connection_id,
             expected_revision,
         } => {
-            let snapshot = client
+            let snapshot = client.contexts
                 .delete_connection(
                     context_id,
                     connection_id.clone(),
@@ -518,7 +518,7 @@ async fn perform_action(
             force,
         } => {
             let snapshot = if attached {
-                client
+                client.targets
                     .attach_target(
                         target.context_id.clone(),
                         target.connection_id.clone(),
@@ -530,12 +530,12 @@ async fn perform_action(
                     )
                     .await
                     .map_err(rpc_error)?;
-                client
+                client.contexts
                     .get_context(target.context_id.clone())
                     .await
                     .map_err(rpc_error)?
             } else {
-                client
+                client.targets
                     .detach_target(
                         target.context_id.clone(),
                         target.connection_id.clone(),
@@ -561,7 +561,7 @@ async fn perform_action(
             source_path,
             line,
         } => {
-            let snapshot = client
+            let snapshot = client.contexts
                 .put_breakpoint(context_id, breakpoint_id.clone(), source_path, line, 1)
                 .await
                 .map_err(rpc_error)?;
@@ -572,7 +572,7 @@ async fn perform_action(
             breakpoint_id,
             expected_revision,
         } => {
-            let snapshot = client
+            let snapshot = client.contexts
                 .delete_breakpoint(
                     context_id,
                     breakpoint_id.clone(),
@@ -589,7 +589,7 @@ async fn perform_action(
 }
 
 async fn configure_connection_path(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     path: ConnectionPathRef,
 ) -> Result<(String, ContextSnapshot), String> {
     let (_, configuration) = connection_path_spec(
@@ -598,7 +598,7 @@ async fn configure_connection_path(
         path.debug_target_id.as_deref(),
     );
     let connection_id = path.connection_id.clone();
-    let context = client
+    let context = client.contexts
         .get_context(path.context_id.clone())
         .await
         .map_err(rpc_error)?;
@@ -630,7 +630,7 @@ async fn configure_connection_path(
         }
     }
     if needs_configuration {
-        client
+        client.contexts
             .put_connection(
                 path.context_id.clone(),
                 connection_id.clone(),
@@ -639,7 +639,7 @@ async fn configure_connection_path(
             .await
             .map_err(rpc_error)?;
     }
-    let snapshot = client
+    let snapshot = client.contexts
         .connect_connection(path.context_id, connection_id.clone())
         .await
         .map_err(rpc_error)?;
@@ -650,7 +650,7 @@ async fn configure_connection_path(
 }
 
 async fn set_connection_path_configured(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     path: ConnectionPathRef,
     configured: bool,
 ) -> Result<(String, ContextSnapshot), String> {
@@ -660,14 +660,14 @@ async fn set_connection_path_configured(
         path.debug_target_id.as_deref(),
     );
     if configured {
-        let snapshot = client
+        let snapshot = client.contexts
             .put_connection(path.context_id, path.connection_id.clone(), configuration)
             .await
             .map_err(rpc_error)?;
         return Ok((format!("Connection {} added", path.connection_id), snapshot));
     }
 
-    let context = client
+    let context = client.contexts
         .get_context(path.context_id.clone())
         .await
         .map_err(rpc_error)?;
@@ -684,7 +684,7 @@ async fn set_connection_path_configured(
             )
         })?;
     let snapshot = match connection.status {
-        ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client
+        ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client.contexts
             .disconnect_connection(path.context_id.clone(), path.connection_id.clone())
             .await
             .map_err(rpc_error)?,
@@ -696,7 +696,7 @@ async fn set_connection_path_configured(
         }
         ConnectionStatus::Disconnected | ConnectionStatus::Failed { .. } => context,
     };
-    let snapshot = client
+    let snapshot = client.contexts
         .delete_connection(
             path.context_id,
             path.connection_id.clone(),

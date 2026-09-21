@@ -9,9 +9,7 @@ use std::time::{Duration, Instant};
 
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
-use linkrpc::prelude::{
-    DirectoryServiceClient, InterfaceHandler, LinkRpcConnection, RegisterOptions,
-};
+use linkrpc::prelude::{DirectoryServiceClient, LinkRpcConnection};
 use linkrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -19,9 +17,7 @@ use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
 
 use crate::debugger_service::DebuggerService;
-use crate::service_api::{
-    DebuggerServiceApiClient, DebuggerServiceApiServer, debugger_service_api,
-};
+use crate::service_api::{self, DbgServiceClient};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -237,14 +233,14 @@ fn unix_socket_path() -> Result<PathBuf, LocalRpcError> {
 
 pub async fn connect_endpoint(
     endpoint: &LocalServiceEndpoint,
-) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+) -> Result<DbgServiceClient, LocalRpcError> {
     connect_endpoint_with_validation(endpoint, true).await
 }
 
 async fn connect_endpoint_with_validation(
     endpoint: &LocalServiceEndpoint,
     validate_interface: bool,
-) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+) -> Result<DbgServiceClient, LocalRpcError> {
     match &endpoint.transport {
         #[cfg(windows)]
         LocalTransportEndpoint::NamedPipe { pipe_name } => {
@@ -287,7 +283,7 @@ async fn connect_stream<S>(
     stream: S,
     token: &str,
     validate_interface: bool,
-) -> Result<DebuggerServiceApiClient, LocalRpcError>
+) -> Result<DbgServiceClient, LocalRpcError>
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -299,36 +295,36 @@ where
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
     if validate_interface {
-        let expected = debugger_service_api::interface();
         let directory = DirectoryServiceClient::new(connection.clone());
-        let listing = directory
-            .list(Some(expected.id().to_owned()), None, None, None, None)
-            .await
-            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-        let Some(actual) = listing
-            .items
-            .iter()
-            .find(|item| item.interface_id == expected.id())
-        else {
-            return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
-        };
-        if actual.interface_hash != expected.schema_hash() {
-            return Err(LocalRpcError::InterfaceHashMismatch {
-                interface_id: expected.id().to_owned(),
-                expected: expected.schema_hash().to_owned(),
-                actual: actual.interface_hash.clone(),
-            });
+        for expected in service_api::interfaces() {
+            let listing = directory
+                .list(Some(expected.id().to_owned()), None, None, None, None)
+                .await
+                .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+            let Some(actual) = listing
+                .items
+                .iter()
+                .find(|item| item.interface_id == expected.id())
+            else {
+                return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
+            };
+            if actual.interface_hash != expected.schema_hash() {
+                return Err(LocalRpcError::InterfaceHashMismatch {
+                    interface_id: expected.id().to_owned(),
+                    expected: expected.schema_hash().to_owned(),
+                    actual: actual.interface_hash.clone(),
+                });
+            }
         }
     }
-    Ok(DebuggerServiceApiClient::new(connection))
+    Ok(DbgServiceClient::new(connection))
 }
 
-pub async fn connect_existing(
-    state_file: &Path,
-) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+pub async fn connect_existing(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
     let endpoint = read_endpoint(state_file)?;
     let client = connect_endpoint(&endpoint).await?;
     let info = client
+        .service
         .service_info()
         .await
         .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
@@ -341,7 +337,7 @@ pub async fn connect_existing(
     Ok(client)
 }
 
-pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClient, LocalRpcError> {
+pub async fn ensure_service(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
     if let Ok(client) = connect_existing(state_file).await {
         return Ok(client);
     }
@@ -372,7 +368,7 @@ pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClien
     }
     match connect_existing(state_file).await {
         Ok(client) => return Ok(client),
-        Err(LocalRpcError::InterfaceHashMismatch { .. }) => {
+        Err(LocalRpcError::InterfaceHashMismatch { .. } | LocalRpcError::InterfaceMissing(_)) => {
             shutdown_incompatible_service(state_file).await?;
         }
         Err(_) => {}
@@ -398,6 +394,12 @@ pub async fn ensure_service(state_file: &Path) -> Result<DebuggerServiceApiClien
                     actual,
                 });
             }
+            Err(LocalRpcError::InterfaceMissing(interface_id)) => {
+                return Err(LocalRpcError::SpawnedServiceInterfaceMissing {
+                    executable: executable.display().to_string(),
+                    interface_id,
+                });
+            }
             Err(error) => last_error = Some(error),
         }
         if let Ok(message) = fs::read_to_string(&startup_error) {
@@ -415,6 +417,7 @@ async fn shutdown_incompatible_service(state_file: &Path) -> Result<(), LocalRpc
         let endpoint = read_endpoint(state_file)?;
         let client = connect_endpoint_with_validation(&endpoint, false).await?;
         let info = client
+            .service
             .service_info()
             .await
             .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
@@ -425,6 +428,7 @@ async fn shutdown_incompatible_service(state_file: &Path) -> Result<(), LocalRpc
             });
         }
         client
+            .service
             .shutdown()
             .await
             .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
@@ -461,11 +465,7 @@ async fn serve_peer(
     }
 
     let connection = LinkRpcConnection::new(Box::new(transport));
-    connection.register(
-        Arc::new(debugger_service_api::interface()),
-        Arc::new(DebuggerServiceApiServer::new(service)) as Arc<dyn InterfaceHandler>,
-        RegisterOptions::default(),
-    )?;
+    service_api::register(&connection, service)?;
     connection.enable_reflection();
     connection.run().await;
     Ok(())
@@ -610,6 +610,14 @@ pub enum LocalRpcError {
         expected: String,
         actual: String,
     },
+    #[error(
+        "spawned service {executable} is missing required LinkRPC interface '{interface_id}'; \
+         rebuild it with `cargo build --bin dbgjs-service`"
+    )]
+    SpawnedServiceInterfaceMissing {
+        executable: String,
+        interface_id: String,
+    },
     #[error("service endpoint changed owner from process {expected} to {actual}")]
     EndpointOwnerChanged { expected: u32, actual: u32 },
     #[error("failed to spawn {executable}: {source}")]
@@ -642,6 +650,89 @@ pub enum LocalRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use linkrpc::prelude::{CallCtx, JsonRpcError, RegisterOptions, link_rpc_interface};
+
+    #[link_rpc_interface(id = "dev.dbgjs.cdp-debugger")]
+    trait LegacyLifecycleApi {
+        async fn service_info() -> Result<service_api::ServiceInfo, JsonRpcError>;
+        async fn shutdown() -> Result<bool, JsonRpcError>;
+    }
+
+    struct LegacyLifecycle;
+
+    #[async_trait::async_trait]
+    impl LegacyLifecycleApi for LegacyLifecycle {
+        async fn service_info(
+            &self,
+            _ctx: &CallCtx,
+        ) -> Result<service_api::ServiceInfo, JsonRpcError> {
+            Ok(service_api::ServiceInfo {
+                process_id: std::process::id(),
+                agent_instance_id: "legacy".into(),
+            })
+        }
+
+        async fn shutdown(&self, _ctx: &CallCtx) -> Result<bool, JsonRpcError> {
+            Ok(true)
+        }
+    }
+
+    async fn connect_lifecycle_only(
+        current_schema: bool,
+        validate_interface: bool,
+    ) -> Result<DbgServiceClient, LocalRpcError> {
+        let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let transport = NdjsonTransport::from_stream(server_stream);
+            let preamble = transport.read_preamble().await.unwrap().unwrap();
+            assert_eq!(preamble.token.as_deref(), Some("test"));
+            let connection = LinkRpcConnection::new(Box::new(transport));
+            let definition = if current_schema {
+                service_api::service_api::interface()
+            } else {
+                legacy_lifecycle_api::interface()
+            };
+            connection
+                .register(
+                    Arc::new(definition),
+                    Arc::new(LegacyLifecycleApiServer::new(Arc::new(LegacyLifecycle))),
+                    RegisterOptions::default(),
+                )
+                .unwrap();
+            connection.enable_reflection();
+            connection.run().await;
+        });
+        connect_stream(client_stream, "test", validate_interface).await
+    }
+
+    #[tokio::test]
+    async fn service_validation_checks_facets_beyond_lifecycle() {
+        let result = connect_lifecycle_only(true, true).await;
+        assert!(matches!(
+            result,
+            Err(LocalRpcError::InterfaceMissing(id)) if id == service_api::context_api::interface().id()
+        ));
+    }
+
+    #[tokio::test]
+    async fn service_lifecycle_keeps_old_daemon_shutdown_compatible() {
+        assert!(matches!(
+            connect_lifecycle_only(false, true).await,
+            Err(LocalRpcError::InterfaceHashMismatch { interface_id, .. })
+                if interface_id == service_api::service_api::interface().id()
+        ));
+        let client = connect_lifecycle_only(false, false).await.unwrap();
+        assert_eq!(
+            client
+                .service
+                .service_info()
+                .await
+                .unwrap()
+                .agent_instance_id,
+            "legacy"
+        );
+        assert!(client.service.shutdown().await.unwrap());
+    }
 
     #[cfg(unix)]
     #[test]
@@ -657,7 +748,10 @@ mod tests {
         fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
 
         ensure_private_directory(&root).unwrap();
-        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
 
         let created = root.join("created");
         ensure_private_directory(&created).unwrap();
@@ -684,7 +778,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn typed_context_state_round_trips_over_native_local_ipc() {
+    async fn service_facets_share_state_and_route_over_native_local_ipc() {
         let state_file = env::temp_dir().join(format!(
             "dbgjs-local-rpc-{}-{}.json",
             std::process::id(),
@@ -708,6 +802,7 @@ mod tests {
         };
 
         let created = client
+            .contexts
             .put_context(
                 "shop".into(),
                 crate::context_identity::ContextKind::Named,
@@ -718,11 +813,13 @@ mod tests {
         assert_eq!(created.revision, 1);
 
         let server_connection = client
+            .contexts
             .put_connection("shop".into(), "server".into(), "ws://127.0.0.1:9229".into())
             .await
             .unwrap();
         assert_eq!(server_connection.connections.len(), 1);
         let browser_connection = client
+            .contexts
             .put_connection(
                 "shop".into(),
                 "browser".into(),
@@ -740,6 +837,7 @@ mod tests {
         );
 
         let with_breakpoint = client
+            .contexts
             .put_breakpoint(
                 "shop".into(),
                 "shared-validation".into(),
@@ -755,7 +853,87 @@ mod tests {
             crate::service_api::BreakpointStatus::Pending
         );
 
-        assert!(client.shutdown().await.unwrap());
+        assert_eq!(
+            client.service.service_info().await.unwrap().process_id,
+            std::process::id()
+        );
+        let formatting = client
+            .sources
+            .set_source_formatting("shop".into(), service_api::SourceFormattingMode::On)
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .contexts
+                .get_context("shop".into())
+                .await
+                .unwrap()
+                .source_formatting,
+            formatting,
+        );
+        assert!(
+            client
+                .captures
+                .list_captures("shop".into())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!client.relay.close_relay("missing".into()).await.unwrap());
+
+        let errors = [
+            client
+                .targets
+                .get_target("shop".into(), "server".into(), "missing".into())
+                .await
+                .unwrap_err(),
+            client
+                .cdp
+                .raw_cdp_request(
+                    "shop".into(),
+                    "server".into(),
+                    "missing".into(),
+                    "Runtime.evaluate".into(),
+                    serde_json::json!({"expression": "1"}),
+                    true,
+                )
+                .await
+                .unwrap_err(),
+            client
+                .browser
+                .click_target(
+                    "shop".into(),
+                    "server".into(),
+                    "missing".into(),
+                    "button".into(),
+                )
+                .await
+                .unwrap_err(),
+            client
+                .coverage
+                .start_coverage("shop".into(), "server".into(), "missing".into())
+                .await
+                .unwrap_err(),
+            client
+                .cpu
+                .start_cpu_profile("shop".into(), "server".into(), "missing".into(), None)
+                .await
+                .unwrap_err(),
+            client
+                .heap
+                .get_heap_snapshot_progress("shop".into(), "server".into(), "missing".into())
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.code, linkrpc::prelude::error_codes::INVALID_PARAMS);
+            assert_eq!(
+                error.message,
+                "target selector 'missing' did not match a discovered target; target discovery may be incomplete"
+            );
+        }
+
+        assert!(client.service.shutdown().await.unwrap());
         server.await.unwrap();
         assert!(!state_file.exists());
         let _ = fs::remove_file(persistent_state_file(&state_file));

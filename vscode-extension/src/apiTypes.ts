@@ -1,40 +1,41 @@
-import type { InterfaceClient } from "@hediet/linkrpc";
-import { DebuggerService } from "./generated/debuggerService.js";
+import type { DbgServiceClient } from "./dbgServiceClient.js";
 
-export type DebuggerServiceClient = InterfaceClient<typeof DebuggerService>;
+type ContextClient = DbgServiceClient["contexts"];
+type SourceClient = DbgServiceClient["sources"];
+type TargetClient = DbgServiceClient["targets"];
 
-type MethodResult<TMethod extends keyof DebuggerServiceClient> =
-	Awaited<ReturnType<DebuggerServiceClient[TMethod]>>;
+type MethodResult<TMethod extends (...args: never[]) => unknown> =
+	Awaited<ReturnType<TMethod>>;
 
-export type ContextSummary = MethodResult<"list_contexts">[number];
-export type ContextSnapshot = MethodResult<"get_context">;
+export type ContextSummary = MethodResult<ContextClient["list_contexts"]>[number];
+export type ContextSnapshot = MethodResult<ContextClient["get_context"]>;
 export type ContextKind =
-	Parameters<DebuggerServiceClient["put_context"]>[0]["kind"];
+	Parameters<ContextClient["put_context"]>[0]["kind"];
 export type ConnectionSnapshot = ContextSnapshot["connections"][number];
 export type ConnectionConfiguration =
-	Parameters<DebuggerServiceClient["put_connection"]>[0]["configuration"];
+	Parameters<ContextClient["put_connection"]>[0]["configuration"];
 export type PlaywrightChannel =
 	Extract<ConnectionConfiguration, { kind: "playwright" }>["channel"];
 export type TargetNodeSnapshot = ContextSnapshot["targetForest"][number];
 export type TargetSnapshot = TargetNodeSnapshot["target"];
 export type BreakpointSnapshot = ContextSnapshot["breakpoints"][number];
 export type BreakpointSpec =
-	Parameters<DebuggerServiceClient["put_breakpoint_spec"]>[0]["specification"];
-export type SourceSnapshotInfo = MethodResult<"list_sources">[number];
-export type SourceContentSnapshot = MethodResult<"show_source">;
-export type TargetDebuggerSnapshot = MethodResult<"get_target">;
+	Parameters<ContextClient["put_breakpoint_spec"]>[0]["specification"];
+export type SourceSnapshotInfo = MethodResult<SourceClient["list_sources"]>[number];
+export type SourceContentSnapshot = MethodResult<SourceClient["show_source"]>;
+export type TargetDebuggerSnapshot = MethodResult<TargetClient["get_target"]>;
 export type PauseSnapshot = NonNullable<TargetDebuggerSnapshot["pause"]>;
 export type FrameSnapshot = PauseSnapshot["frames"][number];
 export type SourceLocation = FrameSnapshot["raw"];
-export type EvaluationSnapshot = MethodResult<"evaluate_target">;
-export type VariableSnapshot = MethodResult<"get_scope_variables">[number];
-export type ObservationResult = MethodResult<"observe_context">;
+export type EvaluationSnapshot = MethodResult<TargetClient["evaluate_target"]>;
+export type VariableSnapshot = MethodResult<TargetClient["get_scope_variables"]>[number];
+export type ObservationResult = MethodResult<ContextClient["observe_context"]>;
 export type ObservationCursor =
-	Parameters<DebuggerServiceClient["observe_context"]>[0]["cursor"];
+	Parameters<ContextClient["observe_context"]>[0]["cursor"];
 export type TargetWaitPredicate =
-	Parameters<DebuggerServiceClient["wait_target"]>[0]["predicate"];
+	Parameters<TargetClient["wait_target"]>[0]["predicate"];
 export type StepKind =
-	Parameters<DebuggerServiceClient["step_target"]>[0]["kind"];
+	Parameters<TargetClient["step_target"]>[0]["kind"];
 
 export function observationSnapshot(
 	result: ObservationResult,

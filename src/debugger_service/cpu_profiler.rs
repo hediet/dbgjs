@@ -1,0 +1,122 @@
+use super::*;
+
+#[async_trait::async_trait]
+impl CpuProfilerApi for DebuggerService {
+    async fn start_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        sampling_interval_micros: Option<u64>,
+    ) -> Result<bool, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .start_cpu_profile(sampling_interval_micros)
+            .await
+            .map_err(target_debugger_rpc_error)?;
+        Ok(true)
+    }
+
+    async fn stop_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: Option<String>,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        if let Some(name) = capture_id.as_ref()
+            && let Some(completed) = self
+                .promote_completed_capture(
+                    &context_id,
+                    &connection_id,
+                    &target_id,
+                    name,
+                    CaptureKind::CpuProfile,
+                )
+                .await?
+        {
+            let CapturePayload::CpuProfile(snapshot) = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return Ok(snapshot);
+        }
+        let debugger = self
+            .target_debugger(&context_id, &connection_id, &target_id)
+            .await?;
+        let owner = debugger.snapshot();
+        let reservation = CaptureReservationGuard::new(
+            self.clone(),
+            self.reserve_capture_optional(
+                &context_id,
+                &owner.connection_id,
+                &owner.target_id,
+                owner.connection_generation,
+                capture_id,
+                CaptureKind::CpuProfile,
+            )
+            .await?,
+        );
+        let name = reservation.reservation.metadata.name.clone();
+        if reservation.reservation.completed.is_some() {
+            let completed = self
+                .promote_completed_capture(
+                    &reservation.reservation.metadata.context_id,
+                    &reservation.reservation.metadata.connection_id,
+                    &reservation.reservation.metadata.target_id,
+                    &reservation.reservation.metadata.name,
+                    CaptureKind::CpuProfile,
+                )
+                .await?
+                .ok_or_else(|| invalid_state("completed capture reservation disappeared"))?;
+            let CapturePayload::CpuProfile(snapshot) = completed.payload else {
+                return Err(invalid_state(
+                    "completed capture kind does not match reservation",
+                ));
+            };
+            return Ok(snapshot);
+        }
+        let snapshot = match debugger
+            .stop_cpu_profile(Some(name.clone()))
+            .await
+            .map_err(target_debugger_rpc_error)
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.abandon_capture(&reservation.reservation).await;
+                return Err(error);
+            }
+        };
+        let snapshot = debugger
+            .get_cpu_profile(name.clone(), None, false, true)
+            .await
+            .unwrap_or(snapshot);
+        self.store_capture(
+            &reservation.reservation,
+            CapturePayload::CpuProfile(snapshot.clone()),
+        )
+        .await?;
+        Ok(snapshot)
+    }
+
+    async fn get_cpu_profile(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        connection_id: String,
+        target_id: String,
+        capture_id: String,
+        source_path: Option<String>,
+        no_cache: bool,
+        project: bool,
+    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .get_cpu_profile(capture_id, source_path, no_cache, project)
+            .await
+            .map_err(target_debugger_rpc_error)
+    }
+}

@@ -21,7 +21,7 @@ use dbgjs::promise_debugging::{
 };
 use dbgjs::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
-    ContextSummary, CpuProfileSnapshot, DebuggerServiceApiClient, EvaluationSnapshot,
+    ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
     HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
     MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
@@ -200,7 +200,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace") => {
             let context_id = required_option("--context", scope_options.context.as_ref())?;
             let client = ensure_service(&state_file).await?;
-            rpc(client.get_context(context_id.clone()).await)?;
+            rpc(client.contexts.get_context(context_id.clone()).await)?;
             select_context(&selection_file, &context_id)?;
             println!("Context: {context_id}");
         }
@@ -209,7 +209,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -223,7 +223,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -236,13 +236,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.get_resource_graph(context_id).await)?)?;
+            output.print(&rpc(client.contexts.get_resource_graph(context_id).await)?)?;
         }
         [log, options @ ..] if log == "log" => {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_logs(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -285,7 +285,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 options,
             )
             .await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .step_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -300,7 +300,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .release_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -327,7 +327,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 options,
             )
             .await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .resume_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -342,14 +342,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
                 )
                 .await)?;
-            let value = rpc(client
+            let value = rpc(client.targets
                 .inspect_value(
                     scope.context,
                     scope.connection,
@@ -373,7 +373,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let context = rpc(client.get_context(scope.context.clone()).await)?;
+            let context = rpc(client.contexts.get_context(scope.context.clone()).await)?;
             let generation = context
                 .connections
                 .iter()
@@ -385,11 +385,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })?
                 .generation;
-            let proxy = rpc(client
+            let proxy = rpc(client.relay
                 .open_playwright_proxy(scope.context, scope.connection, scope.target, generation)
                 .await)?;
             let result = run_playwright_program(&proxy.websocket_url, &program).await;
-            let _ = client.close_playwright_proxy(proxy.id).await;
+            let _ = client.relay.close_playwright_proxy(proxy.id).await;
             if let Some(value) = result? {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             }
@@ -400,7 +400,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let result = if let Some(session_id) = options.session_id {
-                rpc(client
+                rpc(client.cdp
                     .raw_cdp_session_request(
                         scope.context,
                         scope.connection,
@@ -412,7 +412,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await)?
             } else {
-                rpc(client
+                rpc(client.cdp
                     .raw_cdp_request(
                         scope.context,
                         scope.connection,
@@ -430,11 +430,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let relay = rpc(client
+            let relay = rpc(client.relay
                 .open_target_relay(scope.context, scope.connection, scope.target)
                 .await)?;
             let result = run_relay_stdio(&relay.websocket_url).await;
-            let _ = client.close_relay(relay.id).await;
+            let _ = client.relay.close_relay(relay.id).await;
             result?;
         }
         [value, arguments @ ..] if value == "value" => {
@@ -442,14 +442,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
                 )
                 .await)?;
-            let value = rpc(client
+            let value = rpc(client.targets
                 .inspect_value(
                     scope.context,
                     scope.connection,
@@ -471,7 +471,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .set_logpoints(
                     scope.context,
                     scope.connection,
@@ -496,7 +496,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .set_logpoints(
                     scope.context,
                     scope.connection,
@@ -510,7 +510,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            rpc(client
+            rpc(client.browser
                 .click_target(
                     scope.context,
                     scope.connection,
@@ -524,7 +524,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
+            rpc(client.browser
                 .type_target(scope.context, scope.connection, scope.target, text.clone())
                 .await)?;
             println!("Typed {text:?}");
@@ -536,7 +536,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.browser
                 .capture_screenshot(scope.context, scope.connection, scope.target)
                 .await)?;
             let bytes = base64::engine::general_purpose::STANDARD
@@ -562,7 +562,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
+            rpc(client.coverage
                 .start_coverage(scope.context, scope.connection, scope.target)
                 .await)?;
             println!("Coverage recording started.");
@@ -575,7 +575,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.coverage
                 .take_coverage(
                     scope.context,
                     scope.connection,
@@ -607,7 +607,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.coverage
                 .stop_coverage(
                     scope.context,
                     scope.connection,
@@ -633,7 +633,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client
+            rpc(client.cpu
                 .start_cpu_profile(
                     scope.context,
                     scope.connection,
@@ -648,7 +648,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let profile = rpc(client
+            let profile = rpc(client.cpu
                 .stop_cpu_profile(scope.context, scope.connection, scope.target, capture_id)
                 .await)?;
             output.print_cpu_profile_stopped(&profile)?;
@@ -666,7 +666,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let profile = rpc(client
+            let profile = rpc(client.captures
                 .get_stored_cpu_profile(
                     context, options.capture_id, None,
                     scope_options.target.clone(), scope_options.connection.clone(),
@@ -681,7 +681,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let call = rpc(client.capture_heap_snapshot(
+            let call = rpc(client.heap.capture_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
                 scope.target.clone(),
@@ -700,7 +700,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let selection = load_selection(&selection_file)?;
             if options.capture {
                 let scope = resolve_scope(&client, &selection, &scope_options).await?;
-                let call = rpc(client.capture_heap_snapshot(
+                let call = rpc(client.heap.capture_heap_snapshot(
                     scope.context.clone(),
                     scope.connection.clone(),
                     scope.target.clone(),
@@ -723,7 +723,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let source_map = tokio::fs::read_to_string(map_path).await?;
             let client = ensure_service(&state_file).await?;
             let context = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            rpc(client.supply_stored_heap_source_map(context, capture.clone(),
+            rpc(client.captures.supply_stored_heap_source_map(context, capture.clone(),
                 dbgjs::service_api::HeapSourceMapSupply {
                     script_id: script.clone(), script_hash: hash.clone(), source_map_url, source_map,
                 }).await)?;
@@ -733,13 +733,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.list_captures(context).await)?)?;
+            output.print(&rpc(client.captures.list_captures(context).await)?)?;
         }
         [capture, show, name] if capture == "capture" && show == "show" => {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let capture = rpc(client.get_capture(context.clone(), name.clone()).await)?;
+            let capture = rpc(client.captures.get_capture(context.clone(), name.clone()).await)?;
             if output.is_json() {
                 output.print(&capture)?;
             } else {
@@ -779,14 +779,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.delete_capture(context, name.clone()).await)?)?;
+            output.print(&rpc(client.captures.delete_capture(context, name.clone()).await)?)?;
         }
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let selection = rpc(client
+            let selection = rpc(client.heap
                 .select_heap_nodes(
                     scope.context,
                     scope.connection,
@@ -804,7 +804,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let selection = rpc(client
+            let selection = rpc(client.heap
                 .select_heap_nodes(
                     scope.context,
                     scope.connection,
@@ -822,7 +822,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let promises = rpc(client
+            let promises = rpc(client.heap
                 .select_promises(
                     scope.context,
                     scope.connection,
@@ -840,7 +840,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let properties = rpc(client
+            let properties = rpc(client.heap
                 .get_heap_references(
                     scope.context,
                     scope.connection,
@@ -859,7 +859,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let references = rpc(client
+            let references = rpc(client.heap
                 .get_heap_references(
                     scope.context,
                     scope.connection,
@@ -878,7 +878,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let path = rpc(client
+            let path = rpc(client.heap
                 .get_heap_path(
                     scope.context,
                     scope.connection,
@@ -908,7 +908,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let root = rpc(client
+            let root = rpc(client.heap
                 .select_heap_nodes(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -926,7 +926,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
-            let path = rpc(client
+            let path = rpc(client.heap
                 .get_heap_path(
                     scope.context,
                     scope.connection,
@@ -957,7 +957,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let root = rpc(client
+            let root = rpc(client.heap
                 .select_heap_nodes(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -975,7 +975,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
-            let path = rpc(client
+            let path = rpc(client.heap
                 .get_heap_path(
                     scope.context,
                     scope.connection,
@@ -1004,7 +1004,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let chain = rpc(client
+            let chain = rpc(client.heap
                 .get_heap_dominator_chain(
                     scope.context,
                     scope.connection,
@@ -1020,7 +1020,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let aggregate = rpc(client
+            let aggregate = rpc(client.heap
                 .aggregate_heap_snapshot(
                     scope.context,
                     scope.connection,
@@ -1038,7 +1038,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let diff = rpc(client
+            let diff = rpc(client.heap
                 .diff_heap_snapshots(
                     scope.context,
                     scope.connection,
@@ -1058,7 +1058,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let call = rpc(client.take_heap_snapshot(
+            let call = rpc(client.heap.take_heap_snapshot(
                 scope.context.clone(),
                 scope.connection.clone(),
                 scope.target.clone(),
@@ -1078,7 +1078,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selection.watches.push(expression.clone());
                 write_selection(&selection_file, &selection)?;
             }
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -1089,11 +1089,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [service, status] if service == "service" && status == "status" => {
             let client = connect_existing(&state_file).await?;
-            output.print(&rpc(client.service_info().await)?)?;
+            output.print(&rpc(client.service.service_info().await)?)?;
         }
         [service, stop] if service == "service" && stop == "stop" => {
             let client = connect_existing(&state_file).await?;
-            output.print(&rpc(client.shutdown().await)?)?;
+            output.print(&rpc(client.service.shutdown().await)?)?;
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
@@ -1132,7 +1132,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (connection_id, configuration, target) =
                 process_attach_destination(options.locator, &discovered)?;
             let client = ensure_service(&state_file).await?;
-            let context = rpc(client.get_context(context_id.clone()).await)?;
+            let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
             let existing = context
                 .connections
                 .iter()
@@ -1154,17 +1154,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                     .into());
                 }
-                rpc(client
+                rpc(client.contexts
                     .disconnect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
             if !connected
                 || existing.is_some_and(|connection| connection.configuration != configuration)
             {
-                rpc(client
+                rpc(client.contexts
                     .put_connection(context_id.clone(), connection_id.clone(), configuration)
                     .await)?;
-                rpc(client
+                rpc(client.contexts
                     .connect_connection(context_id.clone(), connection_id.clone())
                     .await)?;
             }
@@ -1180,7 +1180,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if target_id != synthetic_node_target_id(&connection_id) {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                 loop {
-                    let context = rpc(client.get_context(context_id.clone()).await)?;
+                    let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
                     if context.target_forest.iter().any(|node| {
                         node.connection_id == connection_id && node.target.target_id == target_id
                     }) {
@@ -1195,7 +1195,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
-            let result = rpc(client
+            let result = rpc(client.targets
                 .attach_target(
                     context_id.clone(),
                     connection_id.clone(),
@@ -1221,7 +1221,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [context, list] if context == "context" && list == "list" => {
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .list_contexts(Some(normalized_cwd.clone()))
                 .await)?)?;
         }
@@ -1230,7 +1230,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client.get_context(context_id).await)?;
+            let snapshot = rpc(client.contexts.get_context(context_id).await)?;
             let selection = load_selection(&selection_file)?;
             output.print(&connection_list_output(
                 &snapshot,
@@ -1247,7 +1247,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 kind,
             } = resolve_context_expression(&expression, &cwd)?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
+            let snapshot = rpc(client.contexts
                 .put_context(context_id.clone(), kind, display_name)
                 .await)?;
             if set_default {
@@ -1259,14 +1259,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.get_context(context_id).await)?)?;
+            output.print(&rpc(client.contexts.get_context(context_id).await)?)?;
         }
         [context, delete, options @ ..] if context == "context" && delete == "delete" => {
             let mutation = parse_mutation_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let deleted = rpc(client.delete_context(context_id.clone(), mutation).await)?;
+            let deleted = rpc(client.contexts.delete_context(context_id.clone(), mutation).await)?;
             output.print_context_deleted(&context_id, deleted)?;
         }
         [context, relay, options @ ..] if context == "context" && relay == "relay" => {
@@ -1274,16 +1274,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let relay = rpc(client.open_context_relay(context_id).await)?;
+            let relay = rpc(client.relay.open_context_relay(context_id).await)?;
             let result = run_relay_stdio(&relay.websocket_url).await;
-            let _ = client.close_relay(relay.id).await;
+            let _ = client.relay.close_relay(relay.id).await;
             result?;
         }
         [state, get] if state == "state" && get == "get" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.get_context(context_id).await)?)?;
+            output.print(&rpc(client.contexts.get_context(context_id).await)?)?;
         }
         [state, watch, options @ ..] if state == "state" && watch == "watch" => {
             let context_id =
@@ -1291,7 +1291,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let mut cursor = parse_observation_cursor(options)?;
             loop {
-                match rpc(client
+                match rpc(client.contexts
                     .observe_context(context_id.clone(), cursor.clone(), 30_000)
                     .await)?
                 {
@@ -1314,7 +1314,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .observe_context(
                     context_id.clone(),
                     ObservationCursor::After {
@@ -1536,7 +1536,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .connect_connection(context_id, connection_id)
                 .await)?)?;
         }
@@ -1544,7 +1544,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .disconnect_connection(context_id, connection_id)
                 .await)?)?;
         }
@@ -1565,7 +1565,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            let enabled = rpc(client
+            let enabled = rpc(client.contexts
                 .set_pause_future_children(context_id, connection_id, enabled)
                 .await)?;
             if output.is_json() {
@@ -1581,7 +1581,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .delete_connection(context_id, connection_id, parse_mutation_options(options)?)
                 .await)?)?;
         }
@@ -1635,7 +1635,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (specification, mutation) =
                 parse_breakpoint_spec(source_path, line, column, options)?;
             let client = ensure_service(&state_file).await?;
-            let context = rpc(client
+            let context = rpc(client.contexts
                 .put_breakpoint_spec(context_id, breakpoint_id.clone(), specification, mutation)
                 .await)?;
             print_breakpoint_result(&client, &context, breakpoint_id, output).await?;
@@ -1646,7 +1646,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.contexts
                 .delete_breakpoint(
                     context_id,
                     breakpoint_id.clone(),
@@ -1660,7 +1660,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let context = rpc(client.get_context(context_id).await)?;
+            let context = rpc(client.contexts.get_context(context_id).await)?;
             output.print(&context.source_formatting)?;
         }
         [source, formatting, set, mode]
@@ -1669,7 +1669,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .set_source_formatting(context_id, parse_source_formatting_mode(mode)?)
                 .await)?)?;
         }
@@ -1682,7 +1682,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let context = rpc(client.get_context(context_id).await)?;
+            let context = rpc(client.contexts.get_context(context_id).await)?;
             output.print(&context.source_formatting)?;
         }
         [source, formatting, rule, add, arguments @ ..]
@@ -1695,7 +1695,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .add_source_formatting_rule(context_id, mode, target_pattern, url_pattern)
                 .await)?)?;
         }
@@ -1708,7 +1708,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .delete_source_formatting_rule(context_id, rule_id.clone())
                 .await)?)?;
         }
@@ -1716,7 +1716,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .list_sources(context_id, parse_source_list_options(options)?)
                 .await)?)?;
         }
@@ -1725,7 +1725,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let tree = rpc(client.show_source_tree(context_id, kind).await)?;
+            let tree = rpc(client.sources.show_source_tree(context_id, kind).await)?;
             output.print_source_tree(&tree, options)?;
         }
         [source, resolve, arguments @ ..] if source == "source" && resolve == "resolve" => {
@@ -1733,41 +1733,41 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.resolve_sources(context_id, path).await)?)?;
+            output.print(&rpc(client.sources.resolve_sources(context_id, path).await)?)?;
         }
         [source, endpoints, arguments @ ..] if source == "source" && endpoints == "endpoints" => {
             let path = parse_source_path_arguments(arguments, "source endpoints")?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.list_sources(context_id, Some(path)).await)?)?;
+            output.print(&rpc(client.sources.list_sources(context_id, Some(path)).await)?)?;
         }
         [source, show, arguments @ ..] if source == "source" && show == "show" => {
             let (path, options) = parse_source_show_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.show_source(context_id, path, options).await)?)?;
+            output.print(&rpc(client.sources.show_source(context_id, path, options).await)?)?;
         }
         [source, grep, arguments @ ..] if source == "source" && grep == "grep" => {
             let options = parse_source_grep_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.grep_sources(context_id, options).await)?)?;
+            output.print(&rpc(client.sources.grep_sources(context_id, options).await)?)?;
         }
         [source, explain, arguments @ ..] if source == "source" && explain == "explain" => {
             let path = parse_source_path_arguments(arguments, "source explain")?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.explain_source(context_id, path).await)?)?;
+            output.print(&rpc(client.sources.explain_source(context_id, path).await)?)?;
         }
         [source, graph] if source == "source" && graph == "graph" => {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.show_source_graph(context_id).await)?)?;
+            output.print(&rpc(client.sources.show_source_graph(context_id).await)?)?;
         }
         [source, graph, uncompacted]
             if source == "source" && graph == "graph" && uncompacted == "--uncompacted" =>
@@ -1775,7 +1775,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .show_uncompacted_source_graph(context_id)
                 .await)?)?;
         }
@@ -1783,14 +1783,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.show_source_graph(context_id).await)?)?;
+            output.print(&rpc(client.sources.show_source_graph(context_id).await)?)?;
         }
         [source, map, arguments @ ..] if source == "source" && map == "map" => {
             let (path, line, column) = parse_source_map_arguments(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .map_source(context_id, path, line, column)
                 .await)?)?;
         }
@@ -1798,13 +1798,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.evict_source_caches(context_id).await)?)?;
+            output.print(&rpc(client.sources.evict_source_caches(context_id).await)?)?;
         }
         [source, export, destination] if source == "source" && export == "export" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            output.print(&rpc(client.sources
                 .export_sources(context_id, destination.clone())
                 .await)?)?;
         }
@@ -1813,7 +1813,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client.get_context(context_id).await)?;
+            let snapshot = rpc(client.contexts.get_context(context_id).await)?;
             let selection = load_selection(&selection_file)?;
             output.print(&target_list_output(
                 &snapshot,
@@ -1827,7 +1827,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let result = rpc(client
+            let result = rpc(client.targets
                 .attach_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -2872,12 +2872,12 @@ fn selected_or_explicit_context(
 }
 
 async fn resolve_implicit_context(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     selection_file: &Path,
     cwd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let store = load_selection_store(selection_file, cwd)?;
-    let contexts = rpc(client.list_contexts(Some(cwd.to_owned())).await)?;
+    let contexts = rpc(client.contexts.list_contexts(Some(cwd.to_owned())).await)?;
     select_implicit_context(&store, cwd, &contexts)
 }
 
@@ -3116,7 +3116,7 @@ fn apply_scope_selection(
 }
 
 async fn resolve_scope(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     selection: &CliSelection,
     options: &ScopeOptions,
 ) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
@@ -3128,7 +3128,7 @@ async fn resolve_scope(
             );
         }
     };
-    let snapshot = rpc(client.get_context(context.clone()).await)?;
+    let snapshot = rpc(client.contexts.get_context(context.clone()).await)?;
     if options.connection.is_some() {
         return Ok(resolve_target_scope(context, &snapshot, selection, options)?);
     }
@@ -3136,7 +3136,7 @@ async fn resolve_scope(
     if let Some(selector) = options.target.as_ref().or_else(|| {
         use_selection.then(|| selection.target.as_ref()).flatten()
     }) {
-        let target = rpc(client
+        let target = rpc(client.targets
             .resolve_target(context.clone(), selector.clone())
             .await)?;
         return Ok(ResolvedScope {
@@ -3156,7 +3156,7 @@ async fn resolve_scope(
 }
 
 async fn resolve_offline_scope(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     selection: &CliSelection,
     options: &ScopeOptions,
 ) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
@@ -3313,7 +3313,7 @@ fn resolve_target_scope(
 
 async fn print_target_with_watches(
     output: &OutputFormat,
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     selection: &CliSelection,
     scope: &ResolvedScope,
     snapshot: &TargetDebuggerSnapshot,
@@ -3324,7 +3324,7 @@ async fn print_target_with_watches(
 }
 
 async fn evaluate_watches(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     selection: &CliSelection,
     scope: &ResolvedScope,
     snapshot: &TargetDebuggerSnapshot,
@@ -3335,7 +3335,7 @@ async fn evaluate_watches(
     let mut evaluations = Vec::new();
     for expression in &selection.watches {
         evaluations.push(
-            match client
+            match client.targets
                 .evaluate_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -3376,7 +3376,7 @@ fn pause_epoch(snapshot: &TargetDebuggerSnapshot) -> Option<u64> {
 }
 
 async fn resolve_pause_epoch(
-    client: &dbgjs::service_api::DebuggerServiceApiClient,
+    client: &dbgjs::service_api::DbgServiceClient,
     context_id: &str,
     connection_id: &str,
     target_id: &str,
@@ -3384,7 +3384,7 @@ async fn resolve_pause_epoch(
 ) -> Result<u64, Box<dyn std::error::Error>> {
     match options {
         [] => {
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     context_id.to_owned(),
                     connection_id.to_owned(),
@@ -4721,13 +4721,13 @@ async fn wait_for_heap_stream<T>(
 }
 
 async fn show_stored_coverage(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     output: &OutputFormat,
     context: String,
     scope: &ScopeOptions,
     options: CoverageShowOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let snapshot = rpc(client
+    let snapshot = rpc(client.captures
         .get_stored_coverage(
             context, options.capture_id, None,
             scope.target.clone(), scope.connection.clone(), None,
@@ -4748,14 +4748,14 @@ async fn show_stored_coverage(
 }
 
 async fn show_stored_cpu_profile(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     output: &OutputFormat,
     context: String,
     scope: &ScopeOptions,
     options: CpuProfileShowOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _ = options.no_cache;
-    let profile = rpc(client
+    let profile = rpc(client.captures
         .get_stored_cpu_profile(
             context, options.capture_id, options.path.clone(),
             scope.target.clone(), scope.connection.clone(),
@@ -4774,13 +4774,13 @@ async fn show_stored_cpu_profile(
 }
 
 async fn show_stored_heap_classes(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     output: &OutputFormat,
     context: String,
     scope: &ScopeOptions,
     options: HeapClassOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let classes = rpc(client
+    let classes = rpc(client.captures
         .get_stored_heap_classes(
             context, options.capture_id, options.filter,
             scope.target.clone(), scope.connection.clone(),
@@ -5295,7 +5295,7 @@ async fn put_selected_breakpoint(
         .clone()
         .or(selection.context.clone())
         .ok_or_else(|| io::Error::other("no context is selected; use --context <id>"))?;
-    let current = rpc(client.get_context(context_id.clone()).await)?;
+    let current = rpc(client.contexts.get_context(context_id.clone()).await)?;
     let explicit_target_scope =
         scope_options.connection.is_some() || scope_options.target.is_some();
     let scope = match resolve_target_scope(context_id.clone(), &current, &selection, scope_options)
@@ -5304,7 +5304,7 @@ async fn put_selected_breakpoint(
         Err(_) if !explicit_target_scope => None,
         Err(error) => return Err(error.into()),
     };
-    let context = rpc(client
+    let context = rpc(client.contexts
         .put_breakpoint(
             context_id,
             breakpoint_id.to_owned(),
@@ -5316,7 +5316,7 @@ async fn put_selected_breakpoint(
     if let Some(scope) = scope {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let snapshot = loop {
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     scope.context.clone(),
                     scope.connection.clone(),
@@ -5347,13 +5347,13 @@ async fn put_selected_breakpoint(
         };
         let _ = snapshot;
     }
-    let context = rpc(client.get_context(context.id.clone()).await)?;
+    let context = rpc(client.contexts.get_context(context.id.clone()).await)?;
     print_breakpoint_result(&client, &context, breakpoint_id, output).await?;
     Ok(())
 }
 
 async fn print_breakpoint_result(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     context: &ContextSnapshot,
     breakpoint_id: &str,
     output: OutputFormat,
@@ -5365,7 +5365,7 @@ async fn print_breakpoint_result(
         .ok_or_else(|| io::Error::other("updated context omitted the requested breakpoint"))?;
     let mut sources = Vec::new();
     for application in &breakpoint.applications {
-        let target = rpc(client
+        let target = rpc(client.targets
             .get_target(
                 context.id.clone(),
                 application.connection_id.clone(),
@@ -5557,7 +5557,7 @@ fn select_renderer_target(
 }
 
 async fn resolve_renderer_target_id(
-    client: &DebuggerServiceApiClient,
+    client: &DbgServiceClient,
     context_id: &str,
     connection_id: &str,
     selector: RendererAttachSelector,
@@ -5567,7 +5567,7 @@ async fn resolve_renderer_target_id(
         connection_id,
         selector,
         Duration::from_secs(10),
-        async || Ok(rpc(client.get_resource_graph(context_id.to_owned()).await)?),
+        async || Ok(rpc(client.contexts.get_resource_graph(context_id.to_owned()).await)?),
     )
     .await
 }
@@ -5620,7 +5620,7 @@ async fn add_connection(
             | ConnectionConfiguration::ScopedProcessTree { .. }
     );
     let client = ensure_service(state_file).await?;
-    let configured = rpc(client
+    let configured = rpc(client.contexts
         .put_connection(
             context_id.to_owned(),
             connection_id.to_owned(),
@@ -5628,7 +5628,7 @@ async fn add_connection(
         )
         .await)?;
     if connect_now {
-        let mut connected = rpc(client
+        let mut connected = rpc(client.contexts
             .connect_connection(context_id.to_owned(), connection_id.to_owned())
             .await)?;
         if wait_for_initial_process_tree {
@@ -5660,7 +5660,7 @@ async fn add_connection(
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                connected = rpc(client.get_context(context_id.to_owned()).await)?;
+                connected = rpc(client.contexts.get_context(context_id.to_owned()).await)?;
             }
         }
         if set_default {
@@ -5685,7 +5685,7 @@ async fn add_connection(
                     [target] => break target.target_id.clone(),
                     [] if tokio::time::Instant::now() < deadline => {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        connected = rpc(client.get_context(context_id.to_owned()).await)?;
+                        connected = rpc(client.contexts.get_context(context_id.to_owned()).await)?;
                     }
                     [] => {
                         return Err(io::Error::new(
@@ -5705,7 +5705,7 @@ async fn add_connection(
                     }
                 }
             };
-            let snapshot = rpc(client
+            let snapshot = rpc(client.targets
                 .get_target(
                     context_id.to_owned(),
                     connection_id.to_owned(),
@@ -6041,7 +6041,7 @@ async fn wait_target(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let timeout_ms = parse_u64("timeout", timeout_ms)?;
     let client = ensure_service(state_file).await?;
-    let snapshot = rpc(client
+    let snapshot = rpc(client.targets
         .wait_target(
             context_id.to_owned(),
             connection_id.to_owned(),

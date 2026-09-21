@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deepStrictEqual } from "node:assert";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const check = process.argv.slice(2).includes("--check");
@@ -35,20 +36,44 @@ if (!existsSync(linkrpc)) {
 	);
 }
 
-run(process.execPath, [
-	linkrpc,
-	"codegen",
-	"--input",
-	"schemas/dbgjs.interfaces.json",
-	"--interface",
-	"dev.dbgjs.cdp-debugger",
-	"--name",
-	"DebuggerService",
-	"--output",
-	"vscode-extension/src/generated/debuggerService.ts",
-	"--preserve-wire-schema",
-	...(check ? ["--check"] : []),
-]);
+const interfaces = [
+	["dev.dbgjs.cdp-debugger", "ServiceApi"],
+	["dev.dbgjs.context", "ContextApi"],
+	["dev.dbgjs.source", "SourceApi"],
+	["dev.dbgjs.capture", "CaptureApi"],
+	["dev.dbgjs.target-debugger", "TargetDebuggerApi"],
+	["dev.dbgjs.cdp-access", "CdpAccessApi"],
+	["dev.dbgjs.relay", "RelayApi"],
+	["dev.dbgjs.browser-automation", "BrowserAutomationApi"],
+	["dev.dbgjs.coverage", "CoverageApi"],
+	["dev.dbgjs.cpu-profiler", "CpuProfilerApi"],
+	["dev.dbgjs.heap-profiler", "HeapProfilerApi"],
+];
+
+const bundle = JSON.parse(readFileSync(resolve(repositoryRoot, "schemas/dbgjs.interfaces.json"), "utf8"));
+deepStrictEqual(
+	interfaces.map(([id]) => id).sort(),
+	bundle.services.flatMap(service => service.interfaces.map(reference => reference.interfaceId)).sort(),
+	"TypeScript generation must cover every advertised daemon interface exactly once",
+);
+
+for (const [id, name] of interfaces) {
+	const filename = name[0].toLowerCase() + name.slice(1);
+	run(process.execPath, [
+		linkrpc,
+		"codegen",
+		"--input",
+		"schemas/dbgjs.interfaces.json",
+		"--interface",
+		id,
+		"--name",
+		name,
+		"--output",
+		`vscode-extension/src/generated/${filename}.ts`,
+		"--preserve-wire-schema",
+		...(check ? ["--check"] : []),
+	]);
+}
 
 function run(command, args) {
 	const result = spawnSync(command, args, {

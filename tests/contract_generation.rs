@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use dbgjs::service_api::debugger_service_api;
+use dbgjs::service_api;
 use linkrpc::prelude::{LinkRpcInterfaceSchema, compute_interface_hash};
 use serde_json::{Value, json};
 
@@ -29,7 +29,6 @@ fn interface(bundle: &Value, id: &str) -> LinkRpcInterfaceSchema {
 fn canonical_bundle_contains_complete_hashed_interfaces() {
     let bundle = bundle();
     let cdp = interface(&bundle, CDP_INTERFACE_ID);
-    let daemon = interface(&bundle, DAEMON_INTERFACE_ID);
 
     assert_eq!(cdp.methods.len(), 896);
     assert_eq!(
@@ -40,27 +39,57 @@ fn canonical_bundle_contains_complete_hashed_interfaces() {
         Some(607)
     );
     assert_eq!(compute_interface_hash(&cdp), cdp.hash);
-    assert_eq!(compute_interface_hash(&daemon), daemon.hash);
     assert_eq!(cdp, dbgjs::cdp::interface().to_schema());
-    assert_eq!(daemon, debugger_service_api::interface().to_schema());
+    let interfaces = service_api::interfaces();
+    assert_eq!(interfaces.len(), 11);
+    assert_eq!(
+        bundle["interfaceSchemas"].as_array().unwrap().len(),
+        interfaces.len() + 1
+    );
+    let mut method_owners = std::collections::BTreeMap::new();
+    for definition in interfaces {
+        let actual = interface(&bundle, definition.id());
+        assert_eq!(compute_interface_hash(&actual), actual.hash);
+        assert_eq!(actual, definition.to_schema());
+        for method in actual.methods.keys() {
+            assert!(
+                method_owners
+                    .insert(method.clone(), actual.id.clone())
+                    .is_none(),
+                "{method} belongs to more than one daemon interface",
+            );
+        }
+    }
+    assert_eq!(method_owners.len(), 84);
 }
 
 #[test]
 fn canonical_bundle_advertises_only_the_daemon_at_the_root() {
     let bundle = bundle();
     let daemon = interface(&bundle, DAEMON_INTERFACE_ID);
-    let expected_reference = json!({
-        "interfaceId": DAEMON_INTERFACE_ID,
-        "interfaceHash": daemon.hash,
-    });
+    let references = service_api::interfaces()
+        .into_iter()
+        .map(|definition| {
+            json!({
+                "interfaceId": definition.id(),
+                "interfaceHash": definition.schema_hash(),
+            })
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         bundle["services"],
         json!([{
             "serviceId": "",
-            "interfaces": [expected_reference.clone()],
+            "interfaces": references,
         }])
     );
-    assert_eq!(bundle["defaultInterface"], expected_reference);
+    assert_eq!(
+        bundle["defaultInterface"],
+        json!({
+            "interfaceId": DAEMON_INTERFACE_ID,
+            "interfaceHash": daemon.hash,
+        })
+    );
 }
 
 #[test]

@@ -14,7 +14,9 @@ import {
 import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../daemonClient.js";
 import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { connectDaemon } from "../daemonTransport.js";
-import { DebuggerService } from "../generated/debuggerService.js";
+import { DbgServiceClient } from "../dbgServiceClient.js";
+import { ContextApi } from "../generated/contextApi.js";
+import { TargetDebuggerApi } from "../generated/targetDebuggerApi.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
@@ -51,7 +53,7 @@ test("workspace context identity uses lexical lowercase absolute paths", () => {
 });
 
 test("empty context observations represent idle long-poll timeouts", () => {
-	const result = parse(DebuggerService.members.observe_context.resultSchema, {
+	const result = parse(ContextApi.members.observe_context.resultSchema, {
 		kind: "items",
 		items: [],
 	});
@@ -59,7 +61,7 @@ test("empty context observations represent idle long-poll timeouts", () => {
 });
 
 test("generated schemas validate Rust enum wire representations", () => {
-	const observation = parse(DebuggerService.members.observe_context.resultSchema, {
+	const observation = parse(ContextApi.members.observe_context.resultSchema, {
 		kind: "historyGap",
 		requested_revision: 0,
 		oldest_available_revision: 1,
@@ -116,7 +118,7 @@ test("generated schemas validate Rust enum wire representations", () => {
 			subtype: null,
 		});
 		const snapshot = observationSnapshot(
-			parse(DebuggerService.members.observe_context.resultSchema, {
+			parse(ContextApi.members.observe_context.resultSchema, {
 			kind: "historyGap",
 			requested_revision: 0,
 			oldest_available_revision: 1,
@@ -163,7 +165,7 @@ test("generated schemas validate Rust enum wire representations", () => {
 });
 
 test("target snapshots preserve ordered console messages", () => {
-	const snapshot = parse(DebuggerService.members.get_target.resultSchema, {
+	const snapshot = parse(TargetDebuggerApi.members.get_target.resultSchema, {
 		contextId: "workspace",
 		connectionId: "node",
 		targetId: "process",
@@ -273,6 +275,76 @@ test("daemon endpoint parsing accepts the Rust named-pipe shape", () => {
 			token: "test-token",
 		},
 	);
+});
+
+test("debug service facets route through one authenticated connection", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-facets-"));
+	const endpoint = testEndpoint(directory);
+	const sockets = new Set<Socket>();
+	const requests: { method: string; params: unknown }[] = [];
+	let connections = 0;
+	let preambles = 0;
+	const server = createServer((socket) => {
+		connections++;
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		socket.on("close", () => sockets.delete(socket));
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) {
+					return;
+				}
+				const message = JSON.parse(buffer.slice(0, newline));
+				buffer = buffer.slice(newline + 1);
+				if ("hello" in message) {
+					assert.deepEqual(message, { hello: 1, token: "facet-token" });
+					preambles++;
+					continue;
+				}
+				requests.push({ method: message.method, params: message.params });
+				sendError(socket, message.id, `Routed ${message.method}`);
+			}
+		});
+	});
+	await listen(server, endpoint);
+	const daemon = await connectDaemon(endpoint, "facet-token");
+	try {
+		const client = new DbgServiceClient(daemon.connection);
+		const scope = { contextId: "workspace", connectionId: "node", targetId: "process" };
+		const coverage = { ...scope, captureId: "capture", noCache: false, sourcePath: null };
+		const cpu = { ...coverage, project: false };
+		const cdp = { ...scope, method: "Runtime.enable", params: {}, validate: true };
+		const cases = [
+			["dev.dbgjs.cdp-debugger::service_info", {}, () => client.service.service_info({})],
+			["dev.dbgjs.context::list_contexts", { cwd: null }, () => client.contexts.list_contexts({ cwd: null })],
+			["dev.dbgjs.source::list_sources", { contextId: scope.contextId, path: null },
+				() => client.sources.list_sources({ contextId: scope.contextId, path: null })],
+			["dev.dbgjs.capture::list_captures", { contextId: scope.contextId },
+				() => client.captures.list_captures({ contextId: scope.contextId })],
+			["dev.dbgjs.target-debugger::get_target", scope, () => client.targets.get_target(scope)],
+			["dev.dbgjs.cdp-access::raw_cdp_request", cdp, () => client.cdp.raw_cdp_request(cdp)],
+			["dev.dbgjs.relay::close_relay", { relayId: "relay" }, () => client.relay.close_relay({ relayId: "relay" })],
+			["dev.dbgjs.browser-automation::type_target", { ...scope, text: "hello" },
+				() => client.browser.type_target({ ...scope, text: "hello" })],
+			["dev.dbgjs.coverage::get_coverage", coverage, () => client.coverage.get_coverage(coverage)],
+			["dev.dbgjs.cpu-profiler::get_cpu_profile", cpu, () => client.cpu.get_cpu_profile(cpu)],
+			["dev.dbgjs.heap-profiler::get_heap_snapshot_progress", scope,
+				() => client.heap.get_heap_snapshot_progress(scope)],
+		] as const;
+		for (const [method, , call] of cases) {
+			await assert.rejects(async () => await call(), { message: `Routed ${method}` });
+		}
+		assert.deepEqual(requests, cases.map(([method, params]) => ({ method, params })));
+		assert.equal(connections, 1);
+		assert.equal(preambles, 1);
+	} finally {
+		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
 });
 
 test("daemon transport preserves the preamble and handles fragmented and coalesced responses", async () => {
@@ -544,12 +616,12 @@ test("long polls do not block command RPCs", async () => {
 					continue;
 				}
 				assert.equal(typeof message.id, "number");
-				if (message.method?.endsWith("::observe_context")) {
+				if (message.method === "dev.dbgjs.context::observe_context") {
 					observationReceivedResolve();
 					void observationRelease.then(() => {
 						sendResult(socket, message.id!, { kind: "items", items: [] });
 					});
-				} else if (message.method?.endsWith("::list_sources")) {
+				} else if (message.method === "dev.dbgjs.source::list_sources") {
 					sendResult(socket, message.id!, []);
 				} else {
 					sendError(socket, message.id!, `Unexpected method ${message.method}`);

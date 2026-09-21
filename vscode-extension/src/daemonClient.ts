@@ -15,16 +15,15 @@ import {
 	type TargetWaitPredicate,
 	type StepKind,
 	type VariableSnapshot,
-	type DebuggerServiceClient,
 	observationSnapshot,
 } from "./apiTypes.js";
 import { connectDaemon, type DaemonConnection } from "./daemonTransport.js";
-import { DebuggerService } from "./generated/debuggerService.js";
+import { DbgServiceClient } from "./dbgServiceClient.js";
 
 export class DaemonClient {
 	private constructor(
 		private readonly hub: DaemonConnection,
-		private readonly _service: DebuggerServiceClient,
+		private readonly _service: DbgServiceClient,
 		public readonly stateFile: string,
 	) {}
 
@@ -33,7 +32,7 @@ export class DaemonClient {
 		log?: (message: string) => void,
 	): Promise<DaemonClient> {
 		const hub = await connectDaemonHub(stateFile, "commands", log);
-		return new DaemonClient(hub, hub.connection.get(DebuggerService), stateFile);
+		return new DaemonClient(hub, new DbgServiceClient(hub.connection), stateFile);
 	}
 
 	public onClose(listener: () => void): { dispose(): void } {
@@ -45,7 +44,7 @@ export class DaemonClient {
 	}
 
 	public async listContexts(cwd?: string): Promise<readonly ContextSummary[]> {
-		return this._service.list_contexts({
+		return this._service.contexts.list_contexts({
 			cwd: cwd ?? null,
 		});
 	}
@@ -55,7 +54,7 @@ export class DaemonClient {
 		kind: ContextKind,
 		displayName: string,
 	): Promise<ContextSnapshot> {
-		return this._service.put_context({
+		return this._service.contexts.put_context({
 			contextId,
 			kind,
 			displayName,
@@ -63,7 +62,7 @@ export class DaemonClient {
 	}
 
 	public async getContext(contextId: string): Promise<ContextSnapshot> {
-		return this._service.get_context({ contextId });
+		return this._service.contexts.get_context({ contextId });
 	}
 
 	public async putConnection(
@@ -71,7 +70,7 @@ export class DaemonClient {
 		connectionId: string,
 		configuration: ConnectionConfiguration,
 	): Promise<ContextSnapshot> {
-		return this._service.put_connection({
+		return this._service.contexts.put_connection({
 			contextId,
 			connectionId,
 			configuration,
@@ -82,7 +81,7 @@ export class DaemonClient {
 		contextId: string,
 		connectionId: string,
 	): Promise<ContextSnapshot> {
-		return this._service.connect_connection({
+		return this._service.contexts.connect_connection({
 			contextId,
 			connectionId,
 		});
@@ -92,7 +91,7 @@ export class DaemonClient {
 		contextId: string,
 		connectionId: string,
 	): Promise<ContextSnapshot> {
-		return this._service.disconnect_connection({
+		return this._service.contexts.disconnect_connection({
 			contextId,
 			connectionId,
 		});
@@ -103,7 +102,7 @@ export class DaemonClient {
 		connectionId: string,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return this._service.delete_connection({
+		return this._service.contexts.delete_connection({
 			contextId,
 			connectionId,
 			options: { expectedRevision: null, requestId },
@@ -118,7 +117,7 @@ export class DaemonClient {
 		const cursor: ObservationCursor = revision === undefined
 			? { kind: "current" }
 			: { kind: "after", revision };
-		return observationSnapshot(await this._service.observe_context({
+		return observationSnapshot(await this._service.contexts.observe_context({
 			contextId,
 			cursor,
 			timeoutMs,
@@ -130,7 +129,7 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.get_target({
+		return this._service.targets.get_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -143,7 +142,7 @@ export class DaemonClient {
 		targetId: string,
 		expectedConnectionGeneration: number,
 	): Promise<TargetDebuggerSnapshot> {
-		const result = await this._service.attach_target({
+		const result = await this._service.targets.attach_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -162,7 +161,7 @@ export class DaemonClient {
 		predicate: TargetWaitPredicate,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.wait_target({
+		return this._service.targets.wait_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -178,7 +177,7 @@ export class DaemonClient {
 		afterRevision: number,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot | undefined> {
-		const result = await this._service.observe_target({
+		const result = await this._service.targets.observe_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -193,7 +192,7 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.release_target({
+		return this._service.targets.release_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -206,7 +205,7 @@ export class DaemonClient {
 		targetId: string,
 		pauseEpoch: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.resume_target({
+		return this._service.targets.resume_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -221,7 +220,7 @@ export class DaemonClient {
 		pauseEpoch: number,
 		kind: StepKind,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.step_target({
+		return this._service.targets.step_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -238,7 +237,7 @@ export class DaemonClient {
 		frameIndex: number,
 		expression: string,
 	): Promise<EvaluationSnapshot> {
-		return this._service.evaluate_target({
+		return this._service.targets.evaluate_target({
 			contextId,
 			connectionId,
 			targetId,
@@ -256,7 +255,7 @@ export class DaemonClient {
 		frameIndex: number,
 		scopeIndex: number,
 	): Promise<readonly VariableSnapshot[]> {
-		return this._service.get_scope_variables({
+		return this._service.targets.get_scope_variables({
 			contextId,
 			connectionId,
 			targetId,
@@ -273,7 +272,7 @@ export class DaemonClient {
 		pauseEpoch: number | undefined,
 		objectId: string,
 	): Promise<readonly VariableSnapshot[]> {
-		return this._service.get_object_properties({
+		return this._service.targets.get_object_properties({
 			contextId,
 			connectionId,
 			targetId,
@@ -288,7 +287,7 @@ export class DaemonClient {
 		specification: BreakpointSpec,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return this._service.put_breakpoint_spec({
+		return this._service.contexts.put_breakpoint_spec({
 			contextId,
 			breakpointId,
 			specification,
@@ -301,7 +300,7 @@ export class DaemonClient {
 		breakpointId: string,
 		requestId: string,
 	): Promise<ContextSnapshot> {
-		return this._service.delete_breakpoint({
+		return this._service.contexts.delete_breakpoint({
 			contextId,
 			breakpointId,
 			options: { expectedRevision: null, requestId },
@@ -309,14 +308,14 @@ export class DaemonClient {
 	}
 
 	public async listSources(contextId: string): Promise<readonly SourceSnapshotInfo[]> {
-		return this._service.list_sources({
+		return this._service.sources.list_sources({
 			contextId,
 			path: null,
 		});
 	}
 
 	public async showSource(contextId: string, path: string): Promise<SourceContentSnapshot> {
-		return this._service.show_source({
+		return this._service.sources.show_source({
 			contextId,
 			path,
 			options: {

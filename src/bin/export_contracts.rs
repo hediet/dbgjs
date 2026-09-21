@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dbgjs::protocol_schema::import_typed_cdp_protocol;
-use dbgjs::service_api::debugger_service_api;
+use dbgjs::service_api;
 use linkrpc::prelude::LinkRpcInterfaceSchema;
 use serde::Serialize;
 
@@ -44,22 +44,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cdp = import_typed_cdp_protocol(&browser_protocol, &js_protocol)?;
     assert_eq!(cdp.id, CDP_INTERFACE_ID);
 
-    let daemon = debugger_service_api::interface().to_schema();
-    assert_eq!(daemon.id, DAEMON_INTERFACE_ID);
-    let daemon_hash = daemon.hash.clone();
+    let daemon_interfaces = service_api::interfaces()
+        .into_iter()
+        .map(|interface| interface.to_schema())
+        .collect::<Vec<_>>();
+    let daemon = daemon_interfaces
+        .iter()
+        .find(|interface| interface.id == DAEMON_INTERFACE_ID)
+        .expect("service lifecycle interface is present");
+    let mut interface_schemas = vec![cdp];
+    interface_schemas.extend(daemon_interfaces.iter().cloned());
     let bundle = ContractBundle {
         services: vec![Service {
             service_id: "",
-            interfaces: vec![InterfaceReference {
-                interface_id: DAEMON_INTERFACE_ID,
-                interface_hash: &daemon_hash,
-            }],
+            interfaces: daemon_interfaces
+                .iter()
+                .map(|interface| InterfaceReference {
+                    interface_id: &interface.id,
+                    interface_hash: &interface.hash,
+                })
+                .collect(),
         }],
         default_interface: InterfaceReference {
-            interface_id: DAEMON_INTERFACE_ID,
-            interface_hash: &daemon_hash,
+            interface_id: &daemon.id,
+            interface_hash: &daemon.hash,
         },
-        interface_schemas: vec![cdp, daemon],
+        interface_schemas,
     };
     let mut generated = serde_json::to_string_pretty(&bundle)?;
     generated.push('\n');
