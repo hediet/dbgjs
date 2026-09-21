@@ -41,6 +41,7 @@ fn canonical_bundle_contains_complete_hashed_interfaces() {
     );
     assert_eq!(compute_interface_hash(&cdp), cdp.hash);
     assert_eq!(compute_interface_hash(&daemon), daemon.hash);
+    assert_eq!(cdp, dbgjs::cdp::interface().to_schema());
     assert_eq!(daemon, debugger_service_api::interface().to_schema());
 }
 

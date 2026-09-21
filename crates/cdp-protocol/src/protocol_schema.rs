@@ -520,6 +520,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_v8_internal_remote_object_subtypes() {
+        let interface = imported();
+        let subtypes = interface["components"]["schemas"]["Runtime.RemoteObject"]["properties"]
+            ["subtype"]["enum"]
+            .as_array()
+            .unwrap();
+        for subtype in [
+            "internal#location",
+            "internal#scope",
+            "internal#scopeList",
+            "internal#entry",
+        ] {
+            assert!(subtypes.contains(&json!(subtype)));
+        }
+    }
+
+    #[test]
     fn preserves_open_and_closed_object_semantics() {
         let interface = imported();
         let open = &interface["components"]["schemas"]["Network.Headers"];

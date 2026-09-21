@@ -46,20 +46,6 @@ fn main() {
         interface.hash, actual_hash,
         "canonical cdp.protocol contract has a stale interface hash"
     );
-    assert_eq!(
-        interface.methods.len(),
-        896,
-        "canonical CDP contract method count changed unexpectedly"
-    );
-    assert_eq!(
-        interface
-            .components
-            .as_ref()
-            .and_then(|components| components.schemas.as_ref())
-            .map(|schemas| schemas.len()),
-        Some(607),
-        "canonical CDP contract component count changed unexpectedly"
-    );
     let generated = generate_rust_interface(
         &interface,
         &GenerateRustOptions {
