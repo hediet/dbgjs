@@ -15,7 +15,7 @@
 pub trait StorageService {
     /// Clears cookies.
     #[name("clearCookies")]
-    async fn clear_cookies(#[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageClearCookiesResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_cookies(#[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageClearCookiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearCookies"))
     }
@@ -67,7 +67,7 @@ pub trait StorageService {
     }
     /// Returns all browser cookies.
     #[name("getCookies")]
-    async fn get_cookies(#[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageGetCookiesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_cookies(#[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageGetCookiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCookies"))
     }
@@ -93,7 +93,7 @@ pub trait StorageService {
     /// Returns storage key for the given frame. If no frame ID is provided,
     /// the storage key of the target executing this command is returned.
     #[name("getStorageKey")]
-    async fn get_storage_key(#[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::StorageGetStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_storage_key(#[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::StorageGetStorageKeyResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageKey"))
     }
@@ -121,7 +121,7 @@ pub trait StorageService {
     #[name("overrideQuotaForOrigin")]
     async fn override_quota_for_origin(
         origin: String,
-        #[serde(rename = "quotaSize")] #[serde(default, skip_serializing_if = "Option::is_none")] quota_size: Option<f64>,
+        #[serde(rename = "quotaSize", skip_serializing_if = "Option::is_none")] quota_size: Option<f64>,
     ) -> Result<super::types::StorageOverrideQuotaForOriginResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, origin, quota_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "overrideQuotaForOrigin"))
@@ -142,7 +142,7 @@ pub trait StorageService {
     #[name("setCookies")]
     async fn set_cookies(
         cookies: Vec<super::types::NetworkCookieParam>,
-        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+        #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
     ) -> Result<super::types::StorageSetCookiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, cookies, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookies"))
@@ -153,7 +153,7 @@ pub trait StorageService {
         #[serde(rename = "ownerOrigin")] owner_origin: String,
         key: String,
         value: String,
-        #[serde(rename = "ignoreIfPresent")] #[serde(default, skip_serializing_if = "Option::is_none")] ignore_if_present: Option<bool>,
+        #[serde(rename = "ignoreIfPresent", skip_serializing_if = "Option::is_none")] ignore_if_present: Option<bool>,
     ) -> Result<super::types::StorageSetSharedStorageEntryResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, owner_origin, key, value, ignore_if_present,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSharedStorageEntry"))

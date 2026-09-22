@@ -21,7 +21,7 @@ pub trait EmulationEventsService {
     #[notification]
     async fn screen_orientation_lock_changed(
         locked: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] orientation: Option<super::types::EmulationScreenOrientation>,
+        #[serde(skip_serializing_if = "Option::is_none")] orientation: Option<super::types::EmulationScreenOrientation>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, locked, orientation,);
         Ok(())

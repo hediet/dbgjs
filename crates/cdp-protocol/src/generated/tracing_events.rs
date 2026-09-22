@@ -16,9 +16,9 @@ pub trait TracingEventsService {
     #[name("bufferUsage")]
     #[notification]
     async fn buffer_usage(
-        #[serde(rename = "percentFull")] #[serde(default, skip_serializing_if = "Option::is_none")] percent_full: Option<f64>,
-        #[serde(rename = "eventCount")] #[serde(default, skip_serializing_if = "Option::is_none")] event_count: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] value: Option<f64>,
+        #[serde(rename = "percentFull", skip_serializing_if = "Option::is_none")] percent_full: Option<f64>,
+        #[serde(rename = "eventCount", skip_serializing_if = "Option::is_none")] event_count: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] value: Option<f64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, percent_full, event_count, value,);
         Ok(())
@@ -37,9 +37,9 @@ pub trait TracingEventsService {
     #[notification]
     async fn tracing_complete(
         #[serde(rename = "dataLossOccurred")] data_loss_occurred: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] stream: Option<super::types::IoStreamHandle>,
-        #[serde(rename = "traceFormat")] #[serde(default, skip_serializing_if = "Option::is_none")] trace_format: Option<super::types::TracingStreamFormat>,
-        #[serde(rename = "streamCompression")] #[serde(default, skip_serializing_if = "Option::is_none")] stream_compression: Option<super::types::TracingStreamCompression>,
+        #[serde(skip_serializing_if = "Option::is_none")] stream: Option<super::types::IoStreamHandle>,
+        #[serde(rename = "traceFormat", skip_serializing_if = "Option::is_none")] trace_format: Option<super::types::TracingStreamFormat>,
+        #[serde(rename = "streamCompression", skip_serializing_if = "Option::is_none")] stream_compression: Option<super::types::TracingStreamCompression>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, data_loss_occurred, stream, trace_format, stream_compression,);
         Ok(())

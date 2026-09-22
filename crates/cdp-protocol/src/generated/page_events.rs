@@ -24,7 +24,7 @@ pub trait PageEventsService {
         #[serde(rename = "loaderId")] loader_id: super::types::NetworkLoaderId,
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "notRestoredExplanations")] not_restored_explanations: Vec<super::types::PageBackForwardCacheNotRestoredExplanation>,
-        #[serde(rename = "notRestoredExplanationsTree")] #[serde(default, skip_serializing_if = "Option::is_none")] not_restored_explanations_tree: Option<super::types::PageBackForwardCacheNotRestoredExplanationTree>,
+        #[serde(rename = "notRestoredExplanationsTree", skip_serializing_if = "Option::is_none")] not_restored_explanations_tree: Option<super::types::PageBackForwardCacheNotRestoredExplanationTree>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, loader_id, frame_id, not_restored_explanations, not_restored_explanations_tree,);
         Ok(())
@@ -86,7 +86,7 @@ pub trait PageEventsService {
     async fn frame_attached(
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "parentFrameId")] parent_frame_id: super::types::PageFrameId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] stack: Option<super::types::RuntimeStackTrace>,
+        #[serde(skip_serializing_if = "Option::is_none")] stack: Option<super::types::RuntimeStackTrace>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id, parent_frame_id, stack,);
         Ok(())
@@ -217,7 +217,7 @@ pub trait PageEventsService {
         message: String,
         r#type: super::types::PageDialogType,
         #[serde(rename = "hasBrowserHandler")] has_browser_handler: bool,
-        #[serde(rename = "defaultPrompt")] #[serde(default, skip_serializing_if = "Option::is_none")] default_prompt: Option<String>,
+        #[serde(rename = "defaultPrompt", skip_serializing_if = "Option::is_none")] default_prompt: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, url, frame_id, message, r#type, has_browser_handler, default_prompt,);
         Ok(())

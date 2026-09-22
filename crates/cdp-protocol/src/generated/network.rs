@@ -50,8 +50,8 @@ pub trait NetworkService {
     /// If maxTotalBufferSize is not set, durable messages are disabled.
     #[name("configureDurableMessages")]
     async fn configure_durable_messages(
-        #[serde(rename = "maxTotalBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
-        #[serde(rename = "maxResourceBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
+        #[serde(rename = "maxTotalBufferSize", skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
+        #[serde(rename = "maxResourceBufferSize", skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
     ) -> Result<super::types::NetworkConfigureDurableMessagesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, max_total_buffer_size, max_resource_buffer_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configureDurableMessages"))
@@ -60,10 +60,10 @@ pub trait NetworkService {
     #[name("deleteCookies")]
     async fn delete_cookies(
         name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] domain: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] path: Option<String>,
-        #[serde(rename = "partitionKey")] #[serde(default, skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
+        #[serde(skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] path: Option<String>,
+        #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
     ) -> Result<super::types::NetworkDeleteCookiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, name, url, domain, path, partition_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteCookies"))
@@ -88,10 +88,10 @@ pub trait NetworkService {
         latency: f64,
         #[serde(rename = "downloadThroughput")] download_throughput: f64,
         #[serde(rename = "uploadThroughput")] upload_throughput: f64,
-        #[serde(rename = "connectionType")] #[serde(default, skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
-        #[serde(rename = "packetLoss")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_loss: Option<f64>,
-        #[serde(rename = "packetQueueLength")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_queue_length: Option<i64>,
-        #[serde(rename = "packetReordering")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_reordering: Option<bool>,
+        #[serde(rename = "connectionType", skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
+        #[serde(rename = "packetLoss", skip_serializing_if = "Option::is_none")] packet_loss: Option<f64>,
+        #[serde(rename = "packetQueueLength", skip_serializing_if = "Option::is_none")] packet_queue_length: Option<i64>,
+        #[serde(rename = "packetReordering", skip_serializing_if = "Option::is_none")] packet_reordering: Option<bool>,
     ) -> Result<super::types::NetworkEmulateNetworkConditionsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, offline, latency, download_throughput, upload_throughput, connection_type, packet_loss, packet_queue_length, packet_reordering,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "emulateNetworkConditions"))
@@ -101,8 +101,8 @@ pub trait NetworkService {
     /// explicitly modify `navigator` behavior.
     #[name("emulateNetworkConditionsByRule")]
     async fn emulate_network_conditions_by_rule(
-        #[serde(default, skip_serializing_if = "Option::is_none")] offline: Option<bool>,
-        #[serde(rename = "emulateOfflineServiceWorker")] #[serde(default, skip_serializing_if = "Option::is_none")] emulate_offline_service_worker: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] offline: Option<bool>,
+        #[serde(rename = "emulateOfflineServiceWorker", skip_serializing_if = "Option::is_none")] emulate_offline_service_worker: Option<bool>,
         #[serde(rename = "matchedNetworkConditions")] matched_network_conditions: Vec<super::types::NetworkNetworkConditions>,
     ) -> Result<super::types::NetworkEmulateNetworkConditionsByRuleResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, offline, emulate_offline_service_worker, matched_network_conditions,);
@@ -111,11 +111,11 @@ pub trait NetworkService {
     /// Enables network tracking, network events will now be delivered to the client.
     #[name("enable")]
     async fn enable(
-        #[serde(rename = "maxTotalBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
-        #[serde(rename = "maxResourceBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
-        #[serde(rename = "maxPostDataSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_post_data_size: Option<i64>,
-        #[serde(rename = "reportDirectSocketTraffic")] #[serde(default, skip_serializing_if = "Option::is_none")] report_direct_socket_traffic: Option<bool>,
-        #[serde(rename = "enableDurableMessages")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_durable_messages: Option<bool>,
+        #[serde(rename = "maxTotalBufferSize", skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
+        #[serde(rename = "maxResourceBufferSize", skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
+        #[serde(rename = "maxPostDataSize", skip_serializing_if = "Option::is_none")] max_post_data_size: Option<i64>,
+        #[serde(rename = "reportDirectSocketTraffic", skip_serializing_if = "Option::is_none")] report_direct_socket_traffic: Option<bool>,
+        #[serde(rename = "enableDurableMessages", skip_serializing_if = "Option::is_none")] enable_durable_messages: Option<bool>,
     ) -> Result<super::types::NetworkEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, max_total_buffer_size, max_resource_buffer_size, max_post_data_size, report_direct_socket_traffic, enable_durable_messages,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
@@ -156,7 +156,7 @@ pub trait NetworkService {
     /// Returns all browser cookies for the current URL. Depending on the backend support, will return
     /// detailed cookie information in the `cookies` field.
     #[name("getCookies")]
-    async fn get_cookies(#[serde(default, skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>) -> Result<super::types::NetworkGetCookiesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_cookies(#[serde(skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>) -> Result<super::types::NetworkGetCookiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, urls,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCookies"))
     }
@@ -174,14 +174,14 @@ pub trait NetworkService {
     }
     /// Returns information about the COEP/COOP isolation status.
     #[name("getSecurityIsolationStatus")]
-    async fn get_security_isolation_status(#[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::NetworkGetSecurityIsolationStatusResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_security_isolation_status(#[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::NetworkGetSecurityIsolationStatusResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSecurityIsolationStatus"))
     }
     /// Fetches the resource and returns the content.
     #[name("loadNetworkResource")]
     async fn load_network_resource(
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
         url: String,
         options: super::types::NetworkLoadNetworkResourceOptions,
     ) -> Result<super::types::NetworkLoadNetworkResourceResult, linkrpc::prelude::JsonRpcError> {
@@ -195,7 +195,7 @@ pub trait NetworkService {
         latency: f64,
         #[serde(rename = "downloadThroughput")] download_throughput: f64,
         #[serde(rename = "uploadThroughput")] upload_throughput: f64,
-        #[serde(rename = "connectionType")] #[serde(default, skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
+        #[serde(rename = "connectionType", skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
     ) -> Result<super::types::NetworkOverrideNetworkStateResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, offline, latency, download_throughput, upload_throughput, connection_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "overrideNetworkState"))
@@ -213,8 +213,8 @@ pub trait NetworkService {
     async fn search_in_response_body(
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         query: String,
-        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
-        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+        #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
     ) -> Result<super::types::NetworkSearchInResponseBodyResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInResponseBody"))
@@ -228,8 +228,8 @@ pub trait NetworkService {
     /// Blocks URLs from loading.
     #[name("setBlockedURLs")]
     async fn set_blocked_urls(
-        #[serde(rename = "urlPatterns")] #[serde(default, skip_serializing_if = "Option::is_none")] url_patterns: Option<Vec<super::types::NetworkBlockPattern>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>,
+        #[serde(rename = "urlPatterns", skip_serializing_if = "Option::is_none")] url_patterns: Option<Vec<super::types::NetworkBlockPattern>>,
+        #[serde(skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>,
     ) -> Result<super::types::NetworkSetBlockedUrlsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, url_patterns, urls,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlockedURLs"))
@@ -251,17 +251,17 @@ pub trait NetworkService {
     async fn set_cookie(
         name: String,
         value: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] domain: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] path: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] secure: Option<bool>,
-        #[serde(rename = "httpOnly")] #[serde(default, skip_serializing_if = "Option::is_none")] http_only: Option<bool>,
-        #[serde(rename = "sameSite")] #[serde(default, skip_serializing_if = "Option::is_none")] same_site: Option<super::types::NetworkCookieSameSite>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] expires: Option<super::types::NetworkTimeSinceEpoch>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] priority: Option<super::types::NetworkCookiePriority>,
-        #[serde(rename = "sourceScheme")] #[serde(default, skip_serializing_if = "Option::is_none")] source_scheme: Option<super::types::NetworkCookieSourceScheme>,
-        #[serde(rename = "sourcePort")] #[serde(default, skip_serializing_if = "Option::is_none")] source_port: Option<i64>,
-        #[serde(rename = "partitionKey")] #[serde(default, skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
+        #[serde(skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] domain: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] secure: Option<bool>,
+        #[serde(rename = "httpOnly", skip_serializing_if = "Option::is_none")] http_only: Option<bool>,
+        #[serde(rename = "sameSite", skip_serializing_if = "Option::is_none")] same_site: Option<super::types::NetworkCookieSameSite>,
+        #[serde(skip_serializing_if = "Option::is_none")] expires: Option<super::types::NetworkTimeSinceEpoch>,
+        #[serde(skip_serializing_if = "Option::is_none")] priority: Option<super::types::NetworkCookiePriority>,
+        #[serde(rename = "sourceScheme", skip_serializing_if = "Option::is_none")] source_scheme: Option<super::types::NetworkCookieSourceScheme>,
+        #[serde(rename = "sourcePort", skip_serializing_if = "Option::is_none")] source_port: Option<i64>,
+        #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
     ) -> Result<super::types::NetworkSetCookieResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, name, value, url, domain, path, secure, http_only, same_site, expires, priority, source_scheme, source_port, partition_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookie"))
@@ -289,9 +289,9 @@ pub trait NetworkService {
     #[name("setUserAgentOverride")]
     async fn set_user_agent_override(
         #[serde(rename = "userAgent")] user_agent: String,
-        #[serde(rename = "acceptLanguage")] #[serde(default, skip_serializing_if = "Option::is_none")] accept_language: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] platform: Option<String>,
-        #[serde(rename = "userAgentMetadata")] #[serde(default, skip_serializing_if = "Option::is_none")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
+        #[serde(rename = "acceptLanguage", skip_serializing_if = "Option::is_none")] accept_language: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] platform: Option<String>,
+        #[serde(rename = "userAgentMetadata", skip_serializing_if = "Option::is_none")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
     ) -> Result<super::types::NetworkSetUserAgentOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, user_agent, accept_language, platform, user_agent_metadata,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserAgentOverride"))

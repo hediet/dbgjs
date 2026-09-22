@@ -102,7 +102,7 @@ pub trait BluetoothEmulationService {
         #[serde(rename = "characteristicId")] characteristic_id: String,
         r#type: super::types::BluetoothEmulationCharacteristicOperationType,
         code: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] data: Option<String>,
     ) -> Result<super::types::BluetoothEmulationSimulateCharacteristicOperationResponseResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, characteristic_id, r#type, code, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateCharacteristicOperationResponse"))
@@ -117,7 +117,7 @@ pub trait BluetoothEmulationService {
         #[serde(rename = "descriptorId")] descriptor_id: String,
         r#type: super::types::BluetoothEmulationDescriptorOperationType,
         code: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] data: Option<String>,
     ) -> Result<super::types::BluetoothEmulationSimulateDescriptorOperationResponseResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, descriptor_id, r#type, code, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateDescriptorOperationResponse"))

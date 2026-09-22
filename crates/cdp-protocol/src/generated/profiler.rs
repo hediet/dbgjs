@@ -46,9 +46,9 @@ pub trait ProfilerService {
     /// counters.
     #[name("startPreciseCoverage")]
     async fn start_precise_coverage(
-        #[serde(rename = "callCount")] #[serde(default, skip_serializing_if = "Option::is_none")] call_count: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] detailed: Option<bool>,
-        #[serde(rename = "allowTriggeredUpdates")] #[serde(default, skip_serializing_if = "Option::is_none")] allow_triggered_updates: Option<bool>,
+        #[serde(rename = "callCount", skip_serializing_if = "Option::is_none")] call_count: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] detailed: Option<bool>,
+        #[serde(rename = "allowTriggeredUpdates", skip_serializing_if = "Option::is_none")] allow_triggered_updates: Option<bool>,
     ) -> Result<super::types::ProfilerStartPreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, call_count, detailed, allow_triggered_updates,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startPreciseCoverage"))

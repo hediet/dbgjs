@@ -30,9 +30,9 @@ pub trait AccessibilityService {
     /// Requires `enable()` to have been called previously.
     #[name("getAXNodeAndAncestors")]
     async fn get_axnode_and_ancestors(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::AccessibilityGetAxnodeAndAncestorsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAXNodeAndAncestors"))
@@ -42,7 +42,7 @@ pub trait AccessibilityService {
     #[name("getChildAXNodes")]
     async fn get_child_axnodes(
         id: super::types::AccessibilityAxnodeId,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
     ) -> Result<super::types::AccessibilityGetChildAxnodesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, id, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getChildAXNodes"))
@@ -50,8 +50,8 @@ pub trait AccessibilityService {
     /// Fetches the entire accessibility tree for the root Document
     #[name("getFullAXTree")]
     async fn get_full_axtree(
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
     ) -> Result<super::types::AccessibilityGetFullAxtreeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, depth, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFullAXTree"))
@@ -59,10 +59,10 @@ pub trait AccessibilityService {
     /// Fetches the accessibility node and partial accessibility tree for this DOM node, if it exists.
     #[name("getPartialAXTree")]
     async fn get_partial_axtree(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(rename = "fetchRelatives")] #[serde(default, skip_serializing_if = "Option::is_none")] fetch_relatives: Option<bool>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "fetchRelatives", skip_serializing_if = "Option::is_none")] fetch_relatives: Option<bool>,
     ) -> Result<super::types::AccessibilityGetPartialAxtreeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id, fetch_relatives,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPartialAXTree"))
@@ -70,7 +70,7 @@ pub trait AccessibilityService {
     /// Fetches the root node.
     /// Requires `enable()` to have been called previously.
     #[name("getRootAXNode")]
-    async fn get_root_axnode(#[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::AccessibilityGetRootAxnodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_root_axnode(#[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::AccessibilityGetRootAxnodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRootAXNode"))
     }
@@ -81,11 +81,11 @@ pub trait AccessibilityService {
     /// `accessibleName` or `role` is specified, it returns all the accessibility nodes in the subtree.
     #[name("queryAXTree")]
     async fn query_axtree(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(rename = "accessibleName")] #[serde(default, skip_serializing_if = "Option::is_none")] accessible_name: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] role: Option<String>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "accessibleName", skip_serializing_if = "Option::is_none")] accessible_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] role: Option<String>,
     ) -> Result<super::types::AccessibilityQueryAxtreeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id, accessible_name, role,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "queryAXTree"))

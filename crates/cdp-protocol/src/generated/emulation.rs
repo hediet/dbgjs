@@ -21,12 +21,12 @@ pub trait EmulationService {
         top: i64,
         width: i64,
         height: i64,
-        #[serde(rename = "workAreaInsets")] #[serde(default, skip_serializing_if = "Option::is_none")] work_area_insets: Option<super::types::EmulationWorkAreaInsets>,
-        #[serde(rename = "devicePixelRatio")] #[serde(default, skip_serializing_if = "Option::is_none")] device_pixel_ratio: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] rotation: Option<i64>,
-        #[serde(rename = "colorDepth")] #[serde(default, skip_serializing_if = "Option::is_none")] color_depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] label: Option<String>,
-        #[serde(rename = "isInternal")] #[serde(default, skip_serializing_if = "Option::is_none")] is_internal: Option<bool>,
+        #[serde(rename = "workAreaInsets", skip_serializing_if = "Option::is_none")] work_area_insets: Option<super::types::EmulationWorkAreaInsets>,
+        #[serde(rename = "devicePixelRatio", skip_serializing_if = "Option::is_none")] device_pixel_ratio: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] rotation: Option<i64>,
+        #[serde(rename = "colorDepth", skip_serializing_if = "Option::is_none")] color_depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>,
+        #[serde(rename = "isInternal", skip_serializing_if = "Option::is_none")] is_internal: Option<bool>,
     ) -> Result<super::types::EmulationAddScreenResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, left, top, width, height, work_area_insets, device_pixel_ratio, rotation, color_depth, label, is_internal,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScreen"))
@@ -99,7 +99,7 @@ pub trait EmulationService {
     }
     /// Automatically render all web contents using a dark theme.
     #[name("setAutoDarkModeOverride")]
-    async fn set_auto_dark_mode_override(#[serde(default, skip_serializing_if = "Option::is_none")] enabled: Option<bool>) -> Result<super::types::EmulationSetAutoDarkModeOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_auto_dark_mode_override(#[serde(skip_serializing_if = "Option::is_none")] enabled: Option<bool>) -> Result<super::types::EmulationSetAutoDarkModeOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoDarkModeOverride"))
     }
@@ -117,14 +117,14 @@ pub trait EmulationService {
     }
     /// Override the value of navigator.connection.saveData
     #[name("setDataSaverOverride")]
-    async fn set_data_saver_override(#[serde(rename = "dataSaverEnabled")] #[serde(default, skip_serializing_if = "Option::is_none")] data_saver_enabled: Option<bool>) -> Result<super::types::EmulationSetDataSaverOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_data_saver_override(#[serde(rename = "dataSaverEnabled", skip_serializing_if = "Option::is_none")] data_saver_enabled: Option<bool>) -> Result<super::types::EmulationSetDataSaverOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, data_saver_enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDataSaverOverride"))
     }
     /// Sets or clears an override of the default background color of the frame. This override is used
     /// if the content does not specify one.
     #[name("setDefaultBackgroundColorOverride")]
-    async fn set_default_background_color_override(#[serde(default, skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>) -> Result<super::types::EmulationSetDefaultBackgroundColorOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_default_background_color_override(#[serde(skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>) -> Result<super::types::EmulationSetDefaultBackgroundColorOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, color,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDefaultBackgroundColorOverride"))
     }
@@ -168,15 +168,15 @@ pub trait EmulationService {
     /// Emulates the given media type or media feature for CSS media queries.
     #[name("setEmulatedMedia")]
     async fn set_emulated_media(
-        #[serde(default, skip_serializing_if = "Option::is_none")] media: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] features: Option<Vec<super::types::EmulationMediaFeature>>,
+        #[serde(skip_serializing_if = "Option::is_none")] media: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] features: Option<Vec<super::types::EmulationMediaFeature>>,
     ) -> Result<super::types::EmulationSetEmulatedMediaResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, media, features,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedMedia"))
     }
     /// Emulates the given OS text scale.
     #[name("setEmulatedOSTextScale")]
-    async fn set_emulated_ostext_scale(#[serde(default, skip_serializing_if = "Option::is_none")] scale: Option<f64>) -> Result<super::types::EmulationSetEmulatedOstextScaleResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_emulated_ostext_scale(#[serde(skip_serializing_if = "Option::is_none")] scale: Option<f64>) -> Result<super::types::EmulationSetEmulatedOstextScaleResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, scale,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedOSTextScale"))
     }
@@ -196,13 +196,13 @@ pub trait EmulationService {
     /// accuracy emulates position unavailable.
     #[name("setGeolocationOverride")]
     async fn set_geolocation_override(
-        #[serde(default, skip_serializing_if = "Option::is_none")] latitude: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] longitude: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] accuracy: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] altitude: Option<f64>,
-        #[serde(rename = "altitudeAccuracy")] #[serde(default, skip_serializing_if = "Option::is_none")] altitude_accuracy: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] heading: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] speed: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] latitude: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] longitude: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] accuracy: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] altitude: Option<f64>,
+        #[serde(rename = "altitudeAccuracy", skip_serializing_if = "Option::is_none")] altitude_accuracy: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] heading: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] speed: Option<f64>,
     ) -> Result<super::types::EmulationSetGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, latitude, longitude, accuracy, altitude, altitude_accuracy, heading, speed,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setGeolocationOverride"))
@@ -223,7 +223,7 @@ pub trait EmulationService {
     }
     /// Overrides default host system locale with the specified one.
     #[name("setLocaleOverride")]
-    async fn set_locale_override(#[serde(default, skip_serializing_if = "Option::is_none")] locale: Option<String>) -> Result<super::types::EmulationSetLocaleOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_locale_override(#[serde(skip_serializing_if = "Option::is_none")] locale: Option<String>) -> Result<super::types::EmulationSetLocaleOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, locale,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setLocaleOverride"))
     }
@@ -247,7 +247,7 @@ pub trait EmulationService {
     async fn set_pressure_source_override_enabled(
         enabled: bool,
         source: super::types::EmulationPressureSource,
-        #[serde(default, skip_serializing_if = "Option::is_none")] metadata: Option<super::types::EmulationPressureMetadata>,
+        #[serde(skip_serializing_if = "Option::is_none")] metadata: Option<super::types::EmulationPressureMetadata>,
     ) -> Result<super::types::EmulationSetPressureSourceOverrideEnabledResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enabled, source, metadata,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureSourceOverrideEnabled"))
@@ -299,7 +299,7 @@ pub trait EmulationService {
     async fn set_sensor_override_enabled(
         enabled: bool,
         r#type: super::types::EmulationSensorType,
-        #[serde(default, skip_serializing_if = "Option::is_none")] metadata: Option<super::types::EmulationSensorMetadata>,
+        #[serde(skip_serializing_if = "Option::is_none")] metadata: Option<super::types::EmulationSensorMetadata>,
     ) -> Result<super::types::EmulationSetSensorOverrideEnabledResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enabled, r#type, metadata,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSensorOverrideEnabled"))
@@ -331,7 +331,7 @@ pub trait EmulationService {
     #[name("setTouchEmulationEnabled")]
     async fn set_touch_emulation_enabled(
         enabled: bool,
-        #[serde(rename = "maxTouchPoints")] #[serde(default, skip_serializing_if = "Option::is_none")] max_touch_points: Option<i64>,
+        #[serde(rename = "maxTouchPoints", skip_serializing_if = "Option::is_none")] max_touch_points: Option<i64>,
     ) -> Result<super::types::EmulationSetTouchEmulationEnabledResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enabled, max_touch_points,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTouchEmulationEnabled"))
@@ -341,9 +341,9 @@ pub trait EmulationService {
     #[name("setUserAgentOverride")]
     async fn set_user_agent_override(
         #[serde(rename = "userAgent")] user_agent: String,
-        #[serde(rename = "acceptLanguage")] #[serde(default, skip_serializing_if = "Option::is_none")] accept_language: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] platform: Option<String>,
-        #[serde(rename = "userAgentMetadata")] #[serde(default, skip_serializing_if = "Option::is_none")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
+        #[serde(rename = "acceptLanguage", skip_serializing_if = "Option::is_none")] accept_language: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] platform: Option<String>,
+        #[serde(rename = "userAgentMetadata", skip_serializing_if = "Option::is_none")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
     ) -> Result<super::types::EmulationSetUserAgentOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, user_agent, accept_language, platform, user_agent_metadata,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserAgentOverride"))
@@ -355,7 +355,7 @@ pub trait EmulationService {
     /// mutating page state. Values are rounded to the nearest CSS pixel. Omitting the rect clears the
     /// override.
     #[name("setVirtualKeyboardGeometryOverride")]
-    async fn set_virtual_keyboard_geometry_override(#[serde(rename = "keyboardRect")] #[serde(default, skip_serializing_if = "Option::is_none")] keyboard_rect: Option<super::types::DomRect>) -> Result<super::types::EmulationSetVirtualKeyboardGeometryOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_virtual_keyboard_geometry_override(#[serde(rename = "keyboardRect", skip_serializing_if = "Option::is_none")] keyboard_rect: Option<super::types::DomRect>) -> Result<super::types::EmulationSetVirtualKeyboardGeometryOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, keyboard_rect,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualKeyboardGeometryOverride"))
     }
@@ -364,9 +364,9 @@ pub trait EmulationService {
     #[name("setVirtualTimePolicy")]
     async fn set_virtual_time_policy(
         policy: super::types::EmulationVirtualTimePolicy,
-        #[serde(default, skip_serializing_if = "Option::is_none")] budget: Option<f64>,
-        #[serde(rename = "maxVirtualTimeTaskStarvationCount")] #[serde(default, skip_serializing_if = "Option::is_none")] max_virtual_time_task_starvation_count: Option<i64>,
-        #[serde(rename = "initialVirtualTime")] #[serde(default, skip_serializing_if = "Option::is_none")] initial_virtual_time: Option<super::types::NetworkTimeSinceEpoch>,
+        #[serde(skip_serializing_if = "Option::is_none")] budget: Option<f64>,
+        #[serde(rename = "maxVirtualTimeTaskStarvationCount", skip_serializing_if = "Option::is_none")] max_virtual_time_task_starvation_count: Option<i64>,
+        #[serde(rename = "initialVirtualTime", skip_serializing_if = "Option::is_none")] initial_virtual_time: Option<super::types::NetworkTimeSinceEpoch>,
     ) -> Result<super::types::EmulationSetVirtualTimePolicyResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, policy, budget, max_virtual_time_task_starvation_count, initial_virtual_time,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualTimePolicy"))
@@ -386,16 +386,16 @@ pub trait EmulationService {
     #[name("updateScreen")]
     async fn update_screen(
         #[serde(rename = "screenId")] screen_id: super::types::EmulationScreenId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] left: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] top: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] width: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] height: Option<i64>,
-        #[serde(rename = "workAreaInsets")] #[serde(default, skip_serializing_if = "Option::is_none")] work_area_insets: Option<super::types::EmulationWorkAreaInsets>,
-        #[serde(rename = "devicePixelRatio")] #[serde(default, skip_serializing_if = "Option::is_none")] device_pixel_ratio: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] rotation: Option<i64>,
-        #[serde(rename = "colorDepth")] #[serde(default, skip_serializing_if = "Option::is_none")] color_depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] label: Option<String>,
-        #[serde(rename = "isInternal")] #[serde(default, skip_serializing_if = "Option::is_none")] is_internal: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] left: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] top: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] width: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] height: Option<i64>,
+        #[serde(rename = "workAreaInsets", skip_serializing_if = "Option::is_none")] work_area_insets: Option<super::types::EmulationWorkAreaInsets>,
+        #[serde(rename = "devicePixelRatio", skip_serializing_if = "Option::is_none")] device_pixel_ratio: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] rotation: Option<i64>,
+        #[serde(rename = "colorDepth", skip_serializing_if = "Option::is_none")] color_depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>,
+        #[serde(rename = "isInternal", skip_serializing_if = "Option::is_none")] is_internal: Option<bool>,
     ) -> Result<super::types::EmulationUpdateScreenResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, screen_id, left, top, width, height, work_area_insets, device_pixel_ratio, rotation, color_depth, label, is_internal,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateScreen"))

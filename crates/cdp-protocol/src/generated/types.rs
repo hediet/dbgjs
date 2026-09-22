@@ -22,43 +22,37 @@ pub struct AccessibilityAxnode {
     /// Whether this node is ignored for accessibility
     pub ignored: bool,
     /// Collection of reasons why this node is hidden.
-    #[serde(rename = "ignoredReasons")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ignoredReasons", skip_serializing_if = "Option::is_none")]
     pub ignored_reasons: Option<Vec<AccessibilityAxproperty>>,
     /// This `Node`'s role, whether explicit or implicit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<AccessibilityAxvalue>,
     /// This `Node`'s Chrome raw role.
-    #[serde(rename = "chromeRole")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "chromeRole", skip_serializing_if = "Option::is_none")]
     pub chrome_role: Option<AccessibilityAxvalue>,
     /// The accessible name for this `Node`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<AccessibilityAxvalue>,
     /// The accessible description for this `Node`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<AccessibilityAxvalue>,
     /// The value for this `Node`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AccessibilityAxvalue>,
     /// All other properties
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<Vec<AccessibilityAxproperty>>,
     /// ID for this node's parent.
-    #[serde(rename = "parentId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<AccessibilityAxnodeId>,
     /// IDs for each of this node's child nodes.
-    #[serde(rename = "childIds")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "childIds", skip_serializing_if = "Option::is_none")]
     pub child_ids: Option<Vec<AccessibilityAxnodeId>>,
     /// The backend ID for the associated DOM node, if any.
-    #[serde(rename = "backendDOMNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendDOMNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_domnode_id: Option<DomBackendNodeId>,
     /// The frame ID for the frame associated with this nodes document.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -241,10 +235,10 @@ pub struct AccessibilityAxrelatedNode {
     #[serde(rename = "backendDOMNodeId")]
     pub backend_domnode_id: DomBackendNodeId,
     /// The IDRef value provided, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub idref: Option<String>,
     /// The text alternative of this node in the current context.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
 }
 
@@ -269,14 +263,13 @@ pub struct AccessibilityAxvalue {
     /// The type of this value.
     pub r#type: AccessibilityAxvalueType,
     /// The computed value of this property.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AccessibilityAxvalueValue>,
     /// One or more related nodes, if applicable.
-    #[serde(rename = "relatedNodes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "relatedNodes", skip_serializing_if = "Option::is_none")]
     pub related_nodes: Option<Vec<AccessibilityAxrelatedNode>>,
     /// The sources which contributed to the computation of this property.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<Vec<AccessibilityAxvalueSource>>,
 }
 
@@ -324,32 +317,28 @@ pub struct AccessibilityAxvalueSource {
     /// What type of source this is.
     pub r#type: AccessibilityAxvalueSourceType,
     /// The value of this property source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<Box<AccessibilityAxvalue>>,
     /// The name of the relevant attribute, if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attribute: Option<String>,
     /// The value of the relevant attribute, if any.
-    #[serde(rename = "attributeValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "attributeValue", skip_serializing_if = "Option::is_none")]
     pub attribute_value: Option<Box<AccessibilityAxvalue>>,
     /// Whether this source is superseded by a higher priority source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded: Option<bool>,
     /// The native markup source for this value, e.g. a `<label>` element.
-    #[serde(rename = "nativeSource")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nativeSource", skip_serializing_if = "Option::is_none")]
     pub native_source: Option<AccessibilityAxvalueNativeSourceType>,
     /// The value, such as a node or node list, of the native source.
-    #[serde(rename = "nativeSourceValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nativeSourceValue", skip_serializing_if = "Option::is_none")]
     pub native_source_value: Option<Box<AccessibilityAxvalue>>,
     /// Whether the value for this property is invalid.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid: Option<bool>,
     /// Reason for the value being invalid, if it is.
-    #[serde(rename = "invalidReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "invalidReason", skip_serializing_if = "Option::is_none")]
     pub invalid_reason: Option<String>,
 }
 
@@ -474,16 +463,13 @@ impl AccessibilityEnableResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AccessibilityGetAxnodeAndAncestorsParams {
     /// Identifier of the node to get.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node to get.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper to get.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -519,8 +505,7 @@ pub struct AccessibilityGetChildAxnodesParams {
     pub id: AccessibilityAxnodeId,
     /// The frame in whose document the node resides.
     /// If omitted, the root frame is used.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -554,12 +539,11 @@ impl AccessibilityGetChildAxnodesResult {
 pub struct AccessibilityGetFullAxtreeParams {
     /// The maximum depth at which descendants of the root node should be retrieved.
     /// If omitted, the full tree is returned.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// The frame for whose document the AX tree should be retrieved.
     /// If omitted, the root frame is used.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -592,20 +576,16 @@ impl AccessibilityGetFullAxtreeResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AccessibilityGetPartialAxtreeParams {
     /// Identifier of the node to get the partial accessibility tree for.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node to get the partial accessibility tree for.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper to get the partial accessibility tree for.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Whether to fetch this node's ancestors, siblings and children. Defaults to true.
-    #[serde(rename = "fetchRelatives")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fetchRelatives", skip_serializing_if = "Option::is_none")]
     pub fetch_relatives: Option<bool>,
 }
 
@@ -643,8 +623,7 @@ impl AccessibilityGetPartialAxtreeResult {
 pub struct AccessibilityGetRootAxnodeParams {
     /// The frame in whose document the node resides.
     /// If omitted, the root frame is used.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -708,23 +687,19 @@ impl AccessibilityNodesUpdatedParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AccessibilityQueryAxtreeParams {
     /// Identifier of the node for the root to query.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node for the root to query.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper for the root to query.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Find nodes with this computed name.
-    #[serde(rename = "accessibleName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "accessibleName", skip_serializing_if = "Option::is_none")]
     pub accessible_name: Option<String>,
     /// Find nodes with this computed role.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
 }
 
@@ -767,8 +742,7 @@ pub struct AdsAdFrameData {
     pub frame_id: PageFrameId,
     /// The initial origin of the frame. To minimize the payload size, this is
     /// only sent once per frame.
-    #[serde(rename = "initialOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "initialOrigin", skip_serializing_if = "Option::is_none")]
     pub initial_origin: Option<String>,
     /// The network bytes of the frame.
     #[serde(rename = "networkBytes")]
@@ -904,16 +878,14 @@ pub struct AnimationAnimation {
     /// Animation type of `Animation`.
     pub r#type: AnimationAnimationType,
     /// `Animation`'s source animation node.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<AnimationAnimationEffect>,
     /// A unique ID for `Animation` representing the sources that triggered this CSS
     /// animation/transition.
-    #[serde(rename = "cssId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssId", skip_serializing_if = "Option::is_none")]
     pub css_id: Option<String>,
     /// View or scroll timeline
-    #[serde(rename = "viewOrScrollTimeline")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "viewOrScrollTimeline", skip_serializing_if = "Option::is_none")]
     pub view_or_scroll_timeline: Option<AnimationViewOrScrollTimeline>,
 }
 
@@ -949,7 +921,7 @@ pub struct AnimationAnimationEffect {
     #[serde(rename = "iterationStart")]
     pub iteration_start: f64,
     /// `AnimationEffect`'s iterations. Omitted if the value is infinite.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub iterations: Option<f64>,
     /// `AnimationEffect`'s iteration duration.
     /// Milliseconds for time based animations and
@@ -961,12 +933,10 @@ pub struct AnimationAnimationEffect {
     /// `AnimationEffect`'s fill mode.
     pub fill: String,
     /// `AnimationEffect`'s target node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// `AnimationEffect`'s keyframes.
-    #[serde(rename = "keyframesRule")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyframesRule", skip_serializing_if = "Option::is_none")]
     pub keyframes_rule: Option<AnimationKeyframesRule>,
     /// `AnimationEffect`'s timing function.
     pub easing: String,
@@ -1015,7 +985,7 @@ impl AnimationKeyframeStyle {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnimationKeyframesRule {
     /// CSS keyframed animation's name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// List of animation keyframes.
     pub keyframes: Vec<AnimationKeyframeStyle>,
@@ -1036,24 +1006,20 @@ impl AnimationKeyframesRule {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnimationViewOrScrollTimeline {
     /// Scroll container node
-    #[serde(rename = "sourceNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceNodeId", skip_serializing_if = "Option::is_none")]
     pub source_node_id: Option<DomBackendNodeId>,
     /// Represents the starting scroll position of the timeline
     /// as a length offset in pixels from scroll origin.
-    #[serde(rename = "startOffset")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startOffset", skip_serializing_if = "Option::is_none")]
     pub start_offset: Option<f64>,
     /// Represents the ending scroll position of the timeline
     /// as a length offset in pixels from scroll origin.
-    #[serde(rename = "endOffset")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "endOffset", skip_serializing_if = "Option::is_none")]
     pub end_offset: Option<f64>,
     /// The element whose principal box's visibility in the
     /// scrollport defined the progress of the timeline.
     /// Does not exist for animations with ScrollTimeline
-    #[serde(rename = "subjectNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "subjectNodeId", skip_serializing_if = "Option::is_none")]
     pub subject_node_id: Option<DomBackendNodeId>,
     /// Orientation of the scroll
     pub axis: DomScrollOrientation,
@@ -1468,8 +1434,7 @@ impl AuditsAffectedFrame {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsAffectedRequest {
     /// The unique request id.
-    #[serde(rename = "requestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<NetworkRequestId>,
     pub url: String,
 }
@@ -1491,11 +1456,9 @@ impl AuditsAffectedRequest {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsBlockedByResponseIssueDetails {
     pub request: AuditsAffectedRequest,
-    #[serde(rename = "parentFrame")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentFrame", skip_serializing_if = "Option::is_none")]
     pub parent_frame: Option<AuditsAffectedFrame>,
-    #[serde(rename = "blockedFrame")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "blockedFrame", skip_serializing_if = "Option::is_none")]
     pub blocked_frame: Option<AuditsAffectedFrame>,
     pub reason: AuditsBlockedByResponseReason,
 }
@@ -1616,8 +1579,7 @@ impl AuditsConnectionAllowlistIssueDetails {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsContentSecurityPolicyIssueDetails {
     /// The url not included in allowed sources.
-    #[serde(rename = "blockedURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "blockedURL", skip_serializing_if = "Option::is_none")]
     pub blocked_url: Option<String>,
     /// Specific directive that is violated, causing the CSP issue.
     #[serde(rename = "violatedDirective")]
@@ -1626,14 +1588,11 @@ pub struct AuditsContentSecurityPolicyIssueDetails {
     pub is_report_only: bool,
     #[serde(rename = "contentSecurityPolicyViolationType")]
     pub content_security_policy_violation_type: AuditsContentSecurityPolicyViolationType,
-    #[serde(rename = "frameAncestor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameAncestor", skip_serializing_if = "Option::is_none")]
     pub frame_ancestor: Option<AuditsAffectedFrame>,
-    #[serde(rename = "sourceCodeLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceCodeLocation", skip_serializing_if = "Option::is_none")]
     pub source_code_location: Option<AuditsSourceCodeLocation>,
-    #[serde(rename = "violatingNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "violatingNodeId", skip_serializing_if = "Option::is_none")]
     pub violating_node_id: Option<DomBackendNodeId>,
 }
 
@@ -1725,10 +1684,9 @@ pub struct AuditsCookieIssueDetails {
     /// Set-Cookie header string. This hints at a problem where the
     /// cookie line is syntactically or semantically malformed in a way
     /// that no valid cookie could be created.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cookie: Option<AuditsAffectedCookie>,
-    #[serde(rename = "rawCookieLine")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rawCookieLine", skip_serializing_if = "Option::is_none")]
     pub raw_cookie_line: Option<String>,
     #[serde(rename = "cookieWarningReasons")]
     pub cookie_warning_reasons: Vec<AuditsCookieWarningReason>,
@@ -1737,16 +1695,14 @@ pub struct AuditsCookieIssueDetails {
     /// Optionally identifies the site-for-cookies and the cookie url, which
     /// may be used by the front-end as additional context.
     pub operation: AuditsCookieOperation,
-    #[serde(rename = "siteForCookies")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "siteForCookies", skip_serializing_if = "Option::is_none")]
     pub site_for_cookies: Option<String>,
-    #[serde(rename = "cookieUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cookieUrl", skip_serializing_if = "Option::is_none")]
     pub cookie_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<AuditsAffectedRequest>,
     /// The recommended solution to the issue.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub insight: Option<AuditsCookieIssueInsight>,
 }
 
@@ -1773,8 +1729,7 @@ impl AuditsCookieIssueDetails {
 pub struct AuditsCookieIssueInsight {
     pub r#type: AuditsInsightType,
     /// Link to table entry in third-party cookie migration readiness list.
-    #[serde(rename = "tableEntryUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tableEntryUrl", skip_serializing_if = "Option::is_none")]
     pub table_entry_url: Option<String>,
 }
 
@@ -1825,16 +1780,13 @@ pub struct AuditsCorsIssueDetails {
     #[serde(rename = "isWarning")]
     pub is_warning: bool,
     pub request: AuditsAffectedRequest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<AuditsSourceCodeLocation>,
-    #[serde(rename = "initiatorOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "initiatorOrigin", skip_serializing_if = "Option::is_none")]
     pub initiator_origin: Option<String>,
-    #[serde(rename = "resourceIPAddressSpace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resourceIPAddressSpace", skip_serializing_if = "Option::is_none")]
     pub resource_ipaddress_space: Option<NetworkIpaddressSpace>,
-    #[serde(rename = "clientSecurityState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clientSecurityState", skip_serializing_if = "Option::is_none")]
     pub client_security_state: Option<NetworkClientSecurityState>,
 }
 
@@ -1858,8 +1810,7 @@ impl AuditsCorsIssueDetails {
 /// https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/frame/third_party/blink/renderer/core/frame/deprecation/README.md
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsDeprecationIssueDetails {
-    #[serde(rename = "affectedFrame")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "affectedFrame", skip_serializing_if = "Option::is_none")]
     pub affected_frame: Option<AuditsAffectedFrame>,
     #[serde(rename = "sourceCodeLocation")]
     pub source_code_location: AuditsSourceCodeLocation,
@@ -2002,8 +1953,7 @@ pub struct AuditsFailedRequestInfo {
     /// The failure message for the failed request.
     #[serde(rename = "failureMessage")]
     pub failure_message: String,
-    #[serde(rename = "requestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<NetworkRequestId>,
 }
 
@@ -2129,16 +2079,13 @@ pub struct AuditsGenericIssueDetails {
     /// Issues with the same errorType are aggregated in the frontend.
     #[serde(rename = "errorType")]
     pub error_type: AuditsGenericIssueErrorType,
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
-    #[serde(rename = "violatingNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "violatingNodeId", skip_serializing_if = "Option::is_none")]
     pub violating_node_id: Option<DomBackendNodeId>,
-    #[serde(rename = "violatingNodeAttribute")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "violatingNodeAttribute", skip_serializing_if = "Option::is_none")]
     pub violating_node_attribute: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<AuditsAffectedRequest>,
 }
 
@@ -2237,8 +2184,7 @@ pub struct AuditsInspectorIssue {
     pub details: AuditsInspectorIssueDetails,
     /// A unique id for this issue. May be omitted if no other entity (e.g.
     /// exception, CDP message, etc.) is referencing this issue.
-    #[serde(rename = "issueId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "issueId", skip_serializing_if = "Option::is_none")]
     pub issue_id: Option<AuditsIssueId>,
 }
 
@@ -2298,95 +2244,65 @@ pub enum AuditsInspectorIssueCode {
 /// add a new optional field to this type.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsInspectorIssueDetails {
-    #[serde(rename = "cookieIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cookieIssueDetails", skip_serializing_if = "Option::is_none")]
     pub cookie_issue_details: Option<AuditsCookieIssueDetails>,
-    #[serde(rename = "mixedContentIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mixedContentIssueDetails", skip_serializing_if = "Option::is_none")]
     pub mixed_content_issue_details: Option<AuditsMixedContentIssueDetails>,
-    #[serde(rename = "blockedByResponseIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "blockedByResponseIssueDetails", skip_serializing_if = "Option::is_none")]
     pub blocked_by_response_issue_details: Option<AuditsBlockedByResponseIssueDetails>,
-    #[serde(rename = "heavyAdIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "heavyAdIssueDetails", skip_serializing_if = "Option::is_none")]
     pub heavy_ad_issue_details: Option<AuditsHeavyAdIssueDetails>,
-    #[serde(rename = "contentSecurityPolicyIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentSecurityPolicyIssueDetails", skip_serializing_if = "Option::is_none")]
     pub content_security_policy_issue_details: Option<AuditsContentSecurityPolicyIssueDetails>,
-    #[serde(rename = "sharedArrayBufferIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sharedArrayBufferIssueDetails", skip_serializing_if = "Option::is_none")]
     pub shared_array_buffer_issue_details: Option<AuditsSharedArrayBufferIssueDetails>,
-    #[serde(rename = "corsIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "corsIssueDetails", skip_serializing_if = "Option::is_none")]
     pub cors_issue_details: Option<AuditsCorsIssueDetails>,
-    #[serde(rename = "quirksModeIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "quirksModeIssueDetails", skip_serializing_if = "Option::is_none")]
     pub quirks_mode_issue_details: Option<AuditsQuirksModeIssueDetails>,
-    #[serde(rename = "partitioningBlobURLIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitioningBlobURLIssueDetails", skip_serializing_if = "Option::is_none")]
     pub partitioning_blob_urlissue_details: Option<AuditsPartitioningBlobUrlissueDetails>,
-    #[serde(rename = "navigatorUserAgentIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "navigatorUserAgentIssueDetails", skip_serializing_if = "Option::is_none")]
     pub navigator_user_agent_issue_details: Option<AuditsNavigatorUserAgentIssueDetails>,
-    #[serde(rename = "genericIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "genericIssueDetails", skip_serializing_if = "Option::is_none")]
     pub generic_issue_details: Option<AuditsGenericIssueDetails>,
-    #[serde(rename = "deprecationIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deprecationIssueDetails", skip_serializing_if = "Option::is_none")]
     pub deprecation_issue_details: Option<AuditsDeprecationIssueDetails>,
-    #[serde(rename = "clientHintIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clientHintIssueDetails", skip_serializing_if = "Option::is_none")]
     pub client_hint_issue_details: Option<AuditsClientHintIssueDetails>,
-    #[serde(rename = "federatedAuthRequestIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "federatedAuthRequestIssueDetails", skip_serializing_if = "Option::is_none")]
     pub federated_auth_request_issue_details: Option<AuditsFederatedAuthRequestIssueDetails>,
-    #[serde(rename = "bounceTrackingIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bounceTrackingIssueDetails", skip_serializing_if = "Option::is_none")]
     pub bounce_tracking_issue_details: Option<AuditsBounceTrackingIssueDetails>,
-    #[serde(rename = "cookieDeprecationMetadataIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cookieDeprecationMetadataIssueDetails", skip_serializing_if = "Option::is_none")]
     pub cookie_deprecation_metadata_issue_details: Option<AuditsCookieDeprecationMetadataIssueDetails>,
-    #[serde(rename = "stylesheetLoadingIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stylesheetLoadingIssueDetails", skip_serializing_if = "Option::is_none")]
     pub stylesheet_loading_issue_details: Option<AuditsStylesheetLoadingIssueDetails>,
-    #[serde(rename = "propertyRuleIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "propertyRuleIssueDetails", skip_serializing_if = "Option::is_none")]
     pub property_rule_issue_details: Option<AuditsPropertyRuleIssueDetails>,
-    #[serde(rename = "federatedAuthUserInfoRequestIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "federatedAuthUserInfoRequestIssueDetails", skip_serializing_if = "Option::is_none")]
     pub federated_auth_user_info_request_issue_details: Option<AuditsFederatedAuthUserInfoRequestIssueDetails>,
-    #[serde(rename = "sharedDictionaryIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sharedDictionaryIssueDetails", skip_serializing_if = "Option::is_none")]
     pub shared_dictionary_issue_details: Option<AuditsSharedDictionaryIssueDetails>,
-    #[serde(rename = "elementAccessibilityIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "elementAccessibilityIssueDetails", skip_serializing_if = "Option::is_none")]
     pub element_accessibility_issue_details: Option<AuditsElementAccessibilityIssueDetails>,
-    #[serde(rename = "sriMessageSignatureIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sriMessageSignatureIssueDetails", skip_serializing_if = "Option::is_none")]
     pub sri_message_signature_issue_details: Option<AuditsSrimessageSignatureIssueDetails>,
-    #[serde(rename = "unencodedDigestIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "unencodedDigestIssueDetails", skip_serializing_if = "Option::is_none")]
     pub unencoded_digest_issue_details: Option<AuditsUnencodedDigestIssueDetails>,
-    #[serde(rename = "connectionAllowlistIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "connectionAllowlistIssueDetails", skip_serializing_if = "Option::is_none")]
     pub connection_allowlist_issue_details: Option<AuditsConnectionAllowlistIssueDetails>,
-    #[serde(rename = "userReidentificationIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userReidentificationIssueDetails", skip_serializing_if = "Option::is_none")]
     pub user_reidentification_issue_details: Option<AuditsUserReidentificationIssueDetails>,
-    #[serde(rename = "permissionElementIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "permissionElementIssueDetails", skip_serializing_if = "Option::is_none")]
     pub permission_element_issue_details: Option<AuditsPermissionElementIssueDetails>,
-    #[serde(rename = "performanceIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "performanceIssueDetails", skip_serializing_if = "Option::is_none")]
     pub performance_issue_details: Option<AuditsPerformanceIssueDetails>,
-    #[serde(rename = "selectivePermissionsInterventionIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "selectivePermissionsInterventionIssueDetails", skip_serializing_if = "Option::is_none")]
     pub selective_permissions_intervention_issue_details: Option<AuditsSelectivePermissionsInterventionIssueDetails>,
-    #[serde(rename = "emailVerificationRequestIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "emailVerificationRequestIssueDetails", skip_serializing_if = "Option::is_none")]
     pub email_verification_request_issue_details: Option<AuditsEmailVerificationRequestIssueDetails>,
-    #[serde(rename = "lazyLoadImageIssueDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lazyLoadImageIssueDetails", skip_serializing_if = "Option::is_none")]
     pub lazy_load_image_issue_details: Option<AuditsLazyLoadImageIssueDetails>,
 }
 
@@ -2465,8 +2381,7 @@ pub struct AuditsMixedContentIssueDetails {
     /// form,...). Marked as optional because it is mapped to from
     /// blink::mojom::RequestContextType, which will be replaced
     /// by network::mojom::RequestDestination
-    #[serde(rename = "resourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resourceType", skip_serializing_if = "Option::is_none")]
     pub resource_type: Option<AuditsMixedContentResourceType>,
     /// The way the mixed content issue is being resolved.
     #[serde(rename = "resolutionStatus")]
@@ -2479,10 +2394,10 @@ pub struct AuditsMixedContentIssueDetails {
     pub main_resource_url: String,
     /// The mixed content request.
     /// Does not always exist (e.g. for unsafe form submission urls).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<AuditsAffectedRequest>,
     /// Optional because not every mixed content issue is necessarily linked to a frame.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<AuditsAffectedFrame>,
 }
 
@@ -2550,7 +2465,7 @@ pub enum AuditsMixedContentResourceType {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsNavigatorUserAgentIssueDetails {
     pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<AuditsSourceCodeLocation>,
 }
 
@@ -2598,8 +2513,7 @@ impl AuditsPartitioningBlobUrlissueDetails {
 pub struct AuditsPerformanceIssueDetails {
     #[serde(rename = "performanceIssueType")]
     pub performance_issue_type: AuditsPerformanceIssueType,
-    #[serde(rename = "sourceCodeLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceCodeLocation", skip_serializing_if = "Option::is_none")]
     pub source_code_location: Option<AuditsSourceCodeLocation>,
 }
 
@@ -2626,32 +2540,26 @@ pub struct AuditsPermissionElementIssueDetails {
     #[serde(rename = "issueType")]
     pub issue_type: AuditsPermissionElementIssueType,
     /// The value of the type attribute.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
     /// The node ID of the <permission> element.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomBackendNodeId>,
     /// True if the issue is a warning, false if it is an error.
-    #[serde(rename = "isWarning")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isWarning", skip_serializing_if = "Option::is_none")]
     pub is_warning: Option<bool>,
     /// Fields for message construction:
     /// Used for messages that reference a specific permission name
-    #[serde(rename = "permissionName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "permissionName", skip_serializing_if = "Option::is_none")]
     pub permission_name: Option<String>,
     /// Used for messages about occlusion
-    #[serde(rename = "occluderNodeInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "occluderNodeInfo", skip_serializing_if = "Option::is_none")]
     pub occluder_node_info: Option<String>,
     /// Used for messages about occluder's parent
-    #[serde(rename = "occluderParentNodeInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "occluderParentNodeInfo", skip_serializing_if = "Option::is_none")]
     pub occluder_parent_node_info: Option<String>,
     /// Used for messages about activation disabled reason
-    #[serde(rename = "disableReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "disableReason", skip_serializing_if = "Option::is_none")]
     pub disable_reason: Option<String>,
 }
 
@@ -2711,8 +2619,7 @@ pub struct AuditsPropertyRuleIssueDetails {
     #[serde(rename = "propertyRuleIssueReason")]
     pub property_rule_issue_reason: AuditsPropertyRuleIssueReason,
     /// The value of the property rule property that failed to parse
-    #[serde(rename = "propertyValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "propertyValue", skip_serializing_if = "Option::is_none")]
     pub property_value: Option<String>,
 }
 
@@ -2833,8 +2740,7 @@ pub struct AuditsSelectivePermissionsInterventionIssueDetails {
     #[serde(rename = "adAncestry")]
     pub ad_ancestry: NetworkAdAncestry,
     /// The stack trace at the time of the intervention.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
 }
 
@@ -2935,8 +2841,7 @@ impl AuditsSharedDictionaryIssueDetails {
 /// SourceCodeLocation
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsSourceCodeLocation {
-    #[serde(rename = "scriptId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptId", skip_serializing_if = "Option::is_none")]
     pub script_id: Option<RuntimeScriptId>,
     pub url: String,
     #[serde(rename = "lineNumber")]
@@ -2975,8 +2880,7 @@ pub struct AuditsStylesheetLoadingIssueDetails {
     #[serde(rename = "styleSheetLoadingIssueReason")]
     pub style_sheet_loading_issue_reason: AuditsStyleSheetLoadingIssueReason,
     /// Contains additional info when the failure was due to a request.
-    #[serde(rename = "failedRequestInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "failedRequestInfo", skip_serializing_if = "Option::is_none")]
     pub failed_request_info: Option<AuditsFailedRequestInfo>,
 }
 
@@ -3025,11 +2929,10 @@ impl AuditsUnencodedDigestIssueDetails {
 pub struct AuditsUserReidentificationIssueDetails {
     pub r#type: AuditsUserReidentificationIssueType,
     /// Applies to BlockedFrameNavigation and BlockedSubresource issue types.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<AuditsAffectedRequest>,
     /// Applies to NoisedCanvasReadback issue type.
-    #[serde(rename = "sourceCodeLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceCodeLocation", skip_serializing_if = "Option::is_none")]
     pub source_code_location: Option<AuditsSourceCodeLocation>,
 }
 
@@ -3143,11 +3046,10 @@ pub struct AuditsGetEncodedResponseParams {
     /// The encoding to use.
     pub encoding: AuditsGetEncodedResponseParamsEncoding,
     /// The quality of the encoding (0-1). (defaults to 1)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<f64>,
     /// Whether to only return the size information (defaults to false).
-    #[serde(rename = "sizeOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sizeOnly", skip_serializing_if = "Option::is_none")]
     pub size_only: Option<bool>,
 }
 
@@ -3167,7 +3069,7 @@ impl AuditsGetEncodedResponseParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditsGetEncodedResponseResult {
     /// The encoded body as a base64 string. Omitted if sizeOnly is true. (Encoded as a base64 string when passed over JSON)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     /// Size before re-encoding.
     #[serde(rename = "originalSize")]
@@ -3464,14 +3366,13 @@ pub struct AutofillTriggerParams {
     #[serde(rename = "fieldId")]
     pub field_id: DomBackendNodeId,
     /// Identifies the frame that field belongs to.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// Credit card information to fill out the form. Credit card data is not saved.  Mutually exclusive with `address`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub card: Option<AutofillCreditCard>,
     /// Address to fill out the form. Address data is not saved. Mutually exclusive with `card`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<AutofillAddress>,
 }
 
@@ -3748,24 +3649,21 @@ pub enum BluetoothEmulationCharacteristicOperationType {
 /// Specification BT 4.2 Vol 3 Part G 3.3.1. Characteristic Properties.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BluetoothEmulationCharacteristicProperties {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub broadcast: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub read: Option<bool>,
-    #[serde(rename = "writeWithoutResponse")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "writeWithoutResponse", skip_serializing_if = "Option::is_none")]
     pub write_without_response: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub write: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub notify: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub indicate: Option<bool>,
-    #[serde(rename = "authenticatedSignedWrites")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "authenticatedSignedWrites", skip_serializing_if = "Option::is_none")]
     pub authenticated_signed_writes: Option<bool>,
-    #[serde(rename = "extendedProperties")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "extendedProperties", skip_serializing_if = "Option::is_none")]
     pub extended_properties: Option<bool>,
 }
 
@@ -3862,21 +3760,19 @@ impl BluetoothEmulationScanEntry {
 /// Stores the byte data of the advertisement packet sent by a Bluetooth device.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BluetoothEmulationScanRecord {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub uuids: Option<Vec<String>>,
     /// Stores the external appearance description of the device.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub appearance: Option<i64>,
     /// Stores the transmission power of a broadcasting device.
-    #[serde(rename = "txPower")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "txPower", skip_serializing_if = "Option::is_none")]
     pub tx_power: Option<i64>,
     /// Key is the company identifier and the value is an array of bytes of
     /// manufacturer specific data.
-    #[serde(rename = "manufacturerData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "manufacturerData", skip_serializing_if = "Option::is_none")]
     pub manufacturer_data: Option<Vec<BluetoothEmulationManufacturerData>>,
 }
 
@@ -4008,10 +3904,9 @@ pub struct BluetoothEmulationCharacteristicOperationReceivedParams {
     #[serde(rename = "characteristicId")]
     pub characteristic_id: String,
     pub r#type: BluetoothEmulationCharacteristicOperationType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
-    #[serde(rename = "writeType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "writeType", skip_serializing_if = "Option::is_none")]
     pub write_type: Option<BluetoothEmulationCharacteristicWriteType>,
 }
 
@@ -4033,7 +3928,7 @@ pub struct BluetoothEmulationDescriptorOperationReceivedParams {
     #[serde(rename = "descriptorId")]
     pub descriptor_id: String,
     pub r#type: BluetoothEmulationDescriptorOperationType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
 }
 
@@ -4259,7 +4154,7 @@ pub struct BluetoothEmulationSimulateCharacteristicOperationResponseParams {
     pub characteristic_id: String,
     pub r#type: BluetoothEmulationCharacteristicOperationType,
     pub code: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
 }
 
@@ -4293,7 +4188,7 @@ pub struct BluetoothEmulationSimulateDescriptorOperationResponseParams {
     pub descriptor_id: String,
     pub r#type: BluetoothEmulationDescriptorOperationType,
     pub code: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
 }
 
@@ -4415,20 +4310,19 @@ impl BluetoothEmulationSimulatePreconnectedPeripheralResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BrowserBounds {
     /// The offset from the left edge of the screen to the window in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<i64>,
     /// The offset from the top edge of the screen to the window in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<i64>,
     /// The window width in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
     /// The window height in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
     /// The window state. Default to normal.
-    #[serde(rename = "windowState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "windowState", skip_serializing_if = "Option::is_none")]
     pub window_state: Option<BrowserWindowState>,
 }
 
@@ -4517,24 +4411,20 @@ pub struct BrowserPermissionDescriptor {
     /// See https://cs.chromium.org/chromium/src/third_party/blink/renderer/modules/permissions/permission_descriptor.idl for valid permission names.
     pub name: String,
     /// For "midi" permission, may also specify sysex control.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sysex: Option<bool>,
     /// For "push" permission, may specify userVisibleOnly.
     /// Note that userVisibleOnly = true is the only currently supported type.
-    #[serde(rename = "userVisibleOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userVisibleOnly", skip_serializing_if = "Option::is_none")]
     pub user_visible_only: Option<bool>,
     /// For "clipboard" permission, may specify allowWithoutSanitization.
-    #[serde(rename = "allowWithoutSanitization")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowWithoutSanitization", skip_serializing_if = "Option::is_none")]
     pub allow_without_sanitization: Option<bool>,
     /// For "fullscreen" permission, must specify allowWithoutGesture:true.
-    #[serde(rename = "allowWithoutGesture")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowWithoutGesture", skip_serializing_if = "Option::is_none")]
     pub allow_without_gesture: Option<bool>,
     /// For "camera" permission, may specify panTiltZoom.
-    #[serde(rename = "panTiltZoom")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "panTiltZoom", skip_serializing_if = "Option::is_none")]
     pub pan_tilt_zoom: Option<bool>,
 }
 
@@ -4694,8 +4584,7 @@ pub struct BrowserCancelDownloadParams {
     /// Global unique identifier of the download.
     pub guid: String,
     /// BrowserContext to perform the action in. When omitted, default browser context is used.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -4813,8 +4702,7 @@ pub struct BrowserDownloadProgressParams {
     /// If download is "completed", provides the path of the downloaded file.
     /// Depending on the platform, it is not guaranteed to be set, nor the file
     /// is guaranteed to exist.
-    #[serde(rename = "filePath")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "filePath", skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
 }
 
@@ -4918,7 +4806,7 @@ pub struct BrowserGetHistogramParams {
     /// Requested histogram name.
     pub name: String,
     /// If true, retrieve delta since last delta call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delta: Option<bool>,
 }
 
@@ -4954,10 +4842,10 @@ pub struct BrowserGetHistogramsParams {
     /// Requested substring in name. Only histograms which have query as a
     /// substring in their name are extracted. An empty or absent query returns
     /// all histograms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     /// If true, retrieve delta since last delta call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delta: Option<bool>,
 }
 
@@ -5067,8 +4955,7 @@ impl BrowserGetWindowBoundsResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BrowserGetWindowForTargetParams {
     /// Devtools agent host id. If called as a part of the session, associated targetId is used.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -5107,11 +4994,10 @@ impl BrowserGetWindowForTargetResult {
 pub struct BrowserGrantPermissionsParams {
     pub permissions: Vec<BrowserPermissionType>,
     /// Origin the permission applies to, all origins if not specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     /// BrowserContext to override permissions. When omitted, default browser context is used.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -5141,8 +5027,7 @@ impl BrowserGrantPermissionsResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BrowserResetPermissionsParams {
     /// BrowserContext to reset permissions. When omitted, default browser context is used.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -5174,11 +5059,11 @@ pub struct BrowserSetContentsSizeParams {
     pub window_id: BrowserWindowId,
     /// The window contents width in DIP. Assumes current width if omitted.
     /// Must be specified if 'height' is omitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
     /// The window contents height in DIP. Assumes current height if omitted.
     /// Must be specified if 'width' is omitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
 }
 
@@ -5207,11 +5092,10 @@ impl BrowserSetContentsSizeResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BrowserSetDockTileParams {
-    #[serde(rename = "badgeLabel")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "badgeLabel", skip_serializing_if = "Option::is_none")]
     pub badge_label: Option<String>,
     /// Png encoded image. (Encoded as a base64 string when passed over JSON)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }
 
@@ -5259,17 +5143,14 @@ pub struct BrowserSetDownloadBehaviorParams {
     /// their download guids.
     pub behavior: BrowserSetDownloadBehaviorParamsBehavior,
     /// BrowserContext to set download behavior. When omitted, default browser context is used.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
     /// The default path to save downloaded files to. This is required if behavior is set to 'allow'
     /// or 'allowAndName'.
-    #[serde(rename = "downloadPath")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "downloadPath", skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
     /// Whether to emit download events (defaults to false).
-    #[serde(rename = "eventsEnabled")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "eventsEnabled", skip_serializing_if = "Option::is_none")]
     pub events_enabled: Option<bool>,
 }
 
@@ -5304,17 +5185,15 @@ pub struct BrowserSetPermissionParams {
     /// Setting of the permission.
     pub setting: BrowserPermissionSetting,
     /// Embedding origin the permission applies to, all origins if not specified.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     /// Embedded origin the permission applies to. It is ignored unless the embedding origin is
     /// present and valid. If the embedding origin is provided but the embedded origin isn't, the
     /// embedding origin is used as the embedded origin.
-    #[serde(rename = "embeddedOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "embeddedOrigin", skip_serializing_if = "Option::is_none")]
     pub embedded_origin: Option<String>,
     /// Context to override. When omitted, default browser context is used.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -5379,7 +5258,7 @@ impl BrowserSetWindowBoundsResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssCssanimationStyle {
     /// The name of the animation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The style coming from the animation.
     pub style: CssCssstyle,
@@ -5432,16 +5311,15 @@ pub struct CssCssatRule {
     /// Type of at-rule.
     pub r#type: CssCssatRuleType,
     /// Subsection of font-feature-values, if this is a subsection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subsection: Option<CssCssatRuleSubsection>,
     /// LINT.ThenChange(//third_party/blink/renderer/core/inspector/inspector_style_sheet.cc:FontVariantAlternatesFeatureType,//third_party/blink/renderer/core/inspector/inspector_css_agent.cc:FontVariantAlternatesFeatureType)
     /// Associated name, if applicable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<CssValue>,
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
@@ -5494,30 +5372,25 @@ pub struct CssCsscontainerQuery {
     pub text: String,
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Optional name for the container.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Optional physical axes queried for the container.
-    #[serde(rename = "physicalAxes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "physicalAxes", skip_serializing_if = "Option::is_none")]
     pub physical_axes: Option<DomPhysicalAxes>,
     /// Optional logical axes queried for the container.
-    #[serde(rename = "logicalAxes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "logicalAxes", skip_serializing_if = "Option::is_none")]
     pub logical_axes: Option<DomLogicalAxes>,
     /// true if the query contains scroll-state() queries.
-    #[serde(rename = "queriesScrollState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "queriesScrollState", skip_serializing_if = "Option::is_none")]
     pub queries_scroll_state: Option<bool>,
     /// true if the query contains anchored() queries.
-    #[serde(rename = "queriesAnchored")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "queriesAnchored", skip_serializing_if = "Option::is_none")]
     pub queries_anchored: Option<bool>,
     /// CSSContainerRule.conditionText
     #[serde(rename = "conditionText")]
@@ -5546,17 +5419,16 @@ impl CssCsscontainerQuery {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssCssfunctionConditionNode {
     /// Media query for this conditional block. Only one type of condition should be set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<CssCssmedia>,
     /// Container query for this conditional block. Only one type of condition should be set.
-    #[serde(rename = "containerQueries")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerQueries", skip_serializing_if = "Option::is_none")]
     pub container_queries: Option<CssCsscontainerQuery>,
     /// @supports CSS at-rule condition. Only one type of condition should be set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports: Option<CssCsssupports>,
     /// @navigation condition. Only one type of condition should be set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub navigation: Option<CssCssnavigation>,
     /// Block body.
     pub children: Vec<CssCssfunctionNode>,
@@ -5584,10 +5456,10 @@ impl CssCssfunctionConditionNode {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssCssfunctionNode {
     /// A conditional block. If set, style should not be set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<Box<CssCssfunctionConditionNode>>,
     /// Values set by this node. If set, condition should not be set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<CssCssstyle>,
 }
 
@@ -5629,8 +5501,7 @@ pub struct CssCssfunctionRule {
     pub name: CssValue,
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
@@ -5639,8 +5510,7 @@ pub struct CssCssfunctionRule {
     /// Function body.
     pub children: Vec<CssCssfunctionNode>,
     /// The BackendNodeId of the DOM node that constitutes the origin tree scope of this rule.
-    #[serde(rename = "originTreeScopeNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originTreeScopeNodeId", skip_serializing_if = "Option::is_none")]
     pub origin_tree_scope_node_id: Option<DomBackendNodeId>,
 }
 
@@ -5664,8 +5534,7 @@ impl CssCssfunctionRule {
 pub struct CssCsskeyframeRule {
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
@@ -5717,11 +5586,10 @@ pub struct CssCsslayer {
     pub text: String,
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
 }
 
@@ -5743,8 +5611,7 @@ pub struct CssCsslayerData {
     /// Layer name.
     pub name: String,
     /// Direct sub-layers
-    #[serde(rename = "subLayers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "subLayers", skip_serializing_if = "Option::is_none")]
     pub sub_layers: Option<Vec<CssCsslayerData>>,
     /// Layer order. The order determines the order of the layer in the cascade order.
     /// A higher number has higher priority in the cascade order.
@@ -5790,20 +5657,17 @@ pub struct CssCssmedia {
     /// stylesheet's STYLE tag.
     pub source: CssCssmediaSource,
     /// URL of the document containing the media query description.
-    #[serde(rename = "sourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceURL", skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
     /// The associated rule (@media or @import) header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Array of media queries.
-    #[serde(rename = "mediaList")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mediaList", skip_serializing_if = "Option::is_none")]
     pub media_list: Option<Vec<CssMediaQuery>>,
 }
 
@@ -5828,15 +5692,14 @@ pub struct CssCssnavigation {
     /// Navigation rule text.
     pub text: String,
     /// Whether the navigation condition is satisfied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub active: Option<bool>,
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
 }
 
@@ -5860,8 +5723,7 @@ pub struct CssCsspositionTryRule {
     pub name: CssValue,
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
@@ -5892,28 +5754,26 @@ pub struct CssCssproperty {
     /// The property value.
     pub value: String,
     /// Whether the property has "!important" annotation (implies `false` if absent).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub important: Option<bool>,
     /// Whether the property is implicit (implies `false` if absent).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub implicit: Option<bool>,
     /// The full property text as specified in the style.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Whether the property is understood by the browser (implies `true` if absent).
-    #[serde(rename = "parsedOk")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parsedOk", skip_serializing_if = "Option::is_none")]
     pub parsed_ok: Option<bool>,
     /// Whether the property is disabled by the user (present for source-based properties only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
     /// The entire property range in the enclosing style declaration (if available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Parsed longhand components of this property if it is a shorthand.
     /// This field will be empty if the given property is not a shorthand.
-    #[serde(rename = "longhandProperties")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "longhandProperties", skip_serializing_if = "Option::is_none")]
     pub longhand_properties: Option<Vec<CssCssproperty>>,
 }
 
@@ -5940,8 +5800,7 @@ impl CssCssproperty {
 pub struct CssCsspropertyRegistration {
     #[serde(rename = "propertyName")]
     pub property_name: String,
-    #[serde(rename = "initialValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "initialValue", skip_serializing_if = "Option::is_none")]
     pub initial_value: Option<CssValue>,
     pub inherits: bool,
     pub syntax: String,
@@ -5965,8 +5824,7 @@ impl CssCsspropertyRegistration {
 pub struct CssCsspropertyRule {
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
@@ -5995,57 +5853,51 @@ impl CssCsspropertyRule {
 pub struct CssCssrule {
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// Rule selector data.
     #[serde(rename = "selectorList")]
     pub selector_list: CssSelectorList,
     /// Array of selectors from ancestor style rules, sorted by distance from the current rule.
-    #[serde(rename = "nestingSelectors")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nestingSelectors", skip_serializing_if = "Option::is_none")]
     pub nesting_selectors: Option<Vec<String>>,
     /// Parent stylesheet's origin.
     pub origin: CssStyleSheetOrigin,
     /// Associated style declaration.
     pub style: CssCssstyle,
     /// The BackendNodeId of the DOM node that constitutes the origin tree scope of this rule.
-    #[serde(rename = "originTreeScopeNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originTreeScopeNodeId", skip_serializing_if = "Option::is_none")]
     pub origin_tree_scope_node_id: Option<DomBackendNodeId>,
     /// Media list array (for rules involving media queries). The array enumerates media queries
     /// starting with the innermost one, going outwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<Vec<CssCssmedia>>,
     /// Container query list array (for rules involving container queries).
     /// The array enumerates container queries starting with the innermost one, going outwards.
-    #[serde(rename = "containerQueries")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerQueries", skip_serializing_if = "Option::is_none")]
     pub container_queries: Option<Vec<CssCsscontainerQuery>>,
     /// @supports CSS at-rule array.
     /// The array enumerates @supports at-rules starting with the innermost one, going outwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports: Option<Vec<CssCsssupports>>,
     /// Cascade layer array. Contains the layer hierarchy that this rule belongs to starting
     /// with the innermost layer and going outwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<CssCsslayer>>,
     /// @scope CSS at-rule array.
     /// The array enumerates @scope at-rules starting with the innermost one, going outwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<CssCssscope>>,
     /// The array keeps the types of ancestor CSSRules from the innermost going outwards.
-    #[serde(rename = "ruleTypes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ruleTypes", skip_serializing_if = "Option::is_none")]
     pub rule_types: Option<Vec<CssCssruleType>>,
     /// @starting-style CSS at-rule array.
     /// The array enumerates @starting-style at-rules starting with the innermost one, going outwards.
-    #[serde(rename = "startingStyles")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startingStyles", skip_serializing_if = "Option::is_none")]
     pub starting_styles: Option<Vec<CssCssstartingStyle>>,
     /// @navigation CSS at-rule array.
     /// The array enumerates @navigation at-rules starting with the innermost one, going outwards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub navigations: Option<Vec<CssCssnavigation>>,
 }
 
@@ -6093,11 +5945,10 @@ pub struct CssCssscope {
     pub text: String,
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
 }
 
@@ -6118,11 +5969,10 @@ impl CssCssscope {
 pub struct CssCssstartingStyle {
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
 }
 
@@ -6142,8 +5992,7 @@ impl CssCssstartingStyle {
 pub struct CssCssstyle {
     /// The css style sheet identifier (absent for user agent stylesheet and user-specified
     /// stylesheet rules) this rule came from.
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
     /// CSS properties in the style.
     #[serde(rename = "cssProperties")]
@@ -6152,11 +6001,10 @@ pub struct CssCssstyle {
     #[serde(rename = "shorthandEntries")]
     pub shorthand_entries: Vec<CssShorthandEntry>,
     /// Style declaration text (if available).
-    #[serde(rename = "cssText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssText", skip_serializing_if = "Option::is_none")]
     pub css_text: Option<String>,
     /// Style declaration range in the enclosing stylesheet (if available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
 }
 
@@ -6189,22 +6037,19 @@ pub struct CssCssstyleSheetHeader {
     #[serde(rename = "sourceURL")]
     pub source_url: String,
     /// URL of source map associated with the stylesheet (if any).
-    #[serde(rename = "sourceMapURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceMapURL", skip_serializing_if = "Option::is_none")]
     pub source_map_url: Option<String>,
     /// Stylesheet origin.
     pub origin: CssStyleSheetOrigin,
     /// Stylesheet title.
     pub title: String,
     /// The backend id for the owner node of the stylesheet.
-    #[serde(rename = "ownerNode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ownerNode", skip_serializing_if = "Option::is_none")]
     pub owner_node: Option<DomBackendNodeId>,
     /// Denotes whether the stylesheet is disabled.
     pub disabled: bool,
     /// Whether the sourceURL field value comes from the sourceURL comment.
-    #[serde(rename = "hasSourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasSourceURL", skip_serializing_if = "Option::is_none")]
     pub has_source_url: Option<bool>,
     /// Whether this stylesheet is created for STYLE tag by parser. This flag is not set for
     /// document.written STYLE tags.
@@ -6235,8 +6080,7 @@ pub struct CssCssstyleSheetHeader {
     #[serde(rename = "endColumn")]
     pub end_column: f64,
     /// If the style sheet was loaded from a network resource, this indicates when the resource failed to load
-    #[serde(rename = "loadingFailed")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "loadingFailed", skip_serializing_if = "Option::is_none")]
     pub loading_failed: Option<bool>,
 }
 
@@ -6276,11 +6120,10 @@ pub struct CssCsssupports {
     pub active: bool,
     /// The associated rule header range in the enclosing stylesheet (if
     /// available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Identifier of the stylesheet containing this object (if exists).
-    #[serde(rename = "styleSheetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleSheetId", skip_serializing_if = "Option::is_none")]
     pub style_sheet_id: Option<DomStyleSheetId>,
 }
 
@@ -6348,8 +6191,7 @@ pub struct CssFontFace {
     #[serde(rename = "platformFontFamily")]
     pub platform_font_family: String,
     /// Available variation settings (a.k.a. "axes").
-    #[serde(rename = "fontVariationAxes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fontVariationAxes", skip_serializing_if = "Option::is_none")]
     pub font_variation_axes: Option<Vec<CssFontVariationAxis>>,
 }
 
@@ -6408,12 +6250,10 @@ impl CssFontVariationAxis {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssInheritedAnimatedStyleEntry {
     /// Styles coming from the animations of the ancestor, if any, in the style inheritance chain.
-    #[serde(rename = "animationStyles")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "animationStyles", skip_serializing_if = "Option::is_none")]
     pub animation_styles: Option<Vec<CssCssanimationStyle>>,
     /// The style coming from the transitions of the ancestor, if any, in the style inheritance chain.
-    #[serde(rename = "transitionsStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "transitionsStyle", skip_serializing_if = "Option::is_none")]
     pub transitions_style: Option<CssCssstyle>,
 }
 
@@ -6450,8 +6290,7 @@ impl CssInheritedPseudoElementMatches {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssInheritedStyleEntry {
     /// The ancestor node's inline style, if any, in the style inheritance chain.
-    #[serde(rename = "inlineStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inlineStyle", skip_serializing_if = "Option::is_none")]
     pub inline_style: Option<CssCssstyle>,
     /// Matches of CSS rules matching the ancestor node in the style inheritance chain.
     #[serde(rename = "matchedCSSRules")]
@@ -6499,12 +6338,10 @@ pub struct CssMediaQueryExpression {
     /// Media query expression feature.
     pub feature: String,
     /// The associated range of the value text in the enclosing stylesheet (if available).
-    #[serde(rename = "valueRange")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "valueRange", skip_serializing_if = "Option::is_none")]
     pub value_range: Option<CssSourceRange>,
     /// Computed length of media query expression (if applicable).
-    #[serde(rename = "computedLength")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "computedLength", skip_serializing_if = "Option::is_none")]
     pub computed_length: Option<f64>,
 }
 
@@ -6559,8 +6396,7 @@ pub struct CssPseudoElementMatches {
     #[serde(rename = "pseudoType")]
     pub pseudo_type: DomPseudoType,
     /// Pseudo element custom ident.
-    #[serde(rename = "pseudoIdentifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoIdentifier", skip_serializing_if = "Option::is_none")]
     pub pseudo_identifier: Option<String>,
     /// Matches of CSS rules applicable to the pseudo style.
     pub matches: Vec<CssRuleMatch>,
@@ -6657,7 +6493,7 @@ pub struct CssShorthandEntry {
     /// Shorthand value.
     pub value: String,
     /// Whether the property has "!important" annotation (implies `false` if absent).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub important: Option<bool>,
 }
 
@@ -6715,7 +6551,7 @@ pub struct CssSpecificity {
     /// The c component, which represents the number of type selectors and pseudo-elements.
     pub c: i64,
     /// Per-simple-selector contributions used to explain this specificity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<CssSpecificityComponent>>,
 }
 
@@ -6803,10 +6639,10 @@ pub struct CssValue {
     /// Value text.
     pub text: String,
     /// Value range in the underlying resource (if available).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<CssSourceRange>,
     /// Specificity of the selector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub specificity: Option<CssSpecificity>,
 }
 
@@ -6835,8 +6671,7 @@ pub struct CssAddRuleParams {
     /// NodeId for the DOM node in whose context custom property declarations for registered properties should be
     /// validated. If omitted, declarations in the new rule text can only be validated statically, which may produce
     /// incorrect results if the declaration contains a var() for example.
-    #[serde(rename = "nodeForPropertySyntaxValidation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeForPropertySyntaxValidation", skip_serializing_if = "Option::is_none")]
     pub node_for_property_syntax_validation: Option<DomNodeId>,
 }
 
@@ -6928,7 +6763,7 @@ pub struct CssCreateStyleSheetParams {
     /// returns a stylesheet previously created by a call with force=false
     /// for the frame's document if it exists or creates a new stylesheet
     /// (default: false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<bool>,
 }
 
@@ -7007,7 +6842,7 @@ impl CssEnableResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssFontsUpdatedParams {
     /// The web font that has loaded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<CssFontFace>,
 }
 
@@ -7103,16 +6938,14 @@ impl CssGetAnimatedStylesForNodeParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssGetAnimatedStylesForNodeResult {
     /// Styles coming from animations.
-    #[serde(rename = "animationStyles")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "animationStyles", skip_serializing_if = "Option::is_none")]
     pub animation_styles: Option<Vec<CssCssanimationStyle>>,
     /// Style coming from transitions.
-    #[serde(rename = "transitionsStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "transitionsStyle", skip_serializing_if = "Option::is_none")]
     pub transitions_style: Option<CssCssstyle>,
     /// Inherited style entries for animationsStyle and transitionsStyle from
     /// the inheritance chain of the element.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inherited: Option<Vec<CssInheritedAnimatedStyleEntry>>,
 }
 
@@ -7152,17 +6985,14 @@ pub struct CssGetBackgroundColorsResult {
     /// this will consist of simply that color. In the case of a gradient, this will consist of each
     /// of the color stops. For anything more complicated, this will be an empty array. Images will
     /// be ignored (as if the image had failed to load).
-    #[serde(rename = "backgroundColors")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backgroundColors", skip_serializing_if = "Option::is_none")]
     pub background_colors: Option<Vec<String>>,
     /// The computed font size for this node, as a CSS computed value string (e.g. '12px').
-    #[serde(rename = "computedFontSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "computedFontSize", skip_serializing_if = "Option::is_none")]
     pub computed_font_size: Option<String>,
     /// The computed font weight for this node, as a CSS computed value string (e.g. 'normal' or
     /// '100').
-    #[serde(rename = "computedFontWeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "computedFontWeight", skip_serializing_if = "Option::is_none")]
     pub computed_font_weight: Option<String>,
 }
 
@@ -7262,12 +7092,10 @@ impl CssGetInlineStylesForNodeParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssGetInlineStylesForNodeResult {
     /// Inline style for the specified DOM node.
-    #[serde(rename = "inlineStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inlineStyle", skip_serializing_if = "Option::is_none")]
     pub inline_style: Option<CssCssstyle>,
     /// Attribute-defined element style (e.g. resulting from "width=20 height=100%").
-    #[serde(rename = "attributesStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "attributesStyle", skip_serializing_if = "Option::is_none")]
     pub attributes_style: Option<CssCssstyle>,
 }
 
@@ -7401,60 +7229,47 @@ impl CssGetMatchedStylesForNodeParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssGetMatchedStylesForNodeResult {
     /// Inline style for the specified DOM node.
-    #[serde(rename = "inlineStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inlineStyle", skip_serializing_if = "Option::is_none")]
     pub inline_style: Option<CssCssstyle>,
     /// Attribute-defined element style (e.g. resulting from "width=20 height=100%").
-    #[serde(rename = "attributesStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "attributesStyle", skip_serializing_if = "Option::is_none")]
     pub attributes_style: Option<CssCssstyle>,
     /// CSS rules matching this node, from all applicable stylesheets.
-    #[serde(rename = "matchedCSSRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "matchedCSSRules", skip_serializing_if = "Option::is_none")]
     pub matched_cssrules: Option<Vec<CssRuleMatch>>,
     /// Pseudo style matches for this node.
-    #[serde(rename = "pseudoElements")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoElements", skip_serializing_if = "Option::is_none")]
     pub pseudo_elements: Option<Vec<CssPseudoElementMatches>>,
     /// A chain of inherited styles (from the immediate node parent up to the DOM tree root).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inherited: Option<Vec<CssInheritedStyleEntry>>,
     /// A chain of inherited pseudo element styles (from the immediate node parent up to the DOM tree root).
-    #[serde(rename = "inheritedPseudoElements")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inheritedPseudoElements", skip_serializing_if = "Option::is_none")]
     pub inherited_pseudo_elements: Option<Vec<CssInheritedPseudoElementMatches>>,
     /// A list of CSS keyframed animations matching this node.
-    #[serde(rename = "cssKeyframesRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssKeyframesRules", skip_serializing_if = "Option::is_none")]
     pub css_keyframes_rules: Option<Vec<CssCsskeyframesRule>>,
     /// A list of CSS @position-try rules matching this node, based on the position-try-fallbacks property.
-    #[serde(rename = "cssPositionTryRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssPositionTryRules", skip_serializing_if = "Option::is_none")]
     pub css_position_try_rules: Option<Vec<CssCsspositionTryRule>>,
     /// Index of the active fallback in the applied position-try-fallback property,
     /// will not be set if there is no active position-try fallback.
-    #[serde(rename = "activePositionFallbackIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "activePositionFallbackIndex", skip_serializing_if = "Option::is_none")]
     pub active_position_fallback_index: Option<i64>,
     /// A list of CSS at-property rules matching this node.
-    #[serde(rename = "cssPropertyRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssPropertyRules", skip_serializing_if = "Option::is_none")]
     pub css_property_rules: Option<Vec<CssCsspropertyRule>>,
     /// A list of CSS property registrations matching this node.
-    #[serde(rename = "cssPropertyRegistrations")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssPropertyRegistrations", skip_serializing_if = "Option::is_none")]
     pub css_property_registrations: Option<Vec<CssCsspropertyRegistration>>,
     /// A list of simple @rules matching this node or its pseudo-elements.
-    #[serde(rename = "cssAtRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssAtRules", skip_serializing_if = "Option::is_none")]
     pub css_at_rules: Option<Vec<CssCssatRule>>,
     /// Id of the first parent element that does not have display: contents.
-    #[serde(rename = "parentLayoutNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentLayoutNodeId", skip_serializing_if = "Option::is_none")]
     pub parent_layout_node_id: Option<DomNodeId>,
     /// A list of CSS at-function rules referenced by styles of this node.
-    #[serde(rename = "cssFunctionRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssFunctionRules", skip_serializing_if = "Option::is_none")]
     pub css_function_rules: Option<Vec<CssCssfunctionRule>>,
 }
 
@@ -7590,17 +7405,14 @@ pub struct CssResolveValuesParams {
     #[serde(rename = "nodeId")]
     pub node_id: DomNodeId,
     /// Only longhands and custom property names are accepted.
-    #[serde(rename = "propertyName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "propertyName", skip_serializing_if = "Option::is_none")]
     pub property_name: Option<String>,
     /// Pseudo element type, only works for pseudo elements that generate
     /// elements in the tree, such as ::before and ::after.
-    #[serde(rename = "pseudoType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoType", skip_serializing_if = "Option::is_none")]
     pub pseudo_type: Option<DomPseudoType>,
     /// Pseudo element custom ident.
-    #[serde(rename = "pseudoIdentifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoIdentifier", skip_serializing_if = "Option::is_none")]
     pub pseudo_identifier: Option<String>,
 }
 
@@ -8009,8 +7821,7 @@ impl CssSetStyleSheetTextParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssSetStyleSheetTextResult {
     /// URL of source map associated with script (if any).
-    #[serde(rename = "sourceMapURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceMapURL", skip_serializing_if = "Option::is_none")]
     pub source_map_url: Option<String>,
 }
 
@@ -8030,8 +7841,7 @@ pub struct CssSetStyleTextsParams {
     /// NodeId for the DOM node in whose context custom property declarations for registered properties should be
     /// validated. If omitted, declarations in the new rule text can only be validated statically, which may produce
     /// incorrect results if the declaration contains a var() for example.
-    #[serde(rename = "nodeForPropertySyntaxValidation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeForPropertySyntaxValidation", skip_serializing_if = "Option::is_none")]
     pub node_for_property_syntax_validation: Option<DomNodeId>,
 }
 
@@ -8255,8 +8065,7 @@ impl CssTakeCoverageDeltaResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CssTrackComputedStyleUpdatesForNodeParams {
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
 }
 
@@ -8321,8 +8130,7 @@ pub struct CacheStorageCache {
     #[serde(rename = "storageKey")]
     pub storage_key: String,
     /// Storage bucket of the cache.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// The name of the cache.
     #[serde(rename = "cacheName")]
@@ -8507,16 +8315,13 @@ impl CacheStorageDeleteEntryResult {
 pub struct CacheStorageRequestCacheNamesParams {
     /// At least and at most one of securityOrigin, storageKey, storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
 }
 
@@ -8595,16 +8400,13 @@ pub struct CacheStorageRequestEntriesParams {
     #[serde(rename = "cacheId")]
     pub cache_id: CacheStorageCacheId,
     /// Number of records to skip.
-    #[serde(rename = "skipCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "skipCount", skip_serializing_if = "Option::is_none")]
     pub skip_count: Option<i64>,
     /// Number of records to fetch.
-    #[serde(rename = "pageSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pageSize", skip_serializing_if = "Option::is_none")]
     pub page_size: Option<i64>,
     /// If present, only return the entries containing this substring in the path
-    #[serde(rename = "pathFilter")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pathFilter", skip_serializing_if = "Option::is_none")]
     pub path_filter: Option<String>,
 }
 
@@ -8650,7 +8452,7 @@ pub struct CastSink {
     pub id: String,
     /// Text describing the current session. Present only if there is an active
     /// session on the sink.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
 }
 
@@ -8690,8 +8492,7 @@ impl CastDisableResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CastEnableParams {
-    #[serde(rename = "presentationUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "presentationUrl", skip_serializing_if = "Option::is_none")]
     pub presentation_url: Option<String>,
 }
 
@@ -8907,13 +8708,13 @@ pub struct ConsoleConsoleMessage {
     /// Message text.
     pub text: String,
     /// URL of the message origin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Line number in the resource that generated this message (1-based).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<i64>,
     /// Column number in the resource that generated this message (1-based).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<i64>,
 }
 
@@ -9107,8 +8908,7 @@ pub struct DomBoxModel {
     /// Node height
     pub height: i64,
     /// Shape outside coordinates
-    #[serde(rename = "shapeOutside")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shapeOutside", skip_serializing_if = "Option::is_none")]
     pub shape_outside: Option<DomShapeOutsideInfo>,
 }
 
@@ -9194,8 +8994,7 @@ pub struct DomNode {
     #[serde(rename = "nodeId")]
     pub node_id: DomNodeId,
     /// The id of the parent node if any.
-    #[serde(rename = "parentId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<DomNodeId>,
     /// The BackendNodeId for this node.
     #[serde(rename = "backendNodeId")]
@@ -9213,109 +9012,85 @@ pub struct DomNode {
     #[serde(rename = "nodeValue")]
     pub node_value: String,
     /// Child count for `Container` nodes.
-    #[serde(rename = "childNodeCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "childNodeCount", skip_serializing_if = "Option::is_none")]
     pub child_node_count: Option<i64>,
     /// Child nodes of this node when requested with children.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<DomNode>>,
     /// Attributes of the `Element` node in the form of flat array `[name1, value1, name2, value2]`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<Vec<String>>,
     /// Document URL that `Document` or `FrameOwner` node points to.
-    #[serde(rename = "documentURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "documentURL", skip_serializing_if = "Option::is_none")]
     pub document_url: Option<String>,
     /// Base URL that `Document` or `FrameOwner` node uses for URL completion.
-    #[serde(rename = "baseURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseURL", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     /// `DocumentType`'s publicId.
-    #[serde(rename = "publicId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publicId", skip_serializing_if = "Option::is_none")]
     pub public_id: Option<String>,
     /// `DocumentType`'s systemId.
-    #[serde(rename = "systemId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "systemId", skip_serializing_if = "Option::is_none")]
     pub system_id: Option<String>,
     /// `DocumentType`'s internalSubset.
-    #[serde(rename = "internalSubset")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "internalSubset", skip_serializing_if = "Option::is_none")]
     pub internal_subset: Option<String>,
     /// `Document`'s XML version in case of XML documents.
-    #[serde(rename = "xmlVersion")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "xmlVersion", skip_serializing_if = "Option::is_none")]
     pub xml_version: Option<String>,
     /// `Attr`'s name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// `Attr`'s value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// Pseudo element type for this node.
-    #[serde(rename = "pseudoType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoType", skip_serializing_if = "Option::is_none")]
     pub pseudo_type: Option<DomPseudoType>,
     /// Pseudo element identifier for this node. Only present if there is a
     /// valid pseudoType.
-    #[serde(rename = "pseudoIdentifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoIdentifier", skip_serializing_if = "Option::is_none")]
     pub pseudo_identifier: Option<String>,
     /// Shadow root type.
-    #[serde(rename = "shadowRootType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shadowRootType", skip_serializing_if = "Option::is_none")]
     pub shadow_root_type: Option<DomShadowRootType>,
     /// Frame ID for frame owner elements.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// Content document for frame owner elements.
-    #[serde(rename = "contentDocument")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentDocument", skip_serializing_if = "Option::is_none")]
     pub content_document: Option<Box<DomNode>>,
     /// Shadow root list for given element host.
-    #[serde(rename = "shadowRoots")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shadowRoots", skip_serializing_if = "Option::is_none")]
     pub shadow_roots: Option<Vec<DomNode>>,
     /// Content document fragment for template elements.
-    #[serde(rename = "templateContent")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "templateContent", skip_serializing_if = "Option::is_none")]
     pub template_content: Option<Box<DomNode>>,
     /// Pseudo elements associated with this node.
-    #[serde(rename = "pseudoElements")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoElements", skip_serializing_if = "Option::is_none")]
     pub pseudo_elements: Option<Vec<DomNode>>,
     /// Deprecated, as the HTML Imports API has been removed (crbug.com/937746).
     /// This property used to return the imported document for the HTMLImport links.
     /// The property is always undefined now.
-    #[serde(rename = "importedDocument")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "importedDocument", skip_serializing_if = "Option::is_none")]
     pub imported_document: Option<Box<DomNode>>,
     /// Distributed nodes for given insertion point.
-    #[serde(rename = "distributedNodes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "distributedNodes", skip_serializing_if = "Option::is_none")]
     pub distributed_nodes: Option<Vec<DomBackendNode>>,
     /// Whether the node is SVG.
-    #[serde(rename = "isSVG")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isSVG", skip_serializing_if = "Option::is_none")]
     pub is_svg: Option<bool>,
-    #[serde(rename = "compatibilityMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "compatibilityMode", skip_serializing_if = "Option::is_none")]
     pub compatibility_mode: Option<DomCompatibilityMode>,
-    #[serde(rename = "assignedSlot")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "assignedSlot", skip_serializing_if = "Option::is_none")]
     pub assigned_slot: Option<DomBackendNode>,
-    #[serde(rename = "isScrollable")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isScrollable", skip_serializing_if = "Option::is_none")]
     pub is_scrollable: Option<bool>,
-    #[serde(rename = "affectedByStartingStyles")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "affectedByStartingStyles", skip_serializing_if = "Option::is_none")]
     pub affected_by_starting_styles: Option<bool>,
-    #[serde(rename = "adoptedStyleSheets")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adoptedStyleSheets", skip_serializing_if = "Option::is_none")]
     pub adopted_style_sheets: Option<Vec<DomStyleSheetId>>,
-    #[serde(rename = "adProvenance")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adProvenance", skip_serializing_if = "Option::is_none")]
     pub ad_provenance: Option<NetworkAdProvenance>,
 }
 
@@ -9480,7 +9255,7 @@ pub struct DomRgba {
     /// The blue component, in the [0-255] range.
     pub b: i64,
     /// The alpha component, in the [0-1] range (default: 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub a: Option<f64>,
 }
 
@@ -9580,8 +9355,7 @@ pub struct DomAdRelatedStateUpdatedParams {
     #[serde(rename = "nodeId")]
     pub node_id: DomNodeId,
     /// The provenance of the ad related node, if it is ad related.
-    #[serde(rename = "adProvenance")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adProvenance", skip_serializing_if = "Option::is_none")]
     pub ad_provenance: Option<NetworkAdProvenance>,
 }
 
@@ -9812,8 +9586,7 @@ pub struct DomCopyToParams {
     pub target_node_id: DomNodeId,
     /// Drop the copy before this node (if absent, the copy becomes the last child of
     /// `targetNodeId`).
-    #[serde(rename = "insertBeforeNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "insertBeforeNodeId", skip_serializing_if = "Option::is_none")]
     pub insert_before_node_id: Option<DomNodeId>,
 }
 
@@ -9849,24 +9622,21 @@ impl DomCopyToResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomDescribeNodeParams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// The maximum depth at which children should be retrieved, defaults to 1. Use -1 for the
     /// entire subtree or provide an integer larger than 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// Whether or not iframes and shadow roots should be traversed when returning the subtree
     /// (default is false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -9994,8 +9764,7 @@ pub enum DomEnableParamsIncludeWhitespace {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomEnableParams {
     /// Whether to include whitespaces in the children array of returned Nodes.
-    #[serde(rename = "includeWhitespace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeWhitespace", skip_serializing_if = "Option::is_none")]
     pub include_whitespace: Option<DomEnableParamsIncludeWhitespace>,
 }
 
@@ -10023,16 +9792,13 @@ impl DomEnableResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomFocusParams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -10102,8 +9868,7 @@ pub struct DomForceShowPopoverParams {
     /// If not provided, it will fall back to the first invoker in the document, preferring
     /// elements with a popovertarget attribute over those with a commandfor attribute. Note that
     /// if there are multiple invokers, this is just an estimate.
-    #[serde(rename = "invokerNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "invokerNodeId", skip_serializing_if = "Option::is_none")]
     pub invoker_node_id: Option<DomBackendNodeId>,
 }
 
@@ -10145,8 +9910,7 @@ pub struct DomGetAnchorElementParams {
     /// https://www.w3.org/TR/css-anchor-position-1/#anchor-specifier.
     /// If not provided, it will return the implicit anchor element for
     /// the given positioned element.
-    #[serde(rename = "anchorSpecifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "anchorSpecifier", skip_serializing_if = "Option::is_none")]
     pub anchor_specifier: Option<String>,
 }
 
@@ -10214,16 +9978,13 @@ impl DomGetAttributesResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomGetBoxModelParams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -10259,20 +10020,15 @@ impl DomGetBoxModelResult {
 pub struct DomGetContainerForNodeParams {
     #[serde(rename = "nodeId")]
     pub node_id: DomNodeId,
-    #[serde(rename = "containerName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerName", skip_serializing_if = "Option::is_none")]
     pub container_name: Option<String>,
-    #[serde(rename = "physicalAxes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "physicalAxes", skip_serializing_if = "Option::is_none")]
     pub physical_axes: Option<DomPhysicalAxes>,
-    #[serde(rename = "logicalAxes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "logicalAxes", skip_serializing_if = "Option::is_none")]
     pub logical_axes: Option<DomLogicalAxes>,
-    #[serde(rename = "queriesScrollState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "queriesScrollState", skip_serializing_if = "Option::is_none")]
     pub queries_scroll_state: Option<bool>,
-    #[serde(rename = "queriesAnchored")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "queriesAnchored", skip_serializing_if = "Option::is_none")]
     pub queries_anchored: Option<bool>,
 }
 
@@ -10294,8 +10050,7 @@ impl DomGetContainerForNodeParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomGetContainerForNodeResult {
     /// The container node for the given node, or null if not found.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
 }
 
@@ -10312,16 +10067,13 @@ impl DomGetContainerForNodeResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomGetContentQuadsParams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -10385,11 +10137,11 @@ impl DomGetDetachedDomNodesResult {
 pub struct DomGetDocumentParams {
     /// The maximum depth at which children should be retrieved, defaults to 1. Use -1 for the
     /// entire subtree or provide an integer larger than 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// Whether or not iframes and shadow roots should be traversed when returning the subtree
     /// (default is false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -10501,11 +10253,11 @@ impl DomGetFileInfoResult {
 pub struct DomGetFlattenedDocumentParams {
     /// The maximum depth at which children should be retrieved, defaults to 1. Use -1 for the
     /// entire subtree or provide an integer larger than 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// Whether or not iframes and shadow roots should be traversed when returning the subtree
     /// (default is false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -10558,8 +10310,7 @@ pub struct DomGetFrameOwnerResult {
     #[serde(rename = "backendNodeId")]
     pub backend_node_id: DomBackendNodeId,
     /// Id of the node at given coordinates, only when enabled and requested document.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
 }
 
@@ -10581,12 +10332,10 @@ pub struct DomGetNodeForLocationParams {
     /// Y coordinate.
     pub y: i64,
     /// False to skip to the nearest non-UA shadow root ancestor (default: false).
-    #[serde(rename = "includeUserAgentShadowDOM")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeUserAgentShadowDOM", skip_serializing_if = "Option::is_none")]
     pub include_user_agent_shadow_dom: Option<bool>,
     /// Whether to ignore pointer-events: none on elements and hit test them.
-    #[serde(rename = "ignorePointerEventsNone")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ignorePointerEventsNone", skip_serializing_if = "Option::is_none")]
     pub ignore_pointer_events_none: Option<bool>,
 }
 
@@ -10612,8 +10361,7 @@ pub struct DomGetNodeForLocationResult {
     #[serde(rename = "frameId")]
     pub frame_id: PageFrameId,
     /// Id of the node at given coordinates, only when enabled and requested document.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
 }
 
@@ -10649,7 +10397,7 @@ impl DomGetNodeStackTracesParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomGetNodeStackTracesResult {
     /// Creation stack trace, if available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub creation: Option<RuntimeStackTrace>,
 }
 
@@ -10673,7 +10421,7 @@ pub struct DomGetNodesForSubtreeByStyleParams {
     pub computed_styles: Vec<DomCsscomputedStyleProperty>,
     /// Whether or not iframes and shadow roots in the same target should be traversed when returning the
     /// results (default is false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -10709,20 +10457,16 @@ impl DomGetNodesForSubtreeByStyleResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomGetOuterHtmlparams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Include all shadow roots. Equals to false if not specified.
-    #[serde(rename = "includeShadowDOM")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeShadowDOM", skip_serializing_if = "Option::is_none")]
     pub include_shadow_dom: Option<bool>,
 }
 
@@ -11009,8 +10753,7 @@ pub struct DomMoveToParams {
     pub target_node_id: DomNodeId,
     /// Drop node before this one (if absent, the moved node becomes the last child of
     /// `targetNodeId`).
-    #[serde(rename = "insertBeforeNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "insertBeforeNodeId", skip_serializing_if = "Option::is_none")]
     pub insert_before_node_id: Option<DomNodeId>,
 }
 
@@ -11048,8 +10791,7 @@ pub struct DomPerformSearchParams {
     /// Plain text or query selector or XPath search query.
     pub query: String,
     /// True to search in user agent shadow DOM.
-    #[serde(rename = "includeUserAgentShadowDOM")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeUserAgentShadowDOM", skip_serializing_if = "Option::is_none")]
     pub include_user_agent_shadow_dom: Option<bool>,
 }
 
@@ -11357,11 +11099,11 @@ pub struct DomRequestChildNodesParams {
     pub node_id: DomNodeId,
     /// The maximum depth at which children should be retrieved, defaults to 1. Use -1 for the
     /// entire subtree or provide an integer larger than 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// Whether or not iframes and shadow roots should be traversed when returning the sub-tree
     /// (default is false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -11425,20 +11167,16 @@ impl DomRequestNodeResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomResolveNodeParams {
     /// Id of the node to resolve.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Backend identifier of the node to resolve.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// Symbolic group name that can be used to release multiple objects.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
     /// Execution context in which to resolve the node.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
 }
 
@@ -11474,20 +11212,17 @@ impl DomResolveNodeResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomScrollIntoViewIfNeededParams {
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// The rect to be scrolled into view, relative to the node's border box, in CSS pixels.
     /// When omitted, center of the node will be used, similar to Element.scrollIntoView.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rect: Option<DomRect>,
 }
 
@@ -11579,7 +11314,7 @@ pub struct DomSetAttributesAsTextParams {
     pub text: String,
     /// Attribute name to replace with new attributes derived from text in case text parsed
     /// successfully.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -11631,16 +11366,13 @@ pub struct DomSetFileInputFilesParams {
     /// Array of file paths to set.
     pub files: Vec<String>,
     /// Identifier of the node.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node wrapper.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -11939,15 +11671,13 @@ pub struct DomdebuggerEventListener {
     #[serde(rename = "columnNumber")]
     pub column_number: i64,
     /// Event handler function value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub handler: Option<RuntimeRemoteObject>,
     /// Event original handler function value.
-    #[serde(rename = "originalHandler")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originalHandler", skip_serializing_if = "Option::is_none")]
     pub original_handler: Option<RuntimeRemoteObject>,
     /// Node the listener is added to (if any).
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
 }
 
@@ -11977,11 +11707,11 @@ pub struct DomdebuggerGetEventListenersParams {
     pub object_id: RuntimeRemoteObjectId,
     /// The maximum depth at which Node children should be retrieved, defaults to 1. Use -1 for the
     /// entire subtree or provide an integer larger than 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<i64>,
     /// Whether or not iframes and shadow roots should be traversed when returning the subtree
     /// (default is false). Reports listeners for all contexts if pierce is enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pierce: Option<bool>,
 }
 
@@ -12050,8 +11780,7 @@ pub struct DomdebuggerRemoveEventListenerBreakpointParams {
     #[serde(rename = "eventName")]
     pub event_name: String,
     /// EventTarget interface name.
-    #[serde(rename = "targetName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetName", skip_serializing_if = "Option::is_none")]
     pub target_name: Option<String>,
 }
 
@@ -12198,8 +11927,7 @@ pub struct DomdebuggerSetEventListenerBreakpointParams {
     pub event_name: String,
     /// EventTarget interface name to stop on. If equal to `"*"` or not provided, will stop on any
     /// EventTarget.
-    #[serde(rename = "targetName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetName", skip_serializing_if = "Option::is_none")]
     pub target_name: Option<String>,
 }
 
@@ -12313,107 +12041,84 @@ pub struct DomsnapshotDomnode {
     #[serde(rename = "nodeValue")]
     pub node_value: String,
     /// Only set for textarea elements, contains the text value.
-    #[serde(rename = "textValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "textValue", skip_serializing_if = "Option::is_none")]
     pub text_value: Option<String>,
     /// Only set for input elements, contains the input's associated text value.
-    #[serde(rename = "inputValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inputValue", skip_serializing_if = "Option::is_none")]
     pub input_value: Option<String>,
     /// Only set for radio and checkbox input elements, indicates if the element has been checked
-    #[serde(rename = "inputChecked")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inputChecked", skip_serializing_if = "Option::is_none")]
     pub input_checked: Option<bool>,
     /// Only set for option elements, indicates if the element has been selected
-    #[serde(rename = "optionSelected")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "optionSelected", skip_serializing_if = "Option::is_none")]
     pub option_selected: Option<bool>,
     /// `Node`'s id, corresponds to DOM.Node.backendNodeId.
     #[serde(rename = "backendNodeId")]
     pub backend_node_id: DomBackendNodeId,
     /// The indexes of the node's child nodes in the `domNodes` array returned by `getSnapshot`, if
     /// any.
-    #[serde(rename = "childNodeIndexes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "childNodeIndexes", skip_serializing_if = "Option::is_none")]
     pub child_node_indexes: Option<Vec<i64>>,
     /// Attributes of an `Element` node.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<Vec<DomsnapshotNameValue>>,
     /// Indexes of pseudo elements associated with this node in the `domNodes` array returned by
     /// `getSnapshot`, if any.
-    #[serde(rename = "pseudoElementIndexes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoElementIndexes", skip_serializing_if = "Option::is_none")]
     pub pseudo_element_indexes: Option<Vec<i64>>,
     /// The index of the node's related layout tree node in the `layoutTreeNodes` array returned by
     /// `getSnapshot`, if any.
-    #[serde(rename = "layoutNodeIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "layoutNodeIndex", skip_serializing_if = "Option::is_none")]
     pub layout_node_index: Option<i64>,
     /// Document URL that `Document` or `FrameOwner` node points to.
-    #[serde(rename = "documentURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "documentURL", skip_serializing_if = "Option::is_none")]
     pub document_url: Option<String>,
     /// Base URL that `Document` or `FrameOwner` node uses for URL completion.
-    #[serde(rename = "baseURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseURL", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     /// Only set for documents, contains the document's content language.
-    #[serde(rename = "contentLanguage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentLanguage", skip_serializing_if = "Option::is_none")]
     pub content_language: Option<String>,
     /// Only set for documents, contains the document's character set encoding.
-    #[serde(rename = "documentEncoding")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "documentEncoding", skip_serializing_if = "Option::is_none")]
     pub document_encoding: Option<String>,
     /// `DocumentType` node's publicId.
-    #[serde(rename = "publicId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publicId", skip_serializing_if = "Option::is_none")]
     pub public_id: Option<String>,
     /// `DocumentType` node's systemId.
-    #[serde(rename = "systemId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "systemId", skip_serializing_if = "Option::is_none")]
     pub system_id: Option<String>,
     /// Frame ID for frame owner elements and also for the document node.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// The index of a frame owner element's content document in the `domNodes` array returned by
     /// `getSnapshot`, if any.
-    #[serde(rename = "contentDocumentIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentDocumentIndex", skip_serializing_if = "Option::is_none")]
     pub content_document_index: Option<i64>,
     /// Type of a pseudo element node.
-    #[serde(rename = "pseudoType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoType", skip_serializing_if = "Option::is_none")]
     pub pseudo_type: Option<DomPseudoType>,
     /// Shadow root type.
-    #[serde(rename = "shadowRootType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shadowRootType", skip_serializing_if = "Option::is_none")]
     pub shadow_root_type: Option<DomShadowRootType>,
     /// Whether this DOM node responds to mouse clicks. This includes nodes that have had click
     /// event listeners attached via JavaScript as well as anchor tags that naturally navigate when
     /// clicked.
-    #[serde(rename = "isClickable")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isClickable", skip_serializing_if = "Option::is_none")]
     pub is_clickable: Option<bool>,
     /// Details of the node's event listeners, if any.
-    #[serde(rename = "eventListeners")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "eventListeners", skip_serializing_if = "Option::is_none")]
     pub event_listeners: Option<Vec<DomdebuggerEventListener>>,
     /// The selected url for nodes with a srcset attribute.
-    #[serde(rename = "currentSourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "currentSourceURL", skip_serializing_if = "Option::is_none")]
     pub current_source_url: Option<String>,
     /// The url of the script (if any) that generates this node.
-    #[serde(rename = "originURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originURL", skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<String>,
     /// Scroll offsets, set when this node is a Document.
-    #[serde(rename = "scrollOffsetX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollOffsetX", skip_serializing_if = "Option::is_none")]
     pub scroll_offset_x: Option<f64>,
-    #[serde(rename = "scrollOffsetY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollOffsetY", skip_serializing_if = "Option::is_none")]
     pub scroll_offset_y: Option<f64>,
 }
 
@@ -12488,20 +12193,16 @@ pub struct DomsnapshotDocumentSnapshot {
     #[serde(rename = "textBoxes")]
     pub text_boxes: DomsnapshotTextBoxSnapshot,
     /// Horizontal scroll offset.
-    #[serde(rename = "scrollOffsetX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollOffsetX", skip_serializing_if = "Option::is_none")]
     pub scroll_offset_x: Option<f64>,
     /// Vertical scroll offset.
-    #[serde(rename = "scrollOffsetY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollOffsetY", skip_serializing_if = "Option::is_none")]
     pub scroll_offset_y: Option<f64>,
     /// Document content width.
-    #[serde(rename = "contentWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentWidth", skip_serializing_if = "Option::is_none")]
     pub content_width: Option<f64>,
     /// Document content height.
-    #[serde(rename = "contentHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentHeight", skip_serializing_if = "Option::is_none")]
     pub content_height: Option<f64>,
 }
 
@@ -12568,26 +12269,21 @@ pub struct DomsnapshotLayoutTreeNode {
     #[serde(rename = "boundingBox")]
     pub bounding_box: DomRect,
     /// Contents of the LayoutText, if any.
-    #[serde(rename = "layoutText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "layoutText", skip_serializing_if = "Option::is_none")]
     pub layout_text: Option<String>,
     /// The post-layout inline text nodes, if any.
-    #[serde(rename = "inlineTextNodes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inlineTextNodes", skip_serializing_if = "Option::is_none")]
     pub inline_text_nodes: Option<Vec<DomsnapshotInlineTextBox>>,
     /// Index into the `computedStyles` array returned by `getSnapshot`.
-    #[serde(rename = "styleIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "styleIndex", skip_serializing_if = "Option::is_none")]
     pub style_index: Option<i64>,
     /// Global paint order index, which is determined by the stacking order of the nodes. Nodes
     /// that are painted together will have the same index. Only provided if includePaintOrder in
     /// getSnapshot was true.
-    #[serde(rename = "paintOrder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "paintOrder", skip_serializing_if = "Option::is_none")]
     pub paint_order: Option<i64>,
     /// Set to true to indicate the element begins a new stacking context.
-    #[serde(rename = "isStackingContext")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isStackingContext", skip_serializing_if = "Option::is_none")]
     pub is_stacking_context: Option<bool>,
 }
 
@@ -12625,28 +12321,22 @@ pub struct DomsnapshotLayoutTreeSnapshot {
     /// Global paint order index, which is determined by the stacking order of the nodes. Nodes
     /// that are painted together will have the same index. Only provided if includePaintOrder in
     /// captureSnapshot was true.
-    #[serde(rename = "paintOrders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "paintOrders", skip_serializing_if = "Option::is_none")]
     pub paint_orders: Option<Vec<i64>>,
     /// The offset rect of nodes. Only available when includeDOMRects is set to true
-    #[serde(rename = "offsetRects")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "offsetRects", skip_serializing_if = "Option::is_none")]
     pub offset_rects: Option<Vec<DomsnapshotRectangle>>,
     /// The scroll rect of nodes. Only available when includeDOMRects is set to true
-    #[serde(rename = "scrollRects")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollRects", skip_serializing_if = "Option::is_none")]
     pub scroll_rects: Option<Vec<DomsnapshotRectangle>>,
     /// The client rect of nodes. Only available when includeDOMRects is set to true
-    #[serde(rename = "clientRects")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clientRects", skip_serializing_if = "Option::is_none")]
     pub client_rects: Option<Vec<DomsnapshotRectangle>>,
     /// The list of background colors that are blended with colors of overlapping elements.
-    #[serde(rename = "blendedBackgroundColors")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "blendedBackgroundColors", skip_serializing_if = "Option::is_none")]
     pub blended_background_colors: Option<Vec<DomsnapshotStringIndex>>,
     /// The list of computed text opacities.
-    #[serde(rename = "textColorOpacities")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "textColorOpacities", skip_serializing_if = "Option::is_none")]
     pub text_color_opacities: Option<Vec<f64>>,
 }
 
@@ -12694,74 +12384,58 @@ impl DomsnapshotNameValue {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomsnapshotNodeTreeSnapshot {
     /// Parent node index.
-    #[serde(rename = "parentIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentIndex", skip_serializing_if = "Option::is_none")]
     pub parent_index: Option<Vec<i64>>,
     /// `Node`'s nodeType.
-    #[serde(rename = "nodeType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeType", skip_serializing_if = "Option::is_none")]
     pub node_type: Option<Vec<i64>>,
     /// Type of the shadow root the `Node` is in. String values are equal to the `ShadowRootType` enum.
-    #[serde(rename = "shadowRootType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shadowRootType", skip_serializing_if = "Option::is_none")]
     pub shadow_root_type: Option<DomsnapshotRareStringData>,
     /// `Node`'s nodeName.
-    #[serde(rename = "nodeName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeName", skip_serializing_if = "Option::is_none")]
     pub node_name: Option<Vec<DomsnapshotStringIndex>>,
     /// `Node`'s nodeValue.
-    #[serde(rename = "nodeValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeValue", skip_serializing_if = "Option::is_none")]
     pub node_value: Option<Vec<DomsnapshotStringIndex>>,
     /// `Node`'s id, corresponds to DOM.Node.backendNodeId.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<Vec<DomBackendNodeId>>,
     /// Attributes of an `Element` node. Flatten name, value pairs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attributes: Option<Vec<DomsnapshotArrayOfStrings>>,
     /// Only set for textarea elements, contains the text value.
-    #[serde(rename = "textValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "textValue", skip_serializing_if = "Option::is_none")]
     pub text_value: Option<DomsnapshotRareStringData>,
     /// Only set for input elements, contains the input's associated text value.
-    #[serde(rename = "inputValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inputValue", skip_serializing_if = "Option::is_none")]
     pub input_value: Option<DomsnapshotRareStringData>,
     /// Only set for radio and checkbox input elements, indicates if the element has been checked
-    #[serde(rename = "inputChecked")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inputChecked", skip_serializing_if = "Option::is_none")]
     pub input_checked: Option<DomsnapshotRareBooleanData>,
     /// Only set for option elements, indicates if the element has been selected
-    #[serde(rename = "optionSelected")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "optionSelected", skip_serializing_if = "Option::is_none")]
     pub option_selected: Option<DomsnapshotRareBooleanData>,
     /// The index of the document in the list of the snapshot documents.
-    #[serde(rename = "contentDocumentIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentDocumentIndex", skip_serializing_if = "Option::is_none")]
     pub content_document_index: Option<DomsnapshotRareIntegerData>,
     /// Type of a pseudo element node.
-    #[serde(rename = "pseudoType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoType", skip_serializing_if = "Option::is_none")]
     pub pseudo_type: Option<DomsnapshotRareStringData>,
     /// Pseudo element identifier for this node. Only present if there is a
     /// valid pseudoType.
-    #[serde(rename = "pseudoIdentifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pseudoIdentifier", skip_serializing_if = "Option::is_none")]
     pub pseudo_identifier: Option<DomsnapshotRareStringData>,
     /// Whether this DOM node responds to mouse clicks. This includes nodes that have had click
     /// event listeners attached via JavaScript as well as anchor tags that naturally navigate when
     /// clicked.
-    #[serde(rename = "isClickable")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isClickable", skip_serializing_if = "Option::is_none")]
     pub is_clickable: Option<DomsnapshotRareBooleanData>,
     /// The selected url for nodes with a srcset attribute.
-    #[serde(rename = "currentSourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "currentSourceURL", skip_serializing_if = "Option::is_none")]
     pub current_source_url: Option<DomsnapshotRareStringData>,
     /// The url of the script (if any) that generates this node.
-    #[serde(rename = "originURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originURL", skip_serializing_if = "Option::is_none")]
     pub origin_url: Option<DomsnapshotRareStringData>,
 }
 
@@ -12885,24 +12559,20 @@ pub struct DomsnapshotCaptureSnapshotParams {
     #[serde(rename = "computedStyles")]
     pub computed_styles: Vec<String>,
     /// Whether to include layout object paint orders into the snapshot.
-    #[serde(rename = "includePaintOrder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includePaintOrder", skip_serializing_if = "Option::is_none")]
     pub include_paint_order: Option<bool>,
     /// Whether to include DOM rectangles (offsetRects, clientRects, scrollRects) into the snapshot
-    #[serde(rename = "includeDOMRects")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeDOMRects", skip_serializing_if = "Option::is_none")]
     pub include_domrects: Option<bool>,
     /// Whether to include blended background colors in the snapshot (default: false).
     /// Blended background color is achieved by blending background colors of all elements
     /// that overlap with the current element.
-    #[serde(rename = "includeBlendedBackgroundColors")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeBlendedBackgroundColors", skip_serializing_if = "Option::is_none")]
     pub include_blended_background_colors: Option<bool>,
     /// Whether to include text color opacity in the snapshot (default: false).
     /// An element might have the opacity property set that affects the text color of the element.
     /// The final text color opacity is computed based on the opacity of all overlapping elements.
-    #[serde(rename = "includeTextColorOpacities")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeTextColorOpacities", skip_serializing_if = "Option::is_none")]
     pub include_text_color_opacities: Option<bool>,
 }
 
@@ -12989,16 +12659,13 @@ pub struct DomsnapshotGetSnapshotParams {
     #[serde(rename = "computedStyleWhitelist")]
     pub computed_style_whitelist: Vec<String>,
     /// Whether or not to retrieve details of DOM listeners (default false).
-    #[serde(rename = "includeEventListeners")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeEventListeners", skip_serializing_if = "Option::is_none")]
     pub include_event_listeners: Option<bool>,
     /// Whether to determine and include the paint order index of LayoutTreeNodes (default false).
-    #[serde(rename = "includePaintOrder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includePaintOrder", skip_serializing_if = "Option::is_none")]
     pub include_paint_order: Option<bool>,
     /// Whether to include UA shadow tree in the snapshot (default false).
-    #[serde(rename = "includeUserAgentShadowTree")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeUserAgentShadowTree", skip_serializing_if = "Option::is_none")]
     pub include_user_agent_shadow_tree: Option<bool>,
 }
 
@@ -13050,12 +12717,10 @@ pub type DomstorageSerializedStorageKey = String;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DomstorageStorageId {
     /// Security origin for the storage.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Represents a key by which DOM Storage keys its CachedStorageAreas
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<DomstorageSerializedStorageKey>,
     /// Whether the storage is local storage (not session storage).
     #[serde(rename = "isLocalStorage")]
@@ -13335,10 +13000,9 @@ pub struct DebuggerBreakLocation {
     #[serde(rename = "lineNumber")]
     pub line_number: i64,
     /// Column number in the script (0-based).
-    #[serde(rename = "columnNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnNumber", skip_serializing_if = "Option::is_none")]
     pub column_number: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<DebuggerBreakLocationType>,
 }
 
@@ -13368,8 +13032,7 @@ pub struct DebuggerCallFrame {
     #[serde(rename = "functionName")]
     pub function_name: String,
     /// Location in the source code.
-    #[serde(rename = "functionLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "functionLocation", skip_serializing_if = "Option::is_none")]
     pub function_location: Option<DebuggerLocation>,
     /// Location in the source code.
     pub location: DebuggerLocation,
@@ -13383,15 +13046,13 @@ pub struct DebuggerCallFrame {
     /// `this` object for this call frame.
     pub this: RuntimeRemoteObject,
     /// The value being returned, if the function is at return point.
-    #[serde(rename = "returnValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnValue", skip_serializing_if = "Option::is_none")]
     pub return_value: Option<RuntimeRemoteObject>,
     /// Valid only while the VM is paused and indicates whether this frame
     /// can be restarted or not. Note that a `true` value here does not
     /// guarantee that Debugger#restartFrame with this CallFrameId will be
     /// successful, but it is very likely.
-    #[serde(rename = "canBeRestarted")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "canBeRestarted", skip_serializing_if = "Option::is_none")]
     pub can_be_restarted: Option<bool>,
 }
 
@@ -13432,8 +13093,7 @@ pub struct DebuggerDebugSymbols {
     /// Type of the debug symbols.
     pub r#type: DebuggerDebugSymbolsType,
     /// URL of the external symbol source.
-    #[serde(rename = "externalURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "externalURL", skip_serializing_if = "Option::is_none")]
     pub external_url: Option<String>,
 }
 
@@ -13458,8 +13118,7 @@ pub struct DebuggerLocation {
     #[serde(rename = "lineNumber")]
     pub line_number: i64,
     /// Column number in the script (0-based).
-    #[serde(rename = "columnNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnNumber", skip_serializing_if = "Option::is_none")]
     pub column_number: Option<i64>,
 }
 
@@ -13551,15 +13210,13 @@ pub struct DebuggerScope {
     /// object; for the rest of the scopes, it is artificial transient object enumerating scope
     /// variables as its properties.
     pub object: RuntimeRemoteObject,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Location in the source code where scope starts
-    #[serde(rename = "startLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startLocation", skip_serializing_if = "Option::is_none")]
     pub start_location: Option<DebuggerLocation>,
     /// Location in the source code where scope ends
-    #[serde(rename = "endLocation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "endLocation", skip_serializing_if = "Option::is_none")]
     pub end_location: Option<DebuggerLocation>,
 }
 
@@ -13679,8 +13336,7 @@ pub enum DebuggerContinueToLocationParamsTargetCallFrames {
 pub struct DebuggerContinueToLocationParams {
     /// Location to continue to.
     pub location: DebuggerLocation,
-    #[serde(rename = "targetCallFrames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetCallFrames", skip_serializing_if = "Option::is_none")]
     pub target_call_frames: Option<DebuggerContinueToLocationParamsTargetCallFrames>,
 }
 
@@ -13749,8 +13405,7 @@ impl DebuggerDisassembleWasmModuleParams {
 pub struct DebuggerDisassembleWasmModuleResult {
     /// For large modules, return a stream from which additional chunks of
     /// disassembly can be read successively.
-    #[serde(rename = "streamId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "streamId", skip_serializing_if = "Option::is_none")]
     pub stream_id: Option<String>,
     /// The total number of lines in the disassembly text.
     #[serde(rename = "totalNumberOfLines")]
@@ -13780,8 +13435,7 @@ impl DebuggerDisassembleWasmModuleResult {
 pub struct DebuggerEnableParams {
     /// The maximum size in bytes of collected scripts (not referenced by other heap objects)
     /// the debugger can hold. Puts no limit if parameter is omitted.
-    #[serde(rename = "maxScriptsCacheSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxScriptsCacheSize", skip_serializing_if = "Option::is_none")]
     pub max_scripts_cache_size: Option<f64>,
 }
 
@@ -13821,36 +13475,30 @@ pub struct DebuggerEvaluateOnCallFrameParams {
     pub expression: String,
     /// String object group name to put result into (allows rapid releasing resulting object handles
     /// using `releaseObjectGroup`).
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
     /// Specifies whether command line API should be available to the evaluated expression, defaults
     /// to false.
-    #[serde(rename = "includeCommandLineAPI")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")]
     pub include_command_line_api: Option<bool>,
     /// In silent mode exceptions thrown during evaluation are not reported and do not pause
     /// execution. Overrides `setPauseOnException` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silent: Option<bool>,
     /// Whether the result is expected to be a JSON object that should be sent by value.
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     pub return_by_value: Option<bool>,
     /// Whether preview should be generated for the result.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
     /// Whether to throw an exception if side effect cannot be ruled out during evaluation.
-    #[serde(rename = "throwOnSideEffect")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")]
     pub throw_on_side_effect: Option<bool>,
     /// Terminate execution after timing out (number of milliseconds).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<RuntimeTimeDelta>,
     /// Specifies the scope number to evaluate the expression in (default: 0, innermost scope).
-    #[serde(rename = "scopeNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scopeNumber", skip_serializing_if = "Option::is_none")]
     pub scope_number: Option<i64>,
 }
 
@@ -13878,8 +13526,7 @@ pub struct DebuggerEvaluateOnCallFrameResult {
     /// Object wrapper for the evaluation result.
     pub result: RuntimeRemoteObject,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -13900,11 +13547,10 @@ pub struct DebuggerGetPossibleBreakpointsParams {
     pub start: DebuggerLocation,
     /// End of range to search possible breakpoint locations in (excluding). When not specified, end
     /// of scripts is used as end of range.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<DebuggerLocation>,
     /// Only consider locations which are in the same (non-nested) function as start.
-    #[serde(rename = "restrictToFunction")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "restrictToFunction", skip_serializing_if = "Option::is_none")]
     pub restrict_to_function: Option<bool>,
 }
 
@@ -13959,7 +13605,7 @@ pub struct DebuggerGetScriptSourceResult {
     #[serde(rename = "scriptSource")]
     pub script_source: String,
     /// Wasm bytecode. (Encoded as a base64 string when passed over JSON)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bytecode: Option<String>,
 }
 
@@ -14129,23 +13775,19 @@ pub struct DebuggerPausedParams {
     /// Pause reason.
     pub reason: String,
     /// Object containing break-specific auxiliary properties.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Hit breakpoints IDs
-    #[serde(rename = "hitBreakpoints")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hitBreakpoints", skip_serializing_if = "Option::is_none")]
     pub hit_breakpoints: Option<Vec<String>>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTrace", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace: Option<RuntimeStackTrace>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTraceId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTraceId", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace_id: Option<RuntimeStackTraceId>,
     /// Never present, will be removed.
-    #[serde(rename = "asyncCallStackTraceId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncCallStackTraceId", skip_serializing_if = "Option::is_none")]
     pub async_call_stack_trace_id: Option<RuntimeStackTraceId>,
 }
 
@@ -14206,7 +13848,7 @@ pub struct DebuggerRestartFrameParams {
     pub call_frame_id: DebuggerCallFrameId,
     /// The `mode` parameter must be present and set to 'StepInto', otherwise
     /// `restartFrame` will error out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<DebuggerRestartFrameParamsMode>,
 }
 
@@ -14227,12 +13869,10 @@ pub struct DebuggerRestartFrameResult {
     #[serde(rename = "callFrames")]
     pub call_frames: Vec<DebuggerCallFrame>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTrace", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace: Option<RuntimeStackTrace>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTraceId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTraceId", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace_id: Option<RuntimeStackTraceId>,
 }
 
@@ -14255,8 +13895,7 @@ pub struct DebuggerResumeParams {
     /// JavaScript (i.e. via evaluation) until execution of the paused code
     /// is actually resumed, at which point termination is triggered.
     /// If execution is currently not paused, this parameter has no effect.
-    #[serde(rename = "terminateOnResume")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "terminateOnResume", skip_serializing_if = "Option::is_none")]
     pub terminate_on_resume: Option<bool>,
 }
 
@@ -14317,43 +13956,34 @@ pub struct DebuggerScriptFailedToParseParams {
     /// Content hash of the script, SHA-256.
     pub hash: String,
     /// For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
-    #[serde(rename = "buildId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "buildId", skip_serializing_if = "Option::is_none")]
     pub build_id: Option<String>,
     /// Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-    #[serde(rename = "executionContextAuxData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextAuxData", skip_serializing_if = "Option::is_none")]
     pub execution_context_aux_data: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// URL of source map associated with script (if any).
-    #[serde(rename = "sourceMapURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceMapURL", skip_serializing_if = "Option::is_none")]
     pub source_map_url: Option<String>,
     /// True, if this script has sourceURL.
-    #[serde(rename = "hasSourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasSourceURL", skip_serializing_if = "Option::is_none")]
     pub has_source_url: Option<bool>,
     /// True, if this script is ES6 module.
-    #[serde(rename = "isModule")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isModule", skip_serializing_if = "Option::is_none")]
     pub is_module: Option<bool>,
     /// This script length.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<i64>,
     /// JavaScript top stack frame of where the script parsed event was triggered if available.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
     /// If the scriptLanguage is WebAssembly, the code section offset in the module.
-    #[serde(rename = "codeOffset")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "codeOffset", skip_serializing_if = "Option::is_none")]
     pub code_offset: Option<i64>,
     /// The language of the script.
-    #[serde(rename = "scriptLanguage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptLanguage", skip_serializing_if = "Option::is_none")]
     pub script_language: Option<DebuggerScriptLanguage>,
     /// The name the embedder supplied for this script.
-    #[serde(rename = "embedderName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "embedderName", skip_serializing_if = "Option::is_none")]
     pub embedder_name: Option<String>,
 }
 
@@ -14409,57 +14039,45 @@ pub struct DebuggerScriptParsedParams {
     /// Content hash of the script, SHA-256.
     pub hash: String,
     /// For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
-    #[serde(rename = "buildId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "buildId", skip_serializing_if = "Option::is_none")]
     pub build_id: Option<String>,
     /// Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-    #[serde(rename = "executionContextAuxData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextAuxData", skip_serializing_if = "Option::is_none")]
     pub execution_context_aux_data: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// True, if this script is generated as a result of the live edit operation.
-    #[serde(rename = "isLiveEdit")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isLiveEdit", skip_serializing_if = "Option::is_none")]
     pub is_live_edit: Option<bool>,
     /// URL of source map associated with script (if any).
-    #[serde(rename = "sourceMapURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceMapURL", skip_serializing_if = "Option::is_none")]
     pub source_map_url: Option<String>,
     /// True, if this script has sourceURL.
-    #[serde(rename = "hasSourceURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasSourceURL", skip_serializing_if = "Option::is_none")]
     pub has_source_url: Option<bool>,
     /// True, if this script is ES6 module.
-    #[serde(rename = "isModule")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isModule", skip_serializing_if = "Option::is_none")]
     pub is_module: Option<bool>,
     /// This script length.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub length: Option<i64>,
     /// JavaScript top stack frame of where the script parsed event was triggered if available.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
     /// If the scriptLanguage is WebAssembly, the code section offset in the module.
-    #[serde(rename = "codeOffset")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "codeOffset", skip_serializing_if = "Option::is_none")]
     pub code_offset: Option<i64>,
     /// The language of the script.
-    #[serde(rename = "scriptLanguage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptLanguage", skip_serializing_if = "Option::is_none")]
     pub script_language: Option<DebuggerScriptLanguage>,
     /// If the scriptLanguage is WebAssembly, the source of debug symbols for the module.
-    #[serde(rename = "debugSymbols")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "debugSymbols", skip_serializing_if = "Option::is_none")]
     pub debug_symbols: Option<Vec<DebuggerDebugSymbols>>,
     /// The name the embedder supplied for this script.
-    #[serde(rename = "embedderName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "embedderName", skip_serializing_if = "Option::is_none")]
     pub embedder_name: Option<String>,
     /// The list of set breakpoints in this script if calls to `setBreakpointByUrl`
     /// matches this script's URL or hash. Clients that use this list can ignore the
     /// `breakpointResolved` event. They are equivalent.
-    #[serde(rename = "resolvedBreakpoints")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resolvedBreakpoints", skip_serializing_if = "Option::is_none")]
     pub resolved_breakpoints: Option<Vec<DebuggerResolvedBreakpoint>>,
 }
 
@@ -14501,12 +14119,10 @@ pub struct DebuggerSearchInContentParams {
     /// String to search for.
     pub query: String,
     /// If true, search is case sensitive.
-    #[serde(rename = "caseSensitive")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")]
     pub case_sensitive: Option<bool>,
     /// If true, treats string parameter as regex.
-    #[serde(rename = "isRegex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")]
     pub is_regex: Option<bool>,
 }
 
@@ -14601,8 +14217,7 @@ pub struct DebuggerSetBlackboxPatternsParams {
     /// Array of regexps that will be used to check script url for blackbox state.
     pub patterns: Vec<String>,
     /// If true, also ignore scripts with no source url.
-    #[serde(rename = "skipAnonymous")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "skipAnonymous", skip_serializing_if = "Option::is_none")]
     pub skip_anonymous: Option<bool>,
 }
 
@@ -14664,24 +14279,21 @@ pub struct DebuggerSetBreakpointByUrlParams {
     #[serde(rename = "lineNumber")]
     pub line_number: i64,
     /// URL of the resources to set breakpoint on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Regex pattern for the URLs of the resources to set breakpoints on. Either `url` or
     /// `urlRegex` must be specified.
-    #[serde(rename = "urlRegex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlRegex", skip_serializing_if = "Option::is_none")]
     pub url_regex: Option<String>,
     /// Script hash of the resources to set breakpoint on.
-    #[serde(rename = "scriptHash")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptHash", skip_serializing_if = "Option::is_none")]
     pub script_hash: Option<String>,
     /// Offset in the line to set breakpoint at.
-    #[serde(rename = "columnNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnNumber", skip_serializing_if = "Option::is_none")]
     pub column_number: Option<i64>,
     /// Expression to use as a breakpoint condition. When specified, debugger will only stop on the
     /// breakpoint if this expression evaluates to true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
 }
 
@@ -14727,7 +14339,7 @@ pub struct DebuggerSetBreakpointOnFunctionCallParams {
     pub object_id: RuntimeRemoteObjectId,
     /// Expression to use as a breakpoint condition. When specified, debugger will
     /// stop on the breakpoint if this expression evaluates to true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
 }
 
@@ -14765,7 +14377,7 @@ pub struct DebuggerSetBreakpointParams {
     pub location: DebuggerLocation,
     /// Expression to use as a breakpoint condition. When specified, debugger will only stop on the
     /// breakpoint if this expression evaluates to true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
 }
 
@@ -14948,13 +14560,11 @@ pub struct DebuggerSetScriptSourceParams {
     pub script_source: String,
     /// If true the change will not actually be applied. Dry run may be used to get result
     /// description without actually modifying the code.
-    #[serde(rename = "dryRun")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dryRun", skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
     /// If true, then `scriptSource` is allowed to change the function on top of the stack
     /// as long as the top-most stack frame is the only activation of that function.
-    #[serde(rename = "allowTopFrameEditing")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowTopFrameEditing", skip_serializing_if = "Option::is_none")]
     pub allow_top_frame_editing: Option<bool>,
 }
 
@@ -14986,28 +14596,23 @@ pub enum DebuggerSetScriptSourceResultStatus {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DebuggerSetScriptSourceResult {
     /// New stack trace in case editing has happened while VM was stopped.
-    #[serde(rename = "callFrames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "callFrames", skip_serializing_if = "Option::is_none")]
     pub call_frames: Option<Vec<DebuggerCallFrame>>,
     /// Whether current call stack  was modified after applying the changes.
-    #[serde(rename = "stackChanged")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackChanged", skip_serializing_if = "Option::is_none")]
     pub stack_changed: Option<bool>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTrace", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace: Option<RuntimeStackTrace>,
     /// Async stack trace, if any.
-    #[serde(rename = "asyncStackTraceId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "asyncStackTraceId", skip_serializing_if = "Option::is_none")]
     pub async_stack_trace_id: Option<RuntimeStackTraceId>,
     /// Whether the operation was successful or not. Only `Ok` denotes a
     /// successful live edit while the other enum variants denote why
     /// the live edit failed.
     pub status: DebuggerSetScriptSourceResultStatus,
     /// Exception details if any. Only present when `status` is `CompileError`.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -15098,12 +14703,10 @@ impl DebuggerSetVariableValueResult {
 pub struct DebuggerStepIntoParams {
     /// Debugger will pause on the execution of the first async task which was scheduled
     /// before next pause.
-    #[serde(rename = "breakOnAsyncCall")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "breakOnAsyncCall", skip_serializing_if = "Option::is_none")]
     pub break_on_async_call: Option<bool>,
     /// The skipList specifies location ranges that should be skipped on step into.
-    #[serde(rename = "skipList")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "skipList", skip_serializing_if = "Option::is_none")]
     pub skip_list: Option<Vec<DebuggerLocationRange>>,
 }
 
@@ -15154,8 +14757,7 @@ impl DebuggerStepOutResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DebuggerStepOverParams {
     /// The skipList specifies location ranges that should be skipped on step over.
-    #[serde(rename = "skipList")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "skipList", skip_serializing_if = "Option::is_none")]
     pub skip_list: Option<Vec<DebuggerLocationRange>>,
 }
 
@@ -15395,15 +14997,14 @@ pub struct DigitalCredentialsSetVirtualWalletBehaviorParams {
     pub action: DigitalCredentialsVirtualWalletAction,
     /// The protocol identifier (e.g. "openid4vp"). Required when |action| is
     /// "respond", forbidden otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
     /// The response data object returned by the wallet.
     /// Required when |action| is "respond", forbidden otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// The frame to scope the virtual wallet behavior to.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -15525,7 +15126,7 @@ impl EmulationMediaFeature {
 /// PressureMetadata
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationPressureMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub available: Option<bool>,
 }
 
@@ -15563,32 +15164,28 @@ pub enum EmulationPressureState {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSafeAreaInsets {
     /// Overrides safe-area-inset-top.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<i64>,
     /// Overrides safe-area-max-inset-top.
-    #[serde(rename = "topMax")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "topMax", skip_serializing_if = "Option::is_none")]
     pub top_max: Option<i64>,
     /// Overrides safe-area-inset-left.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<i64>,
     /// Overrides safe-area-max-inset-left.
-    #[serde(rename = "leftMax")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "leftMax", skip_serializing_if = "Option::is_none")]
     pub left_max: Option<i64>,
     /// Overrides safe-area-inset-bottom.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom: Option<i64>,
     /// Overrides safe-area-max-inset-bottom.
-    #[serde(rename = "bottomMax")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bottomMax", skip_serializing_if = "Option::is_none")]
     pub bottom_max: Option<i64>,
     /// Overrides safe-area-inset-right.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub right: Option<i64>,
     /// Overrides safe-area-max-inset-right.
-    #[serde(rename = "rightMax")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rightMax", skip_serializing_if = "Option::is_none")]
     pub right_max: Option<i64>,
 }
 
@@ -15720,13 +15317,11 @@ impl EmulationScreenOrientation {
 /// SensorMetadata
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSensorMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub available: Option<bool>,
-    #[serde(rename = "minimumFrequency")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "minimumFrequency", skip_serializing_if = "Option::is_none")]
     pub minimum_frequency: Option<f64>,
-    #[serde(rename = "maximumFrequency")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maximumFrequency", skip_serializing_if = "Option::is_none")]
     pub maximum_frequency: Option<f64>,
 }
 
@@ -15745,11 +15340,11 @@ impl EmulationSensorMetadata {
 /// SensorReading
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSensorReading {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub single: Option<EmulationSensorReadingSingle>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub xyz: Option<EmulationSensorReadingXyz>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quaternion: Option<EmulationSensorReadingQuaternion>,
 }
 
@@ -15868,14 +15463,12 @@ impl EmulationUserAgentBrandVersion {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationUserAgentMetadata {
     /// Brands appearing in Sec-CH-UA.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub brands: Option<Vec<EmulationUserAgentBrandVersion>>,
     /// Brands appearing in Sec-CH-UA-Full-Version-List.
-    #[serde(rename = "fullVersionList")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fullVersionList", skip_serializing_if = "Option::is_none")]
     pub full_version_list: Option<Vec<EmulationUserAgentBrandVersion>>,
-    #[serde(rename = "fullVersion")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fullVersion", skip_serializing_if = "Option::is_none")]
     pub full_version: Option<String>,
     pub platform: String,
     #[serde(rename = "platformVersion")]
@@ -15883,14 +15476,13 @@ pub struct EmulationUserAgentMetadata {
     pub architecture: String,
     pub model: String,
     pub mobile: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bitness: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wow64: Option<bool>,
     /// Used to specify User Agent form-factor values.
     /// See https://wicg.github.io/ua-client-hints/#sec-ch-ua-form-factors
-    #[serde(rename = "formFactors")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "formFactors", skip_serializing_if = "Option::is_none")]
     pub form_factors: Option<Vec<String>>,
 }
 
@@ -15932,16 +15524,16 @@ pub enum EmulationVirtualTimePolicy {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationWorkAreaInsets {
     /// Work area top inset in pixels. Default is 0;
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<i64>,
     /// Work area left inset in pixels. Default is 0;
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<i64>,
     /// Work area bottom inset in pixels. Default is 0;
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom: Option<i64>,
     /// Work area right inset in pixels. Default is 0;
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub right: Option<i64>,
 }
 
@@ -15969,26 +15561,22 @@ pub struct EmulationAddScreenParams {
     /// The height of the screen in pixels.
     pub height: i64,
     /// Specifies the screen's work area. Default is entire screen.
-    #[serde(rename = "workAreaInsets")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workAreaInsets", skip_serializing_if = "Option::is_none")]
     pub work_area_insets: Option<EmulationWorkAreaInsets>,
     /// Specifies the screen's device pixel ratio. Default is 1.
-    #[serde(rename = "devicePixelRatio")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "devicePixelRatio", skip_serializing_if = "Option::is_none")]
     pub device_pixel_ratio: Option<f64>,
     /// Specifies the screen's rotation angle. Available values are 0, 90, 180 and 270. Default is 0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation: Option<i64>,
     /// Specifies the screen's color depth in bits. Default is 24.
-    #[serde(rename = "colorDepth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "colorDepth", skip_serializing_if = "Option::is_none")]
     pub color_depth: Option<i64>,
     /// Specifies the descriptive label for the screen. Default is none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Indicates whether the screen is internal to the device or external, attached to the device. Default is false.
-    #[serde(rename = "isInternal")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isInternal", skip_serializing_if = "Option::is_none")]
     pub is_internal: Option<bool>,
 }
 
@@ -16276,7 +15864,7 @@ pub struct EmulationScreenOrientationLockChangedParams {
     /// Whether the screen orientation is currently locked.
     pub locked: bool,
     /// The orientation lock type requested by the page. Only set when locked is true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<EmulationScreenOrientation>,
 }
 
@@ -16295,7 +15883,7 @@ impl EmulationScreenOrientationLockChangedParams {
 pub struct EmulationSetAutoDarkModeOverrideParams {
     /// Whether to enable or disable automatic dark mode.
     /// If not specified, any existing override will be cleared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }
 
@@ -16377,8 +15965,7 @@ impl EmulationSetCputhrottlingRateResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSetDataSaverOverrideParams {
     /// Override value. Omitting the parameter disables the override.
-    #[serde(rename = "dataSaverEnabled")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dataSaverEnabled", skip_serializing_if = "Option::is_none")]
     pub data_saver_enabled: Option<bool>,
 }
 
@@ -16407,7 +15994,7 @@ impl EmulationSetDataSaverOverrideResult {
 pub struct EmulationSetDefaultBackgroundColorOverrideParams {
     /// RGBA of the default background color. If not specified, any existing override will be
     /// cleared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<DomRgba>,
 }
 
@@ -16454,59 +16041,49 @@ pub struct EmulationSetDeviceMetricsOverrideParams {
     /// autosizing and more.
     pub mobile: bool,
     /// Scale to apply to resulting view image.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
     /// Overriding screen width value in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "screenWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenWidth", skip_serializing_if = "Option::is_none")]
     pub screen_width: Option<i64>,
     /// Overriding screen height value in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "screenHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenHeight", skip_serializing_if = "Option::is_none")]
     pub screen_height: Option<i64>,
     /// Overriding view X position on screen in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "positionX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "positionX", skip_serializing_if = "Option::is_none")]
     pub position_x: Option<i64>,
     /// Overriding view Y position on screen in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "positionY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "positionY", skip_serializing_if = "Option::is_none")]
     pub position_y: Option<i64>,
     /// Do not set visible view size, rely upon explicit setVisibleSize call.
-    #[serde(rename = "dontSetVisibleSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dontSetVisibleSize", skip_serializing_if = "Option::is_none")]
     pub dont_set_visible_size: Option<bool>,
     /// Screen orientation override.
-    #[serde(rename = "screenOrientation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenOrientation", skip_serializing_if = "Option::is_none")]
     pub screen_orientation: Option<EmulationScreenOrientation>,
     /// If set, the visible area of the page will be overridden to this viewport. This viewport
     /// change is not observed by the page, e.g. viewport-relative elements do not change positions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<PageViewport>,
     /// If set, the display feature of a multi-segment screen. If not set, multi-segment support
     /// is turned-off.
     /// Deprecated, use Emulation.setDisplayFeaturesOverride.
-    #[serde(rename = "displayFeature")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "displayFeature", skip_serializing_if = "Option::is_none")]
     pub display_feature: Option<EmulationDisplayFeature>,
     /// If set, the posture of a foldable device. If not set the posture is set
     /// to continuous.
     /// Deprecated, use Emulation.setDevicePostureOverride.
-    #[serde(rename = "devicePosture")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "devicePosture", skip_serializing_if = "Option::is_none")]
     pub device_posture: Option<EmulationDevicePosture>,
     /// Scrollbar type. Default: `default`.
-    #[serde(rename = "scrollbarType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollbarType", skip_serializing_if = "Option::is_none")]
     pub scrollbar_type: Option<EmulationSetDeviceMetricsOverrideParamsScrollbarType>,
     /// If set to true, enables screen orientation lock emulation, which
     /// intercepts screen.orientation.lock() calls from the page and reports
     /// orientation changes via screenOrientationLockChanged events. This is
     /// useful for emulating mobile device orientation lock behavior in
     /// responsive design mode.
-    #[serde(rename = "screenOrientationLockEmulation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenOrientationLockEmulation", skip_serializing_if = "Option::is_none")]
     pub screen_orientation_lock_emulation: Option<bool>,
 }
 
@@ -16667,7 +16244,7 @@ pub struct EmulationSetEmitTouchEventsForMouseParams {
     /// Whether touch emulation based on mouse input should be enabled.
     pub enabled: bool,
     /// Touch/gesture events configuration. Default: current platform.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub configuration: Option<EmulationSetEmitTouchEventsForMouseParamsConfiguration>,
 }
 
@@ -16696,10 +16273,10 @@ impl EmulationSetEmitTouchEventsForMouseResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSetEmulatedMediaParams {
     /// Media type to emulate. Empty string disables the override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
     /// Media features to emulate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<Vec<EmulationMediaFeature>>,
 }
 
@@ -16727,7 +16304,7 @@ impl EmulationSetEmulatedMediaResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSetEmulatedOstextScaleParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
 }
 
@@ -16830,26 +16407,25 @@ impl EmulationSetFocusEmulationEnabledResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSetGeolocationOverrideParams {
     /// Mock latitude
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub latitude: Option<f64>,
     /// Mock longitude
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub longitude: Option<f64>,
     /// Mock accuracy
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub accuracy: Option<f64>,
     /// Mock altitude
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub altitude: Option<f64>,
     /// Mock altitudeAccuracy
-    #[serde(rename = "altitudeAccuracy")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "altitudeAccuracy", skip_serializing_if = "Option::is_none")]
     pub altitude_accuracy: Option<f64>,
     /// Mock heading
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub heading: Option<f64>,
     /// Mock speed
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
 }
 
@@ -16944,7 +16520,7 @@ impl EmulationSetIdleOverrideResult {
 pub struct EmulationSetLocaleOverrideParams {
     /// ICU style C locale (e.g. "en_US"). If not specified or empty, disables the override and
     /// restores default host system locale.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
 }
 
@@ -17028,7 +16604,7 @@ impl EmulationSetPageScaleFactorResult {
 pub struct EmulationSetPressureSourceOverrideEnabledParams {
     pub enabled: bool,
     pub source: EmulationPressureSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EmulationPressureMetadata>,
 }
 
@@ -17194,7 +16770,7 @@ impl EmulationSetScrollbarsHiddenResult {
 pub struct EmulationSetSensorOverrideEnabledParams {
     pub enabled: bool,
     pub r#type: EmulationSensorType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<EmulationSensorMetadata>,
 }
 
@@ -17312,8 +16888,7 @@ pub struct EmulationSetTouchEmulationEnabledParams {
     /// Whether the touch event emulation should be enabled.
     pub enabled: bool,
     /// Maximum touch points supported. Defaults to one.
-    #[serde(rename = "maxTouchPoints")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxTouchPoints", skip_serializing_if = "Option::is_none")]
     pub max_touch_points: Option<i64>,
 }
 
@@ -17345,15 +16920,13 @@ pub struct EmulationSetUserAgentOverrideParams {
     #[serde(rename = "userAgent")]
     pub user_agent: String,
     /// Browser language to emulate.
-    #[serde(rename = "acceptLanguage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "acceptLanguage", skip_serializing_if = "Option::is_none")]
     pub accept_language: Option<String>,
     /// The platform navigator.platform should return.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
     /// To be sent in Sec-CH-UA-* headers and returned in navigator.userAgentData
-    #[serde(rename = "userAgentMetadata")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userAgentMetadata", skip_serializing_if = "Option::is_none")]
     pub user_agent_metadata: Option<EmulationUserAgentMetadata>,
 }
 
@@ -17383,8 +16956,7 @@ impl EmulationSetUserAgentOverrideResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmulationSetVirtualKeyboardGeometryOverrideParams {
-    #[serde(rename = "keyboardRect")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyboardRect", skip_serializing_if = "Option::is_none")]
     pub keyboard_rect: Option<DomRect>,
 }
 
@@ -17414,16 +16986,14 @@ pub struct EmulationSetVirtualTimePolicyParams {
     pub policy: EmulationVirtualTimePolicy,
     /// If set, after this many virtual milliseconds have elapsed virtual time will be paused and a
     /// virtualTimeBudgetExpired event is sent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<f64>,
     /// If set this specifies the maximum number of tasks that can be run before virtual is forced
     /// forwards to prevent deadlock.
-    #[serde(rename = "maxVirtualTimeTaskStarvationCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxVirtualTimeTaskStarvationCount", skip_serializing_if = "Option::is_none")]
     pub max_virtual_time_task_starvation_count: Option<i64>,
     /// If set, base::Time::Now will be overridden to initially return this value.
-    #[serde(rename = "initialVirtualTime")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "initialVirtualTime", skip_serializing_if = "Option::is_none")]
     pub initial_virtual_time: Option<NetworkTimeSinceEpoch>,
 }
 
@@ -17493,38 +17063,34 @@ pub struct EmulationUpdateScreenParams {
     #[serde(rename = "screenId")]
     pub screen_id: EmulationScreenId,
     /// Offset of the left edge of the screen in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<i64>,
     /// Offset of the top edge of the screen in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<i64>,
     /// The width of the screen in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
     /// The height of the screen in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
     /// Specifies the screen's work area.
-    #[serde(rename = "workAreaInsets")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workAreaInsets", skip_serializing_if = "Option::is_none")]
     pub work_area_insets: Option<EmulationWorkAreaInsets>,
     /// Specifies the screen's device pixel ratio.
-    #[serde(rename = "devicePixelRatio")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "devicePixelRatio", skip_serializing_if = "Option::is_none")]
     pub device_pixel_ratio: Option<f64>,
     /// Specifies the screen's rotation angle. Available values are 0, 90, 180 and 270.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rotation: Option<i64>,
     /// Specifies the screen's color depth in bits.
-    #[serde(rename = "colorDepth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "colorDepth", skip_serializing_if = "Option::is_none")]
     pub color_depth: Option<i64>,
     /// Specifies the descriptive label for the screen.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Indicates whether the screen is internal to the device or external, attached to the device. Default is false.
-    #[serde(rename = "isInternal")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isInternal", skip_serializing_if = "Option::is_none")]
     pub is_internal: Option<bool>,
 }
 
@@ -17760,7 +17326,7 @@ pub struct ExtensionsGetStorageItemsParams {
     #[serde(rename = "storageArea")]
     pub storage_area: ExtensionsStorageArea,
     /// Keys to retrieve.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub keys: Option<Vec<String>>,
 }
 
@@ -17796,8 +17362,7 @@ pub struct ExtensionsLoadUnpackedParams {
     /// Absolute file path.
     pub path: String,
     /// Enable the extension in incognito
-    #[serde(rename = "enableInIncognito")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableInIncognito", skip_serializing_if = "Option::is_none")]
     pub enable_in_incognito: Option<bool>,
 }
 
@@ -17972,11 +17537,9 @@ pub struct FedCmAccount {
     #[serde(rename = "loginState")]
     pub login_state: FedCmLoginState,
     /// These two are only set if the loginState is signUp
-    #[serde(rename = "termsOfServiceUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "termsOfServiceUrl", skip_serializing_if = "Option::is_none")]
     pub terms_of_service_url: Option<String>,
-    #[serde(rename = "privacyPolicyUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "privacyPolicyUrl", skip_serializing_if = "Option::is_none")]
     pub privacy_policy_url: Option<String>,
 }
 
@@ -18087,7 +17650,7 @@ pub struct FedCmDialogShownParams {
     /// These exist primarily so that the caller can verify the
     /// RP context was used appropriately.
     pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
 }
 
@@ -18131,8 +17694,7 @@ impl FedCmDisableResult {
 pub struct FedCmDismissDialogParams {
     #[serde(rename = "dialogId")]
     pub dialog_id: String,
-    #[serde(rename = "triggerCooldown")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "triggerCooldown", skip_serializing_if = "Option::is_none")]
     pub trigger_cooldown: Option<bool>,
 }
 
@@ -18163,8 +17725,7 @@ pub struct FedCmEnableParams {
     /// Allows callers to disable the promise rejection delay that would
     /// normally happen, if this is unimportant to what's being tested.
     /// (step 4 of https://fedidcg.github.io/FedCM/#browser-api-rp-sign-in)
-    #[serde(rename = "disableRejectionDelay")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "disableRejectionDelay", skip_serializing_if = "Option::is_none")]
     pub disable_rejection_delay: Option<bool>,
 }
 
@@ -18285,7 +17846,7 @@ pub enum FetchAuthChallengeSource {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FetchAuthChallenge {
     /// Source of the authentication challenge.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<FetchAuthChallengeSource>,
     /// Origin of the challenger.
     pub origin: String,
@@ -18327,11 +17888,11 @@ pub struct FetchAuthChallengeResponse {
     pub response: FetchAuthChallengeResponseResponse,
     /// The username to provide, possibly empty. Should only be set if response is
     /// ProvideCredentials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// The password to provide, possibly empty. Should only be set if response is
     /// ProvideCredentials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
 }
 
@@ -18375,16 +17936,13 @@ pub type FetchRequestId = String;
 pub struct FetchRequestPattern {
     /// Wildcards (`'*'` -> zero or more, `'?'` -> exactly one) are allowed. Escape character is
     /// backslash. Omitting is equivalent to `"*"`.
-    #[serde(rename = "urlPattern")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlPattern", skip_serializing_if = "Option::is_none")]
     pub url_pattern: Option<String>,
     /// If set, only requests for matching resource types will be intercepted.
-    #[serde(rename = "resourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resourceType", skip_serializing_if = "Option::is_none")]
     pub resource_type: Option<NetworkResourceType>,
     /// Stage at which to begin intercepting requests. Default is Request.
-    #[serde(rename = "requestStage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestStage", skip_serializing_if = "Option::is_none")]
     pub request_stage: Option<FetchRequestStage>,
 }
 
@@ -18449,23 +18007,21 @@ pub struct FetchContinueRequestParams {
     #[serde(rename = "requestId")]
     pub request_id: FetchRequestId,
     /// If set, the request url will be modified in a way that's not observable by page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// If set, the request method is overridden.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
     /// If set, overrides the post data in the request. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "postData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "postData", skip_serializing_if = "Option::is_none")]
     pub post_data: Option<String>,
     /// If set, overrides the request headers. Note that the overrides do not
     /// extend to subsequent redirect hops, if a redirect happens. Another override
     /// may be applied to a different request produced by a redirect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<Vec<FetchHeaderEntry>>,
     /// If set, overrides response interception behavior for this request.
-    #[serde(rename = "interceptResponse")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "interceptResponse", skip_serializing_if = "Option::is_none")]
     pub intercept_response: Option<bool>,
 }
 
@@ -18501,24 +18057,20 @@ pub struct FetchContinueResponseParams {
     #[serde(rename = "requestId")]
     pub request_id: FetchRequestId,
     /// An HTTP response code. If absent, original response code will be used.
-    #[serde(rename = "responseCode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseCode", skip_serializing_if = "Option::is_none")]
     pub response_code: Option<i64>,
     /// A textual representation of responseCode.
     /// If absent, a standard phrase matching responseCode is used.
-    #[serde(rename = "responsePhrase")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responsePhrase", skip_serializing_if = "Option::is_none")]
     pub response_phrase: Option<String>,
     /// Response headers. If absent, original response headers will be used.
-    #[serde(rename = "responseHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")]
     pub response_headers: Option<Vec<FetchHeaderEntry>>,
     /// Alternative way of specifying response headers as a \0-separated
     /// series of name: value pairs. Prefer the above method unless you
     /// need to represent some non-UTF8 values that can't be transmitted
     /// over the protocol as text. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "binaryResponseHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "binaryResponseHeaders", skip_serializing_if = "Option::is_none")]
     pub binary_response_headers: Option<String>,
 }
 
@@ -18606,12 +18158,11 @@ pub struct FetchEnableParams {
     /// If specified, only requests matching any of these patterns will produce
     /// fetchRequested event and will be paused until clients response. If not set,
     /// all requests will be affected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub patterns: Option<Vec<FetchRequestPattern>>,
     /// If true, authRequired events will be issued and requests will be paused
     /// expecting a call to continueWithAuth.
-    #[serde(rename = "handleAuthRequests")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "handleAuthRequests", skip_serializing_if = "Option::is_none")]
     pub handle_auth_requests: Option<bool>,
 }
 
@@ -18678,25 +18229,22 @@ pub struct FetchFulfillRequestParams {
     #[serde(rename = "responseCode")]
     pub response_code: i64,
     /// Response headers.
-    #[serde(rename = "responseHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")]
     pub response_headers: Option<Vec<FetchHeaderEntry>>,
     /// Alternative way of specifying response headers as a \0-separated
     /// series of name: value pairs. Prefer the above method unless you
     /// need to represent some non-UTF8 values that can't be transmitted
     /// over the protocol as text. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "binaryResponseHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "binaryResponseHeaders", skip_serializing_if = "Option::is_none")]
     pub binary_response_headers: Option<String>,
     /// A response body. If absent, original response body will be used if
     /// the request is intercepted at the response stage and empty body
     /// will be used if the request is intercepted at the request stage. (Encoded as a base64 string when passed over JSON)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     /// A textual representation of responseCode.
     /// If absent, a standard phrase matching responseCode is used.
-    #[serde(rename = "responsePhrase")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responsePhrase", skip_serializing_if = "Option::is_none")]
     pub response_phrase: Option<String>,
 }
 
@@ -18777,30 +18325,24 @@ pub struct FetchRequestPausedParams {
     #[serde(rename = "resourceType")]
     pub resource_type: NetworkResourceType,
     /// Response error if intercepted at response stage.
-    #[serde(rename = "responseErrorReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseErrorReason", skip_serializing_if = "Option::is_none")]
     pub response_error_reason: Option<NetworkErrorReason>,
     /// Response code if intercepted at response stage.
-    #[serde(rename = "responseStatusCode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseStatusCode", skip_serializing_if = "Option::is_none")]
     pub response_status_code: Option<i64>,
     /// Response status text if intercepted at response stage.
-    #[serde(rename = "responseStatusText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseStatusText", skip_serializing_if = "Option::is_none")]
     pub response_status_text: Option<String>,
     /// Response headers if intercepted at the response stage.
-    #[serde(rename = "responseHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")]
     pub response_headers: Option<Vec<FetchHeaderEntry>>,
     /// If the intercepted request had a corresponding Network.requestWillBeSent event fired for it,
     /// then this networkId will be the same as the requestId present in the requestWillBeSent event.
-    #[serde(rename = "networkId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "networkId", skip_serializing_if = "Option::is_none")]
     pub network_id: Option<NetworkRequestId>,
     /// If the request is due to a redirect response from the server, the id of the request that
     /// has caused the redirect.
-    #[serde(rename = "redirectedRequestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "redirectedRequestId", skip_serializing_if = "Option::is_none")]
     pub redirected_request_id: Option<FetchRequestId>,
 }
 
@@ -18861,8 +18403,7 @@ pub struct FileSystemBucketFileSystemLocator {
     #[serde(rename = "storageKey")]
     pub storage_key: StorageSerializedStorageKey,
     /// Bucket name. Not passing a `bucketName` will retrieve the default Bucket. (https://developer.mozilla.org/en-US/docs/Web/API/Storage_API#storage_buckets)
-    #[serde(rename = "bucketName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bucketName", skip_serializing_if = "Option::is_none")]
     pub bucket_name: Option<String>,
     /// Path to the directory using each path component as an array item.
     #[serde(rename = "pathComponents")]
@@ -18976,14 +18517,13 @@ pub enum HeadlessExperimentalScreenshotParamsFormat {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HeadlessExperimentalScreenshotParams {
     /// Image compression format (defaults to png).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<HeadlessExperimentalScreenshotParamsFormat>,
     /// Compression quality from range [0..100] (jpeg and webp only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<i64>,
     /// Optimize image encoding for speed, not for resulting size (defaults to false)
-    #[serde(rename = "optimizeForSpeed")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "optimizeForSpeed", skip_serializing_if = "Option::is_none")]
     pub optimize_for_speed: Option<bool>,
 }
 
@@ -19003,23 +18543,21 @@ impl HeadlessExperimentalScreenshotParams {
 pub struct HeadlessExperimentalBeginFrameParams {
     /// Timestamp of this BeginFrame in Renderer TimeTicks (milliseconds of uptime). If not set,
     /// the current time will be used.
-    #[serde(rename = "frameTimeTicks")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameTimeTicks", skip_serializing_if = "Option::is_none")]
     pub frame_time_ticks: Option<f64>,
     /// The interval between BeginFrames that is reported to the compositor, in milliseconds.
     /// Defaults to a 60 frames/second interval, i.e. about 16.666 milliseconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<f64>,
     /// Whether updates should not be committed and drawn onto the display. False by default. If
     /// true, only side effects of the BeginFrame will be run, such as layout and animations, but
     /// any visual updates may not be visible on the display or in screenshots.
-    #[serde(rename = "noDisplayUpdates")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "noDisplayUpdates", skip_serializing_if = "Option::is_none")]
     pub no_display_updates: Option<bool>,
     /// If set, a screenshot of the frame will be captured and returned in the response. Otherwise,
     /// no screenshot will be captured. Note that capturing a screenshot can fail, for example,
     /// during renderer initialization. In such a case, no screenshot data will be returned.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshot: Option<HeadlessExperimentalScreenshotParams>,
 }
 
@@ -19043,8 +18581,7 @@ pub struct HeadlessExperimentalBeginFrameResult {
     #[serde(rename = "hasDamage")]
     pub has_damage: bool,
     /// Base64-encoded image data of the screenshot, if one was requested and successfully taken. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "screenshotData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenshotData", skip_serializing_if = "Option::is_none")]
     pub screenshot_data: Option<String>,
 }
 
@@ -19325,8 +18862,7 @@ pub struct HeapProfilerGetObjectByHeapObjectIdParams {
     #[serde(rename = "objectId")]
     pub object_id: HeapProfilerHeapSnapshotObjectId,
     /// Symbolic group name that can be used to release multiple objects.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
 }
 
@@ -19425,7 +18961,7 @@ impl HeapProfilerLastSeenObjectIdParams {
 pub struct HeapProfilerReportHeapSnapshotProgressParams {
     pub done: i64,
     pub total: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub finished: Option<bool>,
 }
 
@@ -19456,12 +18992,10 @@ impl HeapProfilerResetProfilesParams {
 pub struct HeapProfilerStartSamplingParams {
     /// Average sample interval in bytes. Poisson distribution is used for the intervals. The
     /// default value is 32768 bytes.
-    #[serde(rename = "samplingInterval")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "samplingInterval", skip_serializing_if = "Option::is_none")]
     pub sampling_interval: Option<f64>,
     /// Maximum stack depth. The default value is 128.
-    #[serde(rename = "stackDepth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackDepth", skip_serializing_if = "Option::is_none")]
     pub stack_depth: Option<f64>,
     /// By default, the sampling heap profiler reports only objects which are
     /// still alive when the profile is returned via getSamplingProfile or
@@ -19470,8 +19004,7 @@ pub struct HeapProfilerStartSamplingParams {
     /// heap profiler to also include information about objects discarded by
     /// major GC, which will show which functions cause large temporary memory
     /// usage or long GC pauses.
-    #[serde(rename = "includeObjectsCollectedByMajorGC")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeObjectsCollectedByMajorGC", skip_serializing_if = "Option::is_none")]
     pub include_objects_collected_by_major_gc: Option<bool>,
     /// By default, the sampling heap profiler reports only objects which are
     /// still alive when the profile is returned via getSamplingProfile or
@@ -19480,8 +19013,7 @@ pub struct HeapProfilerStartSamplingParams {
     /// heap profiler to also include information about objects discarded by
     /// minor GC, which is useful when tuning a latency-sensitive application
     /// for minimal GC activity.
-    #[serde(rename = "includeObjectsCollectedByMinorGC")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeObjectsCollectedByMinorGC", skip_serializing_if = "Option::is_none")]
     pub include_objects_collected_by_minor_gc: Option<bool>,
 }
 
@@ -19511,8 +19043,7 @@ impl HeapProfilerStartSamplingResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HeapProfilerStartTrackingHeapObjectsParams {
-    #[serde(rename = "trackAllocations")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "trackAllocations", skip_serializing_if = "Option::is_none")]
     pub track_allocations: Option<bool>,
 }
 
@@ -19568,20 +19099,16 @@ impl HeapProfilerStopSamplingResult {
 pub struct HeapProfilerStopTrackingHeapObjectsParams {
     /// If true 'reportHeapSnapshotProgress' events will be generated while snapshot is being taken
     /// when the tracking is stopped.
-    #[serde(rename = "reportProgress")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportProgress", skip_serializing_if = "Option::is_none")]
     pub report_progress: Option<bool>,
     /// Deprecated in favor of `exposeInternals`.
-    #[serde(rename = "treatGlobalObjectsAsRoots")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "treatGlobalObjectsAsRoots", skip_serializing_if = "Option::is_none")]
     pub treat_global_objects_as_roots: Option<bool>,
     /// If true, numerical values are included in the snapshot
-    #[serde(rename = "captureNumericValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "captureNumericValue", skip_serializing_if = "Option::is_none")]
     pub capture_numeric_value: Option<bool>,
     /// If true, exposes internals of the snapshot.
-    #[serde(rename = "exposeInternals")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exposeInternals", skip_serializing_if = "Option::is_none")]
     pub expose_internals: Option<bool>,
 }
 
@@ -19612,21 +19139,17 @@ impl HeapProfilerStopTrackingHeapObjectsResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HeapProfilerTakeHeapSnapshotParams {
     /// If true 'reportHeapSnapshotProgress' events will be generated while snapshot is being taken.
-    #[serde(rename = "reportProgress")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportProgress", skip_serializing_if = "Option::is_none")]
     pub report_progress: Option<bool>,
     /// If true, a raw snapshot without artificial roots will be generated.
     /// Deprecated in favor of `exposeInternals`.
-    #[serde(rename = "treatGlobalObjectsAsRoots")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "treatGlobalObjectsAsRoots", skip_serializing_if = "Option::is_none")]
     pub treat_global_objects_as_roots: Option<bool>,
     /// If true, numerical values are included in the snapshot
-    #[serde(rename = "captureNumericValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "captureNumericValue", skip_serializing_if = "Option::is_none")]
     pub capture_numeric_value: Option<bool>,
     /// If true, exposes internals of the snapshot.
-    #[serde(rename = "exposeInternals")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exposeInternals", skip_serializing_if = "Option::is_none")]
     pub expose_internals: Option<bool>,
 }
 
@@ -19691,10 +19214,10 @@ pub struct IoReadParams {
     pub handle: IoStreamHandle,
     /// Seek to the specified offset before reading (if not specified, proceed with offset
     /// following the last read). Some types of streams may only support sequential reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<i64>,
     /// Maximum number of bytes to read (left upon the agent discretion if not specified).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
 }
 
@@ -19713,8 +19236,7 @@ impl IoReadParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IoReadResult {
     /// Set if the data is base64-encoded
-    #[serde(rename = "base64Encoded")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "base64Encoded", skip_serializing_if = "Option::is_none")]
     pub base64_encoded: Option<bool>,
     /// Data that were read.
     pub data: String,
@@ -19835,16 +19357,16 @@ pub struct IndexedDbKey {
     /// Key type.
     pub r#type: IndexedDbKeyType,
     /// Number value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub number: Option<f64>,
     /// String value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub string: Option<String>,
     /// Date value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date: Option<f64>,
     /// Array value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub array: Option<Vec<IndexedDbKey>>,
 }
 
@@ -19879,10 +19401,10 @@ pub struct IndexedDbKeyPath {
     /// Key path type.
     pub r#type: IndexedDbKeyPathType,
     /// String value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub string: Option<String>,
     /// Array value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub array: Option<Vec<String>>,
 }
 
@@ -19902,10 +19424,10 @@ impl IndexedDbKeyPath {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IndexedDbKeyRange {
     /// Lower bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lower: Option<IndexedDbKey>,
     /// Upper bound.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub upper: Option<IndexedDbKey>,
     /// If true lower bound is open.
     #[serde(rename = "lowerOpen")]
@@ -19988,16 +19510,13 @@ impl IndexedDbObjectStoreIndex {
 pub struct IndexedDbClearObjectStoreParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// Database name.
     #[serde(rename = "databaseName")]
@@ -20036,16 +19555,13 @@ impl IndexedDbClearObjectStoreResult {
 pub struct IndexedDbDeleteDatabaseParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// Database name.
     #[serde(rename = "databaseName")]
@@ -20080,16 +19596,13 @@ impl IndexedDbDeleteDatabaseResult {
 pub struct IndexedDbDeleteObjectStoreEntriesParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     #[serde(rename = "databaseName")]
     pub database_name: String,
@@ -20174,16 +19687,13 @@ impl IndexedDbEnableResult {
 pub struct IndexedDbGetMetadataParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// Database name.
     #[serde(rename = "databaseName")]
@@ -20234,16 +19744,13 @@ impl IndexedDbGetMetadataResult {
 pub struct IndexedDbRequestDataParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// Database name.
     #[serde(rename = "databaseName")]
@@ -20252,8 +19759,7 @@ pub struct IndexedDbRequestDataParams {
     #[serde(rename = "objectStoreName")]
     pub object_store_name: String,
     /// Index name. If not specified, it performs an object store data request.
-    #[serde(rename = "indexName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "indexName", skip_serializing_if = "Option::is_none")]
     pub index_name: Option<String>,
     /// Number of records to skip.
     #[serde(rename = "skipCount")]
@@ -20262,8 +19768,7 @@ pub struct IndexedDbRequestDataParams {
     #[serde(rename = "pageSize")]
     pub page_size: i64,
     /// Key range.
-    #[serde(rename = "keyRange")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyRange", skip_serializing_if = "Option::is_none")]
     pub key_range: Option<IndexedDbKeyRange>,
 }
 
@@ -20310,16 +19815,13 @@ impl IndexedDbRequestDataResult {
 pub struct IndexedDbRequestDatabaseNamesParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
 }
 
@@ -20356,16 +19858,13 @@ impl IndexedDbRequestDatabaseNamesResult {
 pub struct IndexedDbRequestDatabaseParams {
     /// At least and at most one of securityOrigin, storageKey, or storageBucket must be specified.
     /// Security origin.
-    #[serde(rename = "securityOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOrigin", skip_serializing_if = "Option::is_none")]
     pub security_origin: Option<String>,
     /// Storage key.
-    #[serde(rename = "storageKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageKey", skip_serializing_if = "Option::is_none")]
     pub storage_key: Option<String>,
     /// Storage bucket. If not specified, it uses the default bucket.
-    #[serde(rename = "storageBucket")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "storageBucket", skip_serializing_if = "Option::is_none")]
     pub storage_bucket: Option<StorageStorageBucket>,
     /// Database name.
     #[serde(rename = "databaseName")]
@@ -20407,7 +19906,7 @@ impl IndexedDbRequestDatabaseResult {
 pub struct InputDragData {
     pub items: Vec<InputDragDataItem>,
     /// List of filenames that should be included when dropping
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
     /// Bit field representing allowed drag operations. Copy = 1, Link = 2, Move = 16
     #[serde(rename = "dragOperationsMask")]
@@ -20436,12 +19935,11 @@ pub struct InputDragDataItem {
     /// text, HTML markup or any other data.
     pub data: String,
     /// Title associated with a link. Only valid when `mimeType` == "text/uri-list".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Stores the base URL for the contained markup. Only valid when `mimeType`
     /// == "text/html".
-    #[serde(rename = "baseURL")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseURL", skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 }
 
@@ -20498,37 +19996,31 @@ pub struct InputTouchPoint {
     /// the top of the viewport and Y increases as it proceeds towards the bottom of the viewport.
     pub y: f64,
     /// X radius of the touch area (default: 1.0).
-    #[serde(rename = "radiusX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "radiusX", skip_serializing_if = "Option::is_none")]
     pub radius_x: Option<f64>,
     /// Y radius of the touch area (default: 1.0).
-    #[serde(rename = "radiusY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "radiusY", skip_serializing_if = "Option::is_none")]
     pub radius_y: Option<f64>,
     /// Rotation angle (default: 0.0).
-    #[serde(rename = "rotationAngle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rotationAngle", skip_serializing_if = "Option::is_none")]
     pub rotation_angle: Option<f64>,
     /// Force (default: 1.0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<f64>,
     /// The normalized tangential pressure, which has a range of [-1,1] (default: 0).
-    #[serde(rename = "tangentialPressure")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tangentialPressure", skip_serializing_if = "Option::is_none")]
     pub tangential_pressure: Option<f64>,
     /// The plane angle between the Y-Z plane and the plane containing both the stylus axis and the Y axis, in degrees of the range [-90,90], a positive tiltX is to the right (default: 0)
-    #[serde(rename = "tiltX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tiltX", skip_serializing_if = "Option::is_none")]
     pub tilt_x: Option<f64>,
     /// The plane angle between the X-Z plane and the plane containing both the stylus axis and the X axis, in degrees of the range [-90,90], a positive tiltY is towards the user (default: 0).
-    #[serde(rename = "tiltY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tiltY", skip_serializing_if = "Option::is_none")]
     pub tilt_y: Option<f64>,
     /// The clockwise rotation of a pen stylus around its own major axis, in degrees in the range [0,359] (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub twist: Option<i64>,
     /// Identifier used to track touch sources between events, must be unique within an event.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<f64>,
 }
 
@@ -20599,7 +20091,7 @@ pub struct InputDispatchDragEventParams {
     pub data: InputDragData,
     /// Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
     /// (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i64>,
 }
 
@@ -20647,59 +20139,52 @@ pub struct InputDispatchKeyEventParams {
     pub r#type: InputDispatchKeyEventParamsType,
     /// Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
     /// (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i64>,
     /// Time at which the event occurred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<InputTimeSinceEpoch>,
     /// Text as generated by processing a virtual key code with a keyboard layout. Not needed for
     /// for `keyUp` and `rawKeyDown` events (default: "")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Text that would have been generated by the keyboard if no modifiers were pressed (except for
     /// shift). Useful for shortcut (accelerator) key handling (default: "").
-    #[serde(rename = "unmodifiedText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "unmodifiedText", skip_serializing_if = "Option::is_none")]
     pub unmodified_text: Option<String>,
     /// Unique key identifier (e.g., 'U+0041') (default: "").
-    #[serde(rename = "keyIdentifier")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyIdentifier", skip_serializing_if = "Option::is_none")]
     pub key_identifier: Option<String>,
     /// Unique DOM defined string value for each physical key (e.g., 'KeyA') (default: "").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// Unique DOM defined string value describing the meaning of the key in the context of active
     /// modifiers, keyboard layout, etc (e.g., 'AltGr') (default: "").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Windows virtual key code (default: 0).
-    #[serde(rename = "windowsVirtualKeyCode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "windowsVirtualKeyCode", skip_serializing_if = "Option::is_none")]
     pub windows_virtual_key_code: Option<i64>,
     /// Native virtual key code (default: 0).
-    #[serde(rename = "nativeVirtualKeyCode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nativeVirtualKeyCode", skip_serializing_if = "Option::is_none")]
     pub native_virtual_key_code: Option<i64>,
     /// Whether the event was generated from auto repeat (default: false).
-    #[serde(rename = "autoRepeat")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "autoRepeat", skip_serializing_if = "Option::is_none")]
     pub auto_repeat: Option<bool>,
     /// Whether the event was generated from the keypad (default: false).
-    #[serde(rename = "isKeypad")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isKeypad", skip_serializing_if = "Option::is_none")]
     pub is_keypad: Option<bool>,
     /// Whether the event was a system key event (default: false).
-    #[serde(rename = "isSystemKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isSystemKey", skip_serializing_if = "Option::is_none")]
     pub is_system_key: Option<bool>,
     /// Whether the event was from the left or right side of the keyboard. 1=Left, 2=Right (default:
     /// 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<i64>,
     /// Editing commands to send with the key event (e.g., 'selectAll') (default: []).
     /// These are related to but not equal the command names used in `document.execCommand` and NSStandardKeyBindingResponding.
     /// See https://source.chromium.org/chromium/chromium/src/+/main:third_party/blink/renderer/core/editing/commands/editor_command_names.h for valid command names.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub commands: Option<Vec<String>>,
 }
 
@@ -20771,51 +20256,44 @@ pub struct InputDispatchMouseEventParams {
     pub y: f64,
     /// Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
     /// (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i64>,
     /// Time at which the event occurred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<InputTimeSinceEpoch>,
     /// Mouse button (default: "none").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub button: Option<InputMouseButton>,
     /// A number indicating which buttons are pressed on the mouse when a mouse event is triggered.
     /// Left=1, Right=2, Middle=4, Back=8, Forward=16, None=0.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub buttons: Option<i64>,
     /// Number of times the mouse button was clicked (default: 0).
-    #[serde(rename = "clickCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clickCount", skip_serializing_if = "Option::is_none")]
     pub click_count: Option<i64>,
     /// The normalized pressure, which has a range of [0,1] (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub force: Option<f64>,
     /// The normalized tangential pressure, which has a range of [-1,1] (default: 0).
-    #[serde(rename = "tangentialPressure")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tangentialPressure", skip_serializing_if = "Option::is_none")]
     pub tangential_pressure: Option<f64>,
     /// The plane angle between the Y-Z plane and the plane containing both the stylus axis and the Y axis, in degrees of the range [-90,90], a positive tiltX is to the right (default: 0).
-    #[serde(rename = "tiltX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tiltX", skip_serializing_if = "Option::is_none")]
     pub tilt_x: Option<f64>,
     /// The plane angle between the X-Z plane and the plane containing both the stylus axis and the X axis, in degrees of the range [-90,90], a positive tiltY is towards the user (default: 0).
-    #[serde(rename = "tiltY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tiltY", skip_serializing_if = "Option::is_none")]
     pub tilt_y: Option<f64>,
     /// The clockwise rotation of a pen stylus around its own major axis, in degrees in the range [0,359] (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub twist: Option<i64>,
     /// X delta in CSS pixels for mouse wheel event (default: 0).
-    #[serde(rename = "deltaX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deltaX", skip_serializing_if = "Option::is_none")]
     pub delta_x: Option<f64>,
     /// Y delta in CSS pixels for mouse wheel event (default: 0).
-    #[serde(rename = "deltaY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deltaY", skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
     /// Pointer type (default: "mouse").
-    #[serde(rename = "pointerType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pointerType", skip_serializing_if = "Option::is_none")]
     pub pointer_type: Option<InputDispatchMouseEventParamsPointerType>,
 }
 
@@ -20881,10 +20359,10 @@ pub struct InputDispatchTouchEventParams {
     pub touch_points: Vec<InputTouchPoint>,
     /// Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
     /// (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i64>,
     /// Time at which the event occurred.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<InputTimeSinceEpoch>,
 }
 
@@ -20951,23 +20429,20 @@ pub struct InputEmulateTouchFromMouseEventParams {
     /// Mouse button. Only "none", "left", "right" are supported.
     pub button: InputMouseButton,
     /// Time at which the event occurred (default: current time).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<InputTimeSinceEpoch>,
     /// X delta in DIP for mouse wheel event (default: 0).
-    #[serde(rename = "deltaX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deltaX", skip_serializing_if = "Option::is_none")]
     pub delta_x: Option<f64>,
     /// Y delta in DIP for mouse wheel event (default: 0).
-    #[serde(rename = "deltaY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deltaY", skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
     /// Bit field representing pressed modifier keys. Alt=1, Ctrl=2, Meta/Command=4, Shift=8
     /// (default: 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i64>,
     /// Number of times the mouse button was clicked (default: 0).
-    #[serde(rename = "clickCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clickCount", skip_serializing_if = "Option::is_none")]
     pub click_count: Option<i64>,
 }
 
@@ -21011,12 +20486,10 @@ pub struct InputImeSetCompositionParams {
     #[serde(rename = "selectionEnd")]
     pub selection_end: i64,
     /// replacement start
-    #[serde(rename = "replacementStart")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "replacementStart", skip_serializing_if = "Option::is_none")]
     pub replacement_start: Option<i64>,
     /// replacement end
-    #[serde(rename = "replacementEnd")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "replacementEnd", skip_serializing_if = "Option::is_none")]
     pub replacement_end: Option<i64>,
 }
 
@@ -21135,13 +20608,11 @@ pub struct InputSynthesizePinchGestureParams {
     #[serde(rename = "scaleFactor")]
     pub scale_factor: f64,
     /// Relative pointer speed in pixels per second (default: 800).
-    #[serde(rename = "relativeSpeed")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "relativeSpeed", skip_serializing_if = "Option::is_none")]
     pub relative_speed: Option<i64>,
     /// Which type of input events to be generated (default: 'default', which queries the platform
     /// for the preferred input type).
-    #[serde(rename = "gestureSourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")]
     pub gesture_source_type: Option<InputGestureSourceType>,
 }
 
@@ -21177,46 +20648,37 @@ pub struct InputSynthesizeScrollGestureParams {
     /// Y coordinate of the start of the gesture in CSS pixels.
     pub y: f64,
     /// The distance to scroll along the X axis (positive to scroll left).
-    #[serde(rename = "xDistance")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "xDistance", skip_serializing_if = "Option::is_none")]
     pub x_distance: Option<f64>,
     /// The distance to scroll along the Y axis (positive to scroll up).
-    #[serde(rename = "yDistance")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "yDistance", skip_serializing_if = "Option::is_none")]
     pub y_distance: Option<f64>,
     /// The number of additional pixels to scroll back along the X axis, in addition to the given
     /// distance.
-    #[serde(rename = "xOverscroll")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "xOverscroll", skip_serializing_if = "Option::is_none")]
     pub x_overscroll: Option<f64>,
     /// The number of additional pixels to scroll back along the Y axis, in addition to the given
     /// distance.
-    #[serde(rename = "yOverscroll")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "yOverscroll", skip_serializing_if = "Option::is_none")]
     pub y_overscroll: Option<f64>,
     /// Prevent fling (default: true).
-    #[serde(rename = "preventFling")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "preventFling", skip_serializing_if = "Option::is_none")]
     pub prevent_fling: Option<bool>,
     /// Swipe speed in pixels per second (default: 800).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<i64>,
     /// Which type of input events to be generated (default: 'default', which queries the platform
     /// for the preferred input type).
-    #[serde(rename = "gestureSourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")]
     pub gesture_source_type: Option<InputGestureSourceType>,
     /// The number of times to repeat the gesture (default: 0).
-    #[serde(rename = "repeatCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "repeatCount", skip_serializing_if = "Option::is_none")]
     pub repeat_count: Option<i64>,
     /// The number of milliseconds delay between each repeat. (default: 250).
-    #[serde(rename = "repeatDelayMs")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "repeatDelayMs", skip_serializing_if = "Option::is_none")]
     pub repeat_delay_ms: Option<i64>,
     /// The name of the interaction markers to generate, if not empty (default: "").
-    #[serde(rename = "interactionMarkerName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "interactionMarkerName", skip_serializing_if = "Option::is_none")]
     pub interaction_marker_name: Option<String>,
 }
 
@@ -21259,16 +20721,14 @@ pub struct InputSynthesizeTapGestureParams {
     /// Y coordinate of the start of the gesture in CSS pixels.
     pub y: f64,
     /// Duration between touchdown and touchup events in ms (default: 50).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<i64>,
     /// Number of times to perform the tap (e.g. 2 for double tap, default: 1).
-    #[serde(rename = "tapCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tapCount", skip_serializing_if = "Option::is_none")]
     pub tap_count: Option<i64>,
     /// Which type of input events to be generated (default: 'default', which queries the platform
     /// for the preferred input type).
-    #[serde(rename = "gestureSourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")]
     pub gesture_source_type: Option<InputGestureSourceType>,
 }
 
@@ -21397,12 +20857,10 @@ pub struct LayerTreeLayer {
     #[serde(rename = "layerId")]
     pub layer_id: LayerTreeLayerId,
     /// The id of parent (not present for root).
-    #[serde(rename = "parentLayerId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentLayerId", skip_serializing_if = "Option::is_none")]
     pub parent_layer_id: Option<LayerTreeLayerId>,
     /// The backend id for the node associated with this layer.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// Offset from parent layer, X coordinate.
     #[serde(rename = "offsetX")]
@@ -21415,19 +20873,16 @@ pub struct LayerTreeLayer {
     /// Layer height.
     pub height: f64,
     /// Transformation matrix for layer, default is identity matrix
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transform: Option<Vec<f64>>,
     /// Transform anchor point X, absent if no transform specified
-    #[serde(rename = "anchorX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "anchorX", skip_serializing_if = "Option::is_none")]
     pub anchor_x: Option<f64>,
     /// Transform anchor point Y, absent if no transform specified
-    #[serde(rename = "anchorY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "anchorY", skip_serializing_if = "Option::is_none")]
     pub anchor_y: Option<f64>,
     /// Transform anchor point Z, absent if no transform specified
-    #[serde(rename = "anchorZ")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "anchorZ", skip_serializing_if = "Option::is_none")]
     pub anchor_z: Option<f64>,
     /// Indicates how many time this layer has painted.
     #[serde(rename = "paintCount")]
@@ -21437,15 +20892,13 @@ pub struct LayerTreeLayer {
     #[serde(rename = "drawsContent")]
     pub draws_content: bool,
     /// Set if layer is not visible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub invisible: Option<bool>,
     /// Rectangles scrolling on main thread only.
-    #[serde(rename = "scrollRects")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollRects", skip_serializing_if = "Option::is_none")]
     pub scroll_rects: Option<Vec<LayerTreeScrollRect>>,
     /// Sticky position constraint information
-    #[serde(rename = "stickyPositionConstraint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stickyPositionConstraint", skip_serializing_if = "Option::is_none")]
     pub sticky_position_constraint: Option<LayerTreeStickyPositionConstraint>,
 }
 
@@ -21544,12 +20997,10 @@ pub struct LayerTreeStickyPositionConstraint {
     #[serde(rename = "containingBlockRect")]
     pub containing_block_rect: DomRect,
     /// The nearest sticky layer that shifts the sticky box
-    #[serde(rename = "nearestLayerShiftingStickyBox")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nearestLayerShiftingStickyBox", skip_serializing_if = "Option::is_none")]
     pub nearest_layer_shifting_sticky_box: Option<LayerTreeLayerId>,
     /// The nearest sticky layer that shifts the containing block
-    #[serde(rename = "nearestLayerShiftingContainingBlock")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nearestLayerShiftingContainingBlock", skip_serializing_if = "Option::is_none")]
     pub nearest_layer_shifting_containing_block: Option<LayerTreeLayerId>,
 }
 
@@ -21671,7 +21122,7 @@ impl LayerTreeLayerPaintedParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LayerTreeLayerTreeDidChangeParams {
     /// Layer tree, absent if not in the compositing mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<LayerTreeLayer>>,
 }
 
@@ -21758,16 +21209,13 @@ pub struct LayerTreeProfileSnapshotParams {
     #[serde(rename = "snapshotId")]
     pub snapshot_id: LayerTreeSnapshotId,
     /// The maximum number of times to replay the snapshot (1, if not specified).
-    #[serde(rename = "minRepeatCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "minRepeatCount", skip_serializing_if = "Option::is_none")]
     pub min_repeat_count: Option<i64>,
     /// The minimum duration (in seconds) to replay the snapshot.
-    #[serde(rename = "minDuration")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "minDuration", skip_serializing_if = "Option::is_none")]
     pub min_duration: Option<f64>,
     /// The clip rectangle to apply when replaying the snapshot.
-    #[serde(rename = "clipRect")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clipRect", skip_serializing_if = "Option::is_none")]
     pub clip_rect: Option<DomRect>,
 }
 
@@ -21834,15 +21282,13 @@ pub struct LayerTreeReplaySnapshotParams {
     #[serde(rename = "snapshotId")]
     pub snapshot_id: LayerTreeSnapshotId,
     /// The first step to replay from (replay from the very start if not specified).
-    #[serde(rename = "fromStep")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromStep", skip_serializing_if = "Option::is_none")]
     pub from_step: Option<i64>,
     /// The last step to replay to (replay till the end if not specified).
-    #[serde(rename = "toStep")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "toStep", skip_serializing_if = "Option::is_none")]
     pub to_step: Option<i64>,
     /// The scale to apply while replaying (defaults to 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
 }
 
@@ -21969,31 +21415,27 @@ pub struct LogLogEntry {
     pub level: LogLogEntryLevel,
     /// Logged text.
     pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<LogLogEntryCategory>,
     /// Timestamp when this entry was added.
     pub timestamp: RuntimeTimestamp,
     /// URL of the resource if known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Line number in the resource.
-    #[serde(rename = "lineNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lineNumber", skip_serializing_if = "Option::is_none")]
     pub line_number: Option<i64>,
     /// JavaScript stack trace.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
     /// Identifier of the network request associated with this entry.
-    #[serde(rename = "networkRequestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "networkRequestId", skip_serializing_if = "Option::is_none")]
     pub network_request_id: Option<NetworkRequestId>,
     /// Identifier of the worker associated with this entry.
-    #[serde(rename = "workerId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workerId", skip_serializing_if = "Option::is_none")]
     pub worker_id: Option<String>,
     /// Call arguments.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<RuntimeRemoteObject>>,
 }
 
@@ -22192,8 +21634,7 @@ impl LogStopViolationsReportResult {
 pub struct MediaPlayer {
     #[serde(rename = "playerId")]
     pub player_id: MediaPlayerId,
-    #[serde(rename = "domNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "domNodeId", skip_serializing_if = "Option::is_none")]
     pub dom_node_id: Option<DomBackendNodeId>,
 }
 
@@ -22816,12 +22257,10 @@ impl MemorySimulatePressureNotificationResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MemoryStartSamplingParams {
     /// Average number of bytes between samples.
-    #[serde(rename = "samplingInterval")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "samplingInterval", skip_serializing_if = "Option::is_none")]
     pub sampling_interval: Option<i64>,
     /// Do not randomize intervals between samples.
-    #[serde(rename = "suppressRandomness")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "suppressRandomness", skip_serializing_if = "Option::is_none")]
     pub suppress_randomness: Option<bool>,
 }
 
@@ -22881,8 +22320,7 @@ pub struct NetworkAdAncestry {
     pub ancestry_chain: Vec<NetworkAdScriptIdentifier>,
     /// The filter list rule that caused the root (last) script in
     /// `ancestryChain` to be tagged as an ad.
-    #[serde(rename = "rootScriptFilterlistRule")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rootScriptFilterlistRule", skip_serializing_if = "Option::is_none")]
     pub root_script_filterlist_rule: Option<String>,
 }
 
@@ -22906,12 +22344,10 @@ impl NetworkAdAncestry {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkAdProvenance {
     /// The filterlist rule that matched, if any.
-    #[serde(rename = "filterlistRule")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "filterlistRule", skip_serializing_if = "Option::is_none")]
     pub filterlist_rule: Option<String>,
     /// The script ancestry that created the ad, if any.
-    #[serde(rename = "adScriptAncestry")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adScriptAncestry", skip_serializing_if = "Option::is_none")]
     pub ad_script_ancestry: Option<NetworkAdAncestry>,
 }
 
@@ -22986,8 +22422,7 @@ pub struct NetworkAssociatedCookie {
     pub blocked_reasons: Vec<NetworkCookieBlockedReason>,
     /// The reason the cookie should have been blocked by 3PCD but is exempted. A cookie could
     /// only have at most one exemption reason.
-    #[serde(rename = "exemptionReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exemptionReason", skip_serializing_if = "Option::is_none")]
     pub exemption_reason: Option<NetworkCookieExemptionReason>,
 }
 
@@ -23076,7 +22511,7 @@ pub struct NetworkBlockedSetCookieWithReason {
     /// The cookie object which represents the cookie which was not stored. It is optional because
     /// sometimes complete cookie information is not available, such as in the case of parsing
     /// errors.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cookie: Option<NetworkCookie>,
 }
 
@@ -23255,8 +22690,7 @@ pub struct NetworkCookie {
     /// True in case of session cookie.
     pub session: bool,
     /// Cookie SameSite type.
-    #[serde(rename = "sameSite")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sameSite", skip_serializing_if = "Option::is_none")]
     pub same_site: Option<NetworkCookieSameSite>,
     /// Cookie Priority
     pub priority: NetworkCookiePriority,
@@ -23269,12 +22703,10 @@ pub struct NetworkCookie {
     #[serde(rename = "sourcePort")]
     pub source_port: i64,
     /// Cookie partition key.
-    #[serde(rename = "partitionKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")]
     pub partition_key: Option<NetworkCookiePartitionKey>,
     /// True if cookie partition key is opaque.
-    #[serde(rename = "partitionKeyOpaque")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitionKeyOpaque", skip_serializing_if = "Option::is_none")]
     pub partition_key_opaque: Option<bool>,
 }
 
@@ -23346,44 +22778,39 @@ pub struct NetworkCookieParam {
     pub value: String,
     /// The request-URI to associate with the setting of the cookie. This value can affect the
     /// default domain, path, source port, and source scheme values of the created cookie.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Cookie domain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
     /// Cookie path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// True if cookie is secure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secure: Option<bool>,
     /// True if cookie is http-only.
-    #[serde(rename = "httpOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "httpOnly", skip_serializing_if = "Option::is_none")]
     pub http_only: Option<bool>,
     /// Cookie SameSite type.
-    #[serde(rename = "sameSite")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sameSite", skip_serializing_if = "Option::is_none")]
     pub same_site: Option<NetworkCookieSameSite>,
     /// Cookie expiration date, session cookie if not set
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires: Option<NetworkTimeSinceEpoch>,
     /// Cookie Priority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<NetworkCookiePriority>,
     /// Cookie source scheme type.
-    #[serde(rename = "sourceScheme")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceScheme", skip_serializing_if = "Option::is_none")]
     pub source_scheme: Option<NetworkCookieSourceScheme>,
     /// Cookie source port. Valid values are {-1, [1, 65535]}, -1 indicates an unspecified port.
     /// An unspecified port value allows protocol clients to emulate legacy cookie scope for the port.
     /// This is a temporary ability and it will be removed in the future.
-    #[serde(rename = "sourcePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourcePort", skip_serializing_if = "Option::is_none")]
     pub source_port: Option<i64>,
     /// Cookie partition key. If not set, the cookie will be set as not partitioned.
-    #[serde(rename = "partitionKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")]
     pub partition_key: Option<NetworkCookiePartitionKey>,
 }
 
@@ -23522,13 +22949,11 @@ pub struct NetworkCreationEventDetails {
     pub fetch_result: NetworkDeviceBoundSessionFetchResult,
     /// The session if there was a newly created session. This is populated for
     /// all successful creation events.
-    #[serde(rename = "newSession")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "newSession", skip_serializing_if = "Option::is_none")]
     pub new_session: Option<NetworkDeviceBoundSession>,
     /// Details about a failed device bound session network request if there was
     /// one.
-    #[serde(rename = "failedRequest")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "failedRequest", skip_serializing_if = "Option::is_none")]
     pub failed_request: Option<NetworkDeviceBoundSessionFailedRequest>,
 }
 
@@ -23550,11 +22975,9 @@ pub struct NetworkCrossOriginEmbedderPolicyStatus {
     pub value: NetworkCrossOriginEmbedderPolicyValue,
     #[serde(rename = "reportOnlyValue")]
     pub report_only_value: NetworkCrossOriginEmbedderPolicyValue,
-    #[serde(rename = "reportingEndpoint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportingEndpoint", skip_serializing_if = "Option::is_none")]
     pub reporting_endpoint: Option<String>,
-    #[serde(rename = "reportOnlyReportingEndpoint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportOnlyReportingEndpoint", skip_serializing_if = "Option::is_none")]
     pub report_only_reporting_endpoint: Option<String>,
 }
 
@@ -23585,11 +23008,9 @@ pub struct NetworkCrossOriginOpenerPolicyStatus {
     pub value: NetworkCrossOriginOpenerPolicyValue,
     #[serde(rename = "reportOnlyValue")]
     pub report_only_value: NetworkCrossOriginOpenerPolicyValue,
-    #[serde(rename = "reportingEndpoint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportingEndpoint", skip_serializing_if = "Option::is_none")]
     pub reporting_endpoint: Option<String>,
-    #[serde(rename = "reportOnlyReportingEndpoint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportOnlyReportingEndpoint", skip_serializing_if = "Option::is_none")]
     pub report_only_reporting_endpoint: Option<String>,
 }
 
@@ -23636,8 +23057,7 @@ pub struct NetworkDeviceBoundSession {
     #[serde(rename = "expiryDate")]
     pub expiry_date: NetworkTimeSinceEpoch,
     /// See comments on `net::device_bound_sessions::Session::cached_challenge__`.
-    #[serde(rename = "cachedChallenge")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cachedChallenge", skip_serializing_if = "Option::is_none")]
     pub cached_challenge: Option<String>,
     /// See comments on `net::device_bound_sessions::Session::allowed_refresh_initiators_`.
     #[serde(rename = "allowedRefreshInitiators")]
@@ -23675,8 +23095,7 @@ pub struct NetworkDeviceBoundSessionCookieCraving {
     #[serde(rename = "httpOnly")]
     pub http_only: bool,
     /// The `SameSite` attribute of the craving attributes.
-    #[serde(rename = "sameSite")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sameSite", skip_serializing_if = "Option::is_none")]
     pub same_site: Option<NetworkCookieSameSite>,
 }
 
@@ -23705,18 +23124,15 @@ pub struct NetworkDeviceBoundSessionFailedRequest {
     #[serde(rename = "requestUrl")]
     pub request_url: String,
     /// The net error of the response if it was not OK.
-    #[serde(rename = "netError")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "netError", skip_serializing_if = "Option::is_none")]
     pub net_error: Option<String>,
     /// The response code if the net error was OK and the response code was not
     /// 200.
-    #[serde(rename = "responseError")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseError", skip_serializing_if = "Option::is_none")]
     pub response_error: Option<i64>,
     /// The body of the response if the net error was OK, the response code was
     /// not 200, and the response body was not empty.
-    #[serde(rename = "responseErrorBody")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseErrorBody", skip_serializing_if = "Option::is_none")]
     pub response_error_body: Option<String>,
 }
 
@@ -23941,19 +23357,15 @@ pub struct NetworkDirectTcpsocketOptions {
     #[serde(rename = "noDelay")]
     pub no_delay: bool,
     /// Expected to be unsigned integer.
-    #[serde(rename = "keepAliveDelay")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keepAliveDelay", skip_serializing_if = "Option::is_none")]
     pub keep_alive_delay: Option<f64>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "sendBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sendBufferSize", skip_serializing_if = "Option::is_none")]
     pub send_buffer_size: Option<f64>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "receiveBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "receiveBufferSize", skip_serializing_if = "Option::is_none")]
     pub receive_buffer_size: Option<f64>,
-    #[serde(rename = "dnsQueryType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dnsQueryType", skip_serializing_if = "Option::is_none")]
     pub dns_query_type: Option<NetworkDirectSocketDnsQueryType>,
 }
 
@@ -23976,13 +23388,11 @@ impl NetworkDirectTcpsocketOptions {
 pub struct NetworkDirectUdpmessage {
     pub data: String,
     /// Null for connected mode.
-    #[serde(rename = "remoteAddr")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remoteAddr", skip_serializing_if = "Option::is_none")]
     pub remote_addr: Option<String>,
     /// Null for connected mode.
     /// Expected to be unsigned integer.
-    #[serde(rename = "remotePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remotePort", skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<i64>,
 }
 
@@ -24001,40 +23411,30 @@ impl NetworkDirectUdpmessage {
 /// DirectUDPSocketOptions
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkDirectUdpsocketOptions {
-    #[serde(rename = "remoteAddr")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remoteAddr", skip_serializing_if = "Option::is_none")]
     pub remote_addr: Option<String>,
     /// Unsigned int 16.
-    #[serde(rename = "remotePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remotePort", skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<i64>,
-    #[serde(rename = "localAddr")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "localAddr", skip_serializing_if = "Option::is_none")]
     pub local_addr: Option<String>,
     /// Unsigned int 16.
-    #[serde(rename = "localPort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "localPort", skip_serializing_if = "Option::is_none")]
     pub local_port: Option<i64>,
-    #[serde(rename = "dnsQueryType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dnsQueryType", skip_serializing_if = "Option::is_none")]
     pub dns_query_type: Option<NetworkDirectSocketDnsQueryType>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "sendBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sendBufferSize", skip_serializing_if = "Option::is_none")]
     pub send_buffer_size: Option<f64>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "receiveBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "receiveBufferSize", skip_serializing_if = "Option::is_none")]
     pub receive_buffer_size: Option<f64>,
-    #[serde(rename = "multicastLoopback")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "multicastLoopback", skip_serializing_if = "Option::is_none")]
     pub multicast_loopback: Option<bool>,
     /// Unsigned int 8.
-    #[serde(rename = "multicastTimeToLive")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "multicastTimeToLive", skip_serializing_if = "Option::is_none")]
     pub multicast_time_to_live: Option<i64>,
-    #[serde(rename = "multicastAllowAddressSharing")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "multicastAllowAddressSharing", skip_serializing_if = "Option::is_none")]
     pub multicast_allow_address_sharing: Option<bool>,
 }
 
@@ -24154,24 +23554,21 @@ pub struct NetworkInitiator {
     pub r#type: NetworkInitiatorType,
     /// Initiator JavaScript stack trace, set for Script only.
     /// Requires the Debugger domain to be enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<RuntimeStackTrace>,
     /// Initiator URL, set for Parser type or for Script type (when script is importing module) or for SignedExchange type.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Initiator line number, set for Parser type or for Script type (when script is importing
     /// module) (0-based).
-    #[serde(rename = "lineNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lineNumber", skip_serializing_if = "Option::is_none")]
     pub line_number: Option<f64>,
     /// Initiator column number, set for Parser type or for Script type (when script is importing
     /// module) (0-based).
-    #[serde(rename = "columnNumber")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnNumber", skip_serializing_if = "Option::is_none")]
     pub column_number: Option<f64>,
     /// Set if another request triggered this request (e.g. preflight).
-    #[serde(rename = "requestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<NetworkRequestId>,
 }
 
@@ -24216,20 +23613,17 @@ impl NetworkLoadNetworkResourceOptions {
 pub struct NetworkLoadNetworkResourcePageResult {
     pub success: bool,
     /// Optional values used for error reporting.
-    #[serde(rename = "netError")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "netError", skip_serializing_if = "Option::is_none")]
     pub net_error: Option<f64>,
-    #[serde(rename = "netErrorName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "netErrorName", skip_serializing_if = "Option::is_none")]
     pub net_error_name: Option<String>,
-    #[serde(rename = "httpStatusCode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "httpStatusCode", skip_serializing_if = "Option::is_none")]
     pub http_status_code: Option<f64>,
     /// If successful, one of the following two fields holds the result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<IoStreamHandle>,
     /// Response headers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<NetworkHeaders>,
 }
 
@@ -24281,23 +23675,19 @@ pub struct NetworkNetworkConditions {
     #[serde(rename = "uploadThroughput")]
     pub upload_throughput: f64,
     /// Connection type if known.
-    #[serde(rename = "connectionType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "connectionType", skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<NetworkConnectionType>,
     /// WebRTC packet loss (percent, 0-100). 0 disables packet loss emulation, 100 drops all the packets.
-    #[serde(rename = "packetLoss")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetLoss", skip_serializing_if = "Option::is_none")]
     pub packet_loss: Option<f64>,
     /// WebRTC packet queue length (packet). 0 removes any queue length limitations.
-    #[serde(rename = "packetQueueLength")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetQueueLength", skip_serializing_if = "Option::is_none")]
     pub packet_queue_length: Option<i64>,
     /// WebRTC packetReordering feature.
-    #[serde(rename = "packetReordering")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetReordering", skip_serializing_if = "Option::is_none")]
     pub packet_reordering: Option<bool>,
     /// True to emulate internet disconnection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub offline: Option<bool>,
 }
 
@@ -24322,7 +23712,7 @@ impl NetworkNetworkConditions {
 /// Post data entry for HTTP request
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkPostDataEntry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<String>,
 }
 
@@ -24360,21 +23750,18 @@ pub struct NetworkRefreshEventDetails {
     pub refresh_result: NetworkRefreshEventDetailsRefreshResult,
     /// LINT.ThenChange(//net/device_bound_sessions/refresh_result.h:DeviceBoundSessionRefreshResult,//content/browser/devtools/protocol/network_handler.cc:DeviceBoundSessionRefreshResult)
     /// If there was a fetch attempt, the result of that.
-    #[serde(rename = "fetchResult")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fetchResult", skip_serializing_if = "Option::is_none")]
     pub fetch_result: Option<NetworkDeviceBoundSessionFetchResult>,
     /// The session display if there was a newly created session. This is populated
     /// for any refresh event that modifies the session config.
-    #[serde(rename = "newSession")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "newSession", skip_serializing_if = "Option::is_none")]
     pub new_session: Option<NetworkDeviceBoundSession>,
     /// See comments on `net::device_bound_sessions::RefreshEventResult::was_fully_proactive_refresh`.
     #[serde(rename = "wasFullyProactiveRefresh")]
     pub was_fully_proactive_refresh: bool,
     /// Details about a failed device bound session network request if there was
     /// one.
-    #[serde(rename = "failedRequest")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "failedRequest", skip_serializing_if = "Option::is_none")]
     pub failed_request: Option<NetworkDeviceBoundSessionFailedRequest>,
 }
 
@@ -24502,8 +23889,7 @@ pub struct NetworkRequest {
     /// Request URL (without fragment).
     pub url: String,
     /// Fragment of the requested URL starting with hash, if present.
-    #[serde(rename = "urlFragment")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlFragment", skip_serializing_if = "Option::is_none")]
     pub url_fragment: Option<String>,
     /// HTTP request method.
     pub method: String,
@@ -24511,20 +23897,16 @@ pub struct NetworkRequest {
     pub headers: NetworkHeaders,
     /// HTTP POST request data.
     /// Use postDataEntries instead.
-    #[serde(rename = "postData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "postData", skip_serializing_if = "Option::is_none")]
     pub post_data: Option<String>,
     /// True when the request has POST data. Note that postData might still be omitted when this flag is true when the data is too long.
-    #[serde(rename = "hasPostData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasPostData", skip_serializing_if = "Option::is_none")]
     pub has_post_data: Option<bool>,
     /// Request body elements (post data broken into individual entries).
-    #[serde(rename = "postDataEntries")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "postDataEntries", skip_serializing_if = "Option::is_none")]
     pub post_data_entries: Option<Vec<NetworkPostDataEntry>>,
     /// The mixed content type of the request.
-    #[serde(rename = "mixedContentType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mixedContentType", skip_serializing_if = "Option::is_none")]
     pub mixed_content_type: Option<SecurityMixedContentType>,
     /// Priority of the resource request at the time request is sent.
     #[serde(rename = "initialPriority")]
@@ -24533,22 +23915,18 @@ pub struct NetworkRequest {
     #[serde(rename = "referrerPolicy")]
     pub referrer_policy: NetworkRequestReferrerPolicy,
     /// Whether is loaded via link preload.
-    #[serde(rename = "isLinkPreload")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isLinkPreload", skip_serializing_if = "Option::is_none")]
     pub is_link_preload: Option<bool>,
     /// Set for requests when the TrustToken API is used. Contains the parameters
     /// passed by the developer (e.g. via "fetch") as understood by the backend.
-    #[serde(rename = "trustTokenParams")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "trustTokenParams", skip_serializing_if = "Option::is_none")]
     pub trust_token_params: Option<NetworkTrustTokenParams>,
     /// True if this resource request is considered to be the 'same site' as the
     /// request corresponding to the main frame.
-    #[serde(rename = "isSameSite")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isSameSite", skip_serializing_if = "Option::is_none")]
     pub is_same_site: Option<bool>,
     /// True when the resource request is ad-related.
-    #[serde(rename = "isAdRelated")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isAdRelated", skip_serializing_if = "Option::is_none")]
     pub is_ad_related: Option<bool>,
 }
 
@@ -24634,12 +24012,10 @@ pub struct NetworkResourceTiming {
     #[serde(rename = "workerRespondWithSettled")]
     pub worker_respond_with_settled: f64,
     /// Started ServiceWorker static routing source evaluation.
-    #[serde(rename = "workerRouterEvaluationStart")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workerRouterEvaluationStart", skip_serializing_if = "Option::is_none")]
     pub worker_router_evaluation_start: Option<f64>,
     /// Started cache lookup when the source was evaluated to `cache`.
-    #[serde(rename = "workerCacheLookupStart")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workerCacheLookupStart", skip_serializing_if = "Option::is_none")]
     pub worker_cache_lookup_start: Option<f64>,
     /// Started sending request.
     #[serde(rename = "sendStart")]
@@ -24731,8 +24107,7 @@ pub struct NetworkResponse {
     /// HTTP response headers.
     pub headers: NetworkHeaders,
     /// HTTP response headers text. This has been replaced by the headers in Network.responseReceivedExtraInfo.
-    #[serde(rename = "headersText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "headersText", skip_serializing_if = "Option::is_none")]
     pub headers_text: Option<String>,
     /// Resource mimeType as determined by the browser.
     #[serde(rename = "mimeType")]
@@ -24740,12 +24115,10 @@ pub struct NetworkResponse {
     /// Resource charset as determined by the browser (if applicable).
     pub charset: String,
     /// Refined HTTP request headers that were actually transmitted over the network.
-    #[serde(rename = "requestHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestHeaders", skip_serializing_if = "Option::is_none")]
     pub request_headers: Option<NetworkHeaders>,
     /// HTTP request headers text. This has been replaced by the headers in Network.requestWillBeSentExtraInfo.
-    #[serde(rename = "requestHeadersText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestHeadersText", skip_serializing_if = "Option::is_none")]
     pub request_headers_text: Option<String>,
     /// Specifies whether physical connection was actually reused for this request.
     #[serde(rename = "connectionReused")]
@@ -24754,67 +24127,55 @@ pub struct NetworkResponse {
     #[serde(rename = "connectionId")]
     pub connection_id: f64,
     /// Remote IP address.
-    #[serde(rename = "remoteIPAddress")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remoteIPAddress", skip_serializing_if = "Option::is_none")]
     pub remote_ipaddress: Option<String>,
     /// Remote port.
-    #[serde(rename = "remotePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remotePort", skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<i64>,
     /// Specifies that the request was served from the disk cache.
-    #[serde(rename = "fromDiskCache")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromDiskCache", skip_serializing_if = "Option::is_none")]
     pub from_disk_cache: Option<bool>,
     /// Specifies that the request was served from the ServiceWorker.
-    #[serde(rename = "fromServiceWorker")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromServiceWorker", skip_serializing_if = "Option::is_none")]
     pub from_service_worker: Option<bool>,
     /// Specifies that the request was served from the prefetch cache.
-    #[serde(rename = "fromPrefetchCache")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromPrefetchCache", skip_serializing_if = "Option::is_none")]
     pub from_prefetch_cache: Option<bool>,
     /// Specifies that the request was served from the prefetch cache.
-    #[serde(rename = "fromEarlyHints")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromEarlyHints", skip_serializing_if = "Option::is_none")]
     pub from_early_hints: Option<bool>,
     /// Information about how ServiceWorker Static Router API was used. If this
     /// field is set with `matchedSourceType` field, a matching rule is found.
     /// If this field is set without `matchedSource`, no matching rule is found.
     /// Otherwise, the API is not used.
-    #[serde(rename = "serviceWorkerRouterInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serviceWorkerRouterInfo", skip_serializing_if = "Option::is_none")]
     pub service_worker_router_info: Option<NetworkServiceWorkerRouterInfo>,
     /// Total number of bytes received for this request so far.
     #[serde(rename = "encodedDataLength")]
     pub encoded_data_length: f64,
     /// Timing information for the given request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timing: Option<NetworkResourceTiming>,
     /// Response source of response from ServiceWorker.
-    #[serde(rename = "serviceWorkerResponseSource")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serviceWorkerResponseSource", skip_serializing_if = "Option::is_none")]
     pub service_worker_response_source: Option<NetworkServiceWorkerResponseSource>,
     /// The time at which the returned response was generated.
-    #[serde(rename = "responseTime")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "responseTime", skip_serializing_if = "Option::is_none")]
     pub response_time: Option<NetworkTimeSinceEpoch>,
     /// Cache Storage Cache Name.
-    #[serde(rename = "cacheStorageCacheName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cacheStorageCacheName", skip_serializing_if = "Option::is_none")]
     pub cache_storage_cache_name: Option<String>,
     /// Protocol used to fetch this request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<String>,
     /// The reason why Chrome uses a specific transport protocol for HTTP semantics.
-    #[serde(rename = "alternateProtocolUsage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "alternateProtocolUsage", skip_serializing_if = "Option::is_none")]
     pub alternate_protocol_usage: Option<NetworkAlternateProtocolUsage>,
     /// Security state of the request resource.
     #[serde(rename = "securityState")]
     pub security_state: SecuritySecurityState,
     /// Security details for the request.
-    #[serde(rename = "securityDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityDetails", skip_serializing_if = "Option::is_none")]
     pub security_details: Option<NetworkSecurityDetails>,
 }
 
@@ -24863,13 +24224,12 @@ pub struct NetworkSecurityDetails {
     #[serde(rename = "keyExchange")]
     pub key_exchange: String,
     /// (EC)DH group used by the connection, if applicable.
-    #[serde(rename = "keyExchangeGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyExchangeGroup", skip_serializing_if = "Option::is_none")]
     pub key_exchange_group: Option<String>,
     /// Cipher name.
     pub cipher: String,
     /// TLS MAC. Note that AEAD ciphers do not have separate MACs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
     /// Certificate ID value.
     #[serde(rename = "certificateId")]
@@ -24897,8 +24257,7 @@ pub struct NetworkSecurityDetails {
     /// The signature algorithm used by the server in the TLS server signature,
     /// represented as a TLS SignatureScheme code point. Omitted if not
     /// applicable or not known.
-    #[serde(rename = "serverSignatureAlgorithm")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serverSignatureAlgorithm", skip_serializing_if = "Option::is_none")]
     pub server_signature_algorithm: Option<i64>,
     /// Whether the connection used Encrypted ClientHello
     #[serde(rename = "encryptedClientHello")]
@@ -24932,11 +24291,11 @@ impl NetworkSecurityDetails {
 /// SecurityIsolationStatus
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkSecurityIsolationStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub coop: Option<NetworkCrossOriginOpenerPolicyStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub coep: Option<NetworkCrossOriginEmbedderPolicyStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub csp: Option<Vec<NetworkContentSecurityPolicyStatus>>,
 }
 
@@ -24970,17 +24329,14 @@ pub enum NetworkServiceWorkerResponseSource {
 pub struct NetworkServiceWorkerRouterInfo {
     /// ID of the rule matched. If there is a matched rule, this field will
     /// be set, otherwiser no value will be set.
-    #[serde(rename = "ruleIdMatched")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ruleIdMatched", skip_serializing_if = "Option::is_none")]
     pub rule_id_matched: Option<i64>,
     /// The router source of the matched rule. If there is a matched rule, this
     /// field will be set, otherwise no value will be set.
-    #[serde(rename = "matchedSourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "matchedSourceType", skip_serializing_if = "Option::is_none")]
     pub matched_source_type: Option<NetworkServiceWorkerRouterSource>,
     /// The actual router source used.
-    #[serde(rename = "actualSourceType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "actualSourceType", skip_serializing_if = "Option::is_none")]
     pub actual_source_type: Option<NetworkServiceWorkerRouterSource>,
 }
 
@@ -25086,12 +24442,10 @@ pub struct NetworkSignedExchangeError {
     /// Error message.
     pub message: String,
     /// The index of the signature which caused the error.
-    #[serde(rename = "signatureIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "signatureIndex", skip_serializing_if = "Option::is_none")]
     pub signature_index: Option<i64>,
     /// The field which caused the error.
-    #[serde(rename = "errorField")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorField", skip_serializing_if = "Option::is_none")]
     pub error_field: Option<NetworkSignedExchangeErrorField>,
 }
 
@@ -25169,14 +24523,13 @@ pub struct NetworkSignedExchangeInfo {
     #[serde(rename = "hasExtraInfo")]
     pub has_extra_info: bool,
     /// Information about the signed exchange header.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<NetworkSignedExchangeHeader>,
     /// Security details for the signed exchange header.
-    #[serde(rename = "securityDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityDetails", skip_serializing_if = "Option::is_none")]
     pub security_details: Option<NetworkSecurityDetails>,
     /// Errors occurred while handling the signed exchange.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub errors: Option<Vec<NetworkSignedExchangeError>>,
 }
 
@@ -25205,12 +24558,10 @@ pub struct NetworkSignedExchangeSignature {
     /// Signed exchange signature integrity.
     pub integrity: String,
     /// Signed exchange signature cert Url.
-    #[serde(rename = "certUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "certUrl", skip_serializing_if = "Option::is_none")]
     pub cert_url: Option<String>,
     /// The hex string of signed exchange signature cert sha256.
-    #[serde(rename = "certSha256")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "certSha256", skip_serializing_if = "Option::is_none")]
     pub cert_sha256: Option<String>,
     /// Signed exchange signature validity Url.
     #[serde(rename = "validityUrl")]
@@ -25220,7 +24571,7 @@ pub struct NetworkSignedExchangeSignature {
     /// Signed exchange signature expires.
     pub expires: i64,
     /// The encoded certificates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub certificates: Option<Vec<String>>,
 }
 
@@ -25305,7 +24656,7 @@ pub struct NetworkTrustTokenParams {
     pub refresh_policy: NetworkTrustTokenParamsRefreshPolicy,
     /// Origins of issuers from whom to request tokens or redemption
     /// records.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub issuers: Option<Vec<String>>,
 }
 
@@ -25375,16 +24726,13 @@ pub struct NetworkWebSocketResponse {
     /// HTTP response headers.
     pub headers: NetworkHeaders,
     /// HTTP response headers text.
-    #[serde(rename = "headersText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "headersText", skip_serializing_if = "Option::is_none")]
     pub headers_text: Option<String>,
     /// HTTP request headers.
-    #[serde(rename = "requestHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestHeaders", skip_serializing_if = "Option::is_none")]
     pub request_headers: Option<NetworkHeaders>,
     /// HTTP request headers text.
-    #[serde(rename = "requestHeadersText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestHeadersText", skip_serializing_if = "Option::is_none")]
     pub request_headers_text: Option<String>,
 }
 
@@ -25531,12 +24879,10 @@ impl NetworkClearBrowserCookiesResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkConfigureDurableMessagesParams {
     /// Buffer size in bytes to use when preserving network payloads (XHRs, etc).
-    #[serde(rename = "maxTotalBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxTotalBufferSize", skip_serializing_if = "Option::is_none")]
     pub max_total_buffer_size: Option<i64>,
     /// Per-resource buffer size in bytes to use when preserving network payloads (XHRs, etc).
-    #[serde(rename = "maxResourceBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxResourceBufferSize", skip_serializing_if = "Option::is_none")]
     pub max_resource_buffer_size: Option<i64>,
 }
 
@@ -25576,7 +24922,7 @@ pub struct NetworkDataReceivedParams {
     #[serde(rename = "encodedDataLength")]
     pub encoded_data_length: i64,
     /// Data that was received. (Encoded as a base64 string when passed over JSON)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
 }
 
@@ -25600,18 +24946,17 @@ pub struct NetworkDeleteCookiesParams {
     pub name: String,
     /// If specified, deletes all the cookies with the given name where domain and path match
     /// provided URL.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// If specified, deletes only cookies with the exact domain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
     /// If specified, deletes only cookies with the exact path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// If specified, deletes only cookies with the the given name and partitionKey where
     /// all partition key attributes match the cookie partition key attribute.
-    #[serde(rename = "partitionKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")]
     pub partition_key: Option<NetworkCookiePartitionKey>,
 }
 
@@ -25677,21 +25022,16 @@ pub struct NetworkDeviceBoundSessionEventOccurredParams {
     pub succeeded: bool,
     /// The session ID this event is associated with. May not be populated for
     /// failed events.
-    #[serde(rename = "sessionId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// The below are the different session event type details. Exactly one is populated.
-    #[serde(rename = "creationEventDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "creationEventDetails", skip_serializing_if = "Option::is_none")]
     pub creation_event_details: Option<NetworkCreationEventDetails>,
-    #[serde(rename = "refreshEventDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "refreshEventDetails", skip_serializing_if = "Option::is_none")]
     pub refresh_event_details: Option<NetworkRefreshEventDetails>,
-    #[serde(rename = "terminationEventDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "terminationEventDetails", skip_serializing_if = "Option::is_none")]
     pub termination_event_details: Option<NetworkTerminationEventDetails>,
-    #[serde(rename = "challengeEventDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "challengeEventDetails", skip_serializing_if = "Option::is_none")]
     pub challenge_event_details: Option<NetworkChallengeEventDetails>,
 }
 
@@ -25813,7 +25153,7 @@ pub struct NetworkDirectTcpsocketCreatedParams {
     pub remote_port: i64,
     pub options: NetworkDirectTcpsocketOptions,
     pub timestamp: NetworkMonotonicTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initiator: Option<NetworkInitiator>,
 }
 
@@ -25841,12 +25181,10 @@ pub struct NetworkDirectTcpsocketOpenedParams {
     #[serde(rename = "remotePort")]
     pub remote_port: i64,
     pub timestamp: NetworkMonotonicTime,
-    #[serde(rename = "localAddr")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "localAddr", skip_serializing_if = "Option::is_none")]
     pub local_addr: Option<String>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "localPort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "localPort", skip_serializing_if = "Option::is_none")]
     pub local_port: Option<i64>,
 }
 
@@ -25945,7 +25283,7 @@ pub struct NetworkDirectUdpsocketCreatedParams {
     pub identifier: NetworkRequestId,
     pub options: NetworkDirectUdpsocketOptions,
     pub timestamp: NetworkMonotonicTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initiator: Option<NetworkInitiator>,
 }
 
@@ -26007,12 +25345,10 @@ pub struct NetworkDirectUdpsocketOpenedParams {
     #[serde(rename = "localPort")]
     pub local_port: i64,
     pub timestamp: NetworkMonotonicTime,
-    #[serde(rename = "remoteAddr")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remoteAddr", skip_serializing_if = "Option::is_none")]
     pub remote_addr: Option<String>,
     /// Expected to be unsigned integer.
-    #[serde(rename = "remotePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "remotePort", skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<i64>,
 }
 
@@ -26057,11 +25393,10 @@ impl NetworkDisableResult {
 pub struct NetworkEmulateNetworkConditionsByRuleParams {
     /// True to emulate internet disconnection. Deprecated, use the offline property in matchedNetworkConditions
     /// or emulateOfflineServiceWorker instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub offline: Option<bool>,
     /// True to emulate offline service worker.
-    #[serde(rename = "emulateOfflineServiceWorker")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "emulateOfflineServiceWorker", skip_serializing_if = "Option::is_none")]
     pub emulate_offline_service_worker: Option<bool>,
     /// Configure conditions for matching requests. If multiple entries match a request, the first entry wins.  Global
     /// conditions can be configured by leaving the urlPattern for the conditions empty. These global conditions are
@@ -26113,20 +25448,16 @@ pub struct NetworkEmulateNetworkConditionsParams {
     #[serde(rename = "uploadThroughput")]
     pub upload_throughput: f64,
     /// Connection type if known.
-    #[serde(rename = "connectionType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "connectionType", skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<NetworkConnectionType>,
     /// WebRTC packet loss (percent, 0-100). 0 disables packet loss emulation, 100 drops all the packets.
-    #[serde(rename = "packetLoss")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetLoss", skip_serializing_if = "Option::is_none")]
     pub packet_loss: Option<f64>,
     /// WebRTC packet queue length (packet). 0 removes any queue length limitations.
-    #[serde(rename = "packetQueueLength")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetQueueLength", skip_serializing_if = "Option::is_none")]
     pub packet_queue_length: Option<i64>,
     /// WebRTC packetReordering feature.
-    #[serde(rename = "packetReordering")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "packetReordering", skip_serializing_if = "Option::is_none")]
     pub packet_reordering: Option<bool>,
 }
 
@@ -26190,28 +25521,23 @@ pub struct NetworkEnableParams {
     /// Buffer size in bytes to use when preserving network payloads (XHRs, etc).
     /// This is the maximum number of bytes that will be collected by this
     /// DevTools session.
-    #[serde(rename = "maxTotalBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxTotalBufferSize", skip_serializing_if = "Option::is_none")]
     pub max_total_buffer_size: Option<i64>,
     /// Per-resource buffer size in bytes to use when preserving network payloads (XHRs, etc).
-    #[serde(rename = "maxResourceBufferSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxResourceBufferSize", skip_serializing_if = "Option::is_none")]
     pub max_resource_buffer_size: Option<i64>,
     /// Longest post body size (in bytes) that would be included in requestWillBeSent notification
-    #[serde(rename = "maxPostDataSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxPostDataSize", skip_serializing_if = "Option::is_none")]
     pub max_post_data_size: Option<i64>,
     /// Whether DirectSocket chunk send/receive events should be reported.
-    #[serde(rename = "reportDirectSocketTraffic")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "reportDirectSocketTraffic", skip_serializing_if = "Option::is_none")]
     pub report_direct_socket_traffic: Option<bool>,
     /// Enable storing response bodies outside of renderer, so that these survive
     /// a cross-process navigation. Requires maxTotalBufferSize to be set.
     /// Currently defaults to false. This field is being deprecated in favor of the dedicated
     /// configureDurableMessages command, due to the possibility of deadlocks when awaiting
     /// Network.enable before issuing Runtime.runIfWaitingForDebugger.
-    #[serde(rename = "enableDurableMessages")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableDurableMessages", skip_serializing_if = "Option::is_none")]
     pub enable_durable_messages: Option<bool>,
 }
 
@@ -26395,7 +25721,7 @@ pub struct NetworkGetCookiesParams {
     /// The list of URLs for which applicable cookies will be fetched.
     /// If not specified, it's assumed to be set to the list containing
     /// the URLs of the page and all of its subframes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub urls: Option<Vec<String>>,
 }
 
@@ -26503,8 +25829,7 @@ impl NetworkGetResponseBodyResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkGetSecurityIsolationStatusParams {
     /// If no frameId is provided, the status of the target is provided.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -26537,8 +25862,7 @@ impl NetworkGetSecurityIsolationStatusResult {
 pub struct NetworkLoadNetworkResourceParams {
     /// Frame id to get the resource for. Mandatory for frame targets, and
     /// should be omitted for worker targets.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// URL of the resource to get content for.
     pub url: String,
@@ -26586,15 +25910,13 @@ pub struct NetworkLoadingFailedParams {
     #[serde(rename = "errorText")]
     pub error_text: String,
     /// True if loading was canceled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub canceled: Option<bool>,
     /// The reason why loading was blocked, if any.
-    #[serde(rename = "blockedReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "blockedReason", skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<NetworkBlockedReason>,
     /// The reason why loading was blocked by CORS, if any.
-    #[serde(rename = "corsErrorStatus")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "corsErrorStatus", skip_serializing_if = "Option::is_none")]
     pub cors_error_status: Option<NetworkCorsErrorStatus>,
 }
 
@@ -26651,8 +25973,7 @@ pub struct NetworkOverrideNetworkStateParams {
     #[serde(rename = "uploadThroughput")]
     pub upload_throughput: f64,
     /// Connection type if known.
-    #[serde(rename = "connectionType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "connectionType", skip_serializing_if = "Option::is_none")]
     pub connection_type: Option<NetworkConnectionType>,
 }
 
@@ -26800,21 +26121,17 @@ pub struct NetworkRequestWillBeSentExtraInfoParams {
     #[serde(rename = "connectTiming")]
     pub connect_timing: NetworkConnectTiming,
     /// How the request site's device bound sessions were used during this request.
-    #[serde(rename = "deviceBoundSessionUsages")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deviceBoundSessionUsages", skip_serializing_if = "Option::is_none")]
     pub device_bound_session_usages: Option<Vec<NetworkDeviceBoundSessionWithUsage>>,
     /// The client security state set for the request.
-    #[serde(rename = "clientSecurityState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "clientSecurityState", skip_serializing_if = "Option::is_none")]
     pub client_security_state: Option<NetworkClientSecurityState>,
     /// Whether the site has partitioned cookies stored in a partition different than the current one.
-    #[serde(rename = "siteHasCookieInOtherPartition")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "siteHasCookieInOtherPartition", skip_serializing_if = "Option::is_none")]
     pub site_has_cookie_in_other_partition: Option<bool>,
     /// The network conditions id if this request was affected by network conditions configured via
     /// emulateNetworkConditionsByRule.
-    #[serde(rename = "appliedNetworkConditionsId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "appliedNetworkConditionsId", skip_serializing_if = "Option::is_none")]
     pub applied_network_conditions_id: Option<String>,
 }
 
@@ -26861,23 +26178,19 @@ pub struct NetworkRequestWillBeSentParams {
     #[serde(rename = "redirectHasExtraInfo")]
     pub redirect_has_extra_info: bool,
     /// Redirect response data.
-    #[serde(rename = "redirectResponse")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "redirectResponse", skip_serializing_if = "Option::is_none")]
     pub redirect_response: Option<NetworkResponse>,
     /// Type of this resource.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<NetworkResourceType>,
     /// Frame identifier.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// Whether the request is initiated by a user gesture. Defaults to false.
-    #[serde(rename = "hasUserGesture")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasUserGesture", skip_serializing_if = "Option::is_none")]
     pub has_user_gesture: Option<bool>,
     /// The render-blocking behavior of the request.
-    #[serde(rename = "renderBlockingBehavior")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "renderBlockingBehavior", skip_serializing_if = "Option::is_none")]
     pub render_blocking_behavior: Option<NetworkRenderBlockingBehavior>,
 }
 
@@ -26976,22 +26289,18 @@ pub struct NetworkResponseReceivedExtraInfoParams {
     pub status_code: i64,
     /// Raw response header text as it was received over the wire. The raw text may not always be
     /// available, such as in the case of HTTP/2 or QUIC.
-    #[serde(rename = "headersText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "headersText", skip_serializing_if = "Option::is_none")]
     pub headers_text: Option<String>,
     /// The cookie partition key that will be used to store partitioned cookies set in this response.
     /// Only sent when partitioned cookies are enabled.
-    #[serde(rename = "cookiePartitionKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cookiePartitionKey", skip_serializing_if = "Option::is_none")]
     pub cookie_partition_key: Option<NetworkCookiePartitionKey>,
     /// True if partitioned cookies are enabled, but the partition key is not serializable to string.
-    #[serde(rename = "cookiePartitionKeyOpaque")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cookiePartitionKeyOpaque", skip_serializing_if = "Option::is_none")]
     pub cookie_partition_key_opaque: Option<bool>,
     /// A list of cookies which should have been blocked by 3PCD but are exempted and stored from
     /// the response with the corresponding reason.
-    #[serde(rename = "exemptedCookies")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exemptedCookies", skip_serializing_if = "Option::is_none")]
     pub exempted_cookies: Option<Vec<NetworkExemptedSetCookieWithReason>>,
 }
 
@@ -27032,8 +26341,7 @@ pub struct NetworkResponseReceivedParams {
     #[serde(rename = "hasExtraInfo")]
     pub has_extra_info: bool,
     /// Frame identifier.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -27061,12 +26369,10 @@ pub struct NetworkSearchInResponseBodyParams {
     /// String to search for.
     pub query: String,
     /// If true, search is case sensitive.
-    #[serde(rename = "caseSensitive")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")]
     pub case_sensitive: Option<bool>,
     /// If true, treats string parameter as regex.
-    #[serde(rename = "isRegex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")]
     pub is_regex: Option<bool>,
 }
 
@@ -27130,11 +26436,10 @@ impl NetworkSetAttachDebugStackResult {
 pub struct NetworkSetBlockedUrlsParams {
     /// Patterns to match in the order in which they are given. These patterns
     /// also take precedence over any wildcard patterns defined in `urls`.
-    #[serde(rename = "urlPatterns")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlPatterns", skip_serializing_if = "Option::is_none")]
     pub url_patterns: Option<Vec<NetworkBlockPattern>>,
     /// URL patterns to block. Wildcards ('*') are allowed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub urls: Option<Vec<String>>,
 }
 
@@ -27251,44 +26556,39 @@ pub struct NetworkSetCookieParams {
     pub value: String,
     /// The request-URI to associate with the setting of the cookie. This value can affect the
     /// default domain, path, source port, and source scheme values of the created cookie.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Cookie domain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
     /// Cookie path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// True if cookie is secure.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub secure: Option<bool>,
     /// True if cookie is http-only.
-    #[serde(rename = "httpOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "httpOnly", skip_serializing_if = "Option::is_none")]
     pub http_only: Option<bool>,
     /// Cookie SameSite type.
-    #[serde(rename = "sameSite")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sameSite", skip_serializing_if = "Option::is_none")]
     pub same_site: Option<NetworkCookieSameSite>,
     /// Cookie expiration date, session cookie if not set
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub expires: Option<NetworkTimeSinceEpoch>,
     /// Cookie Priority type.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<NetworkCookiePriority>,
     /// Cookie source scheme type.
-    #[serde(rename = "sourceScheme")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceScheme", skip_serializing_if = "Option::is_none")]
     pub source_scheme: Option<NetworkCookieSourceScheme>,
     /// Cookie source port. Valid values are {-1, [1, 65535]}, -1 indicates an unspecified port.
     /// An unspecified port value allows protocol clients to emulate legacy cookie scope for the port.
     /// This is a temporary ability and it will be removed in the future.
-    #[serde(rename = "sourcePort")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourcePort", skip_serializing_if = "Option::is_none")]
     pub source_port: Option<i64>,
     /// Cookie partition key. If not set, the cookie will be set as not partitioned.
-    #[serde(rename = "partitionKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "partitionKey", skip_serializing_if = "Option::is_none")]
     pub partition_key: Option<NetworkCookiePartitionKey>,
 }
 
@@ -27390,15 +26690,13 @@ pub struct NetworkSetUserAgentOverrideParams {
     #[serde(rename = "userAgent")]
     pub user_agent: String,
     /// Browser language to emulate.
-    #[serde(rename = "acceptLanguage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "acceptLanguage", skip_serializing_if = "Option::is_none")]
     pub accept_language: Option<String>,
     /// The platform navigator.platform should return.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
     /// To be sent in Sec-CH-UA-* headers and returned in navigator.userAgentData
-    #[serde(rename = "userAgentMetadata")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userAgentMetadata", skip_serializing_if = "Option::is_none")]
     pub user_agent_metadata: Option<EmulationUserAgentMetadata>,
 }
 
@@ -27512,16 +26810,13 @@ pub struct NetworkTrustTokenOperationDoneParams {
     #[serde(rename = "requestId")]
     pub request_id: NetworkRequestId,
     /// Top level origin. The context in which the operation was attempted.
-    #[serde(rename = "topLevelOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "topLevelOrigin", skip_serializing_if = "Option::is_none")]
     pub top_level_origin: Option<String>,
     /// Origin of the issuer in case of a "Issuance" or "Redemption" operation.
-    #[serde(rename = "issuerOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "issuerOrigin", skip_serializing_if = "Option::is_none")]
     pub issuer_origin: Option<String>,
     /// The number of obtained Trust Tokens on a successful "Issuance" operation.
-    #[serde(rename = "issuedTokenCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "issuedTokenCount", skip_serializing_if = "Option::is_none")]
     pub issued_token_count: Option<i64>,
 }
 
@@ -27568,7 +26863,7 @@ pub struct NetworkWebSocketCreatedParams {
     /// WebSocket request URL.
     pub url: String,
     /// Request initiator.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initiator: Option<NetworkInitiator>,
 }
 
@@ -27754,7 +27049,7 @@ pub struct NetworkWebTransportCreatedParams {
     /// Timestamp.
     pub timestamp: NetworkMonotonicTime,
     /// Request initiator.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initiator: Option<NetworkInitiator>,
 }
 
@@ -27775,12 +27070,10 @@ impl NetworkWebTransportCreatedParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayBoxStyle {
     /// The background color for the box (default: transparent)
-    #[serde(rename = "fillColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fillColor", skip_serializing_if = "Option::is_none")]
     pub fill_color: Option<DomRgba>,
     /// The hatching color for the box (default: transparent)
-    #[serde(rename = "hatchColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hatchColor", skip_serializing_if = "Option::is_none")]
     pub hatch_color: Option<DomRgba>,
 }
 
@@ -27812,12 +27105,10 @@ pub enum OverlayColorFormat {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayContainerQueryContainerHighlightConfig {
     /// The style of the container border.
-    #[serde(rename = "containerBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerBorder", skip_serializing_if = "Option::is_none")]
     pub container_border: Option<OverlayLineStyle>,
     /// The style of the descendants' borders.
-    #[serde(rename = "descendantBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "descendantBorder", skip_serializing_if = "Option::is_none")]
     pub descendant_border: Option<OverlayLineStyle>,
 }
 
@@ -27873,29 +27164,25 @@ pub struct OverlayDisplayCutoutConfig {
     /// Shape used to draw the cutout.
     pub shape: OverlayDisplayCutoutShape,
     /// Border radius for rounded cutout shapes.
-    #[serde(rename = "borderRadius")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "borderRadius", skip_serializing_if = "Option::is_none")]
     pub border_radius: Option<i64>,
     /// Upper shoulder radius for notch cutout shapes.
-    #[serde(rename = "upperRadius")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "upperRadius", skip_serializing_if = "Option::is_none")]
     pub upper_radius: Option<i64>,
     /// Lower transition radius for notch cutout shapes.
-    #[serde(rename = "lowerRadius")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lowerRadius", skip_serializing_if = "Option::is_none")]
     pub lower_radius: Option<i64>,
     /// Center x coordinate for circle cutout shapes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cx: Option<i64>,
     /// Center y coordinate for circle cutout shapes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cy: Option<i64>,
     /// Radius for circle cutout shapes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub radius: Option<i64>,
     /// The cutout fill color (default: black).
-    #[serde(rename = "contentColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentColor", skip_serializing_if = "Option::is_none")]
     pub content_color: Option<DomRgba>,
 }
 
@@ -27934,36 +27221,28 @@ pub enum OverlayDisplayCutoutShape {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayFlexContainerHighlightConfig {
     /// The style of the container border
-    #[serde(rename = "containerBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerBorder", skip_serializing_if = "Option::is_none")]
     pub container_border: Option<OverlayLineStyle>,
     /// The style of the separator between lines
-    #[serde(rename = "lineSeparator")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lineSeparator", skip_serializing_if = "Option::is_none")]
     pub line_separator: Option<OverlayLineStyle>,
     /// The style of the separator between items
-    #[serde(rename = "itemSeparator")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "itemSeparator", skip_serializing_if = "Option::is_none")]
     pub item_separator: Option<OverlayLineStyle>,
     /// Style of content-distribution space on the main axis (justify-content).
-    #[serde(rename = "mainDistributedSpace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mainDistributedSpace", skip_serializing_if = "Option::is_none")]
     pub main_distributed_space: Option<OverlayBoxStyle>,
     /// Style of content-distribution space on the cross axis (align-content).
-    #[serde(rename = "crossDistributedSpace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "crossDistributedSpace", skip_serializing_if = "Option::is_none")]
     pub cross_distributed_space: Option<OverlayBoxStyle>,
     /// Style of empty space caused by row gaps (gap/row-gap).
-    #[serde(rename = "rowGapSpace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rowGapSpace", skip_serializing_if = "Option::is_none")]
     pub row_gap_space: Option<OverlayBoxStyle>,
     /// Style of empty space caused by columns gaps (gap/column-gap).
-    #[serde(rename = "columnGapSpace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnGapSpace", skip_serializing_if = "Option::is_none")]
     pub column_gap_space: Option<OverlayBoxStyle>,
     /// Style of the self-alignment line (align-items).
-    #[serde(rename = "crossAlignment")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "crossAlignment", skip_serializing_if = "Option::is_none")]
     pub cross_alignment: Option<OverlayLineStyle>,
 }
 
@@ -27988,16 +27267,13 @@ impl OverlayFlexContainerHighlightConfig {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayFlexItemHighlightConfig {
     /// Style of the box representing the item's base size
-    #[serde(rename = "baseSizeBox")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseSizeBox", skip_serializing_if = "Option::is_none")]
     pub base_size_box: Option<OverlayBoxStyle>,
     /// Style of the border around the box representing the item's base size
-    #[serde(rename = "baseSizeBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseSizeBorder", skip_serializing_if = "Option::is_none")]
     pub base_size_border: Option<OverlayLineStyle>,
     /// Style of the arrow representing if the item grew or shrank
-    #[serde(rename = "flexibilityArrow")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "flexibilityArrow", skip_serializing_if = "Option::is_none")]
     pub flexibility_arrow: Option<OverlayLineStyle>,
 }
 
@@ -28039,84 +27315,64 @@ impl OverlayFlexNodeHighlightConfig {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayGridHighlightConfig {
     /// Whether the extension lines from grid cells to the rulers should be shown (default: false).
-    #[serde(rename = "showGridExtensionLines")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showGridExtensionLines", skip_serializing_if = "Option::is_none")]
     pub show_grid_extension_lines: Option<bool>,
     /// Show Positive line number labels (default: false).
-    #[serde(rename = "showPositiveLineNumbers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showPositiveLineNumbers", skip_serializing_if = "Option::is_none")]
     pub show_positive_line_numbers: Option<bool>,
     /// Show Negative line number labels (default: false).
-    #[serde(rename = "showNegativeLineNumbers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showNegativeLineNumbers", skip_serializing_if = "Option::is_none")]
     pub show_negative_line_numbers: Option<bool>,
     /// Show area name labels (default: false).
-    #[serde(rename = "showAreaNames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showAreaNames", skip_serializing_if = "Option::is_none")]
     pub show_area_names: Option<bool>,
     /// Show line name labels (default: false).
-    #[serde(rename = "showLineNames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showLineNames", skip_serializing_if = "Option::is_none")]
     pub show_line_names: Option<bool>,
     /// Show track size labels (default: false).
-    #[serde(rename = "showTrackSizes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showTrackSizes", skip_serializing_if = "Option::is_none")]
     pub show_track_sizes: Option<bool>,
     /// The grid container border highlight color (default: transparent).
-    #[serde(rename = "gridBorderColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gridBorderColor", skip_serializing_if = "Option::is_none")]
     pub grid_border_color: Option<DomRgba>,
     /// The cell border color (default: transparent). Deprecated, please use rowLineColor and columnLineColor instead.
-    #[serde(rename = "cellBorderColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cellBorderColor", skip_serializing_if = "Option::is_none")]
     pub cell_border_color: Option<DomRgba>,
     /// The row line color (default: transparent).
-    #[serde(rename = "rowLineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rowLineColor", skip_serializing_if = "Option::is_none")]
     pub row_line_color: Option<DomRgba>,
     /// The column line color (default: transparent).
-    #[serde(rename = "columnLineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnLineColor", skip_serializing_if = "Option::is_none")]
     pub column_line_color: Option<DomRgba>,
     /// Whether the grid border is dashed (default: false).
-    #[serde(rename = "gridBorderDash")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gridBorderDash", skip_serializing_if = "Option::is_none")]
     pub grid_border_dash: Option<bool>,
     /// Whether the cell border is dashed (default: false). Deprecated, please us rowLineDash and columnLineDash instead.
-    #[serde(rename = "cellBorderDash")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cellBorderDash", skip_serializing_if = "Option::is_none")]
     pub cell_border_dash: Option<bool>,
     /// Whether row lines are dashed (default: false).
-    #[serde(rename = "rowLineDash")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rowLineDash", skip_serializing_if = "Option::is_none")]
     pub row_line_dash: Option<bool>,
     /// Whether column lines are dashed (default: false).
-    #[serde(rename = "columnLineDash")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnLineDash", skip_serializing_if = "Option::is_none")]
     pub column_line_dash: Option<bool>,
     /// The row gap highlight fill color (default: transparent).
-    #[serde(rename = "rowGapColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rowGapColor", skip_serializing_if = "Option::is_none")]
     pub row_gap_color: Option<DomRgba>,
     /// The row gap hatching fill color (default: transparent).
-    #[serde(rename = "rowHatchColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rowHatchColor", skip_serializing_if = "Option::is_none")]
     pub row_hatch_color: Option<DomRgba>,
     /// The column gap highlight fill color (default: transparent).
-    #[serde(rename = "columnGapColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnGapColor", skip_serializing_if = "Option::is_none")]
     pub column_gap_color: Option<DomRgba>,
     /// The column gap hatching fill color (default: transparent).
-    #[serde(rename = "columnHatchColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "columnHatchColor", skip_serializing_if = "Option::is_none")]
     pub column_hatch_color: Option<DomRgba>,
     /// The named grid areas border color (Default: transparent).
-    #[serde(rename = "areaBorderColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "areaBorderColor", skip_serializing_if = "Option::is_none")]
     pub area_border_color: Option<DomRgba>,
     /// The grid container background color (Default: transparent).
-    #[serde(rename = "gridBackgroundColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gridBackgroundColor", skip_serializing_if = "Option::is_none")]
     pub grid_background_color: Option<DomRgba>,
 }
 
@@ -28175,80 +27431,61 @@ impl OverlayGridNodeHighlightConfig {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayHighlightConfig {
     /// Whether the node info tooltip should be shown (default: false).
-    #[serde(rename = "showInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showInfo", skip_serializing_if = "Option::is_none")]
     pub show_info: Option<bool>,
     /// Whether the node styles in the tooltip (default: false).
-    #[serde(rename = "showStyles")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showStyles", skip_serializing_if = "Option::is_none")]
     pub show_styles: Option<bool>,
     /// Whether the rulers should be shown (default: false).
-    #[serde(rename = "showRulers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showRulers", skip_serializing_if = "Option::is_none")]
     pub show_rulers: Option<bool>,
     /// Whether the a11y info should be shown (default: true).
-    #[serde(rename = "showAccessibilityInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showAccessibilityInfo", skip_serializing_if = "Option::is_none")]
     pub show_accessibility_info: Option<bool>,
     /// Whether the extension lines from node to the rulers should be shown (default: false).
-    #[serde(rename = "showExtensionLines")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showExtensionLines", skip_serializing_if = "Option::is_none")]
     pub show_extension_lines: Option<bool>,
     /// The content box highlight fill color (default: transparent).
-    #[serde(rename = "contentColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentColor", skip_serializing_if = "Option::is_none")]
     pub content_color: Option<DomRgba>,
     /// The padding highlight fill color (default: transparent).
-    #[serde(rename = "paddingColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "paddingColor", skip_serializing_if = "Option::is_none")]
     pub padding_color: Option<DomRgba>,
     /// The border highlight fill color (default: transparent).
-    #[serde(rename = "borderColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "borderColor", skip_serializing_if = "Option::is_none")]
     pub border_color: Option<DomRgba>,
     /// The margin highlight fill color (default: transparent).
-    #[serde(rename = "marginColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "marginColor", skip_serializing_if = "Option::is_none")]
     pub margin_color: Option<DomRgba>,
     /// The event target element highlight fill color (default: transparent).
-    #[serde(rename = "eventTargetColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "eventTargetColor", skip_serializing_if = "Option::is_none")]
     pub event_target_color: Option<DomRgba>,
     /// The shape outside fill color (default: transparent).
-    #[serde(rename = "shapeColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shapeColor", skip_serializing_if = "Option::is_none")]
     pub shape_color: Option<DomRgba>,
     /// The shape margin fill color (default: transparent).
-    #[serde(rename = "shapeMarginColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shapeMarginColor", skip_serializing_if = "Option::is_none")]
     pub shape_margin_color: Option<DomRgba>,
     /// The grid layout color (default: transparent).
-    #[serde(rename = "cssGridColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cssGridColor", skip_serializing_if = "Option::is_none")]
     pub css_grid_color: Option<DomRgba>,
     /// The color format used to format color styles (default: hex).
-    #[serde(rename = "colorFormat")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "colorFormat", skip_serializing_if = "Option::is_none")]
     pub color_format: Option<OverlayColorFormat>,
     /// The grid layout highlight configuration (default: all transparent).
-    #[serde(rename = "gridHighlightConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gridHighlightConfig", skip_serializing_if = "Option::is_none")]
     pub grid_highlight_config: Option<OverlayGridHighlightConfig>,
     /// The flex container highlight configuration (default: all transparent).
-    #[serde(rename = "flexContainerHighlightConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "flexContainerHighlightConfig", skip_serializing_if = "Option::is_none")]
     pub flex_container_highlight_config: Option<OverlayFlexContainerHighlightConfig>,
     /// The flex item highlight configuration (default: all transparent).
-    #[serde(rename = "flexItemHighlightConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "flexItemHighlightConfig", skip_serializing_if = "Option::is_none")]
     pub flex_item_highlight_config: Option<OverlayFlexItemHighlightConfig>,
     /// The contrast algorithm to use for the contrast ratio (default: aa).
-    #[serde(rename = "contrastAlgorithm")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contrastAlgorithm", skip_serializing_if = "Option::is_none")]
     pub contrast_algorithm: Option<OverlayContrastAlgorithm>,
     /// The container query container highlight configuration (default: all transparent).
-    #[serde(rename = "containerQueryContainerHighlightConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "containerQueryContainerHighlightConfig", skip_serializing_if = "Option::is_none")]
     pub container_query_container_highlight_config: Option<OverlayContainerQueryContainerHighlightConfig>,
 }
 
@@ -28286,12 +27523,10 @@ pub struct OverlayHingeConfig {
     /// A rectangle represent hinge
     pub rect: DomRect,
     /// The content box highlight fill color (default: a dark color).
-    #[serde(rename = "contentColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentColor", skip_serializing_if = "Option::is_none")]
     pub content_color: Option<DomRgba>,
     /// The content box highlight outline color (default: transparent).
-    #[serde(rename = "outlineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "outlineColor", skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<DomRgba>,
 }
 
@@ -28324,12 +27559,10 @@ pub enum OverlayInspectMode {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayInspectedElementAnchorConfig {
     /// Identifier of the node to highlight.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node to highlight.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
 }
 
@@ -28370,16 +27603,13 @@ impl OverlayIsolatedElementHighlightConfig {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayIsolationModeHighlightConfig {
     /// The fill color of the resizers (default: transparent).
-    #[serde(rename = "resizerColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resizerColor", skip_serializing_if = "Option::is_none")]
     pub resizer_color: Option<DomRgba>,
     /// The fill color for resizer handles (default: transparent).
-    #[serde(rename = "resizerHandleColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "resizerHandleColor", skip_serializing_if = "Option::is_none")]
     pub resizer_handle_color: Option<DomRgba>,
     /// The fill color for the mask covering non-isolated elements (default: transparent).
-    #[serde(rename = "maskColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maskColor", skip_serializing_if = "Option::is_none")]
     pub mask_color: Option<DomRgba>,
 }
 
@@ -28408,10 +27638,10 @@ pub enum OverlayLineStylePattern {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayLineStyle {
     /// The color of the line (default: transparent)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<DomRgba>,
     /// The line pattern (default: solid)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<OverlayLineStylePattern>,
 }
 
@@ -28430,20 +27660,16 @@ impl OverlayLineStyle {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlayScrollSnapContainerHighlightConfig {
     /// The style of the snapport border (default: transparent)
-    #[serde(rename = "snapportBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "snapportBorder", skip_serializing_if = "Option::is_none")]
     pub snapport_border: Option<OverlayLineStyle>,
     /// The style of the snap area border (default: transparent)
-    #[serde(rename = "snapAreaBorder")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "snapAreaBorder", skip_serializing_if = "Option::is_none")]
     pub snap_area_border: Option<OverlayLineStyle>,
     /// The margin highlight fill color (default: transparent).
-    #[serde(rename = "scrollMarginColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollMarginColor", skip_serializing_if = "Option::is_none")]
     pub scroll_margin_color: Option<DomRgba>,
     /// The padding highlight fill color (default: transparent).
-    #[serde(rename = "scrollPaddingColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scrollPaddingColor", skip_serializing_if = "Option::is_none")]
     pub scroll_padding_color: Option<DomRgba>,
 }
 
@@ -28613,20 +27839,16 @@ pub struct OverlayGetHighlightObjectForTestParams {
     #[serde(rename = "nodeId")]
     pub node_id: DomNodeId,
     /// Whether to include distance info.
-    #[serde(rename = "includeDistance")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeDistance", skip_serializing_if = "Option::is_none")]
     pub include_distance: Option<bool>,
     /// Whether to include style info.
-    #[serde(rename = "includeStyle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeStyle", skip_serializing_if = "Option::is_none")]
     pub include_style: Option<bool>,
     /// The color format to get config with (default: hex).
-    #[serde(rename = "colorFormat")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "colorFormat", skip_serializing_if = "Option::is_none")]
     pub color_format: Option<OverlayColorFormat>,
     /// Whether to show accessibility info (default: true).
-    #[serde(rename = "showAccessibilityInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "showAccessibilityInfo", skip_serializing_if = "Option::is_none")]
     pub show_accessibility_info: Option<bool>,
 }
 
@@ -28721,12 +27943,10 @@ pub struct OverlayHighlightFrameParams {
     #[serde(rename = "frameId")]
     pub frame_id: PageFrameId,
     /// The content box highlight fill color (default: transparent).
-    #[serde(rename = "contentColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentColor", skip_serializing_if = "Option::is_none")]
     pub content_color: Option<DomRgba>,
     /// The content box highlight outline color (default: transparent).
-    #[serde(rename = "contentOutlineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentOutlineColor", skip_serializing_if = "Option::is_none")]
     pub content_outline_color: Option<DomRgba>,
 }
 
@@ -28759,19 +27979,16 @@ pub struct OverlayHighlightNodeParams {
     #[serde(rename = "highlightConfig")]
     pub highlight_config: OverlayHighlightConfig,
     /// Identifier of the node to highlight.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node to highlight.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node to be highlighted.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Selectors to highlight relevant nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
 }
 
@@ -28805,11 +28022,10 @@ pub struct OverlayHighlightQuadParams {
     /// Quad to highlight
     pub quad: DomQuad,
     /// The highlight fill color (default: transparent).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<DomRgba>,
     /// The highlight outline color (default: transparent).
-    #[serde(rename = "outlineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "outlineColor", skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<DomRgba>,
 }
 
@@ -28847,11 +28063,10 @@ pub struct OverlayHighlightRectParams {
     /// Rectangle height
     pub height: i64,
     /// The highlight fill color (default: transparent).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<DomRgba>,
     /// The highlight outline color (default: transparent).
-    #[serde(rename = "outlineColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "outlineColor", skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<DomRgba>,
 }
 
@@ -28887,16 +28102,13 @@ pub struct OverlayHighlightSourceOrderParams {
     #[serde(rename = "sourceOrderConfig")]
     pub source_order_config: OverlaySourceOrderConfig,
     /// Identifier of the node to highlight.
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomNodeId>,
     /// Identifier of the backend node to highlight.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// JavaScript object id of the node to be highlighted.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -29024,8 +28236,7 @@ pub struct OverlaySetInspectModeParams {
     pub mode: OverlayInspectMode,
     /// A descriptor for the highlight appearance of hovered-over nodes. May be omitted if `enabled
     /// == false`.
-    #[serde(rename = "highlightConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "highlightConfig", skip_serializing_if = "Option::is_none")]
     pub highlight_config: Option<OverlayHighlightConfig>,
 }
 
@@ -29054,7 +28265,7 @@ impl OverlaySetInspectModeResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySetPausedInDebuggerMessageParams {
     /// The message to display, also triggers resume and step over controls.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
@@ -29164,8 +28375,7 @@ impl OverlaySetShowDebugBordersResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySetShowDisplayCutoutParams {
     /// display cutout data, null means hide display cutout
-    #[serde(rename = "displayCutoutConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "displayCutoutConfig", skip_serializing_if = "Option::is_none")]
     pub display_cutout_config: Option<OverlayDisplayCutoutConfig>,
 }
 
@@ -29276,8 +28486,7 @@ impl OverlaySetShowGridOverlaysResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySetShowHingeParams {
     /// hinge data, null means hideHinge
-    #[serde(rename = "hingeConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hingeConfig", skip_serializing_if = "Option::is_none")]
     pub hinge_config: Option<OverlayHingeConfig>,
 }
 
@@ -29550,8 +28759,7 @@ impl OverlaySetShowWebVitalsResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct OverlaySetShowWindowControlsOverlayParams {
     /// Window Controls Overlay data, null means hide Window Controls Overlay
-    #[serde(rename = "windowControlsOverlayConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "windowControlsOverlayConfig", skip_serializing_if = "Option::is_none")]
     pub window_controls_overlay_config: Option<OverlayWindowControlsOverlayConfig>,
 }
 
@@ -29644,11 +28852,9 @@ pub struct PwaChangeAppUserSettingsParams {
     ///
     /// TODO(crbug.com/339453269): Setting this value on ChromeOS is not
     /// supported yet.
-    #[serde(rename = "linkCapturing")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "linkCapturing", skip_serializing_if = "Option::is_none")]
     pub link_capturing: Option<bool>,
-    #[serde(rename = "displayMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "displayMode", skip_serializing_if = "Option::is_none")]
     pub display_mode: Option<PwaDisplayMode>,
 }
 
@@ -29719,8 +28925,7 @@ pub struct PwaInstallParams {
     pub manifest_id: String,
     /// The location of the app or bundle overriding the one derived from the
     /// manifestId.
-    #[serde(rename = "installUrlOrBundleUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "installUrlOrBundleUrl", skip_serializing_if = "Option::is_none")]
     pub install_url_or_bundle_url: Option<String>,
 }
 
@@ -29785,7 +28990,7 @@ impl PwaLaunchFilesInAppResult {
 pub struct PwaLaunchParams {
     #[serde(rename = "manifestId")]
     pub manifest_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
@@ -29884,7 +29089,7 @@ pub enum PageAdFrameExplanation {
 pub struct PageAdFrameStatus {
     #[serde(rename = "adFrameType")]
     pub ad_frame_type: PageAdFrameType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub explanations: Option<Vec<PageAdFrameExplanation>>,
 }
 
@@ -29957,10 +29162,10 @@ impl PageAppManifestParsedProperties {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageBackForwardCacheBlockingDetails {
     /// Url of the file where blockage happened. Optional because of tests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Function name where blockage happened. Optional because of anonymous functions and tests.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
     /// Line number in the script (0-based).
     #[serde(rename = "lineNumber")]
@@ -29993,9 +29198,9 @@ pub struct PageBackForwardCacheNotRestoredExplanation {
     /// Context associated with the reason. The meaning of this context is
     /// dependent on the reason:
     /// - EmbedderExtensionSentMessageToCachedFrame: the extension ID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Vec<PageBackForwardCacheBlockingDetails>>,
 }
 
@@ -30261,7 +29466,7 @@ pub struct PageCompilationCacheParams {
     pub url: String,
     /// A hint to the backend whether eager compilation is recommended.
     /// (the actual compilation mode used is upon backend discretion).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub eager: Option<bool>,
 }
 
@@ -30300,9 +29505,9 @@ pub enum PageDialogType {
 /// FileFilter
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageFileFilter {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub accepts: Option<Vec<String>>,
 }
 
@@ -30323,7 +29528,7 @@ pub struct PageFileHandler {
     pub action: String,
     pub name: String,
     /// Mimic a map, name is the key, accepts is the value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub accepts: Option<Vec<PageFileFilter>>,
     /// Won't repeat the enums, using string for easy comparison. Same as the
     /// other enums below.
@@ -30348,26 +29553,25 @@ impl PageFileHandler {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageFontFamilies {
     /// The standard font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub standard: Option<String>,
     /// The fixed font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed: Option<String>,
     /// The serif font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub serif: Option<String>,
     /// The sansSerif font-family.
-    #[serde(rename = "sansSerif")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sansSerif", skip_serializing_if = "Option::is_none")]
     pub sans_serif: Option<String>,
     /// The cursive font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cursive: Option<String>,
     /// The fantasy font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fantasy: Option<String>,
     /// The math font-family.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub math: Option<String>,
 }
 
@@ -30391,10 +29595,10 @@ impl PageFontFamilies {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageFontSizes {
     /// Default standard font size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub standard: Option<i64>,
     /// Default fixed font size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed: Option<i64>,
 }
 
@@ -30415,20 +29619,18 @@ pub struct PageFrame {
     /// Frame unique identifier.
     pub id: PageFrameId,
     /// Parent frame identifier.
-    #[serde(rename = "parentId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<PageFrameId>,
     /// Identifier of the loader associated with this frame.
     #[serde(rename = "loaderId")]
     pub loader_id: NetworkLoaderId,
     /// Frame's name as specified in the tag.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Frame document's URL without fragment.
     pub url: String,
     /// Frame document's URL fragment including the '#'.
-    #[serde(rename = "urlFragment")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlFragment", skip_serializing_if = "Option::is_none")]
     pub url_fragment: Option<String>,
     /// Frame document's registered domain, taking the public suffixes list into account.
     /// Extracted from the Frame's url.
@@ -30440,19 +29642,16 @@ pub struct PageFrame {
     #[serde(rename = "securityOrigin")]
     pub security_origin: String,
     /// Additional details about the frame document's security origin.
-    #[serde(rename = "securityOriginDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "securityOriginDetails", skip_serializing_if = "Option::is_none")]
     pub security_origin_details: Option<PageSecurityOriginDetails>,
     /// Frame document's mimeType as determined by the browser.
     #[serde(rename = "mimeType")]
     pub mime_type: String,
     /// If the frame failed to load, this contains the URL that could not be loaded. Note that unlike url above, this URL may contain a fragment.
-    #[serde(rename = "unreachableUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "unreachableUrl", skip_serializing_if = "Option::is_none")]
     pub unreachable_url: Option<String>,
     /// Indicates whether this frame was tagged as an ad and why.
-    #[serde(rename = "adFrameStatus")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adFrameStatus", skip_serializing_if = "Option::is_none")]
     pub ad_frame_status: Option<PageAdFrameStatus>,
     /// Indicates whether the main document is a secure context and explains why that is the case.
     #[serde(rename = "secureContextType")]
@@ -30503,18 +29702,16 @@ pub struct PageFrameResource {
     #[serde(rename = "mimeType")]
     pub mime_type: String,
     /// last-modified timestamp as reported by server.
-    #[serde(rename = "lastModified")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lastModified", skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<NetworkTimeSinceEpoch>,
     /// Resource content size.
-    #[serde(rename = "contentSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentSize", skip_serializing_if = "Option::is_none")]
     pub content_size: Option<f64>,
     /// True if the resource failed to load.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub failed: Option<bool>,
     /// True if the resource was canceled during loading.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub canceled: Option<bool>,
 }
 
@@ -30540,8 +29737,7 @@ pub struct PageFrameResourceTree {
     /// Frame information for this tree item.
     pub frame: PageFrame,
     /// Child frames.
-    #[serde(rename = "childFrames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "childFrames", skip_serializing_if = "Option::is_none")]
     pub child_frames: Option<Vec<PageFrameResourceTree>>,
     /// Information about frame resources.
     pub resources: Vec<PageFrameResource>,
@@ -30565,8 +29761,7 @@ pub struct PageFrameTree {
     /// Frame information for this tree item.
     pub frame: PageFrame,
     /// Child frames.
-    #[serde(rename = "childFrames")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "childFrames", skip_serializing_if = "Option::is_none")]
     pub child_frames: Option<Vec<PageFrameTree>>,
 }
 
@@ -30596,9 +29791,9 @@ pub struct PageImageResource {
     /// The src field in the definition, but changing to url in favor of
     /// consistency.
     pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sizes: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
 }
 
@@ -30829,8 +30024,7 @@ pub struct PageOriginTrialTokenWithStatus {
     pub raw_token_text: String,
     /// `parsedToken` is present only when the token is extractable and
     /// parsable.
-    #[serde(rename = "parsedToken")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parsedToken", skip_serializing_if = "Option::is_none")]
     pub parsed_token: Option<PageOriginTrialToken>,
     pub status: PageOriginTrialTokenStatus,
 }
@@ -31113,7 +30307,7 @@ pub enum PagePermissionsPolicyFeature {
 pub struct PagePermissionsPolicyFeatureState {
     pub feature: PagePermissionsPolicyFeature,
     pub allowed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub locator: Option<PagePermissionsPolicyBlockLocator>,
 }
 
@@ -31171,7 +30365,7 @@ pub enum PageReferrerPolicy {
 /// RelatedApplication
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageRelatedApplication {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub url: String,
 }
@@ -31230,7 +30424,7 @@ pub struct PageScreencastFrameMetadata {
     #[serde(rename = "scrollOffsetY")]
     pub scroll_offset_y: f64,
     /// Frame swap timestamp.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<NetworkTimeSinceEpoch>,
 }
 
@@ -31256,7 +30450,7 @@ pub struct PageScreenshot {
     pub image: PageImageResource,
     #[serde(rename = "formFactor")]
     pub form_factor: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
 
@@ -31332,13 +30526,13 @@ pub struct PageShareTarget {
     pub method: String,
     pub enctype: String,
     /// Embed the ShareTargetParams
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<PageFileFilter>>,
 }
 
@@ -31460,7 +30654,7 @@ pub struct PageVisualViewport {
     /// Scale relative to the ideal viewport (size at width=device-width).
     pub scale: f64,
     /// Page zoom factor (CSS to device independent pixels ratio).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<f64>,
 }
 
@@ -31484,73 +30678,61 @@ impl PageVisualViewport {
 /// WebAppManifest
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageWebAppManifest {
-    #[serde(rename = "backgroundColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backgroundColor", skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
     /// The extra description provided by the manifest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
     /// The overrided display mode controlled by the user.
-    #[serde(rename = "displayOverrides")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "displayOverrides", skip_serializing_if = "Option::is_none")]
     pub display_overrides: Option<Vec<String>>,
     /// The handlers to open files.
-    #[serde(rename = "fileHandlers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fileHandlers", skip_serializing_if = "Option::is_none")]
     pub file_handlers: Option<Vec<PageFileHandler>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<PageImageResource>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
     /// TODO(crbug.com/1231886): This field is non-standard and part of a Chrome
     /// experiment. See:
     /// https://github.com/WICG/web-app-launch/blob/main/launch_handler.md
-    #[serde(rename = "launchHandler")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "launchHandler", skip_serializing_if = "Option::is_none")]
     pub launch_handler: Option<PageLaunchHandler>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<String>,
-    #[serde(rename = "preferRelatedApplications")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "preferRelatedApplications", skip_serializing_if = "Option::is_none")]
     pub prefer_related_applications: Option<bool>,
     /// The handlers to open protocols.
-    #[serde(rename = "protocolHandlers")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "protocolHandlers", skip_serializing_if = "Option::is_none")]
     pub protocol_handlers: Option<Vec<PageProtocolHandler>>,
-    #[serde(rename = "relatedApplications")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "relatedApplications", skip_serializing_if = "Option::is_none")]
     pub related_applications: Option<Vec<PageRelatedApplication>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     /// Non-standard, see
     /// https://github.com/WICG/manifest-incubations/blob/gh-pages/scope_extensions-explainer.md
-    #[serde(rename = "scopeExtensions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scopeExtensions", skip_serializing_if = "Option::is_none")]
     pub scope_extensions: Option<Vec<PageScopeExtension>>,
     /// The screenshots used by chromium.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshots: Option<Vec<PageScreenshot>>,
-    #[serde(rename = "shareTarget")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shareTarget", skip_serializing_if = "Option::is_none")]
     pub share_target: Option<PageShareTarget>,
-    #[serde(rename = "shortName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "shortName", skip_serializing_if = "Option::is_none")]
     pub short_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shortcuts: Option<Vec<PageShortcut>>,
-    #[serde(rename = "startUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startUrl", skip_serializing_if = "Option::is_none")]
     pub start_url: Option<String>,
-    #[serde(rename = "themeColor")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "themeColor", skip_serializing_if = "Option::is_none")]
     pub theme_color: Option<String>,
 }
 
@@ -31653,18 +30835,15 @@ pub struct PageAddScriptToEvaluateOnNewDocumentParams {
     /// If specified, creates an isolated world with the given name and evaluates given script in it.
     /// This world name will be used as the ExecutionContextDescription::name when the corresponding
     /// event is emitted.
-    #[serde(rename = "worldName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "worldName", skip_serializing_if = "Option::is_none")]
     pub world_name: Option<String>,
     /// Specifies whether command line API should be available to the script, defaults
     /// to false.
-    #[serde(rename = "includeCommandLineAPI")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")]
     pub include_command_line_api: Option<bool>,
     /// If true, runs the script immediately on existing execution contexts or worlds.
     /// Default: false.
-    #[serde(rename = "runImmediately")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "runImmediately", skip_serializing_if = "Option::is_none")]
     pub run_immediately: Option<bool>,
 }
 
@@ -31709,8 +30888,7 @@ pub struct PageBackForwardCacheNotUsedParams {
     #[serde(rename = "notRestoredExplanations")]
     pub not_restored_explanations: Vec<PageBackForwardCacheNotRestoredExplanation>,
     /// Tree structure of reasons why the page could not be cached for each frame.
-    #[serde(rename = "notRestoredExplanationsTree")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "notRestoredExplanationsTree", skip_serializing_if = "Option::is_none")]
     pub not_restored_explanations_tree: Option<PageBackForwardCacheNotRestoredExplanationTree>,
 }
 
@@ -31763,25 +30941,22 @@ pub enum PageCaptureScreenshotParamsFormat {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageCaptureScreenshotParams {
     /// Image compression format (defaults to png).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<PageCaptureScreenshotParamsFormat>,
     /// Compression quality from range [0..100] (jpeg only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<i64>,
     /// Capture the screenshot of a given region only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<PageViewport>,
     /// Capture the screenshot from the surface, rather than the view. Defaults to true.
-    #[serde(rename = "fromSurface")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "fromSurface", skip_serializing_if = "Option::is_none")]
     pub from_surface: Option<bool>,
     /// Capture the screenshot beyond the viewport. Defaults to false.
-    #[serde(rename = "captureBeyondViewport")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "captureBeyondViewport", skip_serializing_if = "Option::is_none")]
     pub capture_beyond_viewport: Option<bool>,
     /// Optimize image encoding for speed, not for resulting size (defaults to false)
-    #[serde(rename = "optimizeForSpeed")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "optimizeForSpeed", skip_serializing_if = "Option::is_none")]
     pub optimize_for_speed: Option<bool>,
 }
 
@@ -31826,7 +31001,7 @@ pub enum PageCaptureSnapshotParamsFormat {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageCaptureSnapshotParams {
     /// Format (defaults to mhtml).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<PageCaptureSnapshotParamsFormat>,
 }
 
@@ -32012,13 +31187,11 @@ pub struct PageCreateIsolatedWorldParams {
     #[serde(rename = "frameId")]
     pub frame_id: PageFrameId,
     /// An optional name which is reported in the Execution Context.
-    #[serde(rename = "worldName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "worldName", skip_serializing_if = "Option::is_none")]
     pub world_name: Option<String>,
     /// Whether or not universal access should be granted to the isolated world. This is a powerful
     /// option, use with caution.
-    #[serde(rename = "grantUniveralAccess")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "grantUniveralAccess", skip_serializing_if = "Option::is_none")]
     pub grant_univeral_access: Option<bool>,
     /// An optional content security policy to set for the isolated world.
     /// If omitted, any existing CSP for the world will be cleared.
@@ -32026,8 +31199,7 @@ pub struct PageCreateIsolatedWorldParams {
     /// context in the same document because LocalDOMWindow caches the
     /// ContentSecurityPolicy object. The change takes effect on subsequent
     /// navigations when a new window context is created.
-    #[serde(rename = "contentSecurityPolicy")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contentSecurityPolicy", skip_serializing_if = "Option::is_none")]
     pub content_security_policy: Option<String>,
 }
 
@@ -32214,8 +31386,7 @@ impl PageDownloadWillBeginParams {
 pub struct PageEnableParams {
     /// If true, the `Page.fileChooserOpened` event will be emitted regardless of the state set by
     /// `Page.setInterceptFileChooserDialog` command (default: false).
-    #[serde(rename = "enableFileChooserOpenedEvent")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableFileChooserOpenedEvent", skip_serializing_if = "Option::is_none")]
     pub enable_file_chooser_opened_event: Option<bool>,
 }
 
@@ -32257,8 +31428,7 @@ pub struct PageFileChooserOpenedParams {
     /// Input mode.
     pub mode: PageFileChooserOpenedParamsMode,
     /// Input node id. Only present for file choosers opened via an `<input type="file">` element.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
 }
 
@@ -32283,7 +31453,7 @@ pub struct PageFrameAttachedParams {
     #[serde(rename = "parentFrameId")]
     pub parent_frame_id: PageFrameId,
     /// JavaScript stack trace of when frame was attached, only set if frame initiated from script.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<RuntimeStackTrace>,
 }
 
@@ -32531,7 +31701,7 @@ pub struct PageGenerateTestReportParams {
     /// Message to be displayed in the report.
     pub message: String,
     /// Specifies the endpoint group to deliver the report to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
 }
 
@@ -32580,8 +31750,7 @@ pub struct PageGetAdScriptAncestryResult {
     /// chain is ordered from the most immediate script (in the frame creation
     /// stack) to more distant ancestors (that created the immediately preceding
     /// script). Only sent if frame is labelled as an ad and ids are available.
-    #[serde(rename = "adScriptAncestry")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "adScriptAncestry", skip_serializing_if = "Option::is_none")]
     pub ad_script_ancestry: Option<NetworkAdAncestry>,
 }
 
@@ -32598,8 +31767,7 @@ impl PageGetAdScriptAncestryResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageGetAnnotatedPageContentParams {
     /// Whether to include actionable information. Defaults to true.
-    #[serde(rename = "includeActionableInformation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeActionableInformation", skip_serializing_if = "Option::is_none")]
     pub include_actionable_information: Option<bool>,
 }
 
@@ -32645,12 +31813,10 @@ impl PageGetAppIdParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageGetAppIdResult {
     /// App id, either from manifest's id attribute or computed from start_url
-    #[serde(rename = "appId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "appId", skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
     /// Recommendation for manifest's id attribute to match current id computed from start_url
-    #[serde(rename = "recommendedId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "recommendedId", skip_serializing_if = "Option::is_none")]
     pub recommended_id: Option<String>,
 }
 
@@ -32667,8 +31833,7 @@ impl PageGetAppIdResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageGetAppManifestParams {
-    #[serde(rename = "manifestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "manifestId", skip_serializing_if = "Option::is_none")]
     pub manifest_id: Option<String>,
 }
 
@@ -32688,10 +31853,10 @@ pub struct PageGetAppManifestResult {
     pub url: String,
     pub errors: Vec<PageAppManifestError>,
     /// Manifest content.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<String>,
     /// Parsed manifest properties. Deprecated, use manifest instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parsed: Option<PageAppManifestParsedProperties>,
     pub manifest: PageWebAppManifest,
 }
@@ -32826,8 +31991,7 @@ impl PageGetManifestIconsParams {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageGetManifestIconsResult {
-    #[serde(rename = "primaryIcon")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "primaryIcon", skip_serializing_if = "Option::is_none")]
     pub primary_icon: Option<String>,
 }
 
@@ -33009,8 +32173,7 @@ pub struct PageHandleJavaScriptDialogParams {
     pub accept: bool,
     /// The text to enter into the dialog prompt before accepting. Used only if this is a prompt
     /// dialog.
-    #[serde(rename = "promptText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "promptText", skip_serializing_if = "Option::is_none")]
     pub prompt_text: Option<String>,
 }
 
@@ -33099,8 +32262,7 @@ pub struct PageJavascriptDialogOpeningParams {
     #[serde(rename = "hasBrowserHandler")]
     pub has_browser_handler: bool,
     /// Default dialog prompt.
-    #[serde(rename = "defaultPrompt")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "defaultPrompt", skip_serializing_if = "Option::is_none")]
     pub default_prompt: Option<String>,
 }
 
@@ -33164,19 +32326,16 @@ pub struct PageNavigateParams {
     /// URL to navigate the page to.
     pub url: String,
     /// Referrer URL.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub referrer: Option<String>,
     /// Intended transition type.
-    #[serde(rename = "transitionType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "transitionType", skip_serializing_if = "Option::is_none")]
     pub transition_type: Option<PageTransitionType>,
     /// Frame id to navigate, if not specified navigates the top frame.
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
     /// Referrer-policy used for the navigation.
-    #[serde(rename = "referrerPolicy")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "referrerPolicy", skip_serializing_if = "Option::is_none")]
     pub referrer_policy: Option<PageReferrerPolicy>,
 }
 
@@ -33201,16 +32360,13 @@ pub struct PageNavigateResult {
     pub frame_id: PageFrameId,
     /// Loader identifier. This is omitted in case of same-document navigation,
     /// as the previously committed loaderId would not change.
-    #[serde(rename = "loaderId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "loaderId", skip_serializing_if = "Option::is_none")]
     pub loader_id: Option<NetworkLoaderId>,
     /// User friendly error message, present if and only if navigation has failed.
-    #[serde(rename = "errorText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorText", skip_serializing_if = "Option::is_none")]
     pub error_text: Option<String>,
     /// Whether the navigation resulted in a download.
-    #[serde(rename = "isDownload")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isDownload", skip_serializing_if = "Option::is_none")]
     pub is_download: Option<bool>,
 }
 
@@ -33300,42 +32456,34 @@ pub enum PagePrintToPdfparamsTransferMode {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PagePrintToPdfparams {
     /// Paper orientation. Defaults to false.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub landscape: Option<bool>,
     /// Display header and footer. Defaults to false.
-    #[serde(rename = "displayHeaderFooter")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "displayHeaderFooter", skip_serializing_if = "Option::is_none")]
     pub display_header_footer: Option<bool>,
     /// Print background graphics. Defaults to false.
-    #[serde(rename = "printBackground")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "printBackground", skip_serializing_if = "Option::is_none")]
     pub print_background: Option<bool>,
     /// Scale of the webpage rendering. Defaults to 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
     /// Paper width in inches. Defaults to 8.5 inches.
-    #[serde(rename = "paperWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "paperWidth", skip_serializing_if = "Option::is_none")]
     pub paper_width: Option<f64>,
     /// Paper height in inches. Defaults to 11 inches.
-    #[serde(rename = "paperHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "paperHeight", skip_serializing_if = "Option::is_none")]
     pub paper_height: Option<f64>,
     /// Top margin in inches. Defaults to 1cm (~0.4 inches).
-    #[serde(rename = "marginTop")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "marginTop", skip_serializing_if = "Option::is_none")]
     pub margin_top: Option<f64>,
     /// Bottom margin in inches. Defaults to 1cm (~0.4 inches).
-    #[serde(rename = "marginBottom")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "marginBottom", skip_serializing_if = "Option::is_none")]
     pub margin_bottom: Option<f64>,
     /// Left margin in inches. Defaults to 1cm (~0.4 inches).
-    #[serde(rename = "marginLeft")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "marginLeft", skip_serializing_if = "Option::is_none")]
     pub margin_left: Option<f64>,
     /// Right margin in inches. Defaults to 1cm (~0.4 inches).
-    #[serde(rename = "marginRight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "marginRight", skip_serializing_if = "Option::is_none")]
     pub margin_right: Option<f64>,
     /// Paper ranges to print, one based, e.g., '1-5, 8, 11-13'. Pages are
     /// printed in the document order, not in the order specified, and no
@@ -33345,8 +32493,7 @@ pub struct PagePrintToPdfparams {
     /// document, and ranges beyond the end of the document are ignored.
     /// If this results in no pages to print, an error is reported.
     /// It is an error to specify a range with start greater than end.
-    #[serde(rename = "pageRanges")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "pageRanges", skip_serializing_if = "Option::is_none")]
     pub page_ranges: Option<String>,
     /// HTML template for the print header. Should be valid HTML markup with following
     /// classes used to inject printing values into them:
@@ -33357,29 +32504,23 @@ pub struct PagePrintToPdfparams {
     /// - `totalPages`: total pages in the document
     ///
     /// For example, `<span class=title></span>` would generate span containing the title.
-    #[serde(rename = "headerTemplate")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "headerTemplate", skip_serializing_if = "Option::is_none")]
     pub header_template: Option<String>,
     /// HTML template for the print footer. Should use the same format as the `headerTemplate`.
-    #[serde(rename = "footerTemplate")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "footerTemplate", skip_serializing_if = "Option::is_none")]
     pub footer_template: Option<String>,
     /// Whether or not to prefer page size as defined by css. Defaults to false,
     /// in which case the content will be scaled to fit the paper size.
-    #[serde(rename = "preferCSSPageSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "preferCSSPageSize", skip_serializing_if = "Option::is_none")]
     pub prefer_csspage_size: Option<bool>,
     /// return as stream
-    #[serde(rename = "transferMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "transferMode", skip_serializing_if = "Option::is_none")]
     pub transfer_mode: Option<PagePrintToPdfparamsTransferMode>,
     /// Whether or not to generate tagged (accessible) PDF. Defaults to embedder choice.
-    #[serde(rename = "generateTaggedPDF")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generateTaggedPDF", skip_serializing_if = "Option::is_none")]
     pub generate_tagged_pdf: Option<bool>,
     /// Whether or not to embed the document outline into the PDF.
-    #[serde(rename = "generateDocumentOutline")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generateDocumentOutline", skip_serializing_if = "Option::is_none")]
     pub generate_document_outline: Option<bool>,
 }
 
@@ -33414,7 +32555,7 @@ pub struct PagePrintToPdfresult {
     /// Base64-encoded pdf data. Empty if |returnAsStream| is specified. (Encoded as a base64 string when passed over JSON)
     pub data: String,
     /// A handle of the stream that holds resulting PDF data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<IoStreamHandle>,
 }
 
@@ -33458,19 +32599,16 @@ impl PageProduceCompilationCacheResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageReloadParams {
     /// If true, browser cache is ignored (as if the user pressed Shift+refresh).
-    #[serde(rename = "ignoreCache")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ignoreCache", skip_serializing_if = "Option::is_none")]
     pub ignore_cache: Option<bool>,
     /// If set, the script will be injected into all frames of the inspected page after reload.
     /// Argument will be ignored if reloading dataURL origin.
-    #[serde(rename = "scriptToEvaluateOnLoad")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptToEvaluateOnLoad", skip_serializing_if = "Option::is_none")]
     pub script_to_evaluate_on_load: Option<String>,
     /// If set, an error will be thrown if the target page's main frame's
     /// loader id does not match the provided id. This prevents accidentally
     /// reloading an unintended target in case there's a racing navigation.
-    #[serde(rename = "loaderId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "loaderId", skip_serializing_if = "Option::is_none")]
     pub loader_id: Option<NetworkLoaderId>,
 }
 
@@ -33648,12 +32786,10 @@ pub struct PageSearchInResourceParams {
     /// String to search for.
     pub query: String,
     /// If true, search is case sensitive.
-    #[serde(rename = "caseSensitive")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")]
     pub case_sensitive: Option<bool>,
     /// If true, treats string parameter as regex.
-    #[serde(rename = "isRegex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")]
     pub is_regex: Option<bool>,
 }
 
@@ -33754,34 +32890,28 @@ pub struct PageSetDeviceMetricsOverrideParams {
     /// autosizing and more.
     pub mobile: bool,
     /// Scale to apply to resulting view image.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
     /// Overriding screen width value in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "screenWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenWidth", skip_serializing_if = "Option::is_none")]
     pub screen_width: Option<i64>,
     /// Overriding screen height value in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "screenHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenHeight", skip_serializing_if = "Option::is_none")]
     pub screen_height: Option<i64>,
     /// Overriding view X position on screen in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "positionX")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "positionX", skip_serializing_if = "Option::is_none")]
     pub position_x: Option<i64>,
     /// Overriding view Y position on screen in pixels (minimum 0, maximum 10000000).
-    #[serde(rename = "positionY")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "positionY", skip_serializing_if = "Option::is_none")]
     pub position_y: Option<i64>,
     /// Do not set visible view size, rely upon explicit setVisibleSize call.
-    #[serde(rename = "dontSetVisibleSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dontSetVisibleSize", skip_serializing_if = "Option::is_none")]
     pub dont_set_visible_size: Option<bool>,
     /// Screen orientation override.
-    #[serde(rename = "screenOrientation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenOrientation", skip_serializing_if = "Option::is_none")]
     pub screen_orientation: Option<EmulationScreenOrientation>,
     /// The viewport dimensions and scale. If not set, the override is cleared.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<PageViewport>,
 }
 
@@ -33899,8 +33029,7 @@ pub struct PageSetDownloadBehaviorParams {
     /// available (otherwise deny).
     pub behavior: PageSetDownloadBehaviorParamsBehavior,
     /// The default path to save downloaded files to. This is required if behavior is set to 'allow'
-    #[serde(rename = "downloadPath")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "downloadPath", skip_serializing_if = "Option::is_none")]
     pub download_path: Option<String>,
 }
 
@@ -33932,8 +33061,7 @@ pub struct PageSetFontFamiliesParams {
     #[serde(rename = "fontFamilies")]
     pub font_families: PageFontFamilies,
     /// Specifies font families to set for individual scripts.
-    #[serde(rename = "forScripts")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "forScripts", skip_serializing_if = "Option::is_none")]
     pub for_scripts: Option<Vec<PageScriptFontFamilies>>,
 }
 
@@ -33990,13 +33118,13 @@ impl PageSetFontSizesResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageSetGeolocationOverrideParams {
     /// Mock latitude
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub latitude: Option<f64>,
     /// Mock longitude
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub longitude: Option<f64>,
     /// Mock accuracy
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub accuracy: Option<f64>,
 }
 
@@ -34029,7 +33157,7 @@ pub struct PageSetInterceptFileChooserDialogParams {
     /// If true, cancels the dialog by emitting relevant events (if any)
     /// in addition to not showing it if the interception is enabled
     /// (default: false).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cancel: Option<bool>,
 }
 
@@ -34199,7 +33327,7 @@ pub struct PageSetTouchEmulationEnabledParams {
     /// Whether the touch event emulation should be enabled.
     pub enabled: bool,
     /// Touch/gesture events configuration. Default: current platform.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub configuration: Option<PageSetTouchEmulationEnabledParamsConfiguration>,
 }
 
@@ -34263,19 +33391,16 @@ impl PageSetWebLifecycleStateResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageStartScreenRecordingParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<bool>,
     /// Maximum frame width in pixels.
-    #[serde(rename = "maxWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxWidth", skip_serializing_if = "Option::is_none")]
     pub max_width: Option<i64>,
     /// Maximum frame height in pixels.
-    #[serde(rename = "maxHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxHeight", skip_serializing_if = "Option::is_none")]
     pub max_height: Option<i64>,
     /// Maximum frame rate in frames per second.
-    #[serde(rename = "frameRate")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameRate", skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<i64>,
 }
 
@@ -34320,22 +33445,19 @@ pub enum PageStartScreencastParamsFormat {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageStartScreencastParams {
     /// Image compression format.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<PageStartScreencastParamsFormat>,
     /// Compression quality from range [0..100].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub quality: Option<i64>,
     /// Maximum screenshot width.
-    #[serde(rename = "maxWidth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxWidth", skip_serializing_if = "Option::is_none")]
     pub max_width: Option<i64>,
     /// Maximum screenshot height.
-    #[serde(rename = "maxHeight")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxHeight", skip_serializing_if = "Option::is_none")]
     pub max_height: Option<i64>,
     /// Send every n-th frame.
-    #[serde(rename = "everyNthFrame")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "everyNthFrame", skip_serializing_if = "Option::is_none")]
     pub every_nth_frame: Option<i64>,
 }
 
@@ -34539,8 +33661,7 @@ pub enum PerformanceEnableParamsTimeDomain {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PerformanceEnableParams {
     /// Time domain to use for collecting and reporting duration metrics.
-    #[serde(rename = "timeDomain")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "timeDomain", skip_serializing_if = "Option::is_none")]
     pub time_domain: Option<PerformanceEnableParamsTimeDomain>,
 }
 
@@ -34658,14 +33779,12 @@ pub struct PerformanceTimelineLargestContentfulPaint {
     /// The number of pixels being painted.
     pub size: f64,
     /// The id attribute of the element, if available.
-    #[serde(rename = "elementId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "elementId", skip_serializing_if = "Option::is_none")]
     pub element_id: Option<String>,
     /// The URL of the image (may be trimmed).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomBackendNodeId>,
 }
 
@@ -34716,8 +33835,7 @@ pub struct PerformanceTimelineLayoutShiftAttribution {
     pub previous_rect: DomRect,
     #[serde(rename = "currentRect")]
     pub current_rect: DomRect,
-    #[serde(rename = "nodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")]
     pub node_id: Option<DomBackendNodeId>,
 }
 
@@ -34747,13 +33865,11 @@ pub struct PerformanceTimelineTimelineEvent {
     /// Time in seconds since Epoch, monotonically increasing within document lifetime.
     pub time: NetworkTimeSinceEpoch,
     /// Event duration, if applicable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
-    #[serde(rename = "lcpDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "lcpDetails", skip_serializing_if = "Option::is_none")]
     pub lcp_details: Option<PerformanceTimelineLargestContentfulPaint>,
-    #[serde(rename = "layoutShiftDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "layoutShiftDetails", skip_serializing_if = "Option::is_none")]
     pub layout_shift_details: Option<PerformanceTimelineLayoutShift>,
 }
 
@@ -34885,11 +34001,9 @@ pub struct PreloadPreloadingAttemptKey {
     pub loader_id: NetworkLoaderId,
     pub action: PreloadSpeculationAction,
     pub url: String,
-    #[serde(rename = "formSubmission")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "formSubmission", skip_serializing_if = "Option::is_none")]
     pub form_submission: Option<bool>,
-    #[serde(rename = "targetHint")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetHint", skip_serializing_if = "Option::is_none")]
     pub target_hint: Option<PreloadSpeculationTargetHint>,
 }
 
@@ -35031,11 +34145,9 @@ pub enum PreloadPrerenderFinalStatus {
 pub struct PreloadPrerenderMismatchedHeaders {
     #[serde(rename = "headerName")]
     pub header_name: String,
-    #[serde(rename = "initialValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "initialValue", skip_serializing_if = "Option::is_none")]
     pub initial_value: Option<String>,
-    #[serde(rename = "activationValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "activationValue", skip_serializing_if = "Option::is_none")]
     pub activation_value: Option<String>,
 }
 
@@ -35077,26 +34189,22 @@ pub struct PreloadRuleSet {
     /// See also:
     /// - https://wicg.github.io/nav-speculation/speculation-rules.html#speculation-rules-script
     /// - https://wicg.github.io/nav-speculation/speculation-rules.html#speculation-rules-header
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(rename = "requestId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<NetworkRequestId>,
     /// Error information
     /// `errorMessage` is null iff `errorType` is null.
-    #[serde(rename = "errorType")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorType", skip_serializing_if = "Option::is_none")]
     pub error_type: Option<PreloadRuleSetErrorType>,
     /// TODO(https://crbug.com/1425354): Replace this property with structured error.
-    #[serde(rename = "errorMessage")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorMessage", skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
     /// For more details, see:
     /// https://github.com/WICG/nav-speculation/blob/main/speculation-rules-tags.md
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
 }
 
@@ -35278,16 +34386,13 @@ pub struct PreloadPrerenderStatusUpdatedParams {
     #[serde(rename = "pipelineId")]
     pub pipeline_id: PreloadPreloadPipelineId,
     pub status: PreloadPreloadingStatus,
-    #[serde(rename = "prerenderStatus")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "prerenderStatus", skip_serializing_if = "Option::is_none")]
     pub prerender_status: Option<PreloadPrerenderFinalStatus>,
     /// This is used to give users more information about the name of Mojo interface
     /// that is incompatible with prerender and has caused the cancellation of the attempt.
-    #[serde(rename = "disallowedMojoInterface")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "disallowedMojoInterface", skip_serializing_if = "Option::is_none")]
     pub disallowed_mojo_interface: Option<String>,
-    #[serde(rename = "mismatchedHeaders")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mismatchedHeaders", skip_serializing_if = "Option::is_none")]
     pub mismatched_headers: Option<Vec<PreloadPrerenderMismatchedHeaders>>,
 }
 
@@ -35419,12 +34524,11 @@ pub struct ProfilerProfile {
     #[serde(rename = "endTime")]
     pub end_time: f64,
     /// Ids of samples top nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub samples: Option<Vec<i64>>,
     /// Time intervals between adjacent samples in microseconds. The first delta is relative to the
     /// profile startTime.
-    #[serde(rename = "timeDeltas")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "timeDeltas", skip_serializing_if = "Option::is_none")]
     pub time_deltas: Option<Vec<i64>>,
 }
 
@@ -35451,20 +34555,17 @@ pub struct ProfilerProfileNode {
     #[serde(rename = "callFrame")]
     pub call_frame: RuntimeCallFrame,
     /// Number of samples where this node was on top of the call stack.
-    #[serde(rename = "hitCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hitCount", skip_serializing_if = "Option::is_none")]
     pub hit_count: Option<i64>,
     /// Child node ids.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<i64>>,
     /// The reason of being not optimized. The function may be deoptimized or marked as don't
     /// optimize.
-    #[serde(rename = "deoptReason")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deoptReason", skip_serializing_if = "Option::is_none")]
     pub deopt_reason: Option<String>,
     /// An array of source position ticks.
-    #[serde(rename = "positionTicks")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "positionTicks", skip_serializing_if = "Option::is_none")]
     pub position_ticks: Option<Vec<ProfilerPositionTickInfo>>,
 }
 
@@ -35514,7 +34615,7 @@ pub struct ProfilerConsoleProfileFinishedParams {
     pub location: DebuggerLocation,
     pub profile: ProfilerProfile,
     /// Profile title passed as an argument to console.profile().
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
@@ -35537,7 +34638,7 @@ pub struct ProfilerConsoleProfileStartedParams {
     /// Location of console.profile().
     pub location: DebuggerLocation,
     /// Profile title passed as an argument to console.profile().
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
@@ -35687,15 +34788,13 @@ impl ProfilerStartParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ProfilerStartPreciseCoverageParams {
     /// Collect accurate call counts beyond simple 'covered' or 'not covered'.
-    #[serde(rename = "callCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "callCount", skip_serializing_if = "Option::is_none")]
     pub call_count: Option<bool>,
     /// Collect block-based coverage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detailed: Option<bool>,
     /// Allow the backend to send updates on its own initiative
-    #[serde(rename = "allowTriggeredUpdates")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowTriggeredUpdates", skip_serializing_if = "Option::is_none")]
     pub allow_triggered_updates: Option<bool>,
 }
 
@@ -35825,15 +34924,13 @@ pub type RuntimeCallArgumentValue = serde_json::Value;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeCallArgument {
     /// Primitive value or serializable javascript object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeCallArgumentValue>,
     /// Primitive value which can not be JSON-stringified.
-    #[serde(rename = "unserializableValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "unserializableValue", skip_serializing_if = "Option::is_none")]
     pub unserializable_value: Option<RuntimeUnserializableValue>,
     /// Remote object handle.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -35891,8 +34988,7 @@ pub struct RuntimeCustomPreview {
     /// If formatter returns true as a result of formatter.hasBody call then bodyGetterId will
     /// contain RemoteObjectId for the function that returns result of formatter.body(object, config) call.
     /// The result value is json ML array.
-    #[serde(rename = "bodyGetterId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bodyGetterId", skip_serializing_if = "Option::is_none")]
     pub body_getter_id: Option<RuntimeRemoteObjectId>,
 }
 
@@ -35965,16 +35061,14 @@ pub type RuntimeDeepSerializedValueValue = serde_json::Value;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeDeepSerializedValue {
     pub r#type: RuntimeDeepSerializedValueType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeDeepSerializedValueValue>,
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<String>,
     /// Set if value reference met more then once during serialization. In such
     /// case, value is provided only to one of the serialized values. Unique
     /// per value in the scope of one CDP call.
-    #[serde(rename = "weakLocalObjectReference")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "weakLocalObjectReference", skip_serializing_if = "Option::is_none")]
     pub weak_local_object_reference: Option<i64>,
 }
 
@@ -35995,7 +35089,7 @@ impl RuntimeDeepSerializedValue {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeEntryPreview {
     /// Preview of the key. Specified for map-like collection entries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<Box<RuntimeObjectPreview>>,
     /// Preview of the value.
     pub value: Box<RuntimeObjectPreview>,
@@ -36028,28 +35122,24 @@ pub struct RuntimeExceptionDetails {
     #[serde(rename = "columnNumber")]
     pub column_number: i64,
     /// Script ID of the exception location.
-    #[serde(rename = "scriptId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptId", skip_serializing_if = "Option::is_none")]
     pub script_id: Option<RuntimeScriptId>,
     /// URL of the exception location, to be used when the script was not reported.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// JavaScript stack trace if available.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
     /// Exception object if available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exception: Option<RuntimeRemoteObject>,
     /// Identifier of the context where exception happened.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
     /// Dictionary with entries of meta data that the client associated
     /// with this exception, such as information about associated network
     /// requests, etc.
-    #[serde(rename = "exceptionMetaData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionMetaData", skip_serializing_if = "Option::is_none")]
     pub exception_meta_data: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -36088,8 +35178,7 @@ pub struct RuntimeExecutionContextDescription {
     #[serde(rename = "uniqueId")]
     pub unique_id: String,
     /// Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-    #[serde(rename = "auxData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "auxData", skip_serializing_if = "Option::is_none")]
     pub aux_data: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -36116,7 +35205,7 @@ pub struct RuntimeInternalPropertyDescriptor {
     /// Conventional property name.
     pub name: String,
     /// The value associated with the property.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeRemoteObject>,
 }
 
@@ -36203,17 +35292,17 @@ pub struct RuntimeObjectPreview {
     /// Object type.
     pub r#type: RuntimeObjectPreviewType,
     /// Object subtype hint. Specified for `object` type values only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<RuntimeObjectPreviewSubtype>,
     /// String representation of the object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// True iff some of the properties or entries of the original object did not fit.
     pub overflow: bool,
     /// List of the properties.
     pub properties: Vec<RuntimePropertyPreview>,
     /// List of the entries. Specified for `map` and `set` subtype values only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<RuntimeEntryPreview>>,
 }
 
@@ -36238,15 +35327,15 @@ pub struct RuntimePrivatePropertyDescriptor {
     /// Private property name.
     pub name: String,
     /// The value associated with the private property.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeRemoteObject>,
     /// A function which serves as a getter for the private property,
     /// or `undefined` if there is no getter (accessor descriptors only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub get: Option<RuntimeRemoteObject>,
     /// A function which serves as a setter for the private property,
     /// or `undefined` if there is no setter (accessor descriptors only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<RuntimeRemoteObject>,
 }
 
@@ -36269,18 +35358,18 @@ pub struct RuntimePropertyDescriptor {
     /// Property name or symbol description.
     pub name: String,
     /// The value associated with the property.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeRemoteObject>,
     /// True if the value associated with the property may be changed (data descriptors only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub writable: Option<bool>,
     /// A function which serves as a getter for the property, or `undefined` if there is no getter
     /// (accessor descriptors only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub get: Option<RuntimeRemoteObject>,
     /// A function which serves as a setter for the property, or `undefined` if there is no setter
     /// (accessor descriptors only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<RuntimeRemoteObject>,
     /// True if the type of this property descriptor may be changed and if the property may be
     /// deleted from the corresponding object.
@@ -36289,15 +35378,13 @@ pub struct RuntimePropertyDescriptor {
     /// object.
     pub enumerable: bool,
     /// True if the result was thrown during the evaluation.
-    #[serde(rename = "wasThrown")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "wasThrown", skip_serializing_if = "Option::is_none")]
     pub was_thrown: Option<bool>,
     /// True if the property is owned for the object.
-    #[serde(rename = "isOwn")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isOwn", skip_serializing_if = "Option::is_none")]
     pub is_own: Option<bool>,
     /// Property symbol object, if the property is of the `symbol` type.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub symbol: Option<RuntimeRemoteObject>,
 }
 
@@ -36396,14 +35483,13 @@ pub struct RuntimePropertyPreview {
     /// Object type. Accessor means that the property itself is an accessor property.
     pub r#type: RuntimePropertyPreviewType,
     /// User-friendly property value string.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// Nested value preview.
-    #[serde(rename = "valuePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "valuePreview", skip_serializing_if = "Option::is_none")]
     pub value_preview: Option<Box<RuntimeObjectPreview>>,
     /// Object subtype hint. Specified for `object` type values only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<RuntimePropertyPreviewSubtype>,
 }
 
@@ -36508,36 +35594,31 @@ pub struct RuntimeRemoteObject {
     /// Object subtype hint. Specified for `object` type values only.
     /// NOTE: If you change anything here, make sure to also update
     /// `subtype` in `ObjectPreview` and `PropertyPreview` below.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<RuntimeRemoteObjectSubtype>,
     /// Object class (constructor) name. Specified for `object` type values only.
-    #[serde(rename = "className")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "className", skip_serializing_if = "Option::is_none")]
     pub class_name: Option<String>,
     /// Remote object value in case of primitive values or JSON values (if it was requested).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<RuntimeRemoteObjectValue>,
     /// Primitive value which can not be JSON-stringified does not have `value`, but gets this
     /// property.
-    #[serde(rename = "unserializableValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "unserializableValue", skip_serializing_if = "Option::is_none")]
     pub unserializable_value: Option<RuntimeUnserializableValue>,
     /// String representation of the object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Deep serialized value.
-    #[serde(rename = "deepSerializedValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "deepSerializedValue", skip_serializing_if = "Option::is_none")]
     pub deep_serialized_value: Option<RuntimeDeepSerializedValue>,
     /// Unique object identifier (for non-primitive values).
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Preview containing abbreviated property values. Specified for `object` type values only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<RuntimeObjectPreview>,
-    #[serde(rename = "customPreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "customPreview", skip_serializing_if = "Option::is_none")]
     pub custom_preview: Option<RuntimeCustomPreview>,
 }
 
@@ -36581,14 +35662,12 @@ pub enum RuntimeSerializationOptionsSerialization {
 pub struct RuntimeSerializationOptions {
     pub serialization: RuntimeSerializationOptionsSerialization,
     /// Deep serialization depth. Default is full depth. Respected only in `deep` serialization mode.
-    #[serde(rename = "maxDepth")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxDepth", skip_serializing_if = "Option::is_none")]
     pub max_depth: Option<i64>,
     /// Embedder-specific parameters. For example if connected to V8 in Chrome these control DOM
     /// serialization via `maxNodeDepth: integer` and `includeShadowTree: "none" | "open" | "all"`.
     /// Values can be only of type string or integer.
-    #[serde(rename = "additionalParameters")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "additionalParameters", skip_serializing_if = "Option::is_none")]
     pub additional_parameters: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -36609,17 +35688,16 @@ impl RuntimeSerializationOptions {
 pub struct RuntimeStackTrace {
     /// String label of this stack trace. For async traces this may be a name of the function that
     /// initiated the async call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// JavaScript function name.
     #[serde(rename = "callFrames")]
     pub call_frames: Vec<RuntimeCallFrame>,
     /// Asynchronous JavaScript stack trace that preceded this stack, if available.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<Box<RuntimeStackTrace>>,
     /// Asynchronous JavaScript stack trace that preceded this stack, if available.
-    #[serde(rename = "parentId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<RuntimeStackTraceId>,
 }
 
@@ -36641,8 +35719,7 @@ impl RuntimeStackTrace {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeStackTraceId {
     pub id: String,
-    #[serde(rename = "debuggerId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "debuggerId", skip_serializing_if = "Option::is_none")]
     pub debugger_id: Option<RuntimeUniqueDebuggerId>,
 }
 
@@ -36680,16 +35757,14 @@ pub struct RuntimeAddBindingParams {
     /// Deprecated in favor of `executionContextName` due to an unclear use case
     /// and bugs in implementation (crbug.com/1169639). `executionContextId` will be
     /// removed in the future.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
     /// If specified, the binding is exposed to the executionContext with
     /// matching name, even for contexts created after the binding is added.
     /// See also `ExecutionContext.name` and `worldName` parameter to
     /// `Page.addScriptToEvaluateOnNewDocument`.
     /// This parameter is mutually exclusive with `executionContextId`.
-    #[serde(rename = "executionContextName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextName", skip_serializing_if = "Option::is_none")]
     pub execution_context_name: Option<String>,
 }
 
@@ -36722,12 +35797,10 @@ pub struct RuntimeAwaitPromiseParams {
     #[serde(rename = "promiseObjectId")]
     pub promise_object_id: RuntimeRemoteObjectId,
     /// Whether the result is expected to be a JSON object that should be sent by value.
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     pub return_by_value: Option<bool>,
     /// Whether preview should be generated for the result.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
 }
 
@@ -36748,8 +35821,7 @@ pub struct RuntimeAwaitPromiseResult {
     /// Promise result. Will contain rejected value if promise was rejected.
     pub result: RuntimeRemoteObject,
     /// Exception details if stack strace is available.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -36792,48 +35864,40 @@ pub struct RuntimeCallFunctionOnParams {
     pub function_declaration: String,
     /// Identifier of the object to call function on. Either objectId or executionContextId should
     /// be specified.
-    #[serde(rename = "objectId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")]
     pub object_id: Option<RuntimeRemoteObjectId>,
     /// Call arguments. All call arguments must belong to the same JavaScript world as the target
     /// object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<RuntimeCallArgument>>,
     /// In silent mode exceptions thrown during evaluation are not reported and do not pause
     /// execution. Overrides `setPauseOnException` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silent: Option<bool>,
     /// Whether the result is expected to be a JSON object which should be sent by value.
     /// Can be overriden by `serializationOptions`.
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     pub return_by_value: Option<bool>,
     /// Whether preview should be generated for the result.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
     /// Whether execution should be treated as initiated by user in the UI.
-    #[serde(rename = "userGesture")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userGesture", skip_serializing_if = "Option::is_none")]
     pub user_gesture: Option<bool>,
     /// Whether execution should `await` for resulting value and return once awaited promise is
     /// resolved.
-    #[serde(rename = "awaitPromise")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")]
     pub await_promise: Option<bool>,
     /// Specifies execution context which global object will be used to call function on. Either
     /// executionContextId or objectId should be specified.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
     /// Symbolic group name that can be used to release multiple objects. If objectGroup is not
     /// specified and objectId is, objectGroup will be inherited from object.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
     /// Whether to throw an exception if side effect cannot be ruled out during evaluation.
-    #[serde(rename = "throwOnSideEffect")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")]
     pub throw_on_side_effect: Option<bool>,
     /// An alternative way to specify the execution context to call function on.
     /// Compared to contextId that may be reused across processes, this is guaranteed to be
@@ -36841,13 +35905,11 @@ pub struct RuntimeCallFunctionOnParams {
     /// in context different than intended (e.g. as a result of navigation across process
     /// boundaries).
     /// This is mutually exclusive with `executionContextId`.
-    #[serde(rename = "uniqueContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "uniqueContextId", skip_serializing_if = "Option::is_none")]
     pub unique_context_id: Option<String>,
     /// Specifies the result serialization. If provided, overrides
     /// `generatePreview` and `returnByValue`.
-    #[serde(rename = "serializationOptions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serializationOptions", skip_serializing_if = "Option::is_none")]
     pub serialization_options: Option<RuntimeSerializationOptions>,
 }
 
@@ -36878,8 +35940,7 @@ pub struct RuntimeCallFunctionOnResult {
     /// Call result.
     pub result: RuntimeRemoteObject,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -36906,8 +35967,7 @@ pub struct RuntimeCompileScriptParams {
     pub persist_script: bool,
     /// Specifies in which execution context to perform script run. If the parameter is omitted the
     /// evaluation will be performed in the context of the inspected page.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
 }
 
@@ -36927,12 +35987,10 @@ impl RuntimeCompileScriptParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeCompileScriptResult {
     /// Id of the script.
-    #[serde(rename = "scriptId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptId", skip_serializing_if = "Option::is_none")]
     pub script_id: Option<RuntimeScriptId>,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -37002,13 +36060,12 @@ pub struct RuntimeConsoleApicalledParams {
     /// Stack trace captured when the call was made. The async stack chain is automatically reported for
     /// the following call types: `assert`, `error`, `trace`, `warning`. For other types the async call
     /// chain can be retrieved using `Debugger.getStackTrace` and `stackTrace.parentId` field.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
     /// Console context descriptor for calls on non-default console context (not console.*):
     /// 'anonymous#unique-logger-id' for call on unnamed context, 'name#unique-logger-id' for call
     /// on named context.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
 }
 
@@ -37098,66 +36155,55 @@ pub struct RuntimeEvaluateParams {
     /// Expression to evaluate.
     pub expression: String,
     /// Symbolic group name that can be used to release multiple objects.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
     /// Determines whether Command Line API should be available during the evaluation.
-    #[serde(rename = "includeCommandLineAPI")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")]
     pub include_command_line_api: Option<bool>,
     /// In silent mode exceptions thrown during evaluation are not reported and do not pause
     /// execution. Overrides `setPauseOnException` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silent: Option<bool>,
     /// Specifies in which execution context to perform evaluation. If the parameter is omitted the
     /// evaluation will be performed in the context of the inspected page.
     /// This is mutually exclusive with `uniqueContextId`, which offers an
     /// alternative way to identify the execution context that is more reliable
     /// in a multi-process environment.
-    #[serde(rename = "contextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contextId", skip_serializing_if = "Option::is_none")]
     pub context_id: Option<RuntimeExecutionContextId>,
     /// Whether the result is expected to be a JSON object that should be sent by value.
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     pub return_by_value: Option<bool>,
     /// Whether preview should be generated for the result.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
     /// Whether execution should be treated as initiated by user in the UI.
-    #[serde(rename = "userGesture")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userGesture", skip_serializing_if = "Option::is_none")]
     pub user_gesture: Option<bool>,
     /// Whether execution should `await` for resulting value and return once awaited promise is
     /// resolved.
-    #[serde(rename = "awaitPromise")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")]
     pub await_promise: Option<bool>,
     /// Whether to throw an exception if side effect cannot be ruled out during evaluation.
     /// This implies `disableBreaks` below.
-    #[serde(rename = "throwOnSideEffect")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")]
     pub throw_on_side_effect: Option<bool>,
     /// Terminate execution after timing out (number of milliseconds).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<RuntimeTimeDelta>,
     /// Disable breakpoints during execution.
-    #[serde(rename = "disableBreaks")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "disableBreaks", skip_serializing_if = "Option::is_none")]
     pub disable_breaks: Option<bool>,
     /// Setting this flag to true enables `let` re-declaration and top-level `await`.
     /// Note that `let` variables can only be re-declared if they originate from
     /// `replMode` themselves.
-    #[serde(rename = "replMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "replMode", skip_serializing_if = "Option::is_none")]
     pub repl_mode: Option<bool>,
     /// The Content Security Policy (CSP) for the target might block 'unsafe-eval'
     /// which includes eval(), Function(), setTimeout() and setInterval()
     /// when called with non-callable arguments. This flag bypasses CSP for this
     /// evaluation and allows unsafe-eval. Defaults to true.
-    #[serde(rename = "allowUnsafeEvalBlockedByCSP")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "allowUnsafeEvalBlockedByCSP", skip_serializing_if = "Option::is_none")]
     pub allow_unsafe_eval_blocked_by_csp: Option<bool>,
     /// An alternative way to specify the execution context to evaluate in.
     /// Compared to contextId that may be reused across processes, this is guaranteed to be
@@ -37165,13 +36211,11 @@ pub struct RuntimeEvaluateParams {
     /// in context different than intended (e.g. as a result of navigation across process
     /// boundaries).
     /// This is mutually exclusive with `contextId`.
-    #[serde(rename = "uniqueContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "uniqueContextId", skip_serializing_if = "Option::is_none")]
     pub unique_context_id: Option<String>,
     /// Specifies the result serialization. If provided, overrides
     /// `generatePreview` and `returnByValue`.
-    #[serde(rename = "serializationOptions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serializationOptions", skip_serializing_if = "Option::is_none")]
     pub serialization_options: Option<RuntimeSerializationOptions>,
 }
 
@@ -37205,8 +36249,7 @@ pub struct RuntimeEvaluateResult {
     /// Evaluation result.
     pub result: RuntimeRemoteObject,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -37327,8 +36370,7 @@ impl RuntimeGetExceptionDetailsParams {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeGetExceptionDetailsResult {
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -37416,21 +36458,17 @@ pub struct RuntimeGetPropertiesParams {
     pub object_id: RuntimeRemoteObjectId,
     /// If true, returns properties belonging only to the element itself, not to its prototype
     /// chain.
-    #[serde(rename = "ownProperties")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ownProperties", skip_serializing_if = "Option::is_none")]
     pub own_properties: Option<bool>,
     /// If true, returns accessor properties (with getter/setter) only; internal properties are not
     /// returned either.
-    #[serde(rename = "accessorPropertiesOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "accessorPropertiesOnly", skip_serializing_if = "Option::is_none")]
     pub accessor_properties_only: Option<bool>,
     /// Whether preview should be generated for the results.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
     /// If true, returns non-indexed properties only.
-    #[serde(rename = "nonIndexedPropertiesOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "nonIndexedPropertiesOnly", skip_serializing_if = "Option::is_none")]
     pub non_indexed_properties_only: Option<bool>,
 }
 
@@ -37453,16 +36491,13 @@ pub struct RuntimeGetPropertiesResult {
     /// Object properties.
     pub result: Vec<RuntimePropertyDescriptor>,
     /// Internal object properties (only of the element itself).
-    #[serde(rename = "internalProperties")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "internalProperties", skip_serializing_if = "Option::is_none")]
     pub internal_properties: Option<Vec<RuntimeInternalPropertyDescriptor>>,
     /// Object private properties.
-    #[serde(rename = "privateProperties")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "privateProperties", skip_serializing_if = "Option::is_none")]
     pub private_properties: Option<Vec<RuntimePrivatePropertyDescriptor>>,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -37482,8 +36517,7 @@ impl RuntimeGetPropertiesResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuntimeGlobalLexicalScopeNamesParams {
     /// Specifies in which execution context to lookup global scope variables.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
 }
 
@@ -37517,8 +36551,7 @@ pub struct RuntimeInspectRequestedParams {
     pub object: RuntimeRemoteObject,
     pub hints: std::collections::HashMap<String, serde_json::Value>,
     /// Identifier of the context where the call was made.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
 }
 
@@ -37540,8 +36573,7 @@ pub struct RuntimeQueryObjectsParams {
     #[serde(rename = "prototypeObjectId")]
     pub prototype_object_id: RuntimeRemoteObjectId,
     /// Symbolic group name that can be used to release the results.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
 }
 
@@ -37683,33 +36715,27 @@ pub struct RuntimeRunScriptParams {
     pub script_id: RuntimeScriptId,
     /// Specifies in which execution context to perform script run. If the parameter is omitted the
     /// evaluation will be performed in the context of the inspected page.
-    #[serde(rename = "executionContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")]
     pub execution_context_id: Option<RuntimeExecutionContextId>,
     /// Symbolic group name that can be used to release multiple objects.
-    #[serde(rename = "objectGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")]
     pub object_group: Option<String>,
     /// In silent mode exceptions thrown during evaluation are not reported and do not pause
     /// execution. Overrides `setPauseOnException` state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub silent: Option<bool>,
     /// Determines whether Command Line API should be available during the evaluation.
-    #[serde(rename = "includeCommandLineAPI")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")]
     pub include_command_line_api: Option<bool>,
     /// Whether the result is expected to be a JSON object which should be sent by value.
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     pub return_by_value: Option<bool>,
     /// Whether preview should be generated for the result.
-    #[serde(rename = "generatePreview")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")]
     pub generate_preview: Option<bool>,
     /// Whether execution should `await` for resulting value and return once awaited promise is
     /// resolved.
-    #[serde(rename = "awaitPromise")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")]
     pub await_promise: Option<bool>,
 }
 
@@ -37735,8 +36761,7 @@ pub struct RuntimeRunScriptResult {
     /// Run result.
     pub result: RuntimeRemoteObject,
     /// Exception details.
-    #[serde(rename = "exceptionDetails")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "exceptionDetails", skip_serializing_if = "Option::is_none")]
     pub exception_details: Option<RuntimeExceptionDetails>,
 }
 
@@ -37923,13 +36948,12 @@ pub struct SecurityCertificateSecurityState {
     #[serde(rename = "keyExchange")]
     pub key_exchange: String,
     /// (EC)DH group used by the connection, if applicable.
-    #[serde(rename = "keyExchangeGroup")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keyExchangeGroup", skip_serializing_if = "Option::is_none")]
     pub key_exchange_group: Option<String>,
     /// Cipher name.
     pub cipher: String,
     /// TLS MAC. Note that AEAD ciphers do not have separate MACs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
     /// Page certificate.
     pub certificate: Vec<String>,
@@ -37945,8 +36969,7 @@ pub struct SecurityCertificateSecurityState {
     #[serde(rename = "validTo")]
     pub valid_to: NetworkTimeSinceEpoch,
     /// The highest priority network error code, if the certificate has an error.
-    #[serde(rename = "certificateNetworkError")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "certificateNetworkError", skip_serializing_if = "Option::is_none")]
     pub certificate_network_error: Option<String>,
     /// True if the certificate uses a weak signature algorithm.
     #[serde(rename = "certificateHasWeakSignature")]
@@ -38059,8 +37082,7 @@ pub struct SecuritySafetyTipInfo {
     #[serde(rename = "safetyTipStatus")]
     pub safety_tip_status: SecuritySafetyTipStatus,
     /// The URL the safety tip suggested ("Did you mean?"). Only filled in for lookalike matches.
-    #[serde(rename = "safeUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "safeUrl", skip_serializing_if = "Option::is_none")]
     pub safe_url: Option<String>,
 }
 
@@ -38119,7 +37141,7 @@ pub struct SecuritySecurityStateExplanation {
     /// Page certificate.
     pub certificate: Vec<String>,
     /// Recommendations to fix any issues.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub recommendations: Option<Vec<String>>,
 }
 
@@ -38146,12 +37168,10 @@ pub struct SecurityVisibleSecurityState {
     #[serde(rename = "securityState")]
     pub security_state: SecuritySecurityState,
     /// Security state details about the page certificate.
-    #[serde(rename = "certificateSecurityState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "certificateSecurityState", skip_serializing_if = "Option::is_none")]
     pub certificate_security_state: Option<SecurityCertificateSecurityState>,
     /// The type of Safety Tip triggered on the page. Note that this field will be set even if the Safety Tip UI was not actually shown.
-    #[serde(rename = "safetyTipInfo")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "safetyTipInfo", skip_serializing_if = "Option::is_none")]
     pub safety_tip_info: Option<SecuritySafetyTipInfo>,
     /// Array of security state issues ids.
     #[serde(rename = "securityStateIssueIds")]
@@ -38286,7 +37306,7 @@ pub struct SecuritySecurityStateChangedParams {
     #[serde(rename = "insecureContentStatus")]
     pub insecure_content_status: SecurityInsecureContentStatus,
     /// Overrides user-visible description of the state. Always omitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
 }
 
@@ -38446,22 +37466,17 @@ pub struct ServiceWorkerServiceWorkerVersion {
     pub running_status: ServiceWorkerServiceWorkerVersionRunningStatus,
     pub status: ServiceWorkerServiceWorkerVersionStatus,
     /// The Last-Modified header value of the main script.
-    #[serde(rename = "scriptLastModified")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptLastModified", skip_serializing_if = "Option::is_none")]
     pub script_last_modified: Option<f64>,
     /// The time at which the response headers of the main script were received from the server.
     /// For cached script it is the last time the cache entry was validated.
-    #[serde(rename = "scriptResponseTime")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptResponseTime", skip_serializing_if = "Option::is_none")]
     pub script_response_time: Option<f64>,
-    #[serde(rename = "controlledClients")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "controlledClients", skip_serializing_if = "Option::is_none")]
     pub controlled_clients: Option<Vec<TargetTargetId>>,
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
-    #[serde(rename = "routerRules")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "routerRules", skip_serializing_if = "Option::is_none")]
     pub router_rules: Option<String>,
 }
 
@@ -38928,11 +37943,11 @@ pub enum SmartCardEmulationProtocol {
 /// Maps to the |SCARD_PROTOCOL_*| flags.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SmartCardEmulationProtocolSet {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub t0: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub t1: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<bool>,
 }
 
@@ -38951,27 +37966,27 @@ impl SmartCardEmulationProtocolSet {
 /// Maps to the |SCARD_STATE_*| flags.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SmartCardEmulationReaderStateFlags {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unaware: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub changed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub empty: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub present: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclusive: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub inuse: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mute: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unpowered: Option<bool>,
 }
 
@@ -39342,7 +38357,7 @@ pub struct SmartCardEmulationGetStatusChangeRequestedParams {
     #[serde(rename = "readerStates")]
     pub reader_states: Vec<SmartCardEmulationReaderStateIn>,
     /// in milliseconds, if absent, it means "infinite"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i64>,
 }
 
@@ -39431,8 +38446,7 @@ pub struct SmartCardEmulationReportConnectResultParams {
     #[serde(rename = "requestId")]
     pub request_id: String,
     pub handle: i64,
-    #[serde(rename = "activeProtocol")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "activeProtocol", skip_serializing_if = "Option::is_none")]
     pub active_protocol: Option<SmartCardEmulationProtocol>,
 }
 
@@ -39669,7 +38683,7 @@ pub struct SmartCardEmulationReportStatusResultParams {
     pub reader_name: String,
     pub state: SmartCardEmulationConnectionState,
     pub atr: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<SmartCardEmulationProtocol>,
 }
 
@@ -39745,7 +38759,7 @@ pub struct SmartCardEmulationTransmitRequestedParams {
     pub request_id: String,
     pub handle: i64,
     pub data: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<SmartCardEmulationProtocol>,
 }
 
@@ -39833,98 +38847,83 @@ pub struct StorageSharedStorageAccessParams {
     /// Spec of the module script URL.
     /// Present only for SharedStorageAccessMethods: addModule and
     /// createWorklet.
-    #[serde(rename = "scriptSourceUrl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "scriptSourceUrl", skip_serializing_if = "Option::is_none")]
     pub script_source_url: Option<String>,
     /// String denoting "context-origin", "script-origin", or a custom
     /// origin to be used as the worklet's data origin.
     /// Present only for SharedStorageAccessMethod: createWorklet.
-    #[serde(rename = "dataOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dataOrigin", skip_serializing_if = "Option::is_none")]
     pub data_origin: Option<String>,
     /// Name of the registered operation to be run.
     /// Present only for SharedStorageAccessMethods: run and selectURL.
-    #[serde(rename = "operationName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
     pub operation_name: Option<String>,
     /// ID of the operation call.
     /// Present only for SharedStorageAccessMethods: run and selectURL.
-    #[serde(rename = "operationId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "operationId", skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     /// Whether or not to keep the worket alive for future run or selectURL
     /// calls.
     /// Present only for SharedStorageAccessMethods: run and selectURL.
-    #[serde(rename = "keepAlive")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keepAlive", skip_serializing_if = "Option::is_none")]
     pub keep_alive: Option<bool>,
     /// Configures the private aggregation options.
     /// Present only for SharedStorageAccessMethods: run and selectURL.
-    #[serde(rename = "privateAggregationConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "privateAggregationConfig", skip_serializing_if = "Option::is_none")]
     pub private_aggregation_config: Option<StorageSharedStoragePrivateAggregationConfig>,
     /// The operation's serialized data in bytes (converted to a string).
     /// Present only for SharedStorageAccessMethods: run and selectURL.
     /// TODO(crbug.com/401011862): Consider updating this parameter to binary.
-    #[serde(rename = "serializedData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "serializedData", skip_serializing_if = "Option::is_none")]
     pub serialized_data: Option<String>,
     /// Array of candidate URLs' specs, along with any associated metadata.
     /// Present only for SharedStorageAccessMethod: selectURL.
-    #[serde(rename = "urlsWithMetadata")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urlsWithMetadata", skip_serializing_if = "Option::is_none")]
     pub urls_with_metadata: Option<Vec<StorageSharedStorageUrlWithMetadata>>,
     /// Spec of the URN:UUID generated for a selectURL call.
     /// Present only for SharedStorageAccessMethod: selectURL.
-    #[serde(rename = "urnUuid")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "urnUuid", skip_serializing_if = "Option::is_none")]
     pub urn_uuid: Option<String>,
     /// Key for a specific entry in an origin's shared storage.
     /// Present only for SharedStorageAccessMethods: set, append, delete, and
     /// get.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Value for a specific entry in an origin's shared storage.
     /// Present only for SharedStorageAccessMethods: set and append.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     /// Whether or not to set an entry for a key if that key is already present.
     /// Present only for SharedStorageAccessMethod: set.
-    #[serde(rename = "ignoreIfPresent")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ignoreIfPresent", skip_serializing_if = "Option::is_none")]
     pub ignore_if_present: Option<bool>,
     /// A number denoting the (0-based) order of the worklet's
     /// creation relative to all other shared storage worklets created by
     /// documents using the current storage partition.
     /// Present only for SharedStorageAccessMethods: addModule, createWorklet.
-    #[serde(rename = "workletOrdinal")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workletOrdinal", skip_serializing_if = "Option::is_none")]
     pub worklet_ordinal: Option<i64>,
     /// Hex representation of the DevTools token used as the TargetID for the
     /// associated shared storage worklet.
     /// Present only for SharedStorageAccessMethods: addModule, createWorklet,
     /// run, selectURL, and any other SharedStorageAccessMethod when the
     /// SharedStorageAccessScope is sharedStorageWorklet.
-    #[serde(rename = "workletTargetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "workletTargetId", skip_serializing_if = "Option::is_none")]
     pub worklet_target_id: Option<TargetTargetId>,
     /// Name of the lock to be acquired, if present.
     /// Optionally present only for SharedStorageAccessMethods: batchUpdate,
     /// set, append, delete, and clear.
-    #[serde(rename = "withLock")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "withLock", skip_serializing_if = "Option::is_none")]
     pub with_lock: Option<String>,
     /// If the method has been called as part of a batchUpdate, then this
     /// number identifies the batch to which it belongs.
     /// Optionally present only for SharedStorageAccessMethods:
     /// batchUpdate (required), set, append, delete, and clear.
-    #[serde(rename = "batchUpdateId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "batchUpdateId", skip_serializing_if = "Option::is_none")]
     pub batch_update_id: Option<String>,
     /// Number of modifier methods sent in batch.
     /// Present only for SharedStorageAccessMethod: batchUpdate.
-    #[serde(rename = "batchSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "batchSize", skip_serializing_if = "Option::is_none")]
     pub batch_size: Option<i64>,
 }
 
@@ -40018,19 +39017,16 @@ impl StorageSharedStorageMetadata {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageSharedStoragePrivateAggregationConfig {
     /// The chosen aggregation service deployment.
-    #[serde(rename = "aggregationCoordinatorOrigin")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "aggregationCoordinatorOrigin", skip_serializing_if = "Option::is_none")]
     pub aggregation_coordinator_origin: Option<String>,
     /// The context ID provided.
-    #[serde(rename = "contextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "contextId", skip_serializing_if = "Option::is_none")]
     pub context_id: Option<String>,
     /// Configures the maximum size allowed for filtering IDs.
     #[serde(rename = "filteringIdMaxBytes")]
     pub filtering_id_max_bytes: i64,
     /// The limit on the number of contributions in the final report.
-    #[serde(rename = "maxContributions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "maxContributions", skip_serializing_if = "Option::is_none")]
     pub max_contributions: Option<i64>,
 }
 
@@ -40094,7 +39090,7 @@ pub struct StorageStorageBucket {
     #[serde(rename = "storageKey")]
     pub storage_key: StorageSerializedStorageKey,
     /// If not specified, it is the default bucket of the storageKey.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -40270,8 +39266,7 @@ impl StorageCacheStorageListUpdatedParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageClearCookiesParams {
     /// Browser context to use when called on the browser endpoint.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -40477,8 +39472,7 @@ impl StorageDeleteStorageBucketResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageGetCookiesParams {
     /// Browser context to use when called on the browser endpoint.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -40630,8 +39624,7 @@ impl StorageGetStorageKeyForFrameResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageGetStorageKeyParams {
-    #[serde(rename = "frameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")]
     pub frame_id: Option<PageFrameId>,
 }
 
@@ -40797,8 +39790,7 @@ pub struct StorageOverrideQuotaForOriginParams {
     /// the specified origin. If this is called multiple times with different
     /// origins, the override will be maintained for each origin until it is
     /// disabled (called without a quotaSize).
-    #[serde(rename = "quotaSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "quotaSize", skip_serializing_if = "Option::is_none")]
     pub quota_size: Option<f64>,
 }
 
@@ -40883,8 +39875,7 @@ pub struct StorageSetCookiesParams {
     /// Cookies to be set.
     pub cookies: Vec<NetworkCookieParam>,
     /// Browser context to use when called on the browser endpoint.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -40918,8 +39909,7 @@ pub struct StorageSetSharedStorageEntryParams {
     pub value: String,
     /// If `ignoreIfPresent` is included and true, then only sets the entry if
     /// `key` doesn't already exist.
-    #[serde(rename = "ignoreIfPresent")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ignoreIfPresent", skip_serializing_if = "Option::is_none")]
     pub ignore_if_present: Option<bool>,
 }
 
@@ -41345,11 +40335,10 @@ pub struct SystemInfoGpudevice {
     #[serde(rename = "deviceId")]
     pub device_id: f64,
     /// Sub sys ID of the GPU, only available on Windows.
-    #[serde(rename = "subSysId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "subSysId", skip_serializing_if = "Option::is_none")]
     pub sub_sys_id: Option<f64>,
     /// Revision of the GPU, only available on Windows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<f64>,
     /// String description of the GPU vendor, if the PCI ID is not available.
     #[serde(rename = "vendorString")]
@@ -41388,12 +40377,10 @@ pub struct SystemInfoGpuinfo {
     /// The graphics devices on the system. Element 0 is the primary GPU.
     pub devices: Vec<SystemInfoGpudevice>,
     /// An optional dictionary of additional GPU related attributes.
-    #[serde(rename = "auxAttributes")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "auxAttributes", skip_serializing_if = "Option::is_none")]
     pub aux_attributes: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// An optional dictionary of graphics features and their status.
-    #[serde(rename = "featureStatus")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "featureStatus", skip_serializing_if = "Option::is_none")]
     pub feature_status: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// An optional array of GPU driver bug workarounds.
     #[serde(rename = "driverBugWorkarounds")]
@@ -41629,10 +40616,10 @@ impl SystemInfoGetProcessInfoResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TargetFilterEntry {
     /// If set, causes exclusion of matching targets from the list.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude: Option<bool>,
     /// If not present, matches any type.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<String>,
 }
 
@@ -41691,36 +40678,30 @@ pub struct TargetTargetInfo {
     /// Whether the target has an attached client.
     pub attached: bool,
     /// Id of the parent target, if any. For example, "iframe" target may have a "page" parent.
-    #[serde(rename = "parentId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<TargetTargetId>,
     /// Opener target Id
-    #[serde(rename = "openerId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "openerId", skip_serializing_if = "Option::is_none")]
     pub opener_id: Option<TargetTargetId>,
     /// Whether the target has access to the originating window.
     #[serde(rename = "canAccessOpener")]
     pub can_access_opener: bool,
     /// Frame id of originating window (is only set if target has an opener).
-    #[serde(rename = "openerFrameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "openerFrameId", skip_serializing_if = "Option::is_none")]
     pub opener_frame_id: Option<PageFrameId>,
     /// Id of the parent frame, present for "iframe" and "worker" targets. For nested workers,
     /// this is the "ancestor" frame that created the first worker in the nested chain.
-    #[serde(rename = "parentFrameId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentFrameId", skip_serializing_if = "Option::is_none")]
     pub parent_frame_id: Option<PageFrameId>,
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
     /// Provides additional details for specific target types. For example, for
     /// the type of "page", this may be set to "prerender".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtype: Option<String>,
     /// Embedder-specific target metadata. This is only set for targets of
     /// type "tab".
-    #[serde(rename = "embedderData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "embedderData", skip_serializing_if = "Option::is_none")]
     pub embedder_data: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
@@ -41821,10 +40802,9 @@ pub struct TargetAttachToTargetParams {
     /// Enables "flat" access to the session via specifying sessionId attribute in the commands.
     /// We plan to make this the default, deprecate non-flattened mode,
     /// and eventually retire it. See crbug.com/991325.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flatten: Option<bool>,
-    #[serde(rename = "__dbgjsAutoAttach")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "__dbgjsAutoAttach", skip_serializing_if = "Option::is_none")]
     pub dbgjs_auto_attach: Option<bool>,
 }
 
@@ -41889,7 +40869,7 @@ pub struct TargetAutoAttachRelatedParams {
     #[serde(rename = "waitForDebuggerOnStart")]
     pub wait_for_debugger_on_start: bool,
     /// Only targets matching filter will be attached.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<TargetTargetFilter>,
 }
 
@@ -41951,21 +40931,17 @@ impl TargetCloseTargetResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TargetCreateBrowserContextParams {
     /// If specified, disposes this context when debugging session disconnects.
-    #[serde(rename = "disposeOnDetach")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "disposeOnDetach", skip_serializing_if = "Option::is_none")]
     pub dispose_on_detach: Option<bool>,
     /// Proxy server, similar to the one passed to --proxy-server
-    #[serde(rename = "proxyServer")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "proxyServer", skip_serializing_if = "Option::is_none")]
     pub proxy_server: Option<String>,
     /// Proxy bypass list, similar to the one passed to --proxy-bypass-list
-    #[serde(rename = "proxyBypassList")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "proxyBypassList", skip_serializing_if = "Option::is_none")]
     pub proxy_bypass_list: Option<String>,
     /// An optional list of origins to grant unlimited cross-origin access to.
     /// Parts of the URL other than those constituting origin are ignored.
-    #[serde(rename = "originsWithUniversalNetworkAccess")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "originsWithUniversalNetworkAccess", skip_serializing_if = "Option::is_none")]
     pub origins_with_universal_network_access: Option<Vec<String>>,
 }
 
@@ -42004,54 +40980,49 @@ pub struct TargetCreateTargetParams {
     /// The initial URL the page will be navigated to. An empty string indicates about:blank.
     pub url: String,
     /// Frame left origin in DIP (requires newWindow to be true or headless shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub left: Option<i64>,
     /// Frame top origin in DIP (requires newWindow to be true or headless shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top: Option<i64>,
     /// Frame width in DIP (requires newWindow to be true or headless shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<i64>,
     /// Frame height in DIP (requires newWindow to be true or headless shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<i64>,
     /// Frame window state (requires newWindow to be true or headless shell).
     /// Default is normal.
-    #[serde(rename = "windowState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "windowState", skip_serializing_if = "Option::is_none")]
     pub window_state: Option<TargetWindowState>,
     /// The browser context to create the page in.
-    #[serde(rename = "browserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")]
     pub browser_context_id: Option<BrowserBrowserContextId>,
     /// Whether BeginFrames for this target will be controlled via DevTools (headless shell only,
     /// not supported on MacOS yet, false by default).
-    #[serde(rename = "enableBeginFrameControl")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableBeginFrameControl", skip_serializing_if = "Option::is_none")]
     pub enable_begin_frame_control: Option<bool>,
     /// Whether to create a new Window or Tab (false by default, not supported by headless shell).
-    #[serde(rename = "newWindow")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "newWindow", skip_serializing_if = "Option::is_none")]
     pub new_window: Option<bool>,
     /// Whether to create the target in background or foreground (false by default, not supported
     /// by headless shell).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<bool>,
     /// Whether to create the target of type "tab".
-    #[serde(rename = "forTab")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "forTab", skip_serializing_if = "Option::is_none")]
     pub for_tab: Option<bool>,
     /// Whether to create a hidden target. The hidden target is observable via protocol, but not
     /// present in the tab UI strip. Cannot be created with `forTab: true`, `newWindow: true` or
     /// `background: false`. The life-time of the tab is limited to the life-time of the session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
     /// If specified, determines whether the new target should be focused.
     /// By default, the focus behavior depends on the `background` parameter:
     /// - If `background` is false (default) and `focus` is omitted, the new target is focused and the browser window is brought to the foreground.
     /// - If `background` is false and `focus` is false, the target is opened but the browser window's focus remains unchanged (e.g., if the window was in the background, it stays there).
     /// - If `background` is true, setting `focus` to true is not supported and will result in an error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub focus: Option<bool>,
 }
 
@@ -42097,12 +41068,10 @@ impl TargetCreateTargetResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TargetDetachFromTargetParams {
     /// Session to detach.
-    #[serde(rename = "sessionId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
     pub session_id: Option<TargetSessionId>,
     /// Deprecated.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42134,8 +41103,7 @@ pub struct TargetDetachedFromTargetParams {
     #[serde(rename = "sessionId")]
     pub session_id: TargetSessionId,
     /// Deprecated.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42182,12 +41150,10 @@ pub struct TargetExposeDevToolsProtocolParams {
     #[serde(rename = "targetId")]
     pub target_id: TargetTargetId,
     /// Binding name, 'cdp' if not specified.
-    #[serde(rename = "bindingName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bindingName", skip_serializing_if = "Option::is_none")]
     pub binding_name: Option<String>,
     /// If true, inherits the current root session's permissions (default: false).
-    #[serde(rename = "inheritPermissions")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inheritPermissions", skip_serializing_if = "Option::is_none")]
     pub inherit_permissions: Option<bool>,
 }
 
@@ -42231,8 +41197,7 @@ pub struct TargetGetBrowserContextsResult {
     #[serde(rename = "browserContextIds")]
     pub browser_context_ids: Vec<BrowserBrowserContextId>,
     /// The id of the default browser context if available.
-    #[serde(rename = "defaultBrowserContextId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "defaultBrowserContextId", skip_serializing_if = "Option::is_none")]
     pub default_browser_context_id: Option<BrowserBrowserContextId>,
 }
 
@@ -42267,8 +41232,7 @@ impl TargetGetDevToolsTargetParams {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TargetGetDevToolsTargetResult {
     /// The targetId of DevTools page target if exists.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42284,8 +41248,7 @@ impl TargetGetDevToolsTargetResult {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TargetGetTargetInfoParams {
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42320,7 +41283,7 @@ pub struct TargetGetTargetsParams {
     /// Only targets matching filter will be reported. If filter is not specified
     /// and target discovery is currently enabled, a filter used for target discovery
     /// is used for consistency.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<TargetTargetFilter>,
 }
 
@@ -42359,8 +41322,7 @@ pub struct TargetOpenDevToolsParams {
     /// The id of the panel we want DevTools to open initially. Currently
     /// supported panels are elements, console, network, sources, resources,
     /// timeline, chrome-recorder, heap-profiler, lighthouse, and security.
-    #[serde(rename = "panelId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "panelId", skip_serializing_if = "Option::is_none")]
     pub panel_id: Option<String>,
 }
 
@@ -42399,8 +41361,7 @@ pub struct TargetReceivedMessageFromTargetParams {
     pub session_id: TargetSessionId,
     pub message: String,
     /// Deprecated.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42420,12 +41381,10 @@ impl TargetReceivedMessageFromTargetParams {
 pub struct TargetSendMessageToTargetParams {
     pub message: String,
     /// Identifier of the session.
-    #[serde(rename = "sessionId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
     pub session_id: Option<TargetSessionId>,
     /// Deprecated.
-    #[serde(rename = "targetId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")]
     pub target_id: Option<TargetTargetId>,
 }
 
@@ -42464,10 +41423,10 @@ pub struct TargetSetAutoAttachParams {
     /// Enables "flat" access to the session via specifying sessionId attribute in the commands.
     /// We plan to make this the default, deprecate non-flattened mode,
     /// and eventually retire it. See crbug.com/991325.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub flatten: Option<bool>,
     /// Only targets matching filter will be attached.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<TargetTargetFilter>,
 }
 
@@ -42501,7 +41460,7 @@ pub struct TargetSetDiscoverTargetsParams {
     pub discover: bool,
     /// Only targets matching filter will be attached. If `discover` is false,
     /// `filter` must be omitted or empty.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<TargetTargetFilter>,
 }
 
@@ -42766,41 +41725,32 @@ pub enum TracingTraceConfigRecordMode {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TracingTraceConfig {
     /// Controls how the trace buffer stores data. The default is `recordUntilFull`.
-    #[serde(rename = "recordMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "recordMode", skip_serializing_if = "Option::is_none")]
     pub record_mode: Option<TracingTraceConfigRecordMode>,
     /// Size of the trace buffer in kilobytes. If not specified or zero is passed, a default value
     /// of 200 MB would be used.
-    #[serde(rename = "traceBufferSizeInKb")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "traceBufferSizeInKb", skip_serializing_if = "Option::is_none")]
     pub trace_buffer_size_in_kb: Option<f64>,
     /// Turns on JavaScript stack sampling.
-    #[serde(rename = "enableSampling")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableSampling", skip_serializing_if = "Option::is_none")]
     pub enable_sampling: Option<bool>,
     /// Turns on system tracing.
-    #[serde(rename = "enableSystrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableSystrace", skip_serializing_if = "Option::is_none")]
     pub enable_systrace: Option<bool>,
     /// Turns on argument filter.
-    #[serde(rename = "enableArgumentFilter")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableArgumentFilter", skip_serializing_if = "Option::is_none")]
     pub enable_argument_filter: Option<bool>,
     /// Included category filters.
-    #[serde(rename = "includedCategories")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "includedCategories", skip_serializing_if = "Option::is_none")]
     pub included_categories: Option<Vec<String>>,
     /// Excluded category filters.
-    #[serde(rename = "excludedCategories")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "excludedCategories", skip_serializing_if = "Option::is_none")]
     pub excluded_categories: Option<Vec<String>>,
     /// Configuration to synthesize the delays in tracing.
-    #[serde(rename = "syntheticDelays")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "syntheticDelays", skip_serializing_if = "Option::is_none")]
     pub synthetic_delays: Option<Vec<String>>,
     /// Configuration for memory dump triggers. Used only when "memory-infra" category is enabled.
-    #[serde(rename = "memoryDumpConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "memoryDumpConfig", skip_serializing_if = "Option::is_none")]
     pub memory_dump_config: Option<TracingMemoryDumpConfig>,
 }
 
@@ -42841,16 +41791,14 @@ pub enum TracingTracingBackend {
 pub struct TracingBufferUsageParams {
     /// A number in range [0..1] that indicates the used size of event buffer as a fraction of its
     /// total size.
-    #[serde(rename = "percentFull")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "percentFull", skip_serializing_if = "Option::is_none")]
     pub percent_full: Option<f64>,
     /// An approximate number of events in the trace log.
-    #[serde(rename = "eventCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "eventCount", skip_serializing_if = "Option::is_none")]
     pub event_count: Option<f64>,
     /// A number in range [0..1] that indicates the used size of event buffer as a fraction of its
     /// total size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
 }
 
@@ -42988,11 +41936,10 @@ impl TracingRecordClockSyncMarkerResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TracingRequestMemoryDumpParams {
     /// Enables more deterministic results by forcing garbage collection
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deterministic: Option<bool>,
     /// Specifies level of details in memory dump. Defaults to "detailed".
-    #[serde(rename = "levelOfDetail")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "levelOfDetail", skip_serializing_if = "Option::is_none")]
     pub level_of_detail: Option<TracingMemoryDumpLevelOfDetail>,
 }
 
@@ -43038,57 +41985,48 @@ pub enum TracingStartParamsTransferMode {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TracingStartParams {
     /// Category/tag filter
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub categories: Option<String>,
     /// Tracing options
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<String>,
     /// If set, the agent will issue bufferUsage events at this interval, specified in milliseconds
-    #[serde(rename = "bufferUsageReportingInterval")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "bufferUsageReportingInterval", skip_serializing_if = "Option::is_none")]
     pub buffer_usage_reporting_interval: Option<f64>,
     /// Whether to report trace events as series of dataCollected events or to save trace to a
     /// stream (defaults to `ReportEvents`).
-    #[serde(rename = "transferMode")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "transferMode", skip_serializing_if = "Option::is_none")]
     pub transfer_mode: Option<TracingStartParamsTransferMode>,
     /// Trace data format to use. This only applies when using `ReturnAsStream`
     /// transfer mode (defaults to `json`).
-    #[serde(rename = "streamFormat")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "streamFormat", skip_serializing_if = "Option::is_none")]
     pub stream_format: Option<TracingStreamFormat>,
     /// Compression format to use. This only applies when using `ReturnAsStream`
     /// transfer mode (defaults to `none`)
-    #[serde(rename = "streamCompression")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "streamCompression", skip_serializing_if = "Option::is_none")]
     pub stream_compression: Option<TracingStreamCompression>,
-    #[serde(rename = "traceConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "traceConfig", skip_serializing_if = "Option::is_none")]
     pub trace_config: Option<TracingTraceConfig>,
     /// Base64-encoded serialized perfetto.protos.TraceConfig protobuf message
     /// When specified, the parameters `categories`, `options`, `traceConfig`
     /// are ignored. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "perfettoConfig")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "perfettoConfig", skip_serializing_if = "Option::is_none")]
     pub perfetto_config: Option<String>,
     /// Backend type (defaults to `auto`)
-    #[serde(rename = "tracingBackend")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "tracingBackend", skip_serializing_if = "Option::is_none")]
     pub tracing_backend: Option<TracingTracingBackend>,
     /// Maximum width and height (in pixels) of each captured screenshot.
     /// Only used when the `disabled-by-default-devtools.screenshot` category is
     /// enabled. Defaults to 500. The combined memory footprint of screenshots
     /// (`screenshotMaxSize` * `screenshotMaxSize` * 4 * `screenshotMaxCount`)
     /// is clamped to the existing per-session budget.
-    #[serde(rename = "screenshotMaxSize")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenshotMaxSize", skip_serializing_if = "Option::is_none")]
     pub screenshot_max_size: Option<i64>,
     /// Maximum number of screenshots captured during a single tracing session.
     /// Only used when the `disabled-by-default-devtools.screenshot` category is
     /// enabled. Defaults to 450. Clamped together with `screenshotMaxSize` to
     /// stay within the per-session screenshot memory budget.
-    #[serde(rename = "screenshotMaxCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "screenshotMaxCount", skip_serializing_if = "Option::is_none")]
     pub screenshot_max_count: Option<i64>,
 }
 
@@ -43130,15 +42068,13 @@ pub struct TracingTracingCompleteParams {
     #[serde(rename = "dataLossOccurred")]
     pub data_loss_occurred: bool,
     /// A handle of the stream that holds resulting trace data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<IoStreamHandle>,
     /// Trace data format of returned stream.
-    #[serde(rename = "traceFormat")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "traceFormat", skip_serializing_if = "Option::is_none")]
     pub trace_format: Option<TracingStreamFormat>,
     /// Compression format of returned stream.
-    #[serde(rename = "streamCompression")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "streamCompression", skip_serializing_if = "Option::is_none")]
     pub stream_compression: Option<TracingStreamCompression>,
 }
 
@@ -43268,8 +42204,7 @@ pub struct WebAudioBaseAudioContext {
     pub context_type: WebAudioContextType,
     #[serde(rename = "contextState")]
     pub context_state: WebAudioContextState,
-    #[serde(rename = "realtimeData")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "realtimeData", skip_serializing_if = "Option::is_none")]
     pub realtime_data: Option<WebAudioContextRealtimeData>,
     /// Platform-dependent callback buffer size.
     #[serde(rename = "callbackBufferSize")]
@@ -43616,8 +42551,7 @@ pub struct WebAudioNodeParamConnectedParams {
     pub source_id: WebAudioGraphObjectId,
     #[serde(rename = "destinationId")]
     pub destination_id: WebAudioGraphObjectId,
-    #[serde(rename = "sourceOutputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")]
     pub source_output_index: Option<f64>,
 }
 
@@ -43642,8 +42576,7 @@ pub struct WebAudioNodeParamDisconnectedParams {
     pub source_id: WebAudioGraphObjectId,
     #[serde(rename = "destinationId")]
     pub destination_id: WebAudioGraphObjectId,
-    #[serde(rename = "sourceOutputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")]
     pub source_output_index: Option<f64>,
 }
 
@@ -43668,11 +42601,9 @@ pub struct WebAudioNodesConnectedParams {
     pub source_id: WebAudioGraphObjectId,
     #[serde(rename = "destinationId")]
     pub destination_id: WebAudioGraphObjectId,
-    #[serde(rename = "sourceOutputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")]
     pub source_output_index: Option<f64>,
-    #[serde(rename = "destinationInputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "destinationInputIndex", skip_serializing_if = "Option::is_none")]
     pub destination_input_index: Option<f64>,
 }
 
@@ -43698,11 +42629,9 @@ pub struct WebAudioNodesDisconnectedParams {
     pub source_id: WebAudioGraphObjectId,
     #[serde(rename = "destinationId")]
     pub destination_id: WebAudioGraphObjectId,
-    #[serde(rename = "sourceOutputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")]
     pub source_output_index: Option<f64>,
-    #[serde(rename = "destinationInputIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "destinationInputIndex", skip_serializing_if = "Option::is_none")]
     pub destination_input_index: Option<f64>,
 }
 
@@ -43760,16 +42689,14 @@ pub struct WebAuthnCredential {
     pub is_resident_credential: bool,
     /// Relying Party ID the credential is scoped to. Must be set when adding a
     /// credential.
-    #[serde(rename = "rpId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "rpId", skip_serializing_if = "Option::is_none")]
     pub rp_id: Option<String>,
     /// The ECDSA P-256 private key in PKCS#8 format. (Encoded as a base64 string when passed over JSON)
     #[serde(rename = "privateKey")]
     pub private_key: String,
     /// An opaque byte sequence with a maximum size of 64 bytes mapping the
     /// credential to a specific user. (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "userHandle")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userHandle", skip_serializing_if = "Option::is_none")]
     pub user_handle: Option<String>,
     /// Signature counter. Must be equal to or greater than -1.
     /// If -1, the credential won't have an associated signature counter, and
@@ -43779,43 +42706,35 @@ pub struct WebAuthnCredential {
     pub sign_count: i64,
     /// The large blob associated with the credential.
     /// See https://w3c.github.io/webauthn/#sctn-large-blob-extension (Encoded as a base64 string when passed over JSON)
-    #[serde(rename = "largeBlob")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "largeBlob", skip_serializing_if = "Option::is_none")]
     pub large_blob: Option<String>,
     /// Assertions returned by this credential will have the backup eligibility
     /// (BE) flag set to this value. Defaults to the authenticator's
     /// defaultBackupEligibility value.
-    #[serde(rename = "backupEligibility")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backupEligibility", skip_serializing_if = "Option::is_none")]
     pub backup_eligibility: Option<bool>,
     /// Assertions returned by this credential will have the backup state (BS)
     /// flag set to this value. Defaults to the authenticator's
     /// defaultBackupState value.
-    #[serde(rename = "backupState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backupState", skip_serializing_if = "Option::is_none")]
     pub backup_state: Option<bool>,
     /// The credential's user.name property. Equivalent to empty if not set.
     /// https://w3c.github.io/webauthn/#dom-publickeycredentialentity-name
-    #[serde(rename = "userName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userName", skip_serializing_if = "Option::is_none")]
     pub user_name: Option<String>,
     /// The credential's user.displayName property. Equivalent to empty if
     /// not set.
     /// https://w3c.github.io/webauthn/#dom-publickeycredentialuserentity-displayname
-    #[serde(rename = "userDisplayName")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "userDisplayName", skip_serializing_if = "Option::is_none")]
     pub user_display_name: Option<String>,
     /// The CMTG keys associated with the credential.
-    #[serde(rename = "cmtgKeys")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cmtgKeys", skip_serializing_if = "Option::is_none")]
     pub cmtg_keys: Option<Vec<String>>,
     /// The 0-based index of the active key in cmtgKeys.
-    #[serde(rename = "activeCmtgKeyIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "activeCmtgKeyIndex", skip_serializing_if = "Option::is_none")]
     pub active_cmtg_key_index: Option<i64>,
     /// If true, the authenticator will generate a new CMTG key on the next operation.
-    #[serde(rename = "generateCmtgKeyOnNextOperation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generateCmtgKeyOnNextOperation", skip_serializing_if = "Option::is_none")]
     pub generate_cmtg_key_on_next_operation: Option<bool>,
 }
 
@@ -43858,82 +42777,68 @@ pub enum WebAuthnCtap2Version {
 pub struct WebAuthnVirtualAuthenticatorOptions {
     pub protocol: WebAuthnAuthenticatorProtocol,
     /// Defaults to ctap2_0. Ignored if |protocol| == u2f.
-    #[serde(rename = "ctap2Version")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "ctap2Version", skip_serializing_if = "Option::is_none")]
     pub ctap2_version: Option<WebAuthnCtap2Version>,
     pub transport: WebAuthnAuthenticatorTransport,
     /// Defaults to false.
-    #[serde(rename = "hasResidentKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasResidentKey", skip_serializing_if = "Option::is_none")]
     pub has_resident_key: Option<bool>,
     /// Defaults to false.
-    #[serde(rename = "hasUserVerification")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasUserVerification", skip_serializing_if = "Option::is_none")]
     pub has_user_verification: Option<bool>,
     /// If set to true, the authenticator will support the largeBlob extension.
     /// https://w3c.github.io/webauthn#largeBlob
     /// Defaults to false.
-    #[serde(rename = "hasLargeBlob")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasLargeBlob", skip_serializing_if = "Option::is_none")]
     pub has_large_blob: Option<bool>,
     /// If set to true, the authenticator will support the credBlob extension.
     /// https://fidoalliance.org/specs/fido-v2.1-rd-20201208/fido-client-to-authenticator-protocol-v2.1-rd-20201208.html#sctn-credBlob-extension
     /// Defaults to false.
-    #[serde(rename = "hasCredBlob")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasCredBlob", skip_serializing_if = "Option::is_none")]
     pub has_cred_blob: Option<bool>,
     /// If set to true, the authenticator will support the minPinLength extension.
     /// https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#sctn-minpinlength-extension
     /// Defaults to false.
-    #[serde(rename = "hasMinPinLength")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasMinPinLength", skip_serializing_if = "Option::is_none")]
     pub has_min_pin_length: Option<bool>,
     /// If set to true, the authenticator will support the prf extension.
     /// https://w3c.github.io/webauthn/#prf-extension
     /// Defaults to false.
-    #[serde(rename = "hasPrf")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasPrf", skip_serializing_if = "Option::is_none")]
     pub has_prf: Option<bool>,
     /// If set to true, the authenticator will support the hmac-secret extension.
     /// https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#sctn-hmac-secret-extension
     /// Defaults to false.
-    #[serde(rename = "hasHmacSecret")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasHmacSecret", skip_serializing_if = "Option::is_none")]
     pub has_hmac_secret: Option<bool>,
     /// If set to true, the authenticator will support the hmac-secret-mc extension.
     /// https://fidoalliance.org/specs/fido-v2.2-rd-20241003/fido-client-to-authenticator-protocol-v2.2-rd-20241003.html#sctn-hmac-secret-make-cred-extension
     /// Defaults to false.
-    #[serde(rename = "hasHmacSecretMc")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasHmacSecretMc", skip_serializing_if = "Option::is_none")]
     pub has_hmac_secret_mc: Option<bool>,
     /// If set to true, the authenticator will support the cmtgKey (Credential
     /// Manager Trust Group Key) extension.
     /// https://github.com/w3c/webauthn/pull/2377
     /// Defaults to false.
-    #[serde(rename = "hasCmtgKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "hasCmtgKey", skip_serializing_if = "Option::is_none")]
     pub has_cmtg_key: Option<bool>,
     /// If set to true, tests of user presence will succeed immediately.
     /// Otherwise, they will not be resolved. Defaults to true.
-    #[serde(rename = "automaticPresenceSimulation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "automaticPresenceSimulation", skip_serializing_if = "Option::is_none")]
     pub automatic_presence_simulation: Option<bool>,
     /// Sets whether User Verification succeeds or fails for an authenticator.
     /// Defaults to false.
-    #[serde(rename = "isUserVerified")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isUserVerified", skip_serializing_if = "Option::is_none")]
     pub is_user_verified: Option<bool>,
     /// Credentials created by this authenticator will have the backup
     /// eligibility (BE) flag set to this value. Defaults to false.
     /// https://w3c.github.io/webauthn/#sctn-credential-backup
-    #[serde(rename = "defaultBackupEligibility")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "defaultBackupEligibility", skip_serializing_if = "Option::is_none")]
     pub default_backup_eligibility: Option<bool>,
     /// Credentials created by this authenticator will have the backup state
     /// (BS) flag set to this value. Defaults to false.
     /// https://w3c.github.io/webauthn/#sctn-credential-backup
-    #[serde(rename = "defaultBackupState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "defaultBackupState", skip_serializing_if = "Option::is_none")]
     pub default_backup_state: Option<bool>,
 }
 
@@ -44151,8 +43056,7 @@ pub struct WebAuthnEnableParams {
     /// experience. Disabling the UI is recommended for automated testing.
     /// Supported at the embedder's discretion if UI is available.
     /// Defaults to false.
-    #[serde(rename = "enableUI")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "enableUI", skip_serializing_if = "Option::is_none")]
     pub enable_ui: Option<bool>,
 }
 
@@ -44334,24 +43238,19 @@ pub struct WebAuthnSetCredentialPropertiesParams {
     pub authenticator_id: WebAuthnAuthenticatorId,
     #[serde(rename = "credentialId")]
     pub credential_id: String,
-    #[serde(rename = "backupEligibility")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backupEligibility", skip_serializing_if = "Option::is_none")]
     pub backup_eligibility: Option<bool>,
-    #[serde(rename = "backupState")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backupState", skip_serializing_if = "Option::is_none")]
     pub backup_state: Option<bool>,
-    #[serde(rename = "activeCmtgKeyIndex")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "activeCmtgKeyIndex", skip_serializing_if = "Option::is_none")]
     pub active_cmtg_key_index: Option<i64>,
-    #[serde(rename = "generateCmtgKeyOnNextOperation")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "generateCmtgKeyOnNextOperation", skip_serializing_if = "Option::is_none")]
     pub generate_cmtg_key_on_next_operation: Option<bool>,
     /// Must be equal to or greater than -1.
     /// If -1, the signature counter is removed from the credential, and every
     /// assertion operation will report a value of 0.
     /// See https://w3c.github.io/webauthn/#signature-counter
-    #[serde(rename = "signCount")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "signCount", skip_serializing_if = "Option::is_none")]
     pub sign_count: Option<i64>,
 }
 
@@ -44388,18 +43287,15 @@ pub struct WebAuthnSetResponseOverrideBitsParams {
     pub authenticator_id: WebAuthnAuthenticatorId,
     /// If isBogusSignature is set, overrides the signature in the authenticator response to be zero.
     /// Defaults to false.
-    #[serde(rename = "isBogusSignature")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isBogusSignature", skip_serializing_if = "Option::is_none")]
     pub is_bogus_signature: Option<bool>,
     /// If isBadUV is set, overrides the UV bit in the flags in the authenticator response to
     /// be zero. Defaults to false.
-    #[serde(rename = "isBadUV")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isBadUV", skip_serializing_if = "Option::is_none")]
     pub is_bad_uv: Option<bool>,
     /// If isBadUP is set, overrides the UP bit in the flags in the authenticator response to
     /// be zero. Defaults to false.
-    #[serde(rename = "isBadUP")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "isBadUP", skip_serializing_if = "Option::is_none")]
     pub is_bad_up: Option<bool>,
 }
 
@@ -44461,15 +43357,13 @@ impl WebAuthnSetUserVerifiedResult {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WebMcpAnnotation {
     /// A hint indicating that the tool does not modify any state.
-    #[serde(rename = "readOnly")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "readOnly", skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
     /// A hint indicating that the tool output may contain untrusted content, ex: UGC, 3rd party data.
-    #[serde(rename = "untrustedContent")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "untrustedContent", skip_serializing_if = "Option::is_none")]
     pub untrusted_content: Option<bool>,
     /// If the declarative tool was declared with the autosubmit attribute.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub autosubmit: Option<bool>,
 }
 
@@ -44522,22 +43416,19 @@ pub struct WebMcpTool {
     /// Tool description.
     pub description: String,
     /// Schema for the tool's input parameters.
-    #[serde(rename = "inputSchema")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "inputSchema", skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<std::collections::HashMap<String, serde_json::Value>>,
     /// Optional annotations for the tool.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<WebMcpAnnotation>,
     /// Frame identifier associated with the tool registration.
     #[serde(rename = "frameId")]
     pub frame_id: PageFrameId,
     /// Optional node ID for declarative tools.
-    #[serde(rename = "backendNodeId")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")]
     pub backend_node_id: Option<DomBackendNodeId>,
     /// The stack trace at the time of the registration.
-    #[serde(rename = "stackTrace")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "stackTrace", skip_serializing_if = "Option::is_none")]
     pub stack_trace: Option<RuntimeStackTrace>,
 }
 
@@ -44711,14 +43602,13 @@ pub struct WebMcpToolRespondedParams {
     pub status: WebMcpInvocationStatus,
     /// Output or error delivered as delivered to the agent. Missing if `status` is anything other than Completed.
     /// Note: The output is untrusted and poses a prompt injection risk. Clients should treat this as potentially malicious user input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<WebMcpToolRespondedParamsOutput>,
     /// Error text for protocol users.
-    #[serde(rename = "errorText")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorText", skip_serializing_if = "Option::is_none")]
     pub error_text: Option<String>,
     /// The exception object, if the javascript tool threw an error>
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exception: Option<RuntimeRemoteObject>,
 }
 

@@ -35,7 +35,7 @@ pub trait SecurityEventsService {
         #[serde(rename = "schemeIsCryptographic")] scheme_is_cryptographic: bool,
         explanations: Vec<super::types::SecuritySecurityStateExplanation>,
         #[serde(rename = "insecureContentStatus")] insecure_content_status: super::types::SecurityInsecureContentStatus,
-        #[serde(default, skip_serializing_if = "Option::is_none")] summary: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] summary: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, security_state, scheme_is_cryptographic, explanations, insecure_content_status, summary,);
         Ok(())

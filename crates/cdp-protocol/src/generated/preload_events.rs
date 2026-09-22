@@ -58,9 +58,9 @@ pub trait PreloadEventsService {
         key: super::types::PreloadPreloadingAttemptKey,
         #[serde(rename = "pipelineId")] pipeline_id: super::types::PreloadPreloadPipelineId,
         status: super::types::PreloadPreloadingStatus,
-        #[serde(rename = "prerenderStatus")] #[serde(default, skip_serializing_if = "Option::is_none")] prerender_status: Option<super::types::PreloadPrerenderFinalStatus>,
-        #[serde(rename = "disallowedMojoInterface")] #[serde(default, skip_serializing_if = "Option::is_none")] disallowed_mojo_interface: Option<String>,
-        #[serde(rename = "mismatchedHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] mismatched_headers: Option<Vec<super::types::PreloadPrerenderMismatchedHeaders>>,
+        #[serde(rename = "prerenderStatus", skip_serializing_if = "Option::is_none")] prerender_status: Option<super::types::PreloadPrerenderFinalStatus>,
+        #[serde(rename = "disallowedMojoInterface", skip_serializing_if = "Option::is_none")] disallowed_mojo_interface: Option<String>,
+        #[serde(rename = "mismatchedHeaders", skip_serializing_if = "Option::is_none")] mismatched_headers: Option<Vec<super::types::PreloadPrerenderMismatchedHeaders>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, key, pipeline_id, status, prerender_status, disallowed_mojo_interface, mismatched_headers,);
         Ok(())

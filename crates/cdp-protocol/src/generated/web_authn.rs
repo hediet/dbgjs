@@ -45,7 +45,7 @@ pub trait WebAuthnService {
     /// Enable the WebAuthn domain and start intercepting credential storage and
     /// retrieval with a virtual authenticator.
     #[name("enable")]
-    async fn enable(#[serde(rename = "enableUI")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_ui: Option<bool>) -> Result<super::types::WebAuthnEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "enableUI", skip_serializing_if = "Option::is_none")] enable_ui: Option<bool>) -> Result<super::types::WebAuthnEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enable_ui,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
@@ -96,11 +96,11 @@ pub trait WebAuthnService {
     async fn set_credential_properties(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         #[serde(rename = "credentialId")] credential_id: String,
-        #[serde(rename = "backupEligibility")] #[serde(default, skip_serializing_if = "Option::is_none")] backup_eligibility: Option<bool>,
-        #[serde(rename = "backupState")] #[serde(default, skip_serializing_if = "Option::is_none")] backup_state: Option<bool>,
-        #[serde(rename = "activeCmtgKeyIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] active_cmtg_key_index: Option<i64>,
-        #[serde(rename = "generateCmtgKeyOnNextOperation")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_cmtg_key_on_next_operation: Option<bool>,
-        #[serde(rename = "signCount")] #[serde(default, skip_serializing_if = "Option::is_none")] sign_count: Option<i64>,
+        #[serde(rename = "backupEligibility", skip_serializing_if = "Option::is_none")] backup_eligibility: Option<bool>,
+        #[serde(rename = "backupState", skip_serializing_if = "Option::is_none")] backup_state: Option<bool>,
+        #[serde(rename = "activeCmtgKeyIndex", skip_serializing_if = "Option::is_none")] active_cmtg_key_index: Option<i64>,
+        #[serde(rename = "generateCmtgKeyOnNextOperation", skip_serializing_if = "Option::is_none")] generate_cmtg_key_on_next_operation: Option<bool>,
+        #[serde(rename = "signCount", skip_serializing_if = "Option::is_none")] sign_count: Option<i64>,
     ) -> Result<super::types::WebAuthnSetCredentialPropertiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, authenticator_id, credential_id, backup_eligibility, backup_state, active_cmtg_key_index, generate_cmtg_key_on_next_operation, sign_count,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCredentialProperties"))
@@ -109,9 +109,9 @@ pub trait WebAuthnService {
     #[name("setResponseOverrideBits")]
     async fn set_response_override_bits(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
-        #[serde(rename = "isBogusSignature")] #[serde(default, skip_serializing_if = "Option::is_none")] is_bogus_signature: Option<bool>,
-        #[serde(rename = "isBadUV")] #[serde(default, skip_serializing_if = "Option::is_none")] is_bad_uv: Option<bool>,
-        #[serde(rename = "isBadUP")] #[serde(default, skip_serializing_if = "Option::is_none")] is_bad_up: Option<bool>,
+        #[serde(rename = "isBogusSignature", skip_serializing_if = "Option::is_none")] is_bogus_signature: Option<bool>,
+        #[serde(rename = "isBadUV", skip_serializing_if = "Option::is_none")] is_bad_uv: Option<bool>,
+        #[serde(rename = "isBadUP", skip_serializing_if = "Option::is_none")] is_bad_up: Option<bool>,
     ) -> Result<super::types::WebAuthnSetResponseOverrideBitsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, authenticator_id, is_bogus_signature, is_bad_uv, is_bad_up,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setResponseOverrideBits"))

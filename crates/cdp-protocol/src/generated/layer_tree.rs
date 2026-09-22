@@ -46,9 +46,9 @@ pub trait LayerTreeService {
     #[name("profileSnapshot")]
     async fn profile_snapshot(
         #[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId,
-        #[serde(rename = "minRepeatCount")] #[serde(default, skip_serializing_if = "Option::is_none")] min_repeat_count: Option<i64>,
-        #[serde(rename = "minDuration")] #[serde(default, skip_serializing_if = "Option::is_none")] min_duration: Option<f64>,
-        #[serde(rename = "clipRect")] #[serde(default, skip_serializing_if = "Option::is_none")] clip_rect: Option<super::types::DomRect>,
+        #[serde(rename = "minRepeatCount", skip_serializing_if = "Option::is_none")] min_repeat_count: Option<i64>,
+        #[serde(rename = "minDuration", skip_serializing_if = "Option::is_none")] min_duration: Option<f64>,
+        #[serde(rename = "clipRect", skip_serializing_if = "Option::is_none")] clip_rect: Option<super::types::DomRect>,
     ) -> Result<super::types::LayerTreeProfileSnapshotResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, snapshot_id, min_repeat_count, min_duration, clip_rect,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "profileSnapshot"))
@@ -63,9 +63,9 @@ pub trait LayerTreeService {
     #[name("replaySnapshot")]
     async fn replay_snapshot(
         #[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId,
-        #[serde(rename = "fromStep")] #[serde(default, skip_serializing_if = "Option::is_none")] from_step: Option<i64>,
-        #[serde(rename = "toStep")] #[serde(default, skip_serializing_if = "Option::is_none")] to_step: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] scale: Option<f64>,
+        #[serde(rename = "fromStep", skip_serializing_if = "Option::is_none")] from_step: Option<i64>,
+        #[serde(rename = "toStep", skip_serializing_if = "Option::is_none")] to_step: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] scale: Option<f64>,
     ) -> Result<super::types::LayerTreeReplaySnapshotResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, snapshot_id, from_step, to_step, scale,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "replaySnapshot"))

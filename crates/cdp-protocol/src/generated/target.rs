@@ -30,8 +30,8 @@ pub trait TargetService {
     #[name("attachToTarget")]
     async fn attach_to_target(
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] flatten: Option<bool>,
-        #[serde(rename = "__dbgjsAutoAttach")] #[serde(default, skip_serializing_if = "Option::is_none")] dbgjs_auto_attach: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] flatten: Option<bool>,
+        #[serde(rename = "__dbgjsAutoAttach", skip_serializing_if = "Option::is_none")] dbgjs_auto_attach: Option<bool>,
     ) -> Result<super::types::TargetAttachToTargetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id, flatten, dbgjs_auto_attach,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "attachToTarget"))
@@ -45,7 +45,7 @@ pub trait TargetService {
     async fn auto_attach_related(
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         #[serde(rename = "waitForDebuggerOnStart")] wait_for_debugger_on_start: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
+        #[serde(skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
     ) -> Result<super::types::TargetAutoAttachRelatedResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id, wait_for_debugger_on_start, filter,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "autoAttachRelated"))
@@ -60,10 +60,10 @@ pub trait TargetService {
     /// one.
     #[name("createBrowserContext")]
     async fn create_browser_context(
-        #[serde(rename = "disposeOnDetach")] #[serde(default, skip_serializing_if = "Option::is_none")] dispose_on_detach: Option<bool>,
-        #[serde(rename = "proxyServer")] #[serde(default, skip_serializing_if = "Option::is_none")] proxy_server: Option<String>,
-        #[serde(rename = "proxyBypassList")] #[serde(default, skip_serializing_if = "Option::is_none")] proxy_bypass_list: Option<String>,
-        #[serde(rename = "originsWithUniversalNetworkAccess")] #[serde(default, skip_serializing_if = "Option::is_none")] origins_with_universal_network_access: Option<Vec<String>>,
+        #[serde(rename = "disposeOnDetach", skip_serializing_if = "Option::is_none")] dispose_on_detach: Option<bool>,
+        #[serde(rename = "proxyServer", skip_serializing_if = "Option::is_none")] proxy_server: Option<String>,
+        #[serde(rename = "proxyBypassList", skip_serializing_if = "Option::is_none")] proxy_bypass_list: Option<String>,
+        #[serde(rename = "originsWithUniversalNetworkAccess", skip_serializing_if = "Option::is_none")] origins_with_universal_network_access: Option<Vec<String>>,
     ) -> Result<super::types::TargetCreateBrowserContextResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, dispose_on_detach, proxy_server, proxy_bypass_list, origins_with_universal_network_access,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createBrowserContext"))
@@ -72,18 +72,18 @@ pub trait TargetService {
     #[name("createTarget")]
     async fn create_target(
         url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] left: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] top: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] width: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] height: Option<i64>,
-        #[serde(rename = "windowState")] #[serde(default, skip_serializing_if = "Option::is_none")] window_state: Option<super::types::TargetWindowState>,
-        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
-        #[serde(rename = "enableBeginFrameControl")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_begin_frame_control: Option<bool>,
-        #[serde(rename = "newWindow")] #[serde(default, skip_serializing_if = "Option::is_none")] new_window: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] background: Option<bool>,
-        #[serde(rename = "forTab")] #[serde(default, skip_serializing_if = "Option::is_none")] for_tab: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] hidden: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] focus: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] left: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] top: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] width: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] height: Option<i64>,
+        #[serde(rename = "windowState", skip_serializing_if = "Option::is_none")] window_state: Option<super::types::TargetWindowState>,
+        #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+        #[serde(rename = "enableBeginFrameControl", skip_serializing_if = "Option::is_none")] enable_begin_frame_control: Option<bool>,
+        #[serde(rename = "newWindow", skip_serializing_if = "Option::is_none")] new_window: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] background: Option<bool>,
+        #[serde(rename = "forTab", skip_serializing_if = "Option::is_none")] for_tab: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] hidden: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] focus: Option<bool>,
     ) -> Result<super::types::TargetCreateTargetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, url, left, top, width, height, window_state, browser_context_id, enable_begin_frame_control, new_window, background, for_tab, hidden, focus,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createTarget"))
@@ -91,8 +91,8 @@ pub trait TargetService {
     /// Detaches session with given id.
     #[name("detachFromTarget")]
     async fn detach_from_target(
-        #[serde(rename = "sessionId")] #[serde(default, skip_serializing_if = "Option::is_none")] session_id: Option<super::types::TargetSessionId>,
-        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+        #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")] session_id: Option<super::types::TargetSessionId>,
+        #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
     ) -> Result<super::types::TargetDetachFromTargetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, session_id, target_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "detachFromTarget"))
@@ -115,8 +115,8 @@ pub trait TargetService {
     #[name("exposeDevToolsProtocol")]
     async fn expose_dev_tools_protocol(
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
-        #[serde(rename = "bindingName")] #[serde(default, skip_serializing_if = "Option::is_none")] binding_name: Option<String>,
-        #[serde(rename = "inheritPermissions")] #[serde(default, skip_serializing_if = "Option::is_none")] inherit_permissions: Option<bool>,
+        #[serde(rename = "bindingName", skip_serializing_if = "Option::is_none")] binding_name: Option<String>,
+        #[serde(rename = "inheritPermissions", skip_serializing_if = "Option::is_none")] inherit_permissions: Option<bool>,
     ) -> Result<super::types::TargetExposeDevToolsProtocolResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id, binding_name, inherit_permissions,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "exposeDevToolsProtocol"))
@@ -136,13 +136,13 @@ pub trait TargetService {
     }
     /// Returns information about a target.
     #[name("getTargetInfo")]
-    async fn get_target_info(#[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::TargetGetTargetInfoResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_target_info(#[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::TargetGetTargetInfoResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargetInfo"))
     }
     /// Retrieves a list of available targets.
     #[name("getTargets")]
-    async fn get_targets(#[serde(default, skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>) -> Result<super::types::TargetGetTargetsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_targets(#[serde(skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>) -> Result<super::types::TargetGetTargetsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, filter,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargets"))
     }
@@ -150,7 +150,7 @@ pub trait TargetService {
     #[name("openDevTools")]
     async fn open_dev_tools(
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
-        #[serde(rename = "panelId")] #[serde(default, skip_serializing_if = "Option::is_none")] panel_id: Option<String>,
+        #[serde(rename = "panelId", skip_serializing_if = "Option::is_none")] panel_id: Option<String>,
     ) -> Result<super::types::TargetOpenDevToolsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id, panel_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openDevTools"))
@@ -161,8 +161,8 @@ pub trait TargetService {
     #[name("sendMessageToTarget")]
     async fn send_message_to_target(
         message: String,
-        #[serde(rename = "sessionId")] #[serde(default, skip_serializing_if = "Option::is_none")] session_id: Option<super::types::TargetSessionId>,
-        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+        #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")] session_id: Option<super::types::TargetSessionId>,
+        #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
     ) -> Result<super::types::TargetSendMessageToTargetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, message, session_id, target_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "sendMessageToTarget"))
@@ -179,8 +179,8 @@ pub trait TargetService {
     async fn set_auto_attach(
         #[serde(rename = "autoAttach")] auto_attach: bool,
         #[serde(rename = "waitForDebuggerOnStart")] wait_for_debugger_on_start: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] flatten: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
+        #[serde(skip_serializing_if = "Option::is_none")] flatten: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
     ) -> Result<super::types::TargetSetAutoAttachResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, auto_attach, wait_for_debugger_on_start, flatten, filter,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoAttach"))
@@ -190,7 +190,7 @@ pub trait TargetService {
     #[name("setDiscoverTargets")]
     async fn set_discover_targets(
         discover: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
+        #[serde(skip_serializing_if = "Option::is_none")] filter: Option<super::types::TargetTargetFilter>,
     ) -> Result<super::types::TargetSetDiscoverTargetsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, discover, filter,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDiscoverTargets"))

@@ -25,7 +25,7 @@ pub trait DOMEventsService {
     #[notification]
     async fn ad_related_state_updated(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(rename = "adProvenance")] #[serde(default, skip_serializing_if = "Option::is_none")] ad_provenance: Option<super::types::NetworkAdProvenance>,
+        #[serde(rename = "adProvenance", skip_serializing_if = "Option::is_none")] ad_provenance: Option<super::types::NetworkAdProvenance>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, ad_provenance,);
         Ok(())

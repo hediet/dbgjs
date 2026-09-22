@@ -32,7 +32,7 @@ pub trait DOMService {
     async fn copy_to(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "targetNodeId")] target_node_id: super::types::DomNodeId,
-        #[serde(rename = "insertBeforeNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] insert_before_node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "insertBeforeNodeId", skip_serializing_if = "Option::is_none")] insert_before_node_id: Option<super::types::DomNodeId>,
     ) -> Result<super::types::DomCopyToResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, target_node_id, insert_before_node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "copyTo"))
@@ -41,11 +41,11 @@ pub trait DOMService {
     /// objects, can be used for automation.
     #[name("describeNode")]
     async fn describe_node(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomDescribeNodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id, depth, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "describeNode"))
@@ -72,9 +72,9 @@ pub trait DOMService {
     /// Focuses the given element.
     #[name("focus")]
     async fn focus(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::DomFocusResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "focus"))
@@ -95,7 +95,7 @@ pub trait DOMService {
     async fn force_show_popover(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         enable: bool,
-        #[serde(rename = "invokerNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] invoker_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "invokerNodeId", skip_serializing_if = "Option::is_none")] invoker_node_id: Option<super::types::DomBackendNodeId>,
     ) -> Result<super::types::DomForceShowPopoverResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, enable, invoker_node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceShowPopover"))
@@ -105,7 +105,7 @@ pub trait DOMService {
     #[name("getAnchorElement")]
     async fn get_anchor_element(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(rename = "anchorSpecifier")] #[serde(default, skip_serializing_if = "Option::is_none")] anchor_specifier: Option<String>,
+        #[serde(rename = "anchorSpecifier", skip_serializing_if = "Option::is_none")] anchor_specifier: Option<String>,
     ) -> Result<super::types::DomGetAnchorElementResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, anchor_specifier,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnchorElement"))
@@ -119,9 +119,9 @@ pub trait DOMService {
     /// Returns boxes for the given node.
     #[name("getBoxModel")]
     async fn get_box_model(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::DomGetBoxModelResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBoxModel"))
@@ -134,11 +134,11 @@ pub trait DOMService {
     #[name("getContainerForNode")]
     async fn get_container_for_node(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(rename = "containerName")] #[serde(default, skip_serializing_if = "Option::is_none")] container_name: Option<String>,
-        #[serde(rename = "physicalAxes")] #[serde(default, skip_serializing_if = "Option::is_none")] physical_axes: Option<super::types::DomPhysicalAxes>,
-        #[serde(rename = "logicalAxes")] #[serde(default, skip_serializing_if = "Option::is_none")] logical_axes: Option<super::types::DomLogicalAxes>,
-        #[serde(rename = "queriesScrollState")] #[serde(default, skip_serializing_if = "Option::is_none")] queries_scroll_state: Option<bool>,
-        #[serde(rename = "queriesAnchored")] #[serde(default, skip_serializing_if = "Option::is_none")] queries_anchored: Option<bool>,
+        #[serde(rename = "containerName", skip_serializing_if = "Option::is_none")] container_name: Option<String>,
+        #[serde(rename = "physicalAxes", skip_serializing_if = "Option::is_none")] physical_axes: Option<super::types::DomPhysicalAxes>,
+        #[serde(rename = "logicalAxes", skip_serializing_if = "Option::is_none")] logical_axes: Option<super::types::DomLogicalAxes>,
+        #[serde(rename = "queriesScrollState", skip_serializing_if = "Option::is_none")] queries_scroll_state: Option<bool>,
+        #[serde(rename = "queriesAnchored", skip_serializing_if = "Option::is_none")] queries_anchored: Option<bool>,
     ) -> Result<super::types::DomGetContainerForNodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, container_name, physical_axes, logical_axes, queries_scroll_state, queries_anchored,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContainerForNode"))
@@ -147,9 +147,9 @@ pub trait DOMService {
     /// might return multiple quads for inline nodes.
     #[name("getContentQuads")]
     async fn get_content_quads(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::DomGetContentQuadsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContentQuads"))
@@ -164,8 +164,8 @@ pub trait DOMService {
     /// Implicitly enables the DOM domain events for the current target.
     #[name("getDocument")]
     async fn get_document(
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomGetDocumentResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, depth, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDocument"))
@@ -188,8 +188,8 @@ pub trait DOMService {
     /// Use DOMSnapshot.captureSnapshot instead.
     #[name("getFlattenedDocument")]
     async fn get_flattened_document(
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomGetFlattenedDocumentResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, depth, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFlattenedDocument"))
@@ -206,8 +206,8 @@ pub trait DOMService {
     async fn get_node_for_location(
         x: i64,
         y: i64,
-        #[serde(rename = "includeUserAgentShadowDOM")] #[serde(default, skip_serializing_if = "Option::is_none")] include_user_agent_shadow_dom: Option<bool>,
-        #[serde(rename = "ignorePointerEventsNone")] #[serde(default, skip_serializing_if = "Option::is_none")] ignore_pointer_events_none: Option<bool>,
+        #[serde(rename = "includeUserAgentShadowDOM", skip_serializing_if = "Option::is_none")] include_user_agent_shadow_dom: Option<bool>,
+        #[serde(rename = "ignorePointerEventsNone", skip_serializing_if = "Option::is_none")] ignore_pointer_events_none: Option<bool>,
     ) -> Result<super::types::DomGetNodeForLocationResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, x, y, include_user_agent_shadow_dom, ignore_pointer_events_none,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodeForLocation"))
@@ -223,7 +223,7 @@ pub trait DOMService {
     async fn get_nodes_for_subtree_by_style(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "computedStyles")] computed_styles: Vec<super::types::DomCsscomputedStyleProperty>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomGetNodesForSubtreeByStyleResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, computed_styles, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodesForSubtreeByStyle"))
@@ -231,10 +231,10 @@ pub trait DOMService {
     /// Returns node's HTML markup.
     #[name("getOuterHTML")]
     async fn get_outer_html(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(rename = "includeShadowDOM")] #[serde(default, skip_serializing_if = "Option::is_none")] include_shadow_dom: Option<bool>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "includeShadowDOM", skip_serializing_if = "Option::is_none")] include_shadow_dom: Option<bool>,
     ) -> Result<super::types::DomGetOuterHtmlresult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id, include_shadow_dom,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOuterHTML"))
@@ -300,7 +300,7 @@ pub trait DOMService {
     async fn move_to(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "targetNodeId")] target_node_id: super::types::DomNodeId,
-        #[serde(rename = "insertBeforeNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] insert_before_node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "insertBeforeNodeId", skip_serializing_if = "Option::is_none")] insert_before_node_id: Option<super::types::DomNodeId>,
     ) -> Result<super::types::DomMoveToResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, target_node_id, insert_before_node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "moveTo"))
@@ -310,7 +310,7 @@ pub trait DOMService {
     #[name("performSearch")]
     async fn perform_search(
         query: String,
-        #[serde(rename = "includeUserAgentShadowDOM")] #[serde(default, skip_serializing_if = "Option::is_none")] include_user_agent_shadow_dom: Option<bool>,
+        #[serde(rename = "includeUserAgentShadowDOM", skip_serializing_if = "Option::is_none")] include_user_agent_shadow_dom: Option<bool>,
     ) -> Result<super::types::DomPerformSearchResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, query, include_user_agent_shadow_dom,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "performSearch"))
@@ -372,8 +372,8 @@ pub trait DOMService {
     #[name("requestChildNodes")]
     async fn request_child_nodes(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomRequestChildNodesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, depth, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestChildNodes"))
@@ -389,10 +389,10 @@ pub trait DOMService {
     /// Resolves the JavaScript node object for a given NodeId or BackendNodeId.
     #[name("resolveNode")]
     async fn resolve_node(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
     ) -> Result<super::types::DomResolveNodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_group, execution_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveNode"))
@@ -402,10 +402,10 @@ pub trait DOMService {
     /// to identify the node.
     #[name("scrollIntoViewIfNeeded")]
     async fn scroll_into_view_if_needed(
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] rect: Option<super::types::DomRect>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(skip_serializing_if = "Option::is_none")] rect: Option<super::types::DomRect>,
     ) -> Result<super::types::DomScrollIntoViewIfNeededResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, backend_node_id, object_id, rect,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "scrollIntoViewIfNeeded"))
@@ -426,7 +426,7 @@ pub trait DOMService {
     async fn set_attributes_as_text(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] name: Option<String>,
     ) -> Result<super::types::DomSetAttributesAsTextResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, text, name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttributesAsText"))
@@ -435,9 +435,9 @@ pub trait DOMService {
     #[name("setFileInputFiles")]
     async fn set_file_input_files(
         files: Vec<String>,
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::DomSetFileInputFilesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, files, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFileInputFiles"))

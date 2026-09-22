@@ -26,8 +26,8 @@ pub trait PWAService {
     #[name("changeAppUserSettings")]
     async fn change_app_user_settings(
         #[serde(rename = "manifestId")] manifest_id: String,
-        #[serde(rename = "linkCapturing")] #[serde(default, skip_serializing_if = "Option::is_none")] link_capturing: Option<bool>,
-        #[serde(rename = "displayMode")] #[serde(default, skip_serializing_if = "Option::is_none")] display_mode: Option<super::types::PwaDisplayMode>,
+        #[serde(rename = "linkCapturing", skip_serializing_if = "Option::is_none")] link_capturing: Option<bool>,
+        #[serde(rename = "displayMode", skip_serializing_if = "Option::is_none")] display_mode: Option<super::types::PwaDisplayMode>,
     ) -> Result<super::types::PwaChangeAppUserSettingsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, manifest_id, link_capturing, display_mode,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "changeAppUserSettings"))
@@ -67,7 +67,7 @@ pub trait PWAService {
     #[name("install")]
     async fn install(
         #[serde(rename = "manifestId")] manifest_id: String,
-        #[serde(rename = "installUrlOrBundleUrl")] #[serde(default, skip_serializing_if = "Option::is_none")] install_url_or_bundle_url: Option<String>,
+        #[serde(rename = "installUrlOrBundleUrl", skip_serializing_if = "Option::is_none")] install_url_or_bundle_url: Option<String>,
     ) -> Result<super::types::PwaInstallResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, manifest_id, install_url_or_bundle_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "install"))
@@ -78,7 +78,7 @@ pub trait PWAService {
     #[name("launch")]
     async fn launch(
         #[serde(rename = "manifestId")] manifest_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] url: Option<String>,
     ) -> Result<super::types::PwaLaunchResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, manifest_id, url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "launch"))

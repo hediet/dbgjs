@@ -40,8 +40,8 @@ pub trait TracingService {
     /// Request a global memory dump.
     #[name("requestMemoryDump")]
     async fn request_memory_dump(
-        #[serde(default, skip_serializing_if = "Option::is_none")] deterministic: Option<bool>,
-        #[serde(rename = "levelOfDetail")] #[serde(default, skip_serializing_if = "Option::is_none")] level_of_detail: Option<super::types::TracingMemoryDumpLevelOfDetail>,
+        #[serde(skip_serializing_if = "Option::is_none")] deterministic: Option<bool>,
+        #[serde(rename = "levelOfDetail", skip_serializing_if = "Option::is_none")] level_of_detail: Option<super::types::TracingMemoryDumpLevelOfDetail>,
     ) -> Result<super::types::TracingRequestMemoryDumpResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, deterministic, level_of_detail,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestMemoryDump"))

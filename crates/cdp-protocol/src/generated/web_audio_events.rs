@@ -95,7 +95,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
-        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
@@ -107,7 +107,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
-        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
@@ -119,8 +119,8 @@ pub trait WebAudioEventsService {
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
-        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
-        #[serde(rename = "destinationInputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
+        #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "destinationInputIndex", skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())
@@ -132,8 +132,8 @@ pub trait WebAudioEventsService {
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
-        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
-        #[serde(rename = "destinationInputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
+        #[serde(rename = "sourceOutputIndex", skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "destinationInputIndex", skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())

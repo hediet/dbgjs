@@ -48,7 +48,7 @@ pub trait SmartCardEmulationService {
     async fn report_connect_result(
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
-        #[serde(rename = "activeProtocol")] #[serde(default, skip_serializing_if = "Option::is_none")] active_protocol: Option<super::types::SmartCardEmulationProtocol>,
+        #[serde(rename = "activeProtocol", skip_serializing_if = "Option::is_none")] active_protocol: Option<super::types::SmartCardEmulationProtocol>,
     ) -> Result<super::types::SmartCardEmulationReportConnectResultResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, handle, active_protocol,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportConnectResult"))
@@ -169,7 +169,7 @@ pub trait SmartCardEmulationService {
         #[serde(rename = "readerName")] reader_name: String,
         state: super::types::SmartCardEmulationConnectionState,
         atr: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
+        #[serde(skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
     ) -> Result<super::types::SmartCardEmulationReportStatusResultResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, reader_name, state, atr, protocol,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportStatusResult"))

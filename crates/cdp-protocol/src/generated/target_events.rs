@@ -31,7 +31,7 @@ pub trait TargetEventsService {
     #[notification]
     async fn detached_from_target(
         #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
-        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+        #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, session_id, target_id,);
         Ok(())
@@ -43,7 +43,7 @@ pub trait TargetEventsService {
     async fn received_message_from_target(
         #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
         message: String,
-        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+        #[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, session_id, message, target_id,);
         Ok(())

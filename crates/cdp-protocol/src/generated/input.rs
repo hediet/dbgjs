@@ -57,8 +57,8 @@ pub trait InputService {
         text: String,
         #[serde(rename = "selectionStart")] selection_start: i64,
         #[serde(rename = "selectionEnd")] selection_end: i64,
-        #[serde(rename = "replacementStart")] #[serde(default, skip_serializing_if = "Option::is_none")] replacement_start: Option<i64>,
-        #[serde(rename = "replacementEnd")] #[serde(default, skip_serializing_if = "Option::is_none")] replacement_end: Option<i64>,
+        #[serde(rename = "replacementStart", skip_serializing_if = "Option::is_none")] replacement_start: Option<i64>,
+        #[serde(rename = "replacementEnd", skip_serializing_if = "Option::is_none")] replacement_end: Option<i64>,
     ) -> Result<super::types::InputImeSetCompositionResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, text, selection_start, selection_end, replacement_start, replacement_end,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "imeSetComposition"))
@@ -89,8 +89,8 @@ pub trait InputService {
         x: f64,
         y: f64,
         #[serde(rename = "scaleFactor")] scale_factor: f64,
-        #[serde(rename = "relativeSpeed")] #[serde(default, skip_serializing_if = "Option::is_none")] relative_speed: Option<i64>,
-        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+        #[serde(rename = "relativeSpeed", skip_serializing_if = "Option::is_none")] relative_speed: Option<i64>,
+        #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
     ) -> Result<super::types::InputSynthesizePinchGestureResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, x, y, scale_factor, relative_speed, gesture_source_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizePinchGesture"))
@@ -100,16 +100,16 @@ pub trait InputService {
     async fn synthesize_scroll_gesture(
         x: f64,
         y: f64,
-        #[serde(rename = "xDistance")] #[serde(default, skip_serializing_if = "Option::is_none")] x_distance: Option<f64>,
-        #[serde(rename = "yDistance")] #[serde(default, skip_serializing_if = "Option::is_none")] y_distance: Option<f64>,
-        #[serde(rename = "xOverscroll")] #[serde(default, skip_serializing_if = "Option::is_none")] x_overscroll: Option<f64>,
-        #[serde(rename = "yOverscroll")] #[serde(default, skip_serializing_if = "Option::is_none")] y_overscroll: Option<f64>,
-        #[serde(rename = "preventFling")] #[serde(default, skip_serializing_if = "Option::is_none")] prevent_fling: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] speed: Option<i64>,
-        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
-        #[serde(rename = "repeatCount")] #[serde(default, skip_serializing_if = "Option::is_none")] repeat_count: Option<i64>,
-        #[serde(rename = "repeatDelayMs")] #[serde(default, skip_serializing_if = "Option::is_none")] repeat_delay_ms: Option<i64>,
-        #[serde(rename = "interactionMarkerName")] #[serde(default, skip_serializing_if = "Option::is_none")] interaction_marker_name: Option<String>,
+        #[serde(rename = "xDistance", skip_serializing_if = "Option::is_none")] x_distance: Option<f64>,
+        #[serde(rename = "yDistance", skip_serializing_if = "Option::is_none")] y_distance: Option<f64>,
+        #[serde(rename = "xOverscroll", skip_serializing_if = "Option::is_none")] x_overscroll: Option<f64>,
+        #[serde(rename = "yOverscroll", skip_serializing_if = "Option::is_none")] y_overscroll: Option<f64>,
+        #[serde(rename = "preventFling", skip_serializing_if = "Option::is_none")] prevent_fling: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] speed: Option<i64>,
+        #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+        #[serde(rename = "repeatCount", skip_serializing_if = "Option::is_none")] repeat_count: Option<i64>,
+        #[serde(rename = "repeatDelayMs", skip_serializing_if = "Option::is_none")] repeat_delay_ms: Option<i64>,
+        #[serde(rename = "interactionMarkerName", skip_serializing_if = "Option::is_none")] interaction_marker_name: Option<String>,
     ) -> Result<super::types::InputSynthesizeScrollGestureResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, x, y, x_distance, y_distance, x_overscroll, y_overscroll, prevent_fling, speed, gesture_source_type, repeat_count, repeat_delay_ms, interaction_marker_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizeScrollGesture"))
@@ -119,9 +119,9 @@ pub trait InputService {
     async fn synthesize_tap_gesture(
         x: f64,
         y: f64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] duration: Option<i64>,
-        #[serde(rename = "tapCount")] #[serde(default, skip_serializing_if = "Option::is_none")] tap_count: Option<i64>,
-        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+        #[serde(skip_serializing_if = "Option::is_none")] duration: Option<i64>,
+        #[serde(rename = "tapCount", skip_serializing_if = "Option::is_none")] tap_count: Option<i64>,
+        #[serde(rename = "gestureSourceType", skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
     ) -> Result<super::types::InputSynthesizeTapGestureResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, x, y, duration, tap_count, gesture_source_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizeTapGesture"))

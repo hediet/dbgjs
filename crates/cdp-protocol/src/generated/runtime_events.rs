@@ -87,7 +87,7 @@ pub trait RuntimeEventsService {
     async fn inspect_requested(
         object: super::types::RuntimeRemoteObject,
         hints: std::collections::HashMap<String, serde_json::Value>,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, object, hints, execution_context_id,);
         Ok(())

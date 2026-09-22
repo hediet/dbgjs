@@ -23,7 +23,7 @@ pub trait NetworkEventsService {
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "dataLength")] data_length: i64,
         #[serde(rename = "encodedDataLength")] encoded_data_length: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] data: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, timestamp, data_length, encoded_data_length, data,);
         Ok(())
@@ -35,11 +35,11 @@ pub trait NetworkEventsService {
         #[serde(rename = "eventId")] event_id: super::types::NetworkDeviceBoundSessionEventId,
         site: String,
         succeeded: bool,
-        #[serde(rename = "sessionId")] #[serde(default, skip_serializing_if = "Option::is_none")] session_id: Option<String>,
-        #[serde(rename = "creationEventDetails")] #[serde(default, skip_serializing_if = "Option::is_none")] creation_event_details: Option<super::types::NetworkCreationEventDetails>,
-        #[serde(rename = "refreshEventDetails")] #[serde(default, skip_serializing_if = "Option::is_none")] refresh_event_details: Option<super::types::NetworkRefreshEventDetails>,
-        #[serde(rename = "terminationEventDetails")] #[serde(default, skip_serializing_if = "Option::is_none")] termination_event_details: Option<super::types::NetworkTerminationEventDetails>,
-        #[serde(rename = "challengeEventDetails")] #[serde(default, skip_serializing_if = "Option::is_none")] challenge_event_details: Option<super::types::NetworkChallengeEventDetails>,
+        #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")] session_id: Option<String>,
+        #[serde(rename = "creationEventDetails", skip_serializing_if = "Option::is_none")] creation_event_details: Option<super::types::NetworkCreationEventDetails>,
+        #[serde(rename = "refreshEventDetails", skip_serializing_if = "Option::is_none")] refresh_event_details: Option<super::types::NetworkRefreshEventDetails>,
+        #[serde(rename = "terminationEventDetails", skip_serializing_if = "Option::is_none")] termination_event_details: Option<super::types::NetworkTerminationEventDetails>,
+        #[serde(rename = "challengeEventDetails", skip_serializing_if = "Option::is_none")] challenge_event_details: Option<super::types::NetworkChallengeEventDetails>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, event_id, site, succeeded, session_id, creation_event_details, refresh_event_details, termination_event_details, challenge_event_details,);
         Ok(())
@@ -103,7 +103,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "remotePort")] remote_port: i64,
         options: super::types::NetworkDirectTcpsocketOptions,
         timestamp: super::types::NetworkMonotonicTime,
-        #[serde(default, skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
+        #[serde(skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, identifier, remote_addr, remote_port, options, timestamp, initiator,);
         Ok(())
@@ -116,8 +116,8 @@ pub trait NetworkEventsService {
         #[serde(rename = "remoteAddr")] remote_addr: String,
         #[serde(rename = "remotePort")] remote_port: i64,
         timestamp: super::types::NetworkMonotonicTime,
-        #[serde(rename = "localAddr")] #[serde(default, skip_serializing_if = "Option::is_none")] local_addr: Option<String>,
-        #[serde(rename = "localPort")] #[serde(default, skip_serializing_if = "Option::is_none")] local_port: Option<i64>,
+        #[serde(rename = "localAddr", skip_serializing_if = "Option::is_none")] local_addr: Option<String>,
+        #[serde(rename = "localPort", skip_serializing_if = "Option::is_none")] local_port: Option<i64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, identifier, remote_addr, remote_port, timestamp, local_addr, local_port,);
         Ok(())
@@ -172,7 +172,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         options: super::types::NetworkDirectUdpsocketOptions,
         timestamp: super::types::NetworkMonotonicTime,
-        #[serde(default, skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
+        #[serde(skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, identifier, options, timestamp, initiator,);
         Ok(())
@@ -203,8 +203,8 @@ pub trait NetworkEventsService {
         #[serde(rename = "localAddr")] local_addr: String,
         #[serde(rename = "localPort")] local_port: i64,
         timestamp: super::types::NetworkMonotonicTime,
-        #[serde(rename = "remoteAddr")] #[serde(default, skip_serializing_if = "Option::is_none")] remote_addr: Option<String>,
-        #[serde(rename = "remotePort")] #[serde(default, skip_serializing_if = "Option::is_none")] remote_port: Option<i64>,
+        #[serde(rename = "remoteAddr", skip_serializing_if = "Option::is_none")] remote_addr: Option<String>,
+        #[serde(rename = "remotePort", skip_serializing_if = "Option::is_none")] remote_port: Option<i64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, identifier, local_addr, local_port, timestamp, remote_addr, remote_port,);
         Ok(())
@@ -230,9 +230,9 @@ pub trait NetworkEventsService {
         timestamp: super::types::NetworkMonotonicTime,
         r#type: super::types::NetworkResourceType,
         #[serde(rename = "errorText")] error_text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] canceled: Option<bool>,
-        #[serde(rename = "blockedReason")] #[serde(default, skip_serializing_if = "Option::is_none")] blocked_reason: Option<super::types::NetworkBlockedReason>,
-        #[serde(rename = "corsErrorStatus")] #[serde(default, skip_serializing_if = "Option::is_none")] cors_error_status: Option<super::types::NetworkCorsErrorStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")] canceled: Option<bool>,
+        #[serde(rename = "blockedReason", skip_serializing_if = "Option::is_none")] blocked_reason: Option<super::types::NetworkBlockedReason>,
+        #[serde(rename = "corsErrorStatus", skip_serializing_if = "Option::is_none")] cors_error_status: Option<super::types::NetworkCorsErrorStatus>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, timestamp, r#type, error_text, canceled, blocked_reason, cors_error_status,);
         Ok(())
@@ -297,11 +297,11 @@ pub trait NetworkEventsService {
         #[serde(rename = "wallTime")] wall_time: super::types::NetworkTimeSinceEpoch,
         initiator: super::types::NetworkInitiator,
         #[serde(rename = "redirectHasExtraInfo")] redirect_has_extra_info: bool,
-        #[serde(rename = "redirectResponse")] #[serde(default, skip_serializing_if = "Option::is_none")] redirect_response: Option<super::types::NetworkResponse>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] r#type: Option<super::types::NetworkResourceType>,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
-        #[serde(rename = "hasUserGesture")] #[serde(default, skip_serializing_if = "Option::is_none")] has_user_gesture: Option<bool>,
-        #[serde(rename = "renderBlockingBehavior")] #[serde(default, skip_serializing_if = "Option::is_none")] render_blocking_behavior: Option<super::types::NetworkRenderBlockingBehavior>,
+        #[serde(rename = "redirectResponse", skip_serializing_if = "Option::is_none")] redirect_response: Option<super::types::NetworkResponse>,
+        #[serde(skip_serializing_if = "Option::is_none")] r#type: Option<super::types::NetworkResourceType>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "hasUserGesture", skip_serializing_if = "Option::is_none")] has_user_gesture: Option<bool>,
+        #[serde(rename = "renderBlockingBehavior", skip_serializing_if = "Option::is_none")] render_blocking_behavior: Option<super::types::NetworkRenderBlockingBehavior>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, loader_id, document_url, request, timestamp, wall_time, initiator, redirect_has_extra_info, redirect_response, r#type, frame_id, has_user_gesture, render_blocking_behavior,);
         Ok(())
@@ -317,10 +317,10 @@ pub trait NetworkEventsService {
         #[serde(rename = "associatedCookies")] associated_cookies: Vec<super::types::NetworkAssociatedCookie>,
         headers: super::types::NetworkHeaders,
         #[serde(rename = "connectTiming")] connect_timing: super::types::NetworkConnectTiming,
-        #[serde(rename = "deviceBoundSessionUsages")] #[serde(default, skip_serializing_if = "Option::is_none")] device_bound_session_usages: Option<Vec<super::types::NetworkDeviceBoundSessionWithUsage>>,
-        #[serde(rename = "clientSecurityState")] #[serde(default, skip_serializing_if = "Option::is_none")] client_security_state: Option<super::types::NetworkClientSecurityState>,
-        #[serde(rename = "siteHasCookieInOtherPartition")] #[serde(default, skip_serializing_if = "Option::is_none")] site_has_cookie_in_other_partition: Option<bool>,
-        #[serde(rename = "appliedNetworkConditionsId")] #[serde(default, skip_serializing_if = "Option::is_none")] applied_network_conditions_id: Option<String>,
+        #[serde(rename = "deviceBoundSessionUsages", skip_serializing_if = "Option::is_none")] device_bound_session_usages: Option<Vec<super::types::NetworkDeviceBoundSessionWithUsage>>,
+        #[serde(rename = "clientSecurityState", skip_serializing_if = "Option::is_none")] client_security_state: Option<super::types::NetworkClientSecurityState>,
+        #[serde(rename = "siteHasCookieInOtherPartition", skip_serializing_if = "Option::is_none")] site_has_cookie_in_other_partition: Option<bool>,
+        #[serde(rename = "appliedNetworkConditionsId", skip_serializing_if = "Option::is_none")] applied_network_conditions_id: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, associated_cookies, headers, connect_timing, device_bound_session_usages, client_security_state, site_has_cookie_in_other_partition, applied_network_conditions_id,);
         Ok(())
@@ -346,7 +346,7 @@ pub trait NetworkEventsService {
         r#type: super::types::NetworkResourceType,
         response: super::types::NetworkResponse,
         #[serde(rename = "hasExtraInfo")] has_extra_info: bool,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, loader_id, timestamp, r#type, response, has_extra_info, frame_id,);
         Ok(())
@@ -374,10 +374,10 @@ pub trait NetworkEventsService {
         headers: super::types::NetworkHeaders,
         #[serde(rename = "resourceIPAddressSpace")] resource_ipaddress_space: super::types::NetworkIpaddressSpace,
         #[serde(rename = "statusCode")] status_code: i64,
-        #[serde(rename = "headersText")] #[serde(default, skip_serializing_if = "Option::is_none")] headers_text: Option<String>,
-        #[serde(rename = "cookiePartitionKey")] #[serde(default, skip_serializing_if = "Option::is_none")] cookie_partition_key: Option<super::types::NetworkCookiePartitionKey>,
-        #[serde(rename = "cookiePartitionKeyOpaque")] #[serde(default, skip_serializing_if = "Option::is_none")] cookie_partition_key_opaque: Option<bool>,
-        #[serde(rename = "exemptedCookies")] #[serde(default, skip_serializing_if = "Option::is_none")] exempted_cookies: Option<Vec<super::types::NetworkExemptedSetCookieWithReason>>,
+        #[serde(rename = "headersText", skip_serializing_if = "Option::is_none")] headers_text: Option<String>,
+        #[serde(rename = "cookiePartitionKey", skip_serializing_if = "Option::is_none")] cookie_partition_key: Option<super::types::NetworkCookiePartitionKey>,
+        #[serde(rename = "cookiePartitionKeyOpaque", skip_serializing_if = "Option::is_none")] cookie_partition_key_opaque: Option<bool>,
+        #[serde(rename = "exemptedCookies", skip_serializing_if = "Option::is_none")] exempted_cookies: Option<Vec<super::types::NetworkExemptedSetCookieWithReason>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, blocked_cookies, headers, resource_ipaddress_space, status_code, headers_text, cookie_partition_key, cookie_partition_key_opaque, exempted_cookies,);
         Ok(())
@@ -418,7 +418,7 @@ pub trait NetworkEventsService {
     async fn web_socket_created(
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
+        #[serde(skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, url, initiator,);
         Ok(())
@@ -506,7 +506,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "transportId")] transport_id: super::types::NetworkRequestId,
         url: String,
         timestamp: super::types::NetworkMonotonicTime,
-        #[serde(default, skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
+        #[serde(skip_serializing_if = "Option::is_none")] initiator: Option<super::types::NetworkInitiator>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, transport_id, url, timestamp, initiator,);
         Ok(())

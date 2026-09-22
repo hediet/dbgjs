@@ -26,7 +26,7 @@ pub trait CSSService {
         #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
         #[serde(rename = "ruleText")] rule_text: String,
         location: super::types::CssSourceRange,
-        #[serde(rename = "nodeForPropertySyntaxValidation")] #[serde(default, skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
+        #[serde(rename = "nodeForPropertySyntaxValidation", skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
     ) -> Result<super::types::CssAddRuleResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, style_sheet_id, rule_text, location, node_for_property_syntax_validation,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addRule"))
@@ -41,7 +41,7 @@ pub trait CSSService {
     #[name("createStyleSheet")]
     async fn create_style_sheet(
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] force: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] force: Option<bool>,
     ) -> Result<super::types::CssCreateStyleSheetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id, force,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createStyleSheet"))
@@ -176,9 +176,9 @@ pub trait CSSService {
     async fn resolve_values(
         values: Vec<String>,
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(rename = "propertyName")] #[serde(default, skip_serializing_if = "Option::is_none")] property_name: Option<String>,
-        #[serde(rename = "pseudoType")] #[serde(default, skip_serializing_if = "Option::is_none")] pseudo_type: Option<super::types::DomPseudoType>,
-        #[serde(rename = "pseudoIdentifier")] #[serde(default, skip_serializing_if = "Option::is_none")] pseudo_identifier: Option<String>,
+        #[serde(rename = "propertyName", skip_serializing_if = "Option::is_none")] property_name: Option<String>,
+        #[serde(rename = "pseudoType", skip_serializing_if = "Option::is_none")] pseudo_type: Option<super::types::DomPseudoType>,
+        #[serde(rename = "pseudoIdentifier", skip_serializing_if = "Option::is_none")] pseudo_identifier: Option<String>,
     ) -> Result<super::types::CssResolveValuesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, values, node_id, property_name, pseudo_type, pseudo_identifier,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveValues"))
@@ -293,7 +293,7 @@ pub trait CSSService {
     #[name("setStyleTexts")]
     async fn set_style_texts(
         edits: Vec<super::types::CssStyleDeclarationEdit>,
-        #[serde(rename = "nodeForPropertySyntaxValidation")] #[serde(default, skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
+        #[serde(rename = "nodeForPropertySyntaxValidation", skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
     ) -> Result<super::types::CssSetStyleTextsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, edits, node_for_property_syntax_validation,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStyleTexts"))
@@ -352,7 +352,7 @@ pub trait CSSService {
     /// so passing a new node id removes tracking from the previous node.
     /// Pass `undefined` to disable tracking.
     #[name("trackComputedStyleUpdatesForNode")]
-    async fn track_computed_style_updates_for_node(#[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>) -> Result<super::types::CssTrackComputedStyleUpdatesForNodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn track_computed_style_updates_for_node(#[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>) -> Result<super::types::CssTrackComputedStyleUpdatesForNodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackComputedStyleUpdatesForNode"))
     }

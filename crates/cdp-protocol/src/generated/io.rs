@@ -24,8 +24,8 @@ pub trait IOService {
     #[name("read")]
     async fn read(
         handle: super::types::IoStreamHandle,
-        #[serde(default, skip_serializing_if = "Option::is_none")] offset: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] size: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] offset: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] size: Option<i64>,
     ) -> Result<super::types::IoReadResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, handle, offset, size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "read"))

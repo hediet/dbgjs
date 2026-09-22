@@ -27,8 +27,8 @@ pub trait RuntimeService {
     #[name("addBinding")]
     async fn add_binding(
         name: String,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-        #[serde(rename = "executionContextName")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_name: Option<String>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "executionContextName", skip_serializing_if = "Option::is_none")] execution_context_name: Option<String>,
     ) -> Result<super::types::RuntimeAddBindingResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, name, execution_context_id, execution_context_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addBinding"))
@@ -37,8 +37,8 @@ pub trait RuntimeService {
     #[name("awaitPromise")]
     async fn await_promise(
         #[serde(rename = "promiseObjectId")] promise_object_id: super::types::RuntimeRemoteObjectId,
-        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
     ) -> Result<super::types::RuntimeAwaitPromiseResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, promise_object_id, return_by_value, generate_preview,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "awaitPromise"))
@@ -48,18 +48,18 @@ pub trait RuntimeService {
     #[name("callFunctionOn")]
     async fn call_function_on(
         #[serde(rename = "functionDeclaration")] function_declaration: String,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] arguments: Option<Vec<super::types::RuntimeCallArgument>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] silent: Option<bool>,
-        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
-        #[serde(rename = "userGesture")] #[serde(default, skip_serializing_if = "Option::is_none")] user_gesture: Option<bool>,
-        #[serde(rename = "awaitPromise")] #[serde(default, skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
-        #[serde(rename = "throwOnSideEffect")] #[serde(default, skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
-        #[serde(rename = "uniqueContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] unique_context_id: Option<String>,
-        #[serde(rename = "serializationOptions")] #[serde(default, skip_serializing_if = "Option::is_none")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(skip_serializing_if = "Option::is_none")] arguments: Option<Vec<super::types::RuntimeCallArgument>>,
+        #[serde(skip_serializing_if = "Option::is_none")] silent: Option<bool>,
+        #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "userGesture", skip_serializing_if = "Option::is_none")] user_gesture: Option<bool>,
+        #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
+        #[serde(rename = "uniqueContextId", skip_serializing_if = "Option::is_none")] unique_context_id: Option<String>,
+        #[serde(rename = "serializationOptions", skip_serializing_if = "Option::is_none")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
     ) -> Result<super::types::RuntimeCallFunctionOnResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, function_declaration, object_id, arguments, silent, return_by_value, generate_preview, user_gesture, await_promise, execution_context_id, object_group, throw_on_side_effect, unique_context_id, serialization_options,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "callFunctionOn"))
@@ -70,7 +70,7 @@ pub trait RuntimeService {
         expression: String,
         #[serde(rename = "sourceURL")] source_url: String,
         #[serde(rename = "persistScript")] persist_script: bool,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
     ) -> Result<super::types::RuntimeCompileScriptResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, expression, source_url, persist_script, execution_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "compileScript"))
@@ -99,21 +99,21 @@ pub trait RuntimeService {
     #[name("evaluate")]
     async fn evaluate(
         expression: String,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
-        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] silent: Option<bool>,
-        #[serde(rename = "contextId")] #[serde(default, skip_serializing_if = "Option::is_none")] context_id: Option<super::types::RuntimeExecutionContextId>,
-        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
-        #[serde(rename = "userGesture")] #[serde(default, skip_serializing_if = "Option::is_none")] user_gesture: Option<bool>,
-        #[serde(rename = "awaitPromise")] #[serde(default, skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
-        #[serde(rename = "throwOnSideEffect")] #[serde(default, skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] timeout: Option<super::types::RuntimeTimeDelta>,
-        #[serde(rename = "disableBreaks")] #[serde(default, skip_serializing_if = "Option::is_none")] disable_breaks: Option<bool>,
-        #[serde(rename = "replMode")] #[serde(default, skip_serializing_if = "Option::is_none")] repl_mode: Option<bool>,
-        #[serde(rename = "allowUnsafeEvalBlockedByCSP")] #[serde(default, skip_serializing_if = "Option::is_none")] allow_unsafe_eval_blocked_by_csp: Option<bool>,
-        #[serde(rename = "uniqueContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] unique_context_id: Option<String>,
-        #[serde(rename = "serializationOptions")] #[serde(default, skip_serializing_if = "Option::is_none")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] silent: Option<bool>,
+        #[serde(rename = "contextId", skip_serializing_if = "Option::is_none")] context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "userGesture", skip_serializing_if = "Option::is_none")] user_gesture: Option<bool>,
+        #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
+        #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] timeout: Option<super::types::RuntimeTimeDelta>,
+        #[serde(rename = "disableBreaks", skip_serializing_if = "Option::is_none")] disable_breaks: Option<bool>,
+        #[serde(rename = "replMode", skip_serializing_if = "Option::is_none")] repl_mode: Option<bool>,
+        #[serde(rename = "allowUnsafeEvalBlockedByCSP", skip_serializing_if = "Option::is_none")] allow_unsafe_eval_blocked_by_csp: Option<bool>,
+        #[serde(rename = "uniqueContextId", skip_serializing_if = "Option::is_none")] unique_context_id: Option<String>,
+        #[serde(rename = "serializationOptions", skip_serializing_if = "Option::is_none")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
     ) -> Result<super::types::RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, expression, object_group, include_command_line_api, silent, context_id, return_by_value, generate_preview, user_gesture, await_promise, throw_on_side_effect, timeout, disable_breaks, repl_mode, allow_unsafe_eval_blocked_by_csp, unique_context_id, serialization_options,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate"))
@@ -146,24 +146,24 @@ pub trait RuntimeService {
     #[name("getProperties")]
     async fn get_properties(
         #[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId,
-        #[serde(rename = "ownProperties")] #[serde(default, skip_serializing_if = "Option::is_none")] own_properties: Option<bool>,
-        #[serde(rename = "accessorPropertiesOnly")] #[serde(default, skip_serializing_if = "Option::is_none")] accessor_properties_only: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
-        #[serde(rename = "nonIndexedPropertiesOnly")] #[serde(default, skip_serializing_if = "Option::is_none")] non_indexed_properties_only: Option<bool>,
+        #[serde(rename = "ownProperties", skip_serializing_if = "Option::is_none")] own_properties: Option<bool>,
+        #[serde(rename = "accessorPropertiesOnly", skip_serializing_if = "Option::is_none")] accessor_properties_only: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "nonIndexedPropertiesOnly", skip_serializing_if = "Option::is_none")] non_indexed_properties_only: Option<bool>,
     ) -> Result<super::types::RuntimeGetPropertiesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, object_id, own_properties, accessor_properties_only, generate_preview, non_indexed_properties_only,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getProperties"))
     }
     /// Returns all let, const and class variables from global scope.
     #[name("globalLexicalScopeNames")]
-    async fn global_lexical_scope_names(#[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>) -> Result<super::types::RuntimeGlobalLexicalScopeNamesResult, linkrpc::prelude::JsonRpcError> {
+    async fn global_lexical_scope_names(#[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>) -> Result<super::types::RuntimeGlobalLexicalScopeNamesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, execution_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "globalLexicalScopeNames"))
     }
     #[name("queryObjects")]
     async fn query_objects(
         #[serde(rename = "prototypeObjectId")] prototype_object_id: super::types::RuntimeRemoteObjectId,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
     ) -> Result<super::types::RuntimeQueryObjectsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, prototype_object_id, object_group,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "queryObjects"))
@@ -197,13 +197,13 @@ pub trait RuntimeService {
     #[name("runScript")]
     async fn run_script(
         #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
-        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] silent: Option<bool>,
-        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
-        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
-        #[serde(rename = "awaitPromise")] #[serde(default, skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
+        #[serde(rename = "executionContextId", skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] silent: Option<bool>,
+        #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "awaitPromise", skip_serializing_if = "Option::is_none")] await_promise: Option<bool>,
     ) -> Result<super::types::RuntimeRunScriptResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, script_id, execution_context_id, object_group, silent, include_command_line_api, return_by_value, generate_preview, await_promise,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runScript"))

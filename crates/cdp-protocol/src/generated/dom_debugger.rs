@@ -19,8 +19,8 @@ pub trait DOMDebuggerService {
     #[name("getEventListeners")]
     async fn get_event_listeners(
         #[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] depth: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] depth: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] pierce: Option<bool>,
     ) -> Result<super::types::DomdebuggerGetEventListenersResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, object_id, depth, pierce,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEventListeners"))
@@ -38,7 +38,7 @@ pub trait DOMDebuggerService {
     #[name("removeEventListenerBreakpoint")]
     async fn remove_event_listener_breakpoint(
         #[serde(rename = "eventName")] event_name: String,
-        #[serde(rename = "targetName")] #[serde(default, skip_serializing_if = "Option::is_none")] target_name: Option<String>,
+        #[serde(rename = "targetName", skip_serializing_if = "Option::is_none")] target_name: Option<String>,
     ) -> Result<super::types::DomdebuggerRemoveEventListenerBreakpointResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, event_name, target_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeEventListenerBreakpoint"))
@@ -74,7 +74,7 @@ pub trait DOMDebuggerService {
     #[name("setEventListenerBreakpoint")]
     async fn set_event_listener_breakpoint(
         #[serde(rename = "eventName")] event_name: String,
-        #[serde(rename = "targetName")] #[serde(default, skip_serializing_if = "Option::is_none")] target_name: Option<String>,
+        #[serde(rename = "targetName", skip_serializing_if = "Option::is_none")] target_name: Option<String>,
     ) -> Result<super::types::DomdebuggerSetEventListenerBreakpointResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, event_name, target_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEventListenerBreakpoint"))

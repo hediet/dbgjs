@@ -43,7 +43,7 @@ pub trait HeapProfilerEventsService {
     async fn report_heap_snapshot_progress(
         done: i64,
         total: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] finished: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] finished: Option<bool>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, done, total, finished,);
         Ok(())

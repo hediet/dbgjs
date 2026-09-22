@@ -34,9 +34,9 @@ pub trait PageService {
     #[name("addScriptToEvaluateOnNewDocument")]
     async fn add_script_to_evaluate_on_new_document(
         source: String,
-        #[serde(rename = "worldName")] #[serde(default, skip_serializing_if = "Option::is_none")] world_name: Option<String>,
-        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
-        #[serde(rename = "runImmediately")] #[serde(default, skip_serializing_if = "Option::is_none")] run_immediately: Option<bool>,
+        #[serde(rename = "worldName", skip_serializing_if = "Option::is_none")] world_name: Option<String>,
+        #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(rename = "runImmediately", skip_serializing_if = "Option::is_none")] run_immediately: Option<bool>,
     ) -> Result<super::types::PageAddScriptToEvaluateOnNewDocumentResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, source, world_name, include_command_line_api, run_immediately,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScriptToEvaluateOnNewDocument"))
@@ -100,9 +100,9 @@ pub trait PageService {
     #[name("createIsolatedWorld")]
     async fn create_isolated_world(
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
-        #[serde(rename = "worldName")] #[serde(default, skip_serializing_if = "Option::is_none")] world_name: Option<String>,
-        #[serde(rename = "grantUniveralAccess")] #[serde(default, skip_serializing_if = "Option::is_none")] grant_univeral_access: Option<bool>,
-        #[serde(rename = "contentSecurityPolicy")] #[serde(default, skip_serializing_if = "Option::is_none")] content_security_policy: Option<String>,
+        #[serde(rename = "worldName", skip_serializing_if = "Option::is_none")] world_name: Option<String>,
+        #[serde(rename = "grantUniveralAccess", skip_serializing_if = "Option::is_none")] grant_univeral_access: Option<bool>,
+        #[serde(rename = "contentSecurityPolicy", skip_serializing_if = "Option::is_none")] content_security_policy: Option<String>,
     ) -> Result<super::types::PageCreateIsolatedWorldResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id, world_name, grant_univeral_access, content_security_policy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createIsolatedWorld"))
@@ -124,7 +124,7 @@ pub trait PageService {
     }
     /// Enables page domain notifications.
     #[name("enable")]
-    async fn enable(#[serde(rename = "enableFileChooserOpenedEvent")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_file_chooser_opened_event: Option<bool>) -> Result<super::types::PageEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "enableFileChooserOpenedEvent", skip_serializing_if = "Option::is_none")] enable_file_chooser_opened_event: Option<bool>) -> Result<super::types::PageEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enable_file_chooser_opened_event,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
@@ -132,7 +132,7 @@ pub trait PageService {
     #[name("generateTestReport")]
     async fn generate_test_report(
         message: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] group: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] group: Option<String>,
     ) -> Result<super::types::PageGenerateTestReportResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, message, group,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "generateTestReport"))
@@ -145,7 +145,7 @@ pub trait PageService {
     /// Get the annotated page content for the main frame.
     /// This is an experimental command that is subject to change.
     #[name("getAnnotatedPageContent")]
-    async fn get_annotated_page_content(#[serde(rename = "includeActionableInformation")] #[serde(default, skip_serializing_if = "Option::is_none")] include_actionable_information: Option<bool>) -> Result<super::types::PageGetAnnotatedPageContentResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_annotated_page_content(#[serde(rename = "includeActionableInformation", skip_serializing_if = "Option::is_none")] include_actionable_information: Option<bool>) -> Result<super::types::PageGetAnnotatedPageContentResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, include_actionable_information,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnnotatedPageContent"))
     }
@@ -162,7 +162,7 @@ pub trait PageService {
     ///     current document, this API errors out.
     ///   If there is not a loaded page, this API errors out immediately.
     #[name("getAppManifest")]
-    async fn get_app_manifest(#[serde(rename = "manifestId")] #[serde(default, skip_serializing_if = "Option::is_none")] manifest_id: Option<String>) -> Result<super::types::PageGetAppManifestResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_app_manifest(#[serde(rename = "manifestId", skip_serializing_if = "Option::is_none")] manifest_id: Option<String>) -> Result<super::types::PageGetAppManifestResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, manifest_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAppManifest"))
     }
@@ -226,7 +226,7 @@ pub trait PageService {
     #[name("handleJavaScriptDialog")]
     async fn handle_java_script_dialog(
         accept: bool,
-        #[serde(rename = "promptText")] #[serde(default, skip_serializing_if = "Option::is_none")] prompt_text: Option<String>,
+        #[serde(rename = "promptText", skip_serializing_if = "Option::is_none")] prompt_text: Option<String>,
     ) -> Result<super::types::PageHandleJavaScriptDialogResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, accept, prompt_text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "handleJavaScriptDialog"))
@@ -235,10 +235,10 @@ pub trait PageService {
     #[name("navigate")]
     async fn navigate(
         url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] referrer: Option<String>,
-        #[serde(rename = "transitionType")] #[serde(default, skip_serializing_if = "Option::is_none")] transition_type: Option<super::types::PageTransitionType>,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
-        #[serde(rename = "referrerPolicy")] #[serde(default, skip_serializing_if = "Option::is_none")] referrer_policy: Option<super::types::PageReferrerPolicy>,
+        #[serde(skip_serializing_if = "Option::is_none")] referrer: Option<String>,
+        #[serde(rename = "transitionType", skip_serializing_if = "Option::is_none")] transition_type: Option<super::types::PageTransitionType>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "referrerPolicy", skip_serializing_if = "Option::is_none")] referrer_policy: Option<super::types::PageReferrerPolicy>,
     ) -> Result<super::types::PageNavigateResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, url, referrer, transition_type, frame_id, referrer_policy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "navigate"))
@@ -269,9 +269,9 @@ pub trait PageService {
     /// Reloads given page optionally ignoring the cache.
     #[name("reload")]
     async fn reload(
-        #[serde(rename = "ignoreCache")] #[serde(default, skip_serializing_if = "Option::is_none")] ignore_cache: Option<bool>,
-        #[serde(rename = "scriptToEvaluateOnLoad")] #[serde(default, skip_serializing_if = "Option::is_none")] script_to_evaluate_on_load: Option<String>,
-        #[serde(rename = "loaderId")] #[serde(default, skip_serializing_if = "Option::is_none")] loader_id: Option<super::types::NetworkLoaderId>,
+        #[serde(rename = "ignoreCache", skip_serializing_if = "Option::is_none")] ignore_cache: Option<bool>,
+        #[serde(rename = "scriptToEvaluateOnLoad", skip_serializing_if = "Option::is_none")] script_to_evaluate_on_load: Option<String>,
+        #[serde(rename = "loaderId", skip_serializing_if = "Option::is_none")] loader_id: Option<super::types::NetworkLoaderId>,
     ) -> Result<super::types::PageReloadResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, ignore_cache, script_to_evaluate_on_load, loader_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reload"))
@@ -306,8 +306,8 @@ pub trait PageService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         url: String,
         query: String,
-        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
-        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+        #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
     ) -> Result<super::types::PageSearchInResourceResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id, url, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInResource"))
@@ -333,14 +333,14 @@ pub trait PageService {
         height: i64,
         #[serde(rename = "deviceScaleFactor")] device_scale_factor: f64,
         mobile: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] scale: Option<f64>,
-        #[serde(rename = "screenWidth")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_width: Option<i64>,
-        #[serde(rename = "screenHeight")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_height: Option<i64>,
-        #[serde(rename = "positionX")] #[serde(default, skip_serializing_if = "Option::is_none")] position_x: Option<i64>,
-        #[serde(rename = "positionY")] #[serde(default, skip_serializing_if = "Option::is_none")] position_y: Option<i64>,
-        #[serde(rename = "dontSetVisibleSize")] #[serde(default, skip_serializing_if = "Option::is_none")] dont_set_visible_size: Option<bool>,
-        #[serde(rename = "screenOrientation")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_orientation: Option<super::types::EmulationScreenOrientation>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] viewport: Option<super::types::PageViewport>,
+        #[serde(skip_serializing_if = "Option::is_none")] scale: Option<f64>,
+        #[serde(rename = "screenWidth", skip_serializing_if = "Option::is_none")] screen_width: Option<i64>,
+        #[serde(rename = "screenHeight", skip_serializing_if = "Option::is_none")] screen_height: Option<i64>,
+        #[serde(rename = "positionX", skip_serializing_if = "Option::is_none")] position_x: Option<i64>,
+        #[serde(rename = "positionY", skip_serializing_if = "Option::is_none")] position_y: Option<i64>,
+        #[serde(rename = "dontSetVisibleSize", skip_serializing_if = "Option::is_none")] dont_set_visible_size: Option<bool>,
+        #[serde(rename = "screenOrientation", skip_serializing_if = "Option::is_none")] screen_orientation: Option<super::types::EmulationScreenOrientation>,
+        #[serde(skip_serializing_if = "Option::is_none")] viewport: Option<super::types::PageViewport>,
     ) -> Result<super::types::PageSetDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, width, height, device_scale_factor, mobile, scale, screen_width, screen_height, position_x, position_y, dont_set_visible_size, screen_orientation, viewport,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceMetricsOverride"))
@@ -374,7 +374,7 @@ pub trait PageService {
     #[name("setFontFamilies")]
     async fn set_font_families(
         #[serde(rename = "fontFamilies")] font_families: super::types::PageFontFamilies,
-        #[serde(rename = "forScripts")] #[serde(default, skip_serializing_if = "Option::is_none")] for_scripts: Option<Vec<super::types::PageScriptFontFamilies>>,
+        #[serde(rename = "forScripts", skip_serializing_if = "Option::is_none")] for_scripts: Option<Vec<super::types::PageScriptFontFamilies>>,
     ) -> Result<super::types::PageSetFontFamiliesResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, font_families, for_scripts,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFontFamilies"))
@@ -389,9 +389,9 @@ pub trait PageService {
     /// unavailable.
     #[name("setGeolocationOverride")]
     async fn set_geolocation_override(
-        #[serde(default, skip_serializing_if = "Option::is_none")] latitude: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] longitude: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] accuracy: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] latitude: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] longitude: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] accuracy: Option<f64>,
     ) -> Result<super::types::PageSetGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, latitude, longitude, accuracy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setGeolocationOverride"))
@@ -402,7 +402,7 @@ pub trait PageService {
     #[name("setInterceptFileChooserDialog")]
     async fn set_intercept_file_chooser_dialog(
         enabled: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")] cancel: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] cancel: Option<bool>,
     ) -> Result<super::types::PageSetInterceptFileChooserDialogResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, enabled, cancel,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInterceptFileChooserDialog"))
@@ -456,10 +456,10 @@ pub trait PageService {
     /// Starts screencast video recording.
     #[name("startScreenRecording")]
     async fn start_screen_recording(
-        #[serde(default, skip_serializing_if = "Option::is_none")] audio: Option<bool>,
-        #[serde(rename = "maxWidth")] #[serde(default, skip_serializing_if = "Option::is_none")] max_width: Option<i64>,
-        #[serde(rename = "maxHeight")] #[serde(default, skip_serializing_if = "Option::is_none")] max_height: Option<i64>,
-        #[serde(rename = "frameRate")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_rate: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] audio: Option<bool>,
+        #[serde(rename = "maxWidth", skip_serializing_if = "Option::is_none")] max_width: Option<i64>,
+        #[serde(rename = "maxHeight", skip_serializing_if = "Option::is_none")] max_height: Option<i64>,
+        #[serde(rename = "frameRate", skip_serializing_if = "Option::is_none")] frame_rate: Option<i64>,
     ) -> Result<super::types::PageStartScreenRecordingResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, audio, max_width, max_height, frame_rate,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startScreenRecording"))

@@ -27,7 +27,7 @@ pub trait CastService {
     /// Also starts observing for issue messages. When an issue is added or removed,
     /// an |issueUpdated| event is fired.
     #[name("enable")]
-    async fn enable(#[serde(rename = "presentationUrl")] #[serde(default, skip_serializing_if = "Option::is_none")] presentation_url: Option<String>) -> Result<super::types::CastEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "presentationUrl", skip_serializing_if = "Option::is_none")] presentation_url: Option<String>) -> Result<super::types::CastEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, presentation_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }

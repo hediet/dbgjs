@@ -24,7 +24,7 @@ pub trait LayerTreeEventsService {
     }
     #[name("layerTreeDidChange")]
     #[notification]
-    async fn layer_tree_did_change(#[serde(default, skip_serializing_if = "Option::is_none")] layers: Option<Vec<super::types::LayerTreeLayer>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn layer_tree_did_change(#[serde(skip_serializing_if = "Option::is_none")] layers: Option<Vec<super::types::LayerTreeLayer>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, layers,);
         Ok(())
     }

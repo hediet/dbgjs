@@ -35,7 +35,7 @@ pub trait DebuggerService {
     /// Enables debugger for the given page. Clients should not assume that the debugging has been
     /// enabled until the result for this command is received.
     #[name("enable")]
-    async fn enable(#[serde(rename = "maxScriptsCacheSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_scripts_cache_size: Option<f64>) -> Result<super::types::DebuggerEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "maxScriptsCacheSize", skip_serializing_if = "Option::is_none")] max_scripts_cache_size: Option<f64>) -> Result<super::types::DebuggerEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, max_scripts_cache_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
@@ -44,14 +44,14 @@ pub trait DebuggerService {
     async fn evaluate_on_call_frame(
         #[serde(rename = "callFrameId")] call_frame_id: super::types::DebuggerCallFrameId,
         expression: String,
-        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
-        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] silent: Option<bool>,
-        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
-        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
-        #[serde(rename = "throwOnSideEffect")] #[serde(default, skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] timeout: Option<super::types::RuntimeTimeDelta>,
-        #[serde(rename = "scopeNumber")] #[serde(default, skip_serializing_if = "Option::is_none")] scope_number: Option<i64>,
+        #[serde(rename = "objectGroup", skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "includeCommandLineAPI", skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] silent: Option<bool>,
+        #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview", skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "throwOnSideEffect", skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] timeout: Option<super::types::RuntimeTimeDelta>,
+        #[serde(rename = "scopeNumber", skip_serializing_if = "Option::is_none")] scope_number: Option<i64>,
     ) -> Result<super::types::DebuggerEvaluateOnCallFrameResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, call_frame_id, expression, object_group, include_command_line_api, silent, return_by_value, generate_preview, throw_on_side_effect, timeout, scope_number,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluateOnCallFrame"))
@@ -61,8 +61,8 @@ pub trait DebuggerService {
     #[name("getPossibleBreakpoints")]
     async fn get_possible_breakpoints(
         start: super::types::DebuggerLocation,
-        #[serde(default, skip_serializing_if = "Option::is_none")] end: Option<super::types::DebuggerLocation>,
-        #[serde(rename = "restrictToFunction")] #[serde(default, skip_serializing_if = "Option::is_none")] restrict_to_function: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] end: Option<super::types::DebuggerLocation>,
+        #[serde(rename = "restrictToFunction", skip_serializing_if = "Option::is_none")] restrict_to_function: Option<bool>,
     ) -> Result<super::types::DebuggerGetPossibleBreakpointsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, start, end, restrict_to_function,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPossibleBreakpoints"))
@@ -131,7 +131,7 @@ pub trait DebuggerService {
     }
     /// Resumes JavaScript execution.
     #[name("resume")]
-    async fn resume(#[serde(rename = "terminateOnResume")] #[serde(default, skip_serializing_if = "Option::is_none")] terminate_on_resume: Option<bool>) -> Result<super::types::DebuggerResumeResult, linkrpc::prelude::JsonRpcError> {
+    async fn resume(#[serde(rename = "terminateOnResume", skip_serializing_if = "Option::is_none")] terminate_on_resume: Option<bool>) -> Result<super::types::DebuggerResumeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, terminate_on_resume,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resume"))
     }
@@ -140,8 +140,8 @@ pub trait DebuggerService {
     async fn search_in_content(
         #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
         query: String,
-        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
-        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+        #[serde(rename = "caseSensitive", skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex", skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
     ) -> Result<super::types::DebuggerSearchInContentResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, script_id, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInContent"))
@@ -166,7 +166,7 @@ pub trait DebuggerService {
     #[name("setBlackboxPatterns")]
     async fn set_blackbox_patterns(
         patterns: Vec<String>,
-        #[serde(rename = "skipAnonymous")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_anonymous: Option<bool>,
+        #[serde(rename = "skipAnonymous", skip_serializing_if = "Option::is_none")] skip_anonymous: Option<bool>,
     ) -> Result<super::types::DebuggerSetBlackboxPatternsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, patterns, skip_anonymous,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlackboxPatterns"))
@@ -187,7 +187,7 @@ pub trait DebuggerService {
     #[name("setBreakpoint")]
     async fn set_breakpoint(
         location: super::types::DebuggerLocation,
-        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] condition: Option<String>,
     ) -> Result<super::types::DebuggerSetBreakpointResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, location, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpoint"))
@@ -199,11 +199,11 @@ pub trait DebuggerService {
     #[name("setBreakpointByUrl")]
     async fn set_breakpoint_by_url(
         #[serde(rename = "lineNumber")] line_number: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
-        #[serde(rename = "urlRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] url_regex: Option<String>,
-        #[serde(rename = "scriptHash")] #[serde(default, skip_serializing_if = "Option::is_none")] script_hash: Option<String>,
-        #[serde(rename = "columnNumber")] #[serde(default, skip_serializing_if = "Option::is_none")] column_number: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(rename = "urlRegex", skip_serializing_if = "Option::is_none")] url_regex: Option<String>,
+        #[serde(rename = "scriptHash", skip_serializing_if = "Option::is_none")] script_hash: Option<String>,
+        #[serde(rename = "columnNumber", skip_serializing_if = "Option::is_none")] column_number: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] condition: Option<String>,
     ) -> Result<super::types::DebuggerSetBreakpointByUrlResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, line_number, url, url_regex, script_hash, column_number, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpointByUrl"))
@@ -214,7 +214,7 @@ pub trait DebuggerService {
     #[name("setBreakpointOnFunctionCall")]
     async fn set_breakpoint_on_function_call(
         #[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] condition: Option<String>,
     ) -> Result<super::types::DebuggerSetBreakpointOnFunctionCallResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, object_id, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpointOnFunctionCall"))
@@ -249,8 +249,8 @@ pub trait DebuggerService {
     async fn set_script_source(
         #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
         #[serde(rename = "scriptSource")] script_source: String,
-        #[serde(rename = "dryRun")] #[serde(default, skip_serializing_if = "Option::is_none")] dry_run: Option<bool>,
-        #[serde(rename = "allowTopFrameEditing")] #[serde(default, skip_serializing_if = "Option::is_none")] allow_top_frame_editing: Option<bool>,
+        #[serde(rename = "dryRun", skip_serializing_if = "Option::is_none")] dry_run: Option<bool>,
+        #[serde(rename = "allowTopFrameEditing", skip_serializing_if = "Option::is_none")] allow_top_frame_editing: Option<bool>,
     ) -> Result<super::types::DebuggerSetScriptSourceResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, script_id, script_source, dry_run, allow_top_frame_editing,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScriptSource"))
@@ -276,8 +276,8 @@ pub trait DebuggerService {
     /// Steps into the function call.
     #[name("stepInto")]
     async fn step_into(
-        #[serde(rename = "breakOnAsyncCall")] #[serde(default, skip_serializing_if = "Option::is_none")] break_on_async_call: Option<bool>,
-        #[serde(rename = "skipList")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>,
+        #[serde(rename = "breakOnAsyncCall", skip_serializing_if = "Option::is_none")] break_on_async_call: Option<bool>,
+        #[serde(rename = "skipList", skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>,
     ) -> Result<super::types::DebuggerStepIntoResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, break_on_async_call, skip_list,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stepInto"))
@@ -290,7 +290,7 @@ pub trait DebuggerService {
     }
     /// Steps over the statement.
     #[name("stepOver")]
-    async fn step_over(#[serde(rename = "skipList")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>) -> Result<super::types::DebuggerStepOverResult, linkrpc::prelude::JsonRpcError> {
+    async fn step_over(#[serde(rename = "skipList", skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>) -> Result<super::types::DebuggerStepOverResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, skip_list,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stepOver"))
     }

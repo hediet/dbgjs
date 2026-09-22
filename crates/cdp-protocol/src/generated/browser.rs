@@ -25,7 +25,7 @@ pub trait BrowserService {
     #[name("cancelDownload")]
     async fn cancel_download(
         guid: String,
-        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+        #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
     ) -> Result<super::types::BrowserCancelDownloadResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, guid, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelDownload"))
@@ -65,7 +65,7 @@ pub trait BrowserService {
     #[name("getHistogram")]
     async fn get_histogram(
         name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] delta: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] delta: Option<bool>,
     ) -> Result<super::types::BrowserGetHistogramResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, name, delta,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistogram"))
@@ -73,8 +73,8 @@ pub trait BrowserService {
     /// Get Chrome histograms.
     #[name("getHistograms")]
     async fn get_histograms(
-        #[serde(default, skip_serializing_if = "Option::is_none")] query: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] delta: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] query: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] delta: Option<bool>,
     ) -> Result<super::types::BrowserGetHistogramsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, query, delta,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistograms"))
@@ -93,7 +93,7 @@ pub trait BrowserService {
     }
     /// Get the browser window that contains the devtools target.
     #[name("getWindowForTarget")]
-    async fn get_window_for_target(#[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::BrowserGetWindowForTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_window_for_target(#[serde(rename = "targetId", skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::BrowserGetWindowForTargetResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, target_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWindowForTarget"))
     }
@@ -102,15 +102,15 @@ pub trait BrowserService {
     #[name("grantPermissions")]
     async fn grant_permissions(
         permissions: Vec<super::types::BrowserPermissionType>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] origin: Option<String>,
-        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+        #[serde(skip_serializing_if = "Option::is_none")] origin: Option<String>,
+        #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
     ) -> Result<super::types::BrowserGrantPermissionsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, permissions, origin, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "grantPermissions"))
     }
     /// Reset all permission management for all origins.
     #[name("resetPermissions")]
-    async fn reset_permissions(#[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::BrowserResetPermissionsResult, linkrpc::prelude::JsonRpcError> {
+    async fn reset_permissions(#[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::BrowserResetPermissionsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetPermissions"))
     }
@@ -118,8 +118,8 @@ pub trait BrowserService {
     #[name("setContentsSize")]
     async fn set_contents_size(
         #[serde(rename = "windowId")] window_id: super::types::BrowserWindowId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] width: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] height: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] width: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] height: Option<i64>,
     ) -> Result<super::types::BrowserSetContentsSizeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, window_id, width, height,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setContentsSize"))
@@ -127,8 +127,8 @@ pub trait BrowserService {
     /// Set dock tile details, platform-specific.
     #[name("setDockTile")]
     async fn set_dock_tile(
-        #[serde(rename = "badgeLabel")] #[serde(default, skip_serializing_if = "Option::is_none")] badge_label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] image: Option<String>,
+        #[serde(rename = "badgeLabel", skip_serializing_if = "Option::is_none")] badge_label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] image: Option<String>,
     ) -> Result<super::types::BrowserSetDockTileResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, badge_label, image,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDockTile"))
@@ -144,9 +144,9 @@ pub trait BrowserService {
     async fn set_permission(
         permission: super::types::BrowserPermissionDescriptor,
         setting: super::types::BrowserPermissionSetting,
-        #[serde(default, skip_serializing_if = "Option::is_none")] origin: Option<String>,
-        #[serde(rename = "embeddedOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] embedded_origin: Option<String>,
-        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+        #[serde(skip_serializing_if = "Option::is_none")] origin: Option<String>,
+        #[serde(rename = "embeddedOrigin", skip_serializing_if = "Option::is_none")] embedded_origin: Option<String>,
+        #[serde(rename = "browserContextId", skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
     ) -> Result<super::types::BrowserSetPermissionResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, permission, setting, origin, embedded_origin, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPermission"))

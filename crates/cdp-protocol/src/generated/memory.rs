@@ -74,8 +74,8 @@ pub trait MemoryService {
     /// Start collecting native memory profile.
     #[name("startSampling")]
     async fn start_sampling(
-        #[serde(rename = "samplingInterval")] #[serde(default, skip_serializing_if = "Option::is_none")] sampling_interval: Option<i64>,
-        #[serde(rename = "suppressRandomness")] #[serde(default, skip_serializing_if = "Option::is_none")] suppress_randomness: Option<bool>,
+        #[serde(rename = "samplingInterval", skip_serializing_if = "Option::is_none")] sampling_interval: Option<i64>,
+        #[serde(rename = "suppressRandomness", skip_serializing_if = "Option::is_none")] suppress_randomness: Option<bool>,
     ) -> Result<super::types::MemoryStartSamplingResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, sampling_interval, suppress_randomness,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startSampling"))

@@ -30,13 +30,13 @@ pub trait FedCmService {
     #[name("dismissDialog")]
     async fn dismiss_dialog(
         #[serde(rename = "dialogId")] dialog_id: String,
-        #[serde(rename = "triggerCooldown")] #[serde(default, skip_serializing_if = "Option::is_none")] trigger_cooldown: Option<bool>,
+        #[serde(rename = "triggerCooldown", skip_serializing_if = "Option::is_none")] trigger_cooldown: Option<bool>,
     ) -> Result<super::types::FedCmDismissDialogResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, dialog_id, trigger_cooldown,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dismissDialog"))
     }
     #[name("enable")]
-    async fn enable(#[serde(rename = "disableRejectionDelay")] #[serde(default, skip_serializing_if = "Option::is_none")] disable_rejection_delay: Option<bool>) -> Result<super::types::FedCmEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "disableRejectionDelay", skip_serializing_if = "Option::is_none")] disable_rejection_delay: Option<bool>) -> Result<super::types::FedCmEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, disable_rejection_delay,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }

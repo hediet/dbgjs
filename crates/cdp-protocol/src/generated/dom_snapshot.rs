@@ -21,10 +21,10 @@ pub trait DOMSnapshotService {
     #[name("captureSnapshot")]
     async fn capture_snapshot(
         #[serde(rename = "computedStyles")] computed_styles: Vec<String>,
-        #[serde(rename = "includePaintOrder")] #[serde(default, skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
-        #[serde(rename = "includeDOMRects")] #[serde(default, skip_serializing_if = "Option::is_none")] include_domrects: Option<bool>,
-        #[serde(rename = "includeBlendedBackgroundColors")] #[serde(default, skip_serializing_if = "Option::is_none")] include_blended_background_colors: Option<bool>,
-        #[serde(rename = "includeTextColorOpacities")] #[serde(default, skip_serializing_if = "Option::is_none")] include_text_color_opacities: Option<bool>,
+        #[serde(rename = "includePaintOrder", skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
+        #[serde(rename = "includeDOMRects", skip_serializing_if = "Option::is_none")] include_domrects: Option<bool>,
+        #[serde(rename = "includeBlendedBackgroundColors", skip_serializing_if = "Option::is_none")] include_blended_background_colors: Option<bool>,
+        #[serde(rename = "includeTextColorOpacities", skip_serializing_if = "Option::is_none")] include_text_color_opacities: Option<bool>,
     ) -> Result<super::types::DomsnapshotCaptureSnapshotResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, computed_styles, include_paint_order, include_domrects, include_blended_background_colors, include_text_color_opacities,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureSnapshot"))
@@ -48,9 +48,9 @@ pub trait DOMSnapshotService {
     #[name("getSnapshot")]
     async fn get_snapshot(
         #[serde(rename = "computedStyleWhitelist")] computed_style_whitelist: Vec<String>,
-        #[serde(rename = "includeEventListeners")] #[serde(default, skip_serializing_if = "Option::is_none")] include_event_listeners: Option<bool>,
-        #[serde(rename = "includePaintOrder")] #[serde(default, skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
-        #[serde(rename = "includeUserAgentShadowTree")] #[serde(default, skip_serializing_if = "Option::is_none")] include_user_agent_shadow_tree: Option<bool>,
+        #[serde(rename = "includeEventListeners", skip_serializing_if = "Option::is_none")] include_event_listeners: Option<bool>,
+        #[serde(rename = "includePaintOrder", skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
+        #[serde(rename = "includeUserAgentShadowTree", skip_serializing_if = "Option::is_none")] include_user_agent_shadow_tree: Option<bool>,
     ) -> Result<super::types::DomsnapshotGetSnapshotResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, computed_style_whitelist, include_event_listeners, include_paint_order, include_user_agent_shadow_tree,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSnapshot"))

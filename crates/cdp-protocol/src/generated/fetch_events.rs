@@ -46,12 +46,12 @@ pub trait FetchEventsService {
         request: super::types::NetworkRequest,
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "resourceType")] resource_type: super::types::NetworkResourceType,
-        #[serde(rename = "responseErrorReason")] #[serde(default, skip_serializing_if = "Option::is_none")] response_error_reason: Option<super::types::NetworkErrorReason>,
-        #[serde(rename = "responseStatusCode")] #[serde(default, skip_serializing_if = "Option::is_none")] response_status_code: Option<i64>,
-        #[serde(rename = "responseStatusText")] #[serde(default, skip_serializing_if = "Option::is_none")] response_status_text: Option<String>,
-        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
-        #[serde(rename = "networkId")] #[serde(default, skip_serializing_if = "Option::is_none")] network_id: Option<super::types::NetworkRequestId>,
-        #[serde(rename = "redirectedRequestId")] #[serde(default, skip_serializing_if = "Option::is_none")] redirected_request_id: Option<super::types::FetchRequestId>,
+        #[serde(rename = "responseErrorReason", skip_serializing_if = "Option::is_none")] response_error_reason: Option<super::types::NetworkErrorReason>,
+        #[serde(rename = "responseStatusCode", skip_serializing_if = "Option::is_none")] response_status_code: Option<i64>,
+        #[serde(rename = "responseStatusText", skip_serializing_if = "Option::is_none")] response_status_text: Option<String>,
+        #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "networkId", skip_serializing_if = "Option::is_none")] network_id: Option<super::types::NetworkRequestId>,
+        #[serde(rename = "redirectedRequestId", skip_serializing_if = "Option::is_none")] redirected_request_id: Option<super::types::FetchRequestId>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, request, frame_id, resource_type, response_error_reason, response_status_code, response_status_text, response_headers, network_id, redirected_request_id,);
         Ok(())

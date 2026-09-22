@@ -37,9 +37,9 @@ pub trait AutofillService {
     #[name("trigger")]
     async fn trigger(
         #[serde(rename = "fieldId")] field_id: super::types::DomBackendNodeId,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] card: Option<super::types::AutofillCreditCard>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] address: Option<super::types::AutofillAddress>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(skip_serializing_if = "Option::is_none")] card: Option<super::types::AutofillCreditCard>,
+        #[serde(skip_serializing_if = "Option::is_none")] address: Option<super::types::AutofillAddress>,
     ) -> Result<super::types::AutofillTriggerResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, field_id, frame_id, card, address,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trigger"))

@@ -29,7 +29,7 @@ pub trait FedCmEventsService {
         #[serde(rename = "dialogType")] dialog_type: super::types::FedCmDialogType,
         accounts: Vec<super::types::FedCmAccount>,
         title: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] subtitle: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] subtitle: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, dialog_id, dialog_type, accounts, title, subtitle,);
         Ok(())

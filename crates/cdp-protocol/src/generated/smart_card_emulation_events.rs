@@ -141,7 +141,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "contextId")] context_id: i64,
         #[serde(rename = "readerStates")] reader_states: Vec<super::types::SmartCardEmulationReaderStateIn>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] timeout: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")] timeout: Option<i64>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, context_id, reader_states, timeout,);
         Ok(())
@@ -215,7 +215,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
         data: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
+        #[serde(skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, handle, data, protocol,);
         Ok(())

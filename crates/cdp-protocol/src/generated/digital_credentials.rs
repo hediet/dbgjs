@@ -19,9 +19,9 @@ pub trait DigitalCredentialsService {
     #[name("setVirtualWalletBehavior")]
     async fn set_virtual_wallet_behavior(
         action: super::types::DigitalCredentialsVirtualWalletAction,
-        #[serde(default, skip_serializing_if = "Option::is_none")] protocol: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] response: Option<std::collections::HashMap<String, serde_json::Value>>,
-        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(skip_serializing_if = "Option::is_none")] protocol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] response: Option<std::collections::HashMap<String, serde_json::Value>>,
+        #[serde(rename = "frameId", skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
     ) -> Result<super::types::DigitalCredentialsSetVirtualWalletBehaviorResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, action, protocol, response, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualWalletBehavior"))

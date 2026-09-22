@@ -29,7 +29,7 @@ pub trait CSSEventsService {
     /// web font.
     #[name("fontsUpdated")]
     #[notification]
-    async fn fonts_updated(#[serde(default, skip_serializing_if = "Option::is_none")] font: Option<super::types::CssFontFace>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn fonts_updated(#[serde(skip_serializing_if = "Option::is_none")] font: Option<super::types::CssFontFace>) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, font,);
         Ok(())
     }

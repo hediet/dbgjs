@@ -19,7 +19,7 @@ pub trait ProfilerEventsService {
         id: String,
         location: super::types::DebuggerLocation,
         profile: super::types::ProfilerProfile,
-        #[serde(default, skip_serializing_if = "Option::is_none")] title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] title: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, id, location, profile, title,);
         Ok(())
@@ -30,7 +30,7 @@ pub trait ProfilerEventsService {
     async fn console_profile_started(
         id: String,
         location: super::types::DebuggerLocation,
-        #[serde(default, skip_serializing_if = "Option::is_none")] title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] title: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, id, location, title,);
         Ok(())

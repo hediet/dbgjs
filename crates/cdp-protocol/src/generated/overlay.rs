@@ -36,10 +36,10 @@ pub trait OverlayService {
     #[name("getHighlightObjectForTest")]
     async fn get_highlight_object_for_test(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-        #[serde(rename = "includeDistance")] #[serde(default, skip_serializing_if = "Option::is_none")] include_distance: Option<bool>,
-        #[serde(rename = "includeStyle")] #[serde(default, skip_serializing_if = "Option::is_none")] include_style: Option<bool>,
-        #[serde(rename = "colorFormat")] #[serde(default, skip_serializing_if = "Option::is_none")] color_format: Option<super::types::OverlayColorFormat>,
-        #[serde(rename = "showAccessibilityInfo")] #[serde(default, skip_serializing_if = "Option::is_none")] show_accessibility_info: Option<bool>,
+        #[serde(rename = "includeDistance", skip_serializing_if = "Option::is_none")] include_distance: Option<bool>,
+        #[serde(rename = "includeStyle", skip_serializing_if = "Option::is_none")] include_style: Option<bool>,
+        #[serde(rename = "colorFormat", skip_serializing_if = "Option::is_none")] color_format: Option<super::types::OverlayColorFormat>,
+        #[serde(rename = "showAccessibilityInfo", skip_serializing_if = "Option::is_none")] show_accessibility_info: Option<bool>,
     ) -> Result<super::types::OverlayGetHighlightObjectForTestResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, node_id, include_distance, include_style, color_format, show_accessibility_info,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHighlightObjectForTest"))
@@ -63,8 +63,8 @@ pub trait OverlayService {
     #[name("highlightFrame")]
     async fn highlight_frame(
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
-        #[serde(rename = "contentColor")] #[serde(default, skip_serializing_if = "Option::is_none")] content_color: Option<super::types::DomRgba>,
-        #[serde(rename = "contentOutlineColor")] #[serde(default, skip_serializing_if = "Option::is_none")] content_outline_color: Option<super::types::DomRgba>,
+        #[serde(rename = "contentColor", skip_serializing_if = "Option::is_none")] content_color: Option<super::types::DomRgba>,
+        #[serde(rename = "contentOutlineColor", skip_serializing_if = "Option::is_none")] content_outline_color: Option<super::types::DomRgba>,
     ) -> Result<super::types::OverlayHighlightFrameResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_id, content_color, content_outline_color,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightFrame"))
@@ -74,10 +74,10 @@ pub trait OverlayService {
     #[name("highlightNode")]
     async fn highlight_node(
         #[serde(rename = "highlightConfig")] highlight_config: super::types::OverlayHighlightConfig,
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] selector: Option<String>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(skip_serializing_if = "Option::is_none")] selector: Option<String>,
     ) -> Result<super::types::OverlayHighlightNodeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, highlight_config, node_id, backend_node_id, object_id, selector,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightNode"))
@@ -86,8 +86,8 @@ pub trait OverlayService {
     #[name("highlightQuad")]
     async fn highlight_quad(
         quad: super::types::DomQuad,
-        #[serde(default, skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>,
-        #[serde(rename = "outlineColor")] #[serde(default, skip_serializing_if = "Option::is_none")] outline_color: Option<super::types::DomRgba>,
+        #[serde(skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>,
+        #[serde(rename = "outlineColor", skip_serializing_if = "Option::is_none")] outline_color: Option<super::types::DomRgba>,
     ) -> Result<super::types::OverlayHighlightQuadResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, quad, color, outline_color,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightQuad"))
@@ -102,8 +102,8 @@ pub trait OverlayService {
         y: i64,
         width: i64,
         height: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>,
-        #[serde(rename = "outlineColor")] #[serde(default, skip_serializing_if = "Option::is_none")] outline_color: Option<super::types::DomRgba>,
+        #[serde(skip_serializing_if = "Option::is_none")] color: Option<super::types::DomRgba>,
+        #[serde(rename = "outlineColor", skip_serializing_if = "Option::is_none")] outline_color: Option<super::types::DomRgba>,
     ) -> Result<super::types::OverlayHighlightRectResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, x, y, width, height, color, outline_color,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightRect"))
@@ -113,9 +113,9 @@ pub trait OverlayService {
     #[name("highlightSourceOrder")]
     async fn highlight_source_order(
         #[serde(rename = "sourceOrderConfig")] source_order_config: super::types::OverlaySourceOrderConfig,
-        #[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
-        #[serde(rename = "backendNodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
-        #[serde(rename = "objectId")] #[serde(default, skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
+        #[serde(rename = "nodeId", skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>,
+        #[serde(rename = "backendNodeId", skip_serializing_if = "Option::is_none")] backend_node_id: Option<super::types::DomBackendNodeId>,
+        #[serde(rename = "objectId", skip_serializing_if = "Option::is_none")] object_id: Option<super::types::RuntimeRemoteObjectId>,
     ) -> Result<super::types::OverlayHighlightSourceOrderResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, source_order_config, node_id, backend_node_id, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightSourceOrder"))
@@ -125,13 +125,13 @@ pub trait OverlayService {
     #[name("setInspectMode")]
     async fn set_inspect_mode(
         mode: super::types::OverlayInspectMode,
-        #[serde(rename = "highlightConfig")] #[serde(default, skip_serializing_if = "Option::is_none")] highlight_config: Option<super::types::OverlayHighlightConfig>,
+        #[serde(rename = "highlightConfig", skip_serializing_if = "Option::is_none")] highlight_config: Option<super::types::OverlayHighlightConfig>,
     ) -> Result<super::types::OverlaySetInspectModeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, mode, highlight_config,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInspectMode"))
     }
     #[name("setPausedInDebuggerMessage")]
-    async fn set_paused_in_debugger_message(#[serde(default, skip_serializing_if = "Option::is_none")] message: Option<String>) -> Result<super::types::OverlaySetPausedInDebuggerMessageResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_paused_in_debugger_message(#[serde(skip_serializing_if = "Option::is_none")] message: Option<String>) -> Result<super::types::OverlaySetPausedInDebuggerMessageResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, message,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPausedInDebuggerMessage"))
     }
@@ -154,7 +154,7 @@ pub trait OverlayService {
     }
     /// Add a display cutout overlay.
     #[name("setShowDisplayCutout")]
-    async fn set_show_display_cutout(#[serde(rename = "displayCutoutConfig")] #[serde(default, skip_serializing_if = "Option::is_none")] display_cutout_config: Option<super::types::OverlayDisplayCutoutConfig>) -> Result<super::types::OverlaySetShowDisplayCutoutResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_display_cutout(#[serde(rename = "displayCutoutConfig", skip_serializing_if = "Option::is_none")] display_cutout_config: Option<super::types::OverlayDisplayCutoutConfig>) -> Result<super::types::OverlaySetShowDisplayCutoutResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, display_cutout_config,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowDisplayCutout"))
     }
@@ -177,7 +177,7 @@ pub trait OverlayService {
     }
     /// Add a dual screen device hinge
     #[name("setShowHinge")]
-    async fn set_show_hinge(#[serde(rename = "hingeConfig")] #[serde(default, skip_serializing_if = "Option::is_none")] hinge_config: Option<super::types::OverlayHingeConfig>) -> Result<super::types::OverlaySetShowHingeResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_hinge(#[serde(rename = "hingeConfig", skip_serializing_if = "Option::is_none")] hinge_config: Option<super::types::OverlayHingeConfig>) -> Result<super::types::OverlaySetShowHingeResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, hinge_config,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowHinge"))
     }
@@ -235,7 +235,7 @@ pub trait OverlayService {
     }
     /// Show Window Controls Overlay for PWA
     #[name("setShowWindowControlsOverlay")]
-    async fn set_show_window_controls_overlay(#[serde(rename = "windowControlsOverlayConfig")] #[serde(default, skip_serializing_if = "Option::is_none")] window_controls_overlay_config: Option<super::types::OverlayWindowControlsOverlayConfig>) -> Result<super::types::OverlaySetShowWindowControlsOverlayResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_window_controls_overlay(#[serde(rename = "windowControlsOverlayConfig", skip_serializing_if = "Option::is_none")] window_controls_overlay_config: Option<super::types::OverlayWindowControlsOverlayConfig>) -> Result<super::types::OverlaySetShowWindowControlsOverlayResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, window_controls_overlay_config,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowWindowControlsOverlay"))
     }

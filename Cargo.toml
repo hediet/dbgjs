@@ -3,8 +3,8 @@ members = ["crates/cdp-protocol", "crates/dbgjs-tui", "tools/cdp-codegen"]
 resolver = "3"
 
 [workspace.dependencies]
-linkrpc = { git = "https://github.com/hediet/linkrpc.git", rev = "54f7629cb838423738d6e026677a65221dc4ef67" }
-linkrpc-tokio = { git = "https://github.com/hediet/linkrpc.git", rev = "54f7629cb838423738d6e026677a65221dc4ef67" }
+linkrpc = { git = "https://github.com/hediet/linkrpc.git", rev = "363d2a661d19c5fa7b63661600810f6862a16cb1" }
+linkrpc-tokio = { git = "https://github.com/hediet/linkrpc.git", rev = "363d2a661d19c5fa7b63661600810f6862a16cb1" }
 
 [package]
 name = "dbgjs"

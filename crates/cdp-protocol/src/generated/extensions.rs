@@ -35,7 +35,7 @@ pub trait ExtensionsService {
     async fn get_storage_items(
         id: String,
         #[serde(rename = "storageArea")] storage_area: super::types::ExtensionsStorageArea,
-        #[serde(default, skip_serializing_if = "Option::is_none")] keys: Option<Vec<String>>,
+        #[serde(skip_serializing_if = "Option::is_none")] keys: Option<Vec<String>>,
     ) -> Result<super::types::ExtensionsGetStorageItemsResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, id, storage_area, keys,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageItems"))
@@ -46,7 +46,7 @@ pub trait ExtensionsService {
     #[name("loadUnpacked")]
     async fn load_unpacked(
         path: String,
-        #[serde(rename = "enableInIncognito")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_in_incognito: Option<bool>,
+        #[serde(rename = "enableInIncognito", skip_serializing_if = "Option::is_none")] enable_in_incognito: Option<bool>,
     ) -> Result<super::types::ExtensionsLoadUnpackedResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, path, enable_in_incognito,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "loadUnpacked"))

@@ -23,8 +23,8 @@ pub trait BluetoothEmulationEventsService {
     async fn characteristic_operation_received(
         #[serde(rename = "characteristicId")] characteristic_id: String,
         r#type: super::types::BluetoothEmulationCharacteristicOperationType,
-        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
-        #[serde(rename = "writeType")] #[serde(default, skip_serializing_if = "Option::is_none")] write_type: Option<super::types::BluetoothEmulationCharacteristicWriteType>,
+        #[serde(skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(rename = "writeType", skip_serializing_if = "Option::is_none")] write_type: Option<super::types::BluetoothEmulationCharacteristicWriteType>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, characteristic_id, r#type, data, write_type,);
         Ok(())
@@ -37,7 +37,7 @@ pub trait BluetoothEmulationEventsService {
     async fn descriptor_operation_received(
         #[serde(rename = "descriptorId")] descriptor_id: String,
         r#type: super::types::BluetoothEmulationDescriptorOperationType,
-        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] data: Option<String>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, descriptor_id, r#type, data,);
         Ok(())

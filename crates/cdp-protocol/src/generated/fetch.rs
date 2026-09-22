@@ -18,11 +18,11 @@ pub trait FetchService {
     #[name("continueRequest")]
     async fn continue_request(
         #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
-        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] method: Option<String>,
-        #[serde(rename = "postData")] #[serde(default, skip_serializing_if = "Option::is_none")] post_data: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] headers: Option<Vec<super::types::FetchHeaderEntry>>,
-        #[serde(rename = "interceptResponse")] #[serde(default, skip_serializing_if = "Option::is_none")] intercept_response: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] method: Option<String>,
+        #[serde(rename = "postData", skip_serializing_if = "Option::is_none")] post_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "interceptResponse", skip_serializing_if = "Option::is_none")] intercept_response: Option<bool>,
     ) -> Result<super::types::FetchContinueRequestResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, url, method, post_data, headers, intercept_response,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueRequest"))
@@ -33,10 +33,10 @@ pub trait FetchService {
     #[name("continueResponse")]
     async fn continue_response(
         #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
-        #[serde(rename = "responseCode")] #[serde(default, skip_serializing_if = "Option::is_none")] response_code: Option<i64>,
-        #[serde(rename = "responsePhrase")] #[serde(default, skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
-        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
-        #[serde(rename = "binaryResponseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
+        #[serde(rename = "responseCode", skip_serializing_if = "Option::is_none")] response_code: Option<i64>,
+        #[serde(rename = "responsePhrase", skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
+        #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "binaryResponseHeaders", skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
     ) -> Result<super::types::FetchContinueResponseResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, response_code, response_phrase, response_headers, binary_response_headers,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueResponse"))
@@ -60,8 +60,8 @@ pub trait FetchService {
     /// calls one of failRequest, fulfillRequest or continueRequest/continueWithAuth.
     #[name("enable")]
     async fn enable(
-        #[serde(default, skip_serializing_if = "Option::is_none")] patterns: Option<Vec<super::types::FetchRequestPattern>>,
-        #[serde(rename = "handleAuthRequests")] #[serde(default, skip_serializing_if = "Option::is_none")] handle_auth_requests: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] patterns: Option<Vec<super::types::FetchRequestPattern>>,
+        #[serde(rename = "handleAuthRequests", skip_serializing_if = "Option::is_none")] handle_auth_requests: Option<bool>,
     ) -> Result<super::types::FetchEnableResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, patterns, handle_auth_requests,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
@@ -80,10 +80,10 @@ pub trait FetchService {
     async fn fulfill_request(
         #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
         #[serde(rename = "responseCode")] response_code: i64,
-        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
-        #[serde(rename = "binaryResponseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] body: Option<String>,
-        #[serde(rename = "responsePhrase")] #[serde(default, skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
+        #[serde(rename = "responseHeaders", skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "binaryResponseHeaders", skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] body: Option<String>,
+        #[serde(rename = "responsePhrase", skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
     ) -> Result<super::types::FetchFulfillRequestResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, request_id, response_code, response_headers, binary_response_headers, body, response_phrase,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fulfillRequest"))

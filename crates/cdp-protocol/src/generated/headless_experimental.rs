@@ -20,10 +20,10 @@ pub trait HeadlessExperimentalService {
     /// https://goo.gle/chrome-headless-rendering for more background.
     #[name("beginFrame")]
     async fn begin_frame(
-        #[serde(rename = "frameTimeTicks")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_time_ticks: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] interval: Option<f64>,
-        #[serde(rename = "noDisplayUpdates")] #[serde(default, skip_serializing_if = "Option::is_none")] no_display_updates: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] screenshot: Option<super::types::HeadlessExperimentalScreenshotParams>,
+        #[serde(rename = "frameTimeTicks", skip_serializing_if = "Option::is_none")] frame_time_ticks: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")] interval: Option<f64>,
+        #[serde(rename = "noDisplayUpdates", skip_serializing_if = "Option::is_none")] no_display_updates: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] screenshot: Option<super::types::HeadlessExperimentalScreenshotParams>,
     ) -> Result<super::types::HeadlessExperimentalBeginFrameResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, frame_time_ticks, interval, no_display_updates, screenshot,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "beginFrame"))
