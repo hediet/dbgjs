@@ -1305,6 +1305,8 @@ pretty-printed.
 Searching logical/projected sources is a first-class operation:
 
 Search acquires matching metadata-only runtime scripts before scanning them.
+Initial debugger script replay is processed before the first target command, so
+an immediate search after attachment sees the already-loaded scripts.
 Map-bearing scripts are also acquired to discover matching authored filenames,
 even when their generated bundle URL does not match `--path`. Acquisition shares
 the source-show/tree path, observes search deadlines and cancellation, and keeps
@@ -1930,11 +1932,16 @@ operations do not acquire Electron-specific variants. Zero or multiple
 `WebContents` matches are explicit errors.
 
 The main-process CDP connection bootstraps an authenticated loopback server but
-does not carry renderer traffic. One control socket owns the bridge lifetime,
-and one renderer socket carries newline-delimited CDP envelopes for each
-attachment. Closing a renderer socket releases only its debugger attachment;
-closing the control socket releases every attachment and the server. This also
-makes process termination a cleanup signal enforced by the operating system
+does not carry renderer traffic. Connections to the same Electron root share
+one server, with an independently authenticated control client for each
+connection. One renderer socket carries newline-delimited CDP envelopes for
+each attachment. Closing a renderer socket releases only its debugger
+attachment; closing a control client releases only that client's attachments.
+The last client closes the server. Discovery subscriptions are client-local,
+and startup blocking remains enabled while any client requests it. Different
+contexts can therefore debug different windows without replacing each other's
+bridge, while debugger ownership of an individual renderer remains exclusive.
+Process termination is a cleanup signal enforced by the operating system
 rather than by a remote JavaScript object finalizer.
 
 The bridge owns only debugger attachments it created and never detaches an

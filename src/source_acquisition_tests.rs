@@ -12,6 +12,7 @@ use crate::session_transport::CdpEnvelope;
 
 struct SourceTransport {
     responses: BTreeMap<String, Result<String, String>>,
+    replayed_scripts: Vec<(String, String)>,
     requests: std::sync::Mutex<Vec<String>>,
     breakpoint_requests: std::sync::Mutex<Vec<serde_json::Value>>,
     inbound: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<CdpEnvelope>>,
@@ -25,6 +26,32 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for SourceTransport {
             return Ok(());
         };
         let payload = match request.method.as_str() {
+            "Runtime.enable" | "Debugger.disable" => ResponsePayload::Result(json!({})),
+            "Debugger.enable" => {
+                for (script_id, url) in &self.replayed_scripts {
+                    self.outbound
+                        .send(CdpEnvelope {
+                            session_id: envelope.session_id.clone(),
+                            message: JsonRpcMessage::Notification(
+                                linkrpc::prelude::JsonRpcNotification {
+                                    method: "Debugger.scriptParsed".into(),
+                                    params: Some(json!({
+                                        "scriptId": script_id,
+                                        "url": url,
+                                        "startLine": 0,
+                                        "startColumn": 0,
+                                        "endLine": 1,
+                                        "endColumn": 0,
+                                        "executionContextId": 1,
+                                        "hash": script_id,
+                                    })),
+                                },
+                            ),
+                        })
+                        .map_err(|_| TransportError::Closed)?;
+                }
+                ResponsePayload::Result(json!({ "debuggerId": "source-test" }))
+            }
             "Debugger.getScriptSource" => {
                 let script = request.params.as_ref().unwrap()["scriptId"].as_str().unwrap();
                 self.requests.lock().unwrap().push(script.to_owned());
@@ -79,6 +106,7 @@ async fn source_driver(
     let (outbound, inbound) = tokio::sync::mpsc::unbounded_channel();
     let transport = Arc::new(SourceTransport {
         responses,
+        replayed_scripts: Vec::new(),
         requests: Default::default(),
         breakpoint_requests: Default::default(),
         inbound: tokio::sync::Mutex::new(inbound),
@@ -127,6 +155,125 @@ async fn source_driver(
         sources,
     );
     (driver, transport)
+}
+
+async fn source_target(
+    replayed_scripts: Vec<(String, String)>,
+    responses: BTreeMap<String, Result<String, String>>,
+) -> TargetDebuggerHandle {
+    let (outbound, inbound) = tokio::sync::mpsc::unbounded_channel();
+    let transport = Arc::new(SourceTransport {
+        responses,
+        replayed_scripts,
+        requests: Default::default(),
+        breakpoint_requests: Default::default(),
+        inbound: tokio::sync::Mutex::new(inbound),
+        outbound,
+    });
+    let connection = CdpConnection::connect_root_debugger_transport(
+        transport,
+        1,
+        "source-test".to_owned(),
+    )
+    .await
+    .unwrap();
+    let session = SessionKey {
+        connection_generation: 1,
+        session_id: "source-test".to_owned(),
+    };
+    TargetDebuggerHandle::start(
+        "source-test".to_owned(),
+        "source-test".to_owned(),
+        "runtime".to_owned(),
+        1,
+        connection.take_root_debugger_session().unwrap(),
+        session,
+        false,
+        Arc::new(ContextSourceModel::new()),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn immediate_runtime_source_search_waits_for_initial_script_replay() {
+    for _ in 0..32 {
+        let target = source_target(
+            vec![(
+                "workbench".to_owned(),
+                "file:///out/vs/workbench/workbench.desktop.main.js".to_owned(),
+            )],
+            BTreeMap::from([(
+                "workbench".to_owned(),
+                Ok("super(message || \"An unexpected bug occurred.\")".to_owned()),
+            )]),
+        )
+        .await;
+
+        let batch = target
+            .source_search_batch(
+                Some("workbench.desktop.main.js".to_owned()),
+                true,
+                SearchControl::with_deadline(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(batch.sources.len(), 1);
+        assert!(
+            batch.sources[0]
+                .content
+                .contains("An unexpected bug occurred.")
+        );
+
+        let no_match = tokio::time::timeout(
+            Duration::from_millis(100),
+            target.source_search_batch(
+                Some("missing.js".to_owned()),
+                true,
+                SearchControl::default(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(no_match.sources.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn initial_script_replay_remains_within_search_deadline_and_cancellation() {
+    for control in {
+        let cancelled = SearchControl::default();
+        cancelled.cancel();
+        [
+            SearchControl::with_deadline(std::time::Instant::now()),
+            cancelled,
+        ]
+    } {
+        let target = source_target(
+            vec![(
+                "workbench".to_owned(),
+                "file:///out/vs/workbench/workbench.desktop.main.js".to_owned(),
+            )],
+            BTreeMap::from([("workbench".to_owned(), Ok("content".to_owned()))]),
+        )
+        .await;
+        let result = target
+            .source_search_batch(
+                Some("workbench.desktop.main.js".to_owned()),
+                true,
+                control,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(TargetDebuggerError::SourceSearch(
+                SearchError::DeadlineExceeded | SearchError::Cancelled
+            ))
+        ));
+    }
 }
 
 #[tokio::test]

@@ -72,7 +72,6 @@ pub struct ElectronRendererBridge {
 impl ElectronRendererBridge {
     pub async fn install(
         client: CdpClient<linkrpc::connection::channel::Channel>,
-        independent: bool,
     ) -> Result<Option<Arc<Self>>, TransportError> {
         let token = random_token()?;
         let token_json = serde_json::to_string(&token).map_err(|error| {
@@ -80,7 +79,7 @@ impl ElectronRendererBridge {
         })?;
         let expression = format!(
             "typeof process !== 'undefined' && process.versions?.electron && process.type === 'browser' \
-             ? ({BRIDGE_SOURCE})({token_json}, {independent}) : null"
+             ? ({BRIDGE_SOURCE})({token_json}) : null"
         );
         let mut params = RuntimeEvaluateParams::new(expression);
         params.object_group = Some(BRIDGE_OBJECT_GROUP.to_owned());

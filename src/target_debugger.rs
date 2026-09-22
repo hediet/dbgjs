@@ -1141,6 +1141,30 @@ enum TargetCommand {
     },
 }
 
+enum TargetInput<C, E> {
+    Command(C),
+    Event(E),
+}
+
+async fn next_target_input<C, E>(
+    event: impl std::future::Future<Output = E>,
+    command: impl std::future::Future<Output = C>,
+    debugger_replay_pending: bool,
+) -> TargetInput<C, E> {
+    if debugger_replay_pending {
+        tokio::select! {
+            biased;
+            event = event => TargetInput::Event(event),
+            command = command => TargetInput::Command(command),
+        }
+    } else {
+        tokio::select! {
+            event = event => TargetInput::Event(event),
+            command = command => TargetInput::Command(command),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_target(
     context_id: String,
@@ -1164,16 +1188,20 @@ async fn run_target(
     let mut heap_constructor_groups = BTreeMap::<String, Arc<Vec<HeapConstructorGroup>>>::new();
     let mut heap_graphs = BTreeMap::<String, Arc<HeapGraph>>::new();
     let mut heap_aliases = BTreeMap::<(String, String), String>::new();
+    // Debugger.enable replays known scripts before its response; reduce those queued events before
+    // accepting the first command so source acquisition sees the complete initial script set.
+    let mut debugger_replay_pending = true;
     loop {
-        enum Next {
-            Command(Option<TargetCommand>),
-            Event(Result<bool, DebuggerDriverError>),
+        let next = next_target_input(
+            driver.process_next_event(),
+            commands.recv(),
+            debugger_replay_pending,
+        )
+        .await;
+        if matches!(&next, TargetInput::Command(_)) {
+            debugger_replay_pending = false;
         }
-
-        let next = tokio::select! {
-            command = commands.recv() => Next::Command(command),
-            event = driver.process_next_event() => Next::Event(event),
-        };
+        use TargetInput as Next;
         match next {
             Next::Command(Some(TargetCommand::SetBreakpoints {
                 context_revision,
@@ -6444,8 +6472,8 @@ mod tests {
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
         complete_source_search_batch, cpu_profile_sample_durations, cpu_profile_snapshot,
         effective_coverage_ranges, evaluated_remote_from_envelope, forward_heap_snapshot_progress,
-        heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
-        window_highlighted_line,
+        heap_class_display_name, next_target_input, predicate_matches, publish_snapshot, snapshot,
+        source_excerpt, window_highlighted_line, TargetInput,
     };
     use super::{project_heap_classes, supply_heap_source_map};
     use crate::cdp::{
@@ -6476,6 +6504,40 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn replayed_debugger_events_are_observed_before_ready_commands() {
+        let next = next_target_input(
+            std::future::ready("Debugger.scriptParsed"),
+            std::future::ready("source search"),
+            true,
+        )
+        .await;
+
+        assert!(matches!(
+            next,
+            TargetInput::Event("Debugger.scriptParsed")
+        ));
+    }
+
+    #[tokio::test]
+    async fn default_scheduling_remains_ready_after_replayed_events_are_drained() {
+        let command = next_target_input(
+            std::future::pending::<&str>(),
+            std::future::ready("source search"),
+            false,
+        )
+        .await;
+        assert!(matches!(command, TargetInput::Command("source search")));
+
+        let event = next_target_input(
+            std::future::ready("Debugger.paused"),
+            std::future::pending::<&str>(),
+            false,
+        )
+        .await;
+        assert!(matches!(event, TargetInput::Event("Debugger.paused")));
+    }
 
     #[tokio::test]
     async fn heap_progress_forwarding_is_command_scoped_and_flushes_final_update() {

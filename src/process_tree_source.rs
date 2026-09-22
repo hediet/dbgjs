@@ -129,12 +129,7 @@ impl ProcessTreeTargetSource {
         source.supervise_provider_events(provider_events);
         // Browser roots have no Runtime domain; plain Node roots explicitly return no bridge.
         if !root_endpoint_url.contains("/devtools/browser/") {
-            match ElectronRendererBridge::install(
-                root_endpoint.client(),
-                source.browser_endpoint.is_some(),
-            )
-            .await
-            {
+            match ElectronRendererBridge::install(root_endpoint.client()).await {
                 Ok(Some(bridge)) => {
                     source.supervise_bridge_events(&bridge).await;
                     *source.bridge.lock().await = Some(bridge);

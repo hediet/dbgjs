@@ -1,4 +1,4 @@
-async (token, independent = false) => {
+async function installRendererBridge(token) {
 	const electronRequire = typeof require === "function"
 		? require
 		: process?.mainModule?.require?.bind(process.mainModule);
@@ -9,8 +9,15 @@ async (token, independent = false) => {
 	const net = electronRequire("node:net");
 	const registryKey = Symbol.for("dbgjs.rendererBridge");
 	const previous = globalThis[registryKey];
-	if (!independent && previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
-		await previous.bridge.dispose("replaced by a new dbgjs bridge");
+	if (previous?.owner === "dbgjs" && previous.version === 2
+		&& typeof previous.server?.createClient === "function") {
+		return previous.server.createClient(token);
+	}
+	if (previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
+		await previous.bridge.dispose("replaced by a compatible dbgjs bridge");
+		if (globalThis[registryKey] !== previous) {
+			return installRendererBridge(token);
+		}
 	}
 
 	const maxMessageBytes = 128 * 1024 * 1024;
@@ -24,12 +31,11 @@ async (token, independent = false) => {
 	const startupBlocks = new Map();
 	const watched = new Set();
 	const pendingSockets = new Set();
-	const pendingAttachments = new Set();
-	let controlSocket;
-	let controlTimer;
+	const pendingAttachments = new Map();
+	const socketClients = new Map();
+	const clients = new Map();
 	let disposed = false;
-	let discovering = false;
-	let waitForDebuggerOnStart = false;
+	let disposePromise;
 	let server;
 	let bridge;
 
@@ -124,10 +130,11 @@ async (token, independent = false) => {
 		}
 	};
 	const publish = (kind, payload) => {
-		if (!discovering || !controlSocket || controlSocket.destroyed) {
-			return;
+		for (const client of clients.values()) {
+			if (client.discovering && client.controlSocket && !client.controlSocket.destroyed) {
+				writeFrame(client.controlSocket, { kind, ...payload });
+			}
 		}
-		writeFrame(controlSocket, { kind, ...payload });
 	};
 	const publishTarget = (kind, contents) => {
 		publish(kind, { target: descriptor(contents) });
@@ -242,7 +249,7 @@ async (token, independent = false) => {
 	};
 	const onWebContentsCreated = (contents) => {
 		watch(contents);
-		if (!waitForDebuggerOnStart) {
+		if (![...clients.values()].some((client) => client.waitForDebuggerOnStart)) {
 			publishTarget("targetCreated", contents);
 			return;
 		}
@@ -330,8 +337,8 @@ async (token, independent = false) => {
 			writeFrame(entry.socket, { kind: "cdp", envelope: response });
 		}
 	};
-	const attachRenderer = async (socket, webContentsId, force) => {
-		if (disposed) {
+	const attachRenderer = async (client, socket, webContentsId, force) => {
+		if (disposed || client.disposed) {
 			throw new Error("renderer bridge is disposed");
 		}
 		const previousClient = rendererClients.get(webContentsId);
@@ -356,6 +363,7 @@ async (token, independent = false) => {
 			stolen = true;
 		}
 		const entry = {
+			client,
 			webContentsId,
 			contents,
 			socket,
@@ -438,31 +446,84 @@ async (token, independent = false) => {
 			}
 		});
 	};
+	const releaseUnclaimedStartupBlocks = () => {
+		if ([...clients.values()].some((client) => client.waitForDebuggerOnStart)) {
+			return;
+		}
+		for (const webContentsId of [...startupBlocks.keys()]) {
+			if (!rendererClients.has(webContentsId)) {
+				void releaseStartup(webContentsId, true);
+			}
+		}
+	};
+	const disposeClient = async (client, reason, acknowledgeSocket) => {
+		if (client.disposed) {
+			return;
+		}
+		client.disposed = true;
+		client.discovering = false;
+		client.waitForDebuggerOnStart = false;
+		clearTimeout(client.controlTimer);
+		clients.delete(client.token);
+		for (const socket of pendingSockets) {
+			if (socketClients.get(socket) === client) {
+				socket.destroy();
+			}
+		}
+		const attachments = [...pendingAttachments]
+			.filter(([, owner]) => owner === client)
+			.map(([attachment]) => attachment);
+		await Promise.allSettled(attachments);
+		await Promise.all(
+			[...rendererClients.values()]
+				.filter((entry) => entry.client === client)
+				.map((entry) => releaseRenderer(entry, reason)),
+		);
+		releaseUnclaimedStartupBlocks();
+		if (acknowledgeSocket && !acknowledgeSocket.destroyed) {
+			writeFrame(acknowledgeSocket, { kind: "disposed" });
+			acknowledgeSocket.end();
+		} else if (client.controlSocket && !client.controlSocket.destroyed) {
+			client.controlSocket.destroy();
+		}
+		client.controlSocket = undefined;
+		if (clients.size === 0) {
+			await bridge.dispose(reason);
+		}
+	};
 	const acceptSocket = (socket) => {
 		pendingSockets.add(socket);
 		socket.setNoDelay(true);
 		let authenticated = false;
+		let client;
 		let rendererEntry;
 		readLines(socket, (frame) => {
 			if (!authenticated) {
 				authenticated = true;
 				void (async () => {
-					if (frame?.token !== token) {
+					client = clients.get(frame?.token);
+					if (!client || client.disposed) {
 						throw new Error("renderer bridge authentication failed");
 					}
+					socketClients.set(socket, client);
 					if (frame.role === "control") {
-						if (controlSocket && !controlSocket.destroyed) {
-							throw new Error("renderer bridge already has a control client");
+						if (client.controlSocket && !client.controlSocket.destroyed) {
+							throw new Error("renderer bridge client already has a control connection");
 						}
-						controlSocket = socket;
+						client.controlSocket = socket;
 						pendingSockets.delete(socket);
-						clearTimeout(controlTimer);
+						clearTimeout(client.controlTimer);
 						writeFrame(socket, { ready: true });
 						return;
 					}
 					if (frame.role === "renderer" && Number.isInteger(frame.webContentsId)) {
-						const attachment = attachRenderer(socket, frame.webContentsId, frame.force === true);
-						pendingAttachments.add(attachment);
+						const attachment = attachRenderer(
+							client,
+							socket,
+							frame.webContentsId,
+							frame.force === true,
+						);
+						pendingAttachments.set(attachment, client);
 						try {
 							const result = await attachment;
 							rendererEntry = result.entry;
@@ -483,18 +544,19 @@ async (token, independent = false) => {
 				});
 				return;
 			}
-			if (socket === controlSocket) {
+			if (socket === client?.controlSocket) {
 				if (frame?.kind === "dispose") {
-					void bridge.dispose("disposed by debugger service", socket);
+					void disposeClient(client, "disposed by debugger service", socket);
 					return;
 				}
 				if (frame?.kind === "setDiscovery") {
-					discovering = frame.enabled === true;
+					client.discovering = frame.enabled === true;
 					acknowledge(socket, frame);
 					return;
 				}
 				if (frame?.kind === "setWaitForDebuggerOnStart") {
-					bridge.setWaitForDebuggerOnStart(frame.enabled === true);
+					client.waitForDebuggerOnStart = frame.enabled === true;
+					releaseUnclaimedStartupBlocks();
 					acknowledge(socket, frame);
 					return;
 				}
@@ -511,9 +573,10 @@ async (token, independent = false) => {
 		});
 		socket.once("close", () => {
 			pendingSockets.delete(socket);
-			if (socket === controlSocket) {
-				controlSocket = undefined;
-				void bridge.dispose("renderer bridge control socket closed");
+			socketClients.delete(socket);
+			if (client && socket === client.controlSocket) {
+				client.controlSocket = undefined;
+				void disposeClient(client, "renderer bridge control socket closed");
 			} else if (rendererEntry) {
 				void releaseRenderer(rendererEntry, "renderer bridge socket closed", false);
 			}
@@ -524,7 +587,7 @@ async (token, independent = false) => {
 	};
 
 	server = net.createServer(acceptSocket);
-	await new Promise((resolve, reject) => {
+	const serverReady = new Promise((resolve, reject) => {
 		const onError = (error) => {
 			server.off("listening", onListening);
 			reject(error);
@@ -539,6 +602,38 @@ async (token, independent = false) => {
 	});
 
 	bridge = {
+		async createClient(clientToken) {
+			await serverReady;
+			if (disposed) {
+				await disposePromise;
+				return installRendererBridge(clientToken);
+			}
+			if (clients.has(clientToken)) {
+				throw new Error("renderer bridge client token is already registered");
+			}
+			const client = {
+				token: clientToken,
+				controlSocket: undefined,
+				controlTimer: undefined,
+				discovering: false,
+				waitForDebuggerOnStart: false,
+				disposed: false,
+			};
+			const lease = {
+				endpoint: () => bridge.endpoint(),
+				list: () => bridge.list(),
+				resolveBrowserTargets: (targetIds) => bridge.resolveBrowserTargets(targetIds),
+				dispose: (reason = "renderer bridge client disposed") => disposeClient(client, reason),
+			};
+			clients.set(clientToken, client);
+			client.controlTimer = setTimeout(() => {
+				if (!client.controlSocket) {
+					void disposeClient(client, "renderer bridge control handshake timed out");
+				}
+			}, 10_000);
+			client.controlTimer.unref?.();
+			return lease;
+		},
 		endpoint() {
 			const address = server.address();
 			if (!address || typeof address === "string") {
@@ -558,50 +653,39 @@ async (token, independent = false) => {
 				return contents && !contents.isDestroyed() ? [[targetId, contents.id]] : [];
 			}));
 		},
-		setWaitForDebuggerOnStart(enabled) {
-			waitForDebuggerOnStart = enabled === true;
-			if (!waitForDebuggerOnStart) {
-				for (const webContentsId of [...startupBlocks.keys()]) {
-					if (!rendererClients.has(webContentsId)) {
-						void releaseStartup(webContentsId, true);
-					}
-				}
-			}
-			return { waitForDebuggerOnStart };
-		},
-		async dispose(reason = "renderer bridge disposed", acknowledgeSocket) {
-			if (disposed) {
-				return;
+		dispose(reason = "renderer bridge disposed") {
+			if (disposePromise) {
+				return disposePromise;
 			}
 			disposed = true;
-			waitForDebuggerOnStart = false;
-			app.off("web-contents-created", onAppWebContentsCreated);
-			app.off("browser-window-created", onAppBrowserWindowCreated);
-			clearTimeout(controlTimer);
-			const serverClosed = new Promise((resolve) => server.close(resolve));
-			const releases = Promise.all(
-				[...rendererClients.values()].map((entry) => releaseRenderer(entry, reason)),
-			);
-			const resumed = Promise.all(
-				[...startupBlocks.keys()].map((webContentsId) => releaseStartup(webContentsId, true)),
-			);
-			for (const socket of pendingSockets) {
-				socket.destroy();
-			}
-			await Promise.allSettled([...pendingAttachments]);
-			await releases;
-			await resumed;
-			if (acknowledgeSocket && !acknowledgeSocket.destroyed) {
-				writeFrame(acknowledgeSocket, { kind: "disposed" });
-				acknowledgeSocket.end();
-			}
-			if (controlSocket && controlSocket !== acknowledgeSocket) {
-				controlSocket.destroy();
-			}
-			await serverClosed;
-			if (globalThis[registryKey]?.bridge === this) {
-				delete globalThis[registryKey];
-			}
+			disposePromise = (async () => {
+				app.off("web-contents-created", onAppWebContentsCreated);
+				app.off("browser-window-created", onAppBrowserWindowCreated);
+				for (const client of clients.values()) {
+					client.disposed = true;
+					clearTimeout(client.controlTimer);
+					client.controlSocket?.destroy();
+				}
+				clients.clear();
+				const serverClosed = new Promise((resolve) => server.close(resolve));
+				const releases = Promise.all(
+					[...rendererClients.values()].map((entry) => releaseRenderer(entry, reason)),
+				);
+				const resumed = Promise.all(
+					[...startupBlocks.keys()].map((webContentsId) => releaseStartup(webContentsId, true)),
+				);
+				for (const socket of pendingSockets) {
+					socket.destroy();
+				}
+				await Promise.allSettled([...pendingAttachments.keys()]);
+				await releases;
+				await resumed;
+				await serverClosed;
+				if (globalThis[registryKey]?.server === this) {
+					delete globalThis[registryKey];
+				}
+			})();
+			return disposePromise;
 		},
 	};
 	for (const contents of webContents.getAllWebContents()) {
@@ -609,14 +693,6 @@ async (token, independent = false) => {
 	}
 	app.on("web-contents-created", onAppWebContentsCreated);
 	app.on("browser-window-created", onAppBrowserWindowCreated);
-	if (!independent) {
-		globalThis[registryKey] = { owner: "dbgjs", token, bridge };
-	}
-	controlTimer = setTimeout(() => {
-		if (!controlSocket) {
-			void bridge.dispose("renderer bridge control handshake timed out");
-		}
-	}, 10_000);
-	controlTimer.unref?.();
-	return bridge;
+	globalThis[registryKey] = { owner: "dbgjs", version: 2, server: bridge };
+	return bridge.createClient(token);
 }
