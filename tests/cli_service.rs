@@ -1655,6 +1655,29 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             .is_some_and(|sources| !sources.is_empty()),
         "{sources}"
     );
+    let runtime_search = run_json(
+        &cli,
+        &service,
+        &state_file,
+        &[
+            "source",
+            "grep",
+            "lateSourceNeedle",
+            "--path",
+            "late.min.js",
+            "--no-sourcemaps",
+            "--view",
+            "original",
+            "--context",
+            &context,
+            "--timeout-ms",
+            "3000",
+        ],
+    );
+    assert_eq!(runtime_search["skippedSources"], 0);
+    assert_eq!(runtime_search["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(runtime_search["matches"][0]["kind"], "runtime");
+    assert_eq!(runtime_search["matches"][0]["line"], 1);
     let searched = run_json(
         &cli,
         &service,
@@ -1665,6 +1688,8 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "lateSourceNeedle",
             "--path",
             "late.min.js",
+            "--view",
+            "original",
             "--context",
             &context,
         ],
@@ -1675,6 +1700,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     );
     assert_eq!(searched["skippedSources"], 0);
     assert!(!searched["matches"].as_array().unwrap().is_empty());
+    assert_eq!(runtime_search["matches"], searched["matches"]);
 
     run_json(
         &cli,
@@ -1717,6 +1743,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "formattedFirstNeedle",
             "--path",
             "format-first.min.js",
+            "--no-sourcemaps",
             "--view",
             "formatted",
             "--context",

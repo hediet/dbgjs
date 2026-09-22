@@ -64,7 +64,7 @@ use crate::service_api::{
     HeapSourceMapSupply, ScriptProvenance,
 };
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
-use crate::source_search::{HydratedSourceBatch, SearchControl, SearchError};
+use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::Position;
 use crate::source_view::{GeneratedSourceInput, ResolutionPolicy, ResolvedSourceView};
 
@@ -400,12 +400,14 @@ impl TargetDebuggerHandle {
     pub async fn source_search_batch(
         &self,
         path_selector: Option<String>,
+        no_sourcemaps: bool,
         control: SearchControl,
     ) -> Result<HydratedSourceBatch, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::SourceSearchBatch {
                 path_selector,
+                no_sourcemaps,
                 control,
                 response,
             })
@@ -996,6 +998,7 @@ enum TargetCommand {
     },
     SourceSearchBatch {
         path_selector: Option<String>,
+        no_sourcemaps: bool,
         control: SearchControl,
         response: oneshot::Sender<Result<HydratedSourceBatch, TargetDebuggerError>>,
     },
@@ -1389,9 +1392,22 @@ async fn run_target(
             }
             Next::Command(Some(TargetCommand::SourceSearchBatch {
                 path_selector,
+                no_sourcemaps,
                 control,
                 response,
             })) => {
+                if no_sourcemaps {
+                    if !response.is_closed() {
+                        let result = runtime_source_search_batch(
+                            &driver,
+                            path_selector.as_deref(),
+                            &control,
+                        )
+                        .await;
+                        let _ = response.send(result);
+                    }
+                    continue;
+                }
                 if !response.is_closed() && control.check().is_ok() {
                     let result = acquire_sources(
                         &mut driver,
@@ -4005,6 +4021,65 @@ fn source_acquisition_candidates(
             .then(|| key.clone())
         })
         .collect()
+}
+
+async fn runtime_source_search_batch(
+    driver: &DebuggerDriver,
+    path_selector: Option<&str>,
+    control: &SearchControl,
+) -> Result<HydratedSourceBatch, TargetDebuggerError> {
+    control.check()?;
+    let mut sources = BTreeMap::new();
+    let mut skipped = BTreeMap::new();
+    for (key, script) in driver.state().scripts.iter() {
+        control.check()?;
+        if path_selector
+            .is_some_and(|selector| !script.url.contains(original_source_path(selector)))
+        {
+            continue;
+        }
+        let content = match driver.generated_source_content(key) {
+            Some(content) => content,
+            None => {
+                let debugger = driver.client().debugger();
+                let request = debugger.get_script_source(
+                    crate::cdp::DebuggerGetScriptSourceParams::new(key.script_id.clone()),
+                );
+                let result = tokio::select! {
+                    biased;
+                    error = control.interrupted() => return Err(error.into()),
+                    result = request => result,
+                };
+                match result {
+                    Ok(source) => Arc::<str>::from(source.script_source),
+                    Err(error) => {
+                        skipped.insert(script.url.clone(), format!("{error:?}"));
+                        continue;
+                    }
+                }
+            }
+        };
+        let source = HydratedSource::runtime(script.url.clone(), content, control)?;
+        sources.insert((source.path.clone(), source.content_hash), source);
+    }
+    for source in sources.values() {
+        skipped.remove(&source.path);
+    }
+    control.check()?;
+    Ok(HydratedSourceBatch {
+        sources: sources.into_values().collect(),
+        skipped_sources: skipped.len().min(u32::MAX as usize) as u32,
+        skipped: skipped
+            .into_iter()
+            .map(|(path, reason)| crate::service_api::SourceSearchSkip {
+                path,
+                kind: "runtime".to_owned(),
+                connection_id: None,
+                target_id: None,
+                reason,
+            })
+            .collect(),
+    })
 }
 
 async fn acquire_sources(

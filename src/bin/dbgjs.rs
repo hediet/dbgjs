@@ -3759,6 +3759,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
     let mut context_lines = 0_u32;
     let mut timeout_ms = None;
     let mut view = SourceViewPreference::Policy;
+    let mut no_sourcemaps = false;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -3768,6 +3769,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
             }
             "--regex" => regex = true,
             "--ignore-case" => case_sensitive = false,
+            "--no-sourcemaps" => no_sourcemaps = true,
             "--max-results" => {
                 index += 1;
                 max_results = parse_positive_u32(
@@ -3818,6 +3820,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
         context_lines,
         timeout_ms,
         view,
+        no_sourcemaps,
     })
 }
 
@@ -6792,7 +6795,7 @@ commands:
   dbgjs source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   dbgjs source graph [--uncompacted] [--context <id>]
   dbgjs source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
-  dbgjs source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
+  dbgjs source grep <pattern> [--path <substring>] [--no-sourcemaps] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
   dbgjs source map <path> <line> <column> [--context <id>]
   dbgjs source cache evict [--context <id>]
   dbgjs source export <destination> [--context <id>]
@@ -8634,6 +8637,7 @@ mod tests {
             "trim.*Whitespace",
             "--regex",
             "--ignore-case",
+            "--no-sourcemaps",
             "--path",
             "src/vs/editor",
             "--max-results",
@@ -8650,10 +8654,16 @@ mod tests {
         assert_eq!(options.path.as_deref(), Some("src/vs/editor"));
         assert!(options.regex);
         assert!(!options.case_sensitive);
+        assert!(options.no_sourcemaps);
         assert_eq!(options.max_results, 25);
         assert_eq!(options.context_lines, 2);
         assert_eq!(options.timeout_ms, Some(1500));
         assert_eq!(options.view, SourceViewPreference::Formatted);
+        assert!(
+            !parse_source_grep_options(&arguments(&["needle"]))
+                .unwrap()
+                .no_sourcemaps
+        );
     }
 
     #[test]

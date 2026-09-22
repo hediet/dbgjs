@@ -123,6 +123,177 @@ async fn source_driver(
 }
 
 #[tokio::test]
+async fn runtime_source_search_skips_unrelated_scripts_and_unresponsive_maps() {
+    let map_server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let map_url = format!("http://{}/bundle.js.map", map_server.local_addr().unwrap());
+    let (driver, transport) = source_driver(
+        &[
+            ("bundle", "https://test/bundle.js", Some(map_url.clone())),
+            ("unrelated", "https://test/vendor.js", Some(map_url)),
+        ],
+        BTreeMap::from([("bundle".to_owned(), Ok("const needle = 42;".to_owned()))]),
+    )
+    .await;
+    let control = SearchControl::with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+    let batch = runtime_source_search_batch(&driver, Some("bundle.js"), &control)
+        .await
+        .unwrap();
+    assert_eq!(batch.sources.len(), 1);
+    let source = &batch.sources[0];
+    assert_eq!(source.path, "https://test/bundle.js");
+    assert_eq!(source.kind, "runtime");
+    assert_eq!(&*source.content, "const needle = 42;");
+    assert_eq!(
+        source.content_hash,
+        crate::content_store::ContentHash::of_bytes(source.content.as_bytes())
+    );
+    assert_eq!(batch.skipped_sources, 0);
+    assert_eq!(*transport.requests.lock().unwrap(), ["bundle"]);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), map_server.accept())
+            .await
+            .is_err()
+    );
+    assert!(
+        driver
+            .state()
+            .scripts
+            .values()
+            .all(|script| matches!(script.source, ScriptSourceState::Unresolved))
+    );
+}
+
+#[tokio::test]
+async fn runtime_source_search_preserves_later_authored_discovery_and_ignores_cached_maps() {
+    let map = json!({
+        "version": 3, "sources": ["src/editor.ts"], "sourcesContent": ["export const authoredNeedle = 42;"],
+        "names": [], "mappings": "AAAA"
+    });
+    let map_url = format!(
+        "data:application/json;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(map.to_string())
+    );
+    let (mut driver, transport) = source_driver(
+        &[("bundle", "https://test/bundle.js", Some(map_url))],
+        BTreeMap::from([(
+            "bundle".to_owned(),
+            Ok("const runtimeNeedle = 42;".to_owned()),
+        )]),
+    )
+    .await;
+    let control = SearchControl::default();
+    let before = runtime_source_search_batch(&driver, None, &control)
+        .await
+        .unwrap();
+    assert_eq!(before.sources.len(), 1);
+    acquire_sources(
+        &mut driver,
+        SourceAcquisition::Search(Some("editor.ts")),
+        None,
+    )
+    .await
+    .unwrap();
+    let authored = driver
+        .source_effects()
+        .search_source_batch(driver.state(), Some("editor.ts"), &control)
+        .unwrap();
+    assert!(
+        authored
+            .sources
+            .iter()
+            .any(|source| source.content.contains("authoredNeedle"))
+    );
+    let after = runtime_source_search_batch(&driver, None, &control)
+        .await
+        .unwrap();
+    assert_eq!(after.sources.len(), 1);
+    assert_eq!(after.sources[0].kind, "runtime");
+    assert_eq!(
+        after.sources[0].content_hash,
+        before.sources[0].content_hash
+    );
+    let absent = runtime_source_search_batch(&driver, Some("editor.ts"), &control)
+        .await
+        .unwrap();
+    assert!(absent.sources.is_empty());
+    assert_eq!(*transport.requests.lock().unwrap(), ["bundle", "bundle"]);
+}
+
+#[tokio::test]
+async fn runtime_source_search_reports_fetch_failures_and_deduplicates_scripts() {
+    let (driver, _) = source_driver(
+        &[
+            ("bad", "https://test/bad.js", None),
+            ("good", "https://test/good.js", None),
+            ("same", "https://test/good.js", None),
+            ("stale", "https://test/good.js", None),
+        ],
+        BTreeMap::from([
+            ("bad".to_owned(), Err("script was collected".to_owned())),
+            ("good".to_owned(), Ok("needle".to_owned())),
+            ("same".to_owned(), Ok("needle".to_owned())),
+            (
+                "stale".to_owned(),
+                Err("old script was collected".to_owned()),
+            ),
+        ]),
+    )
+    .await;
+    let batch = runtime_source_search_batch(&driver, None, &SearchControl::default())
+        .await
+        .unwrap();
+    assert_eq!(batch.sources.len(), 1);
+    assert_eq!(batch.skipped_sources, 1);
+    assert_eq!(batch.skipped[0].path, "https://test/bad.js");
+    assert!(batch.skipped[0].reason.contains("script was collected"));
+}
+
+#[tokio::test]
+async fn runtime_source_search_cancels_inflight_requests_without_changing_hydration_state() {
+    for deadline in [false, true] {
+        let (driver, transport) = source_driver(
+            &[
+                ("a-hung", "https://test/hung.js", None),
+                ("z-next", "https://test/next.js", None),
+            ],
+            BTreeMap::new(),
+        )
+        .await;
+        let control = if deadline {
+            SearchControl::with_deadline(std::time::Instant::now() + Duration::from_millis(30))
+        } else {
+            SearchControl::default()
+        };
+        let cancel = control.clone();
+        let cancel_transport = transport.clone();
+        let cancellation = tokio::spawn(async move {
+            while cancel_transport.requests.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            if !deadline {
+                cancel.cancel();
+            }
+        });
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            runtime_source_search_batch(&driver, None, &control),
+        )
+        .await
+        .unwrap();
+        cancellation.await.unwrap();
+        assert!(matches!(result, Err(TargetDebuggerError::SourceSearch(_))));
+        assert_eq!(*transport.requests.lock().unwrap(), ["a-hung"]);
+        assert!(
+            driver
+                .state()
+                .scripts
+                .values()
+                .all(|script| matches!(script.source, ScriptSourceState::Unresolved))
+        );
+    }
+}
+
+#[tokio::test]
 async fn source_acquisition_searches_metadata_and_reports_individual_fetch_failures() {
     let (mut driver, transport) = source_driver(
         &[

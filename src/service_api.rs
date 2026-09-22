@@ -734,6 +734,8 @@ pub struct SourceSearchOptions {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub view: SourceViewPreference,
+    #[serde(default)]
+    pub no_sourcemaps: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

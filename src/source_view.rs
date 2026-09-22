@@ -1062,6 +1062,10 @@ fn indexed_depth(index: &SourceMapIndex) -> usize {
         .unwrap_or(0)
 }
 
+pub(crate) fn format_runtime_content(url: &str, source: &str) -> Result<String, SourceViewError> {
+    format_minified(url, source).map(|(content, _)| content)
+}
+
 fn format_minified(url: &str, source: &str) -> Result<(String, FormatProjection), SourceViewError> {
     let allocator = Allocator::default();
     let source_path = url.split(['?', '#']).next().unwrap_or(url);

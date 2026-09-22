@@ -40,6 +40,22 @@ pub struct HydratedSource {
     pub content: Arc<str>,
 }
 
+impl HydratedSource {
+    pub fn runtime(
+        path: String,
+        content: Arc<str>,
+        control: &SearchControl,
+    ) -> Result<Self, SearchError> {
+        Ok(Self {
+            provenance: format!("runtime source {path}"),
+            path,
+            kind: "runtime".to_owned(),
+            content_hash: ContentHash::try_of_bytes(content.as_bytes(), || control.check())?,
+            content,
+        })
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct HydratedSourceBatch {
     pub sources: Vec<HydratedSource>,

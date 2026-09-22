@@ -558,7 +558,7 @@ impl SourceApi for DebuggerService {
                 let batch_control = control.clone();
                 async move {
                     debugger
-                        .source_search_batch(path_selector, batch_control)
+                        .source_search_batch(path_selector, options.no_sourcemaps, batch_control)
                         .await
                         .map(|batch| (connection_id, target_id, batch))
                 }
@@ -587,7 +587,9 @@ impl SourceApi for DebuggerService {
                 source.target_id = Some(target_id.clone());
                 source
             }));
-            select_source_views(&mut batch.sources, &formatting, &target_id, options.view);
+            if !options.no_sourcemaps {
+                select_source_views(&mut batch.sources, &formatting, &target_id, options.view);
+            }
             documents.extend(batch.sources.into_iter().map(|source| SearchDocument {
                 identity: SourceIdentity {
                     path: source.path,
@@ -604,6 +606,63 @@ impl SourceApi for DebuggerService {
         let worker_control = control.clone();
         let worker = tokio::task::spawn_blocking(move || {
             let mut skipped_local = Vec::new();
+            if options.no_sourcemaps {
+                let mut selected = Vec::new();
+                for mut document in documents {
+                    worker_control.check()?;
+                    let mode = effective_formatting_mode(
+                        &formatting,
+                        document.identity.target_id.as_deref().unwrap_or_default(),
+                        &document.identity.path,
+                    );
+                    let format = match options.view {
+                        SourceViewPreference::Original => false,
+                        SourceViewPreference::Formatted => true,
+                        SourceViewPreference::Policy => {
+                            mode == SourceFormattingMode::On
+                                || mode == SourceFormattingMode::Auto
+                                    && appears_minified(&document.identity.path, &document.content)
+                        }
+                    };
+                    if format {
+                        match crate::source_view::format_runtime_content(
+                            &document.identity.path,
+                            &document.content,
+                        ) {
+                            Ok(content) => {
+                                document.identity.provenance =
+                                    crate::source_effects::provenance_label(
+                                        &crate::source_view::Provenance::Formatted {
+                                            generated_url: document.identity.path.clone(),
+                                        },
+                                    );
+                                document.identity.path.push_str("?formatted");
+                                document.identity.kind = "authored".to_owned();
+                                document.content = Arc::from(content);
+                                document.content_hash =
+                                    crate::content_store::ContentHash::try_of_bytes(
+                                        document.content.as_bytes(),
+                                        || worker_control.check(),
+                                    )?;
+                            }
+                            Err(error) => {
+                                skipped_local.push(crate::service_api::SourceSearchSkip {
+                                    path: format!("{}?formatted", document.identity.path),
+                                    kind: "formatted".to_owned(),
+                                    connection_id: document.identity.connection_id.clone(),
+                                    target_id: document.identity.target_id.clone(),
+                                    reason: error.to_string(),
+                                });
+                                if options.view == SourceViewPreference::Formatted {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    selected.push(document);
+                }
+                documents = selected;
+            }
             for path in local_sources {
                 worker_control.check()?;
                 let content = match source_file_path(&path)

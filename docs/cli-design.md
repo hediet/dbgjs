@@ -1312,6 +1312,17 @@ individual fetch failures from preventing other sources from being searched.
 JSON results include `skipped` entries with source identity and reason; human
 output lists the same diagnostics after the searched/skipped counts.
 
+Use `--no-sourcemaps` to search runtime scripts without fetching, parsing, or
+searching source maps, including maps already cached by an earlier operation.
+Only runtime URLs matching `--path` are acquired. Local breakpoint source files
+remain searchable, and formatting policy still applies; use `--view original`
+for raw runtime locations. The option does not change subsequent source-map
+operations or the default search behavior.
+
+```text
+dbgjs source grep "An unexpected bug occurred." --path workbench.desktop.main.js --no-sourcemaps --view original
+```
+
 Cancelling a source-map read closes its CDP stream without waiting for the read
 response. If cancellation happens before the resource-load response, bounded
 response tracking closes the stream when its handle arrives. At most four

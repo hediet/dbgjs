@@ -728,24 +728,15 @@ impl SourceEffectInterpreter {
             if path_selector.is_none_or(|selector| script.url.contains(selector)) {
                 let identity = (script.url.clone(), "runtime".to_owned());
                 if let Some(content) = self.generated_source_content(state, script_key) {
-                    let content_hash = crate::content_store::ContentHash::try_of_bytes(
-                        content.as_bytes(),
-                        || control.check(),
-                    )?;
+                    let source = HydratedSource::runtime(script.url.clone(), content, control)?;
                     sources
                         .entry((
                             identity.0.clone(),
                             identity.1.clone(),
-                            content_hash,
-                            format!("runtime source {}", script.url),
+                            source.content_hash,
+                            source.provenance.clone(),
                         ))
-                        .or_insert_with(|| HydratedSource {
-                            path: identity.0.clone(),
-                            kind: identity.1.clone(),
-                            provenance: format!("runtime source {}", script.url),
-                            content_hash,
-                            content,
-                        });
+                        .or_insert(source);
                 } else {
                     skipped.insert(identity, Self::script_source_skip_reason(&script.source));
                 }
@@ -960,7 +951,7 @@ fn mapping_quality_label(quality: MappingQuality) -> &'static str {
     }
 }
 
-fn provenance_label(provenance: &Provenance) -> String {
+pub(crate) fn provenance_label(provenance: &Provenance) -> String {
     match provenance {
         Provenance::RuntimeSource { url } => format!("runtime source {url}"),
         Provenance::SourcesContent { map_id } => {
