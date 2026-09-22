@@ -1340,8 +1340,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "linkrpc"
-version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=363d2a661d19c5fa7b63661600810f6862a16cb1#363d2a661d19c5fa7b63661600810f6862a16cb1"
+version = "0.3.0-next.20260922.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e3005abb194194638a0477fd31dea2ca41195b27c346627130e31b98c14a815"
 dependencies = [
  "async-trait",
  "futures",
@@ -1360,8 +1361,9 @@ dependencies = [
 
 [[package]]
 name = "linkrpc-macros"
-version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=363d2a661d19c5fa7b63661600810f6862a16cb1#363d2a661d19c5fa7b63661600810f6862a16cb1"
+version = "0.3.0-next.20260922.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4e972ea67b2fc248ecbf1220dc81839b3a88d1c3976f6d2f6f625c6515f7a72"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1371,8 +1373,9 @@ dependencies = [
 
 [[package]]
 name = "linkrpc-tokio"
-version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=363d2a661d19c5fa7b63661600810f6862a16cb1#363d2a661d19c5fa7b63661600810f6862a16cb1"
+version = "0.3.0-next.20260922.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30adf6a4b7a6038a6d0cc4317878969badb5b918859d8a65ba35d94300ac2c6c"
 dependencies = [
  "async-trait",
  "futures-util",

@@ -252,15 +252,14 @@ and failures, and is not the input to code generation.
 ## Pinned dependencies and local LinkRPC development
 
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
-dependencies intentionally use the immutable Git revision
-`363d2a661d19c5fa7b63661600810f6862a16cb1` from
-`https://github.com/hediet/linkrpc.git`: the inline-parameter generator release
-has not been published yet. The root `[workspace.dependencies]` pins
-`linkrpc` and `linkrpc-tokio`; the runtime, protocol crate, and generator inherit
-these sources. `Cargo.lock` also pins the transitive macro crate to that revision.
-Cargo fetches the public repository in ordinary installs and CI; no sibling
-checkout, local path patch, vendored sources, or unpublished local package is
-needed. Keep the exact revision until adopting a published release.
+dependencies resolve from public crates.io packages. The root
+`[workspace.dependencies]` pins `linkrpc` and `linkrpc-tokio` to the exact
+published version `=0.3.0-next.20260922.1`; the runtime, protocol crate, and
+generator inherit these dependencies. `Cargo.lock` also locks the transitive
+macro crate and registry checksums.
+Ordinary installs and CI do not need access to the private LinkRPC Git
+repository, a sibling checkout, a local path patch, vendored sources, or an
+unpublished local package.
 
 The locked LinkRPC versions provide shared component generation, typed endpoint
 bindings, schema-preserving macro-backed CDP clients with inline parameters, and
