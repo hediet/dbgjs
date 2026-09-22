@@ -24,7 +24,7 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, TargetAttachToTargetParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, CdpEventsClient, TargetAttachToTargetParams,
     TargetAttachToTargetResult, TargetAttachedToTargetParams, TargetDetachFromTargetParams,
     TargetDetachFromTargetResult, TargetDetachedFromTargetParams, TargetGetTargetsParams,
     TargetGetTargetsResult, TargetSetAutoAttachParams, TargetSetAutoAttachResult,
@@ -499,8 +499,8 @@ impl VirtualRootState {
         self.tasks.lock().unwrap().push(task);
     }
 
-    fn root_client(&self) -> CdpClient<Channel> {
-        CdpClient::root(
+    fn root_events_client(&self) -> CdpEventsClient<Channel> {
+        CdpEventsClient::root(
             self.root_channel
                 .get()
                 .expect("root channel is set before target events are emitted")
@@ -589,7 +589,7 @@ impl VirtualRootState {
                 if self.discover.load(Ordering::Relaxed) && changed {
                     if is_new {
                         let _ = self
-                            .root_client()
+                            .root_events_client()
                             .target()
                             .target_created(TargetTargetCreatedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
@@ -597,7 +597,7 @@ impl VirtualRootState {
                             .await;
                     } else {
                         let _ = self
-                            .root_client()
+                            .root_events_client()
                             .target()
                             .target_info_changed(TargetTargetInfoChangedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
@@ -621,7 +621,7 @@ impl VirtualRootState {
                 self.detach_sessions_for_target(&target_id).await;
                 if existed && self.discover.load(Ordering::Relaxed) {
                     let _ = self
-                        .root_client()
+                        .root_events_client()
                         .target()
                         .target_destroyed(TargetTargetDestroyedParams {
                             target_id: target_id.clone(),
@@ -690,7 +690,7 @@ impl VirtualRootState {
         let mut target_info = target_info_from_snapshot(&target.snapshot);
         target_info.attached = true;
         let _ = self
-            .root_client()
+            .root_events_client()
             .target()
             .attached_to_target(TargetAttachedToTargetParams {
                 session_id: session_id.clone(),
@@ -746,7 +746,7 @@ impl VirtualRootState {
             known.snapshot.attached = false;
         }
         let _ = self
-            .root_client()
+            .root_events_client()
             .target()
             .detached_from_target(TargetDetachedFromTargetParams {
                 session_id,
@@ -826,7 +826,7 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         if params.discover && !was_enabled {
             for target in self.refresh_known().await {
                 let _ = self
-                    .root_client()
+                    .root_events_client()
                     .target()
                     .target_created(TargetTargetCreatedParams {
                         target_info: target_info_from_snapshot(&target.snapshot),

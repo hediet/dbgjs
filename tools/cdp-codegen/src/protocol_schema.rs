@@ -74,7 +74,7 @@ pub fn import_cdp_protocol(
                             event,
                             domain_name,
                             &wire_method,
-                            "serverNotification",
+                            "notification",
                             false,
                         ),
                     )?;
@@ -118,17 +118,24 @@ fn import_typed_cdp_protocol(
     Ok(serde_json::from_value(interface)?)
 }
 
-/// A CDP domain's schema and its immutable bare-root wire address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CdpDomainKind {
+    Commands,
+    Events,
+}
+
+/// One direction of a CDP domain and its immutable bare-root wire address.
 #[derive(Debug, Clone)]
 pub struct CdpDomainSchema {
     pub name: String,
+    pub kind: CdpDomainKind,
     pub prefix: String,
     pub interface: linkrpc::prelude::LinkRpcInterfaceSchema,
 }
 
-/// Split the upstream protocol into local-member interfaces. Every interface uses
-/// the same component names, including command/event payloads, so a shared Rust
-/// type registry can preserve identity across domain boundaries.
+/// Split the upstream protocol into separate command and event contracts with
+/// local members. Shared component names preserve Rust type identity across
+/// contracts. Both directions retain the original CDP prefix on separate routers.
 pub fn import_cdp_domains(
     browser_protocol: &str,
     js_protocol: &str,
@@ -138,7 +145,8 @@ pub fn import_cdp_domains(
         .as_object()
         .ok_or(ProtocolSchemaError::Missing("component schemas"))?
         .clone();
-    let mut domains = std::collections::BTreeMap::<String, Map<String, Value>>::new();
+    let mut domains =
+        std::collections::BTreeMap::<(String, CdpDomainKind), Map<String, Value>>::new();
     for (wire_name, original_method) in imported["methods"]
         .as_object()
         .ok_or(ProtocolSchemaError::Missing("interface methods"))?
@@ -147,6 +155,11 @@ pub fn import_cdp_domains(
             .split_once('.')
             .ok_or(ProtocolSchemaError::Missing("domain-qualified method"))?;
         let mut method = original_method.clone();
+        let kind = if method.get("result").is_some() {
+            CdpDomainKind::Commands
+        } else {
+            CdpDomainKind::Events
+        };
         for (field, suffix) in [("params", "Params"), ("result", "Result")] {
             if let Some(schema) = method.get(field).cloned() {
                 let name = format!("{wire_name}{suffix}");
@@ -155,14 +168,18 @@ pub fn import_cdp_domains(
             }
         }
         domains
-            .entry(domain.to_owned())
+            .entry((domain.to_owned(), kind))
             .or_default()
             .insert(member.to_owned(), method);
     }
     domains
         .into_iter()
-        .map(|(name, methods)| {
+        .map(|((name, kind), methods)| {
             let prefix = format!("{name}.");
+            let id = match kind {
+                CdpDomainKind::Commands => format!("cdp.{name}"),
+                CdpDomainKind::Events => format!("cdp.{name}.events"),
+            };
             let mut reachable = std::collections::BTreeSet::new();
             collect_component_refs(&Value::Object(methods.clone()), &mut reachable);
             let mut pending = reachable.iter().cloned().collect::<Vec<_>>();
@@ -183,7 +200,7 @@ pub fn import_cdp_domains(
                 .map(|(name, schema)| (name.clone(), schema.clone()))
                 .collect::<Map<_, _>>();
             let mut interface = json!({
-                "id": format!("cdp.{name}"),
+                "id": id,
                 "hash": "",
                 "methods": methods,
                 "components": { "schemas": domain_components },
@@ -200,6 +217,7 @@ pub fn import_cdp_domains(
             interface["hash"] = Value::String(compute_imported_interface_hash(&interface)?);
             Ok(CdpDomainSchema {
                 name,
+                kind,
                 prefix,
                 interface: serde_json::from_value(interface)?,
             })
@@ -517,11 +535,11 @@ mod tests {
         let domains = import_cdp_domains(BROWSER_PROTOCOL, JS_PROTOCOL).unwrap();
         let runtime = domains
             .iter()
-            .find(|domain| domain.name == "Runtime")
+            .find(|domain| domain.name == "Runtime" && domain.kind == CdpDomainKind::Commands)
             .unwrap();
         let debugger = domains
             .iter()
-            .find(|domain| domain.name == "Debugger")
+            .find(|domain| domain.name == "Debugger" && domain.kind == CdpDomainKind::Events)
             .unwrap();
         assert_eq!(runtime.prefix, "Runtime.");
         assert_eq!(runtime.interface.id, "cdp.Runtime");
@@ -553,8 +571,62 @@ mod tests {
         );
         assert_eq!(
             debugger_schema["methods"]["scriptParsed"][CODEGEN_KEY]["kind"],
-            "serverNotification",
+            "notification",
         );
+    }
+
+    #[test]
+    fn directional_contracts_partition_every_upstream_method_without_changing_wire_names() {
+        let imported = imported();
+        let original_methods = imported["methods"].as_object().unwrap();
+        let domains = import_cdp_domains(BROWSER_PROTOCOL, JS_PROTOCOL).unwrap();
+        let mut wire_names = std::collections::BTreeSet::new();
+        for domain in domains {
+            assert_eq!(domain.prefix, format!("{}.", domain.name));
+            assert!(!domain.interface.methods.is_empty());
+            for (member, method) in &domain.interface.methods {
+                let wire_name = format!("{}{member}", domain.prefix);
+                assert!(wire_names.insert(wire_name.clone()));
+                let original = &original_methods[&wire_name];
+                assert_eq!(method.result.is_some(), original.get("result").is_some());
+                assert_eq!(
+                    method.result.is_some(),
+                    domain.kind == CdpDomainKind::Commands
+                );
+                assert_eq!(
+                    method.extension(CODEGEN_KEY).unwrap()["wireMethod"],
+                    wire_name,
+                );
+            }
+        }
+        assert_eq!(
+            wire_names,
+            original_methods.keys().cloned().collect(),
+        );
+    }
+
+    #[test]
+    fn command_changes_do_not_change_the_event_contract_hash() {
+        let protocol = json!({
+            "domains": [{
+                "domain": "Example",
+                "commands": [{ "name": "enable" }],
+                "events": [{ "name": "changed" }],
+            }],
+        });
+        let mut changed = protocol.clone();
+        changed["domains"][0]["commands"][0]["parameters"] =
+            json!([{ "name": "enabled", "type": "boolean" }]);
+        let before = import_cdp_domains(&protocol.to_string(), r#"{"domains":[]}"#).unwrap();
+        let after = import_cdp_domains(&changed.to_string(), r#"{"domains":[]}"#).unwrap();
+        assert_eq!(before.len(), 2);
+        assert_eq!(after.len(), 2);
+        assert_eq!(before[0].kind, CdpDomainKind::Commands);
+        assert_eq!(before[1].kind, CdpDomainKind::Events);
+        assert_ne!(before[0].interface.hash, after[0].interface.hash);
+        assert_eq!(before[1].interface.hash, after[1].interface.hash);
+        assert_ne!(before[0].interface.id, before[1].interface.id);
+        assert_ne!(before[0].interface.hash, before[1].interface.hash);
     }
 
     #[test]
@@ -605,7 +677,7 @@ mod tests {
             typed.methods["Debugger.scriptParsed"]
                 .extension(CODEGEN_KEY)
                 .and_then(|value| value["kind"].as_str()),
-            Some("serverNotification")
+            Some("notification")
         );
     }
 

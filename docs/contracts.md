@@ -51,9 +51,10 @@ protocol JSON or running code generation. Do not edit generated sources.
 The independent [`cdp-codegen`](../tools/cdp-codegen/) tool can regenerate them
 even if the generated directory is missing; it does not depend on the runtime
 protocol crate.
-CDP providers implement supported methods of each generated domain trait.
+CDP providers implement supported methods of each generated command trait.
 Unsupported commands retain an explicit method-not-found
-response, rather than fabricated successful results.
+response, rather than fabricated successful results. CDP consumers implement
+the separate event traits to receive notifications.
 
 The extension's interface definitions and typed root bindings in
 [`src/generated/`](../vscode-extension/src/generated/)
@@ -122,12 +123,29 @@ only; clients must use the appropriate capability for other operations.
 ## Bare CDP interfaces versus daemon capabilities
 
 Multiple interfaces and bare wire addressing are separate concerns. Each CDP
-domain has an interface with local members (for example `evaluate`) and a bare
-root target containing its wire prefix (`Runtime.`). The target bundles the
+domain has a command contract (`cdp.Runtime`, for example) and, when it defines
+events, a distinct event contract (`cdp.Runtime.events`). They have independent
+identities and hashes, not just separate Rust traits over one combined schema.
+Both use local members (for example `evaluate` or `consoleAPICalled`) and bare
+root targets containing the same wire prefix (`Runtime.`). The target bundles the
 interface and addressing information so consumers do not reconstruct prefixes.
 The resulting request is still `Runtime.evaluate`, including when sent through
 the existing flat-session multiplexer. Cross-domain components share Rust type
 identity rather than independently generated lookalike structs.
+
+`CdpClient::root(caller).runtime()` sends commands through `runtime::RuntimeClient`.
+Providers implement `runtime::RuntimeService` and register `runtime::RuntimeServer`.
+On the other side, consumers implement `runtime_events::RuntimeEventsService`
+and register `runtime_events::RuntimeEventsServer` on their receive router.
+`CdpEventsClient::root(caller).runtime()` sends ordinary notifications such as
+`Runtime.consoleAPICalled`; event methods do not use `#[server_notification]`.
+The shared payload types retain their existing names.
+
+`command_interfaces()` is the endpoint's command catalog; `event_interfaces()`
+is the consumer's notification catalog. Register only the relevant direction on
+each router: the two contracts intentionally share a bare prefix and must not
+both be registered on the same router. Provider reflection exposes commands,
+not the event contracts implemented by its peer.
 
 The daemon uses qualified addressing for its capability interfaces; it needs no
 bare bindings.

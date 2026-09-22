@@ -19,7 +19,7 @@ use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, TargetAttachToBrowserTargetParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpEventsClient, TargetAttachToBrowserTargetParams,
     TargetAttachToBrowserTargetResult, TargetAttachToTargetParams, TargetAttachToTargetResult,
     TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
     TargetDetachedFromTargetParams, TargetGetTargetInfoParams, TargetGetTargetInfoResult,
@@ -563,7 +563,7 @@ impl ContextRelayState {
                 target_info,
                 waiting_for_debugger,
             };
-            let _ = CdpClient::root(self.root_channel().clone())
+            let _ = CdpEventsClient::root(self.root_channel().clone())
                 .target()
                 .attached_to_target(params)
                 .await;
@@ -698,7 +698,7 @@ impl ContextRelayState {
                 session_id: session_id.clone(),
                 target_id: Some(session.target_id),
             };
-            let _ = CdpClient::root(self.root_channel().clone())
+            let _ = CdpEventsClient::root(self.root_channel().clone())
                 .target()
                 .detached_from_target(params)
                 .await;
@@ -723,7 +723,7 @@ impl ContextRelayState {
         let params = TargetTargetCreatedParams {
             target_info: target_info_from_snapshot(snapshot),
         };
-        let _ = CdpClient::root(self.root_channel().clone())
+        let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
             .target_created(params)
             .await;
@@ -733,7 +733,7 @@ impl ContextRelayState {
         let params = TargetTargetInfoChangedParams {
             target_info: target_info_from_snapshot(snapshot),
         };
-        let _ = CdpClient::root(self.root_channel().clone())
+        let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
             .target_info_changed(params)
             .await;
@@ -743,7 +743,7 @@ impl ContextRelayState {
         let params = TargetTargetDestroyedParams {
             target_id: target_id.to_owned(),
         };
-        let _ = CdpClient::root(self.root_channel().clone())
+        let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
             .target_destroyed(params)
             .await;

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use dbgjs::cdp::{
-    CdpClient, DebuggerPausedParams, DebuggerScriptParsedParams,
+    CdpClient, CdpEventsClient, DebuggerPausedParams, DebuggerScriptParsedParams,
     DebuggerSetBreakpointByUrlParams, RuntimeEvaluateParams, RuntimeRemoteObjectType,
     TargetAttachToTargetParams,
 };
 use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
 use linkrpc::connection::channel::{Channel, RejectingHandler};
-use linkrpc::prelude::{JsonRpcMessage, MessageTransport};
+use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, JsonRpcMessage, MessageTransport};
 use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
 use linkrpc::transport::memory::transport_pair_of;
 use serde_json::json;
@@ -63,6 +63,108 @@ fn generated_cdp_provider_trait_can_use_default_methods() {
     assert_provider::<DefaultRuntimeService>();
 }
 
+#[derive(Default)]
+struct RuntimeEventReceiver {
+    contexts: std::sync::Mutex<Vec<i64>>,
+}
+
+#[async_trait::async_trait]
+impl dbgjs::cdp::runtime_events::RuntimeEventsService for RuntimeEventReceiver {
+    async fn console_apicalled(
+        &self,
+        _ctx: &CallCtx,
+        params: dbgjs::cdp::RuntimeConsoleApicalledParams,
+    ) -> Result<(), JsonRpcError> {
+        self.contexts.lock().unwrap().push(params.execution_context_id);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn generated_event_contract_sends_and_receives_flat_root_and_session_notifications() {
+    let (sender_raw, receiver_raw) = transport_pair_of::<CdpEnvelope>();
+    let mux = CdpSessionMux::new(Arc::new(sender_raw));
+    let receiver = Arc::new(RuntimeEventReceiver::default());
+    let event_router = linkrpc::binding::InterfaceRouter::new();
+    dbgjs::cdp::runtime_events::DOMAIN
+        .register(
+            &event_router,
+            Arc::new(dbgjs::cdp::runtime_events::RuntimeEventsServer::new(
+                receiver.clone(),
+            )),
+        )
+        .unwrap();
+
+    for (context, session_id) in [(1, None), (2, Some("child-session"))] {
+        let transport = match session_id {
+            None => mux.open_root().unwrap(),
+            Some(id) => mux.open_session(id.to_owned()).unwrap(),
+        };
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let params = json!({
+            "type": "log",
+            "args": [],
+            "executionContextId": context,
+            "timestamp": 42.0,
+        });
+        CdpEventsClient::root(channel)
+            .runtime()
+            .console_apicalled(serde_json::from_value(params.clone()).unwrap())
+            .await
+            .unwrap();
+        let envelope = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            receiver_raw.recv(),
+        )
+        .await
+        .expect("notification arrives")
+        .unwrap();
+        assert_eq!(envelope.session_id.as_deref(), session_id);
+        let JsonRpcMessage::Notification(notification) = envelope.message else {
+            panic!("expected a notification without a request id");
+        };
+        assert_eq!(notification.method, "Runtime.consoleAPICalled");
+        let received_params = notification.params.expect("event has parameters");
+        assert_eq!(received_params, params);
+        event_router
+            .dispatch_notification(&notification.method, received_params)
+            .await
+            .unwrap();
+    }
+    assert_eq!(*receiver.contexts.lock().unwrap(), vec![1, 2]);
+}
+
+#[tokio::test]
+async fn command_and_event_implementations_register_on_separate_routers() {
+    let command_router = linkrpc::binding::InterfaceRouter::new();
+    dbgjs::cdp::runtime::DOMAIN
+        .register(
+            &command_router,
+            Arc::new(dbgjs::cdp::runtime::RuntimeServer::new(Arc::new(
+                DefaultRuntimeService,
+            ))),
+        )
+        .unwrap();
+    let event_router = linkrpc::binding::InterfaceRouter::new();
+    dbgjs::cdp::runtime_events::DOMAIN
+        .register(
+            &event_router,
+            Arc::new(dbgjs::cdp::runtime_events::RuntimeEventsServer::new(Arc::new(
+                RuntimeEventReceiver::default(),
+            ))),
+        )
+        .unwrap();
+    for (router, method) in [
+        (&command_router, "Runtime.executionContextsCleared"),
+        (&event_router, "Runtime.enable"),
+    ] {
+        let error = InterfaceHandler::handle_request(router, method, json!({}), CallCtx::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, -32601);
+    }
+}
+
 #[tokio::test]
 async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel() {
     let (client_raw, browser_raw) = transport_pair_of::<CdpEnvelope>();
@@ -72,11 +174,6 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
         Box::new(RejectingHandler),
     );
     let client = CdpClient::root(channel.clone());
-    assert_eq!(
-        client.debugger().script_parsed_event_name(),
-        "Debugger.scriptParsed"
-    );
-
     let mux_loop = mux.clone();
     tokio::spawn(async move { mux_loop.run().await });
     let channel_loop = channel.clone();

@@ -5223,7 +5223,7 @@ fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(
         OnceLock::new();
     let (member, interface) = INTERFACES
         .get_or_init(|| {
-            crate::cdp::interfaces()
+            crate::cdp::command_interfaces()
                 .into_iter()
                 .map(|(prefix, interface)| (prefix, interface.to_schema()))
                 .collect()
@@ -8256,6 +8256,10 @@ mod tests {
         let unknown =
             validate_raw_cdp_params("Runtime.notACommand", &serde_json::json!({})).unwrap_err();
         assert!(unknown.contains("unknown request method"), "{unknown}");
+        let event =
+            validate_raw_cdp_params("Runtime.executionContextsCleared", &serde_json::json!({}))
+                .unwrap_err();
+        assert!(event.contains("unknown request method"), "{event}");
     }
 
     #[test]

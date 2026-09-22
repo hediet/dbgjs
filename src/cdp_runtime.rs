@@ -253,14 +253,14 @@ struct RootCdpEventDispatcher {
 impl RootCdpEventHandler {
     fn into_dispatcher(self) -> RootCdpEventDispatcher {
         let router = linkrpc::binding::InterfaceRouter::new();
-        crate::cdp::target::DOMAIN
+        crate::cdp::target_events::DOMAIN
             .register(
                 &router,
-                Arc::new(crate::cdp::target::TargetServer::new(Arc::new(
+                Arc::new(crate::cdp::target_events::TargetEventsServer::new(Arc::new(
                     self.clone(),
                 ))),
             )
-            .expect("generated Target binding is valid");
+            .expect("generated Target events binding is valid");
         RootCdpEventDispatcher {
             handler: self,
             router,
@@ -269,7 +269,7 @@ impl RootCdpEventHandler {
 }
 
 #[async_trait]
-impl crate::cdp::target::TargetService for RootCdpEventHandler {
+impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
     async fn target_created(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
@@ -1116,24 +1116,24 @@ impl CdpEventHandler {
     fn into_dispatcher(self) -> CdpEventDispatcher {
         let handler = Arc::new(self.clone());
         let router = linkrpc::binding::InterfaceRouter::new();
-        crate::cdp::debugger::DOMAIN
+        crate::cdp::debugger_events::DOMAIN
             .register(
                 &router,
-                Arc::new(crate::cdp::debugger::DebuggerServer::new(handler.clone())),
+                Arc::new(crate::cdp::debugger_events::DebuggerEventsServer::new(handler.clone())),
             )
-            .expect("generated Debugger binding is valid");
-        crate::cdp::runtime::DOMAIN
+            .expect("generated Debugger events binding is valid");
+        crate::cdp::runtime_events::DOMAIN
             .register(
                 &router,
-                Arc::new(crate::cdp::runtime::RuntimeServer::new(handler.clone())),
+                Arc::new(crate::cdp::runtime_events::RuntimeEventsServer::new(handler.clone())),
             )
-            .expect("generated Runtime binding is distinct");
-        crate::cdp::heap_profiler::DOMAIN
+            .expect("generated Runtime events binding is distinct");
+        crate::cdp::heap_profiler_events::DOMAIN
             .register(
                 &router,
-                Arc::new(crate::cdp::heap_profiler::HeapProfilerServer::new(handler)),
+                Arc::new(crate::cdp::heap_profiler_events::HeapProfilerEventsServer::new(handler)),
             )
-            .expect("generated HeapProfiler binding is distinct");
+            .expect("generated HeapProfiler events binding is distinct");
         CdpEventDispatcher {
             handler: self,
             router,
@@ -1195,7 +1195,7 @@ impl MessageTransport for HeapSnapshotTransport {
 }
 
 #[async_trait]
-impl crate::cdp::debugger::DebuggerService for CdpEventHandler {
+impl crate::cdp::debugger_events::DebuggerEventsService for CdpEventHandler {
     async fn script_parsed(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
@@ -1233,7 +1233,7 @@ impl crate::cdp::debugger::DebuggerService for CdpEventHandler {
 }
 
 #[async_trait]
-impl crate::cdp::runtime::RuntimeService for CdpEventHandler {
+impl crate::cdp::runtime_events::RuntimeEventsService for CdpEventHandler {
     async fn console_apicalled(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
@@ -1248,7 +1248,7 @@ impl crate::cdp::runtime::RuntimeService for CdpEventHandler {
 }
 
 #[async_trait]
-impl crate::cdp::heap_profiler::HeapProfilerService for CdpEventHandler {
+impl crate::cdp::heap_profiler_events::HeapProfilerEventsService for CdpEventHandler {
     async fn add_heap_snapshot_chunk(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,

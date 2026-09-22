@@ -2,63 +2,104 @@
 mod types;
 pub use types::*;
 pub mod accessibility;
+pub mod accessibility_events;
 pub mod ads;
 pub mod animation;
+pub mod animation_events;
 pub mod audits;
+pub mod audits_events;
 pub mod autofill;
+pub mod autofill_events;
 pub mod background_service;
+pub mod background_service_events;
 pub mod bluetooth_emulation;
+pub mod bluetooth_emulation_events;
 pub mod browser;
+pub mod browser_events;
 pub mod css;
+pub mod css_events;
 pub mod cache_storage;
 pub mod cast;
+pub mod cast_events;
 pub mod console;
+pub mod console_events;
 pub mod crash_report_context;
 pub mod dom;
+pub mod dom_events;
 pub mod dom_debugger;
 pub mod dom_snapshot;
 pub mod dom_storage;
+pub mod dom_storage_events;
 pub mod debugger;
+pub mod debugger_events;
 pub mod device_access;
+pub mod device_access_events;
 pub mod device_orientation;
 pub mod digital_credentials;
 pub mod emulation;
+pub mod emulation_events;
 pub mod event_breakpoints;
 pub mod extensions;
 pub mod fed_cm;
+pub mod fed_cm_events;
 pub mod fetch;
+pub mod fetch_events;
 pub mod file_system;
 pub mod headless_experimental;
 pub mod heap_profiler;
+pub mod heap_profiler_events;
 pub mod io;
 pub mod indexed_db;
 pub mod input;
+pub mod input_events;
 pub mod inspector;
+pub mod inspector_events;
 pub mod layer_tree;
+pub mod layer_tree_events;
 pub mod log;
+pub mod log_events;
 pub mod media;
+pub mod media_events;
 pub mod memory;
 pub mod network;
+pub mod network_events;
 pub mod overlay;
+pub mod overlay_events;
 pub mod pwa;
 pub mod page;
+pub mod page_events;
 pub mod performance;
+pub mod performance_events;
 pub mod performance_timeline;
+pub mod performance_timeline_events;
 pub mod preload;
+pub mod preload_events;
 pub mod profiler;
+pub mod profiler_events;
 pub mod runtime;
+pub mod runtime_events;
 pub mod schema;
 pub mod security;
+pub mod security_events;
 pub mod service_worker;
+pub mod service_worker_events;
 pub mod smart_card_emulation;
+pub mod smart_card_emulation_events;
 pub mod storage;
+pub mod storage_events;
 pub mod system_info;
 pub mod target;
+pub mod target_events;
 pub mod tethering;
+pub mod tethering_events;
 pub mod tracing;
+pub mod tracing_events;
 pub mod web_audio;
+pub mod web_audio_events;
 pub mod web_authn;
+pub mod web_authn_events;
 pub mod web_mcp;
+pub mod web_mcp_events;
 #[derive(Clone)]
 pub struct CdpClient<C> { caller: C }
 impl<C: linkrpc::prelude::RpcCall + Clone> CdpClient<C> {
@@ -122,7 +163,54 @@ pub fn web_audio(&self) -> web_audio::WebAudioClient<C> { web_audio::DOMAIN.clie
 pub fn web_authn(&self) -> web_authn::WebAuthnClient<C> { web_authn::DOMAIN.client(self.caller.clone()) }
 pub fn web_mcp(&self) -> web_mcp::WebMCPClient<C> { web_mcp::DOMAIN.client(self.caller.clone()) }
 }
-pub fn interfaces() -> Vec<(String, linkrpc::prelude::InterfaceDefinition)> {
+#[derive(Clone)]
+pub struct CdpEventsClient<C> { caller: C }
+impl<C: linkrpc::prelude::RpcCall + Clone> CdpEventsClient<C> {
+pub fn root(caller: C) -> Self { Self { caller } }
+pub fn accessibility(&self) -> accessibility_events::AccessibilityEventsClient<C> { accessibility_events::DOMAIN.client(self.caller.clone()) }
+pub fn animation(&self) -> animation_events::AnimationEventsClient<C> { animation_events::DOMAIN.client(self.caller.clone()) }
+pub fn audits(&self) -> audits_events::AuditsEventsClient<C> { audits_events::DOMAIN.client(self.caller.clone()) }
+pub fn autofill(&self) -> autofill_events::AutofillEventsClient<C> { autofill_events::DOMAIN.client(self.caller.clone()) }
+pub fn background_service(&self) -> background_service_events::BackgroundServiceEventsClient<C> { background_service_events::DOMAIN.client(self.caller.clone()) }
+pub fn bluetooth_emulation(&self) -> bluetooth_emulation_events::BluetoothEmulationEventsClient<C> { bluetooth_emulation_events::DOMAIN.client(self.caller.clone()) }
+pub fn browser(&self) -> browser_events::BrowserEventsClient<C> { browser_events::DOMAIN.client(self.caller.clone()) }
+pub fn css(&self) -> css_events::CSSEventsClient<C> { css_events::DOMAIN.client(self.caller.clone()) }
+pub fn cast(&self) -> cast_events::CastEventsClient<C> { cast_events::DOMAIN.client(self.caller.clone()) }
+pub fn console(&self) -> console_events::ConsoleEventsClient<C> { console_events::DOMAIN.client(self.caller.clone()) }
+pub fn dom(&self) -> dom_events::DOMEventsClient<C> { dom_events::DOMAIN.client(self.caller.clone()) }
+pub fn dom_storage(&self) -> dom_storage_events::DOMStorageEventsClient<C> { dom_storage_events::DOMAIN.client(self.caller.clone()) }
+pub fn debugger(&self) -> debugger_events::DebuggerEventsClient<C> { debugger_events::DOMAIN.client(self.caller.clone()) }
+pub fn device_access(&self) -> device_access_events::DeviceAccessEventsClient<C> { device_access_events::DOMAIN.client(self.caller.clone()) }
+pub fn emulation(&self) -> emulation_events::EmulationEventsClient<C> { emulation_events::DOMAIN.client(self.caller.clone()) }
+pub fn fed_cm(&self) -> fed_cm_events::FedCmEventsClient<C> { fed_cm_events::DOMAIN.client(self.caller.clone()) }
+pub fn fetch(&self) -> fetch_events::FetchEventsClient<C> { fetch_events::DOMAIN.client(self.caller.clone()) }
+pub fn heap_profiler(&self) -> heap_profiler_events::HeapProfilerEventsClient<C> { heap_profiler_events::DOMAIN.client(self.caller.clone()) }
+pub fn input(&self) -> input_events::InputEventsClient<C> { input_events::DOMAIN.client(self.caller.clone()) }
+pub fn inspector(&self) -> inspector_events::InspectorEventsClient<C> { inspector_events::DOMAIN.client(self.caller.clone()) }
+pub fn layer_tree(&self) -> layer_tree_events::LayerTreeEventsClient<C> { layer_tree_events::DOMAIN.client(self.caller.clone()) }
+pub fn log(&self) -> log_events::LogEventsClient<C> { log_events::DOMAIN.client(self.caller.clone()) }
+pub fn media(&self) -> media_events::MediaEventsClient<C> { media_events::DOMAIN.client(self.caller.clone()) }
+pub fn network(&self) -> network_events::NetworkEventsClient<C> { network_events::DOMAIN.client(self.caller.clone()) }
+pub fn overlay(&self) -> overlay_events::OverlayEventsClient<C> { overlay_events::DOMAIN.client(self.caller.clone()) }
+pub fn page(&self) -> page_events::PageEventsClient<C> { page_events::DOMAIN.client(self.caller.clone()) }
+pub fn performance(&self) -> performance_events::PerformanceEventsClient<C> { performance_events::DOMAIN.client(self.caller.clone()) }
+pub fn performance_timeline(&self) -> performance_timeline_events::PerformanceTimelineEventsClient<C> { performance_timeline_events::DOMAIN.client(self.caller.clone()) }
+pub fn preload(&self) -> preload_events::PreloadEventsClient<C> { preload_events::DOMAIN.client(self.caller.clone()) }
+pub fn profiler(&self) -> profiler_events::ProfilerEventsClient<C> { profiler_events::DOMAIN.client(self.caller.clone()) }
+pub fn runtime(&self) -> runtime_events::RuntimeEventsClient<C> { runtime_events::DOMAIN.client(self.caller.clone()) }
+pub fn security(&self) -> security_events::SecurityEventsClient<C> { security_events::DOMAIN.client(self.caller.clone()) }
+pub fn service_worker(&self) -> service_worker_events::ServiceWorkerEventsClient<C> { service_worker_events::DOMAIN.client(self.caller.clone()) }
+pub fn smart_card_emulation(&self) -> smart_card_emulation_events::SmartCardEmulationEventsClient<C> { smart_card_emulation_events::DOMAIN.client(self.caller.clone()) }
+pub fn storage(&self) -> storage_events::StorageEventsClient<C> { storage_events::DOMAIN.client(self.caller.clone()) }
+pub fn target(&self) -> target_events::TargetEventsClient<C> { target_events::DOMAIN.client(self.caller.clone()) }
+pub fn tethering(&self) -> tethering_events::TetheringEventsClient<C> { tethering_events::DOMAIN.client(self.caller.clone()) }
+pub fn tracing(&self) -> tracing_events::TracingEventsClient<C> { tracing_events::DOMAIN.client(self.caller.clone()) }
+pub fn web_audio(&self) -> web_audio_events::WebAudioEventsClient<C> { web_audio_events::DOMAIN.client(self.caller.clone()) }
+pub fn web_authn(&self) -> web_authn_events::WebAuthnEventsClient<C> { web_authn_events::DOMAIN.client(self.caller.clone()) }
+pub fn web_mcp(&self) -> web_mcp_events::WebMCPEventsClient<C> { web_mcp_events::DOMAIN.client(self.caller.clone()) }
+}
+/// Command contracts offered by a CDP endpoint. Register separately from event contracts.
+pub fn command_interfaces() -> Vec<(String, linkrpc::prelude::InterfaceDefinition)> {
 vec![
 (accessibility::DOMAIN.prefix(), accessibility::DOMAIN.interface()),
 (ads::DOMAIN.prefix(), ads::DOMAIN.interface()),
@@ -182,5 +270,51 @@ vec![
 (web_audio::DOMAIN.prefix(), web_audio::DOMAIN.interface()),
 (web_authn::DOMAIN.prefix(), web_authn::DOMAIN.interface()),
 (web_mcp::DOMAIN.prefix(), web_mcp::DOMAIN.interface()),
+]
+}
+/// Notification contracts implemented by a CDP consumer, using the same CDP wire prefixes.
+pub fn event_interfaces() -> Vec<(String, linkrpc::prelude::InterfaceDefinition)> {
+vec![
+(accessibility_events::DOMAIN.prefix(), accessibility_events::DOMAIN.interface()),
+(animation_events::DOMAIN.prefix(), animation_events::DOMAIN.interface()),
+(audits_events::DOMAIN.prefix(), audits_events::DOMAIN.interface()),
+(autofill_events::DOMAIN.prefix(), autofill_events::DOMAIN.interface()),
+(background_service_events::DOMAIN.prefix(), background_service_events::DOMAIN.interface()),
+(bluetooth_emulation_events::DOMAIN.prefix(), bluetooth_emulation_events::DOMAIN.interface()),
+(browser_events::DOMAIN.prefix(), browser_events::DOMAIN.interface()),
+(css_events::DOMAIN.prefix(), css_events::DOMAIN.interface()),
+(cast_events::DOMAIN.prefix(), cast_events::DOMAIN.interface()),
+(console_events::DOMAIN.prefix(), console_events::DOMAIN.interface()),
+(dom_events::DOMAIN.prefix(), dom_events::DOMAIN.interface()),
+(dom_storage_events::DOMAIN.prefix(), dom_storage_events::DOMAIN.interface()),
+(debugger_events::DOMAIN.prefix(), debugger_events::DOMAIN.interface()),
+(device_access_events::DOMAIN.prefix(), device_access_events::DOMAIN.interface()),
+(emulation_events::DOMAIN.prefix(), emulation_events::DOMAIN.interface()),
+(fed_cm_events::DOMAIN.prefix(), fed_cm_events::DOMAIN.interface()),
+(fetch_events::DOMAIN.prefix(), fetch_events::DOMAIN.interface()),
+(heap_profiler_events::DOMAIN.prefix(), heap_profiler_events::DOMAIN.interface()),
+(input_events::DOMAIN.prefix(), input_events::DOMAIN.interface()),
+(inspector_events::DOMAIN.prefix(), inspector_events::DOMAIN.interface()),
+(layer_tree_events::DOMAIN.prefix(), layer_tree_events::DOMAIN.interface()),
+(log_events::DOMAIN.prefix(), log_events::DOMAIN.interface()),
+(media_events::DOMAIN.prefix(), media_events::DOMAIN.interface()),
+(network_events::DOMAIN.prefix(), network_events::DOMAIN.interface()),
+(overlay_events::DOMAIN.prefix(), overlay_events::DOMAIN.interface()),
+(page_events::DOMAIN.prefix(), page_events::DOMAIN.interface()),
+(performance_events::DOMAIN.prefix(), performance_events::DOMAIN.interface()),
+(performance_timeline_events::DOMAIN.prefix(), performance_timeline_events::DOMAIN.interface()),
+(preload_events::DOMAIN.prefix(), preload_events::DOMAIN.interface()),
+(profiler_events::DOMAIN.prefix(), profiler_events::DOMAIN.interface()),
+(runtime_events::DOMAIN.prefix(), runtime_events::DOMAIN.interface()),
+(security_events::DOMAIN.prefix(), security_events::DOMAIN.interface()),
+(service_worker_events::DOMAIN.prefix(), service_worker_events::DOMAIN.interface()),
+(smart_card_emulation_events::DOMAIN.prefix(), smart_card_emulation_events::DOMAIN.interface()),
+(storage_events::DOMAIN.prefix(), storage_events::DOMAIN.interface()),
+(target_events::DOMAIN.prefix(), target_events::DOMAIN.interface()),
+(tethering_events::DOMAIN.prefix(), tethering_events::DOMAIN.interface()),
+(tracing_events::DOMAIN.prefix(), tracing_events::DOMAIN.interface()),
+(web_audio_events::DOMAIN.prefix(), web_audio_events::DOMAIN.interface()),
+(web_authn_events::DOMAIN.prefix(), web_authn_events::DOMAIN.interface()),
+(web_mcp_events::DOMAIN.prefix(), web_mcp_events::DOMAIN.interface()),
 ]
 }
