@@ -10,7 +10,7 @@ use crate::debugger_engine::{
     BreakpointMapping, DebuggerState, Effect, EffectId, Input, ScriptKey, ScriptSourceState,
 };
 use crate::service_api::{SourceGraphViewSnapshot, SourceProjectionPathSnapshot};
-use crate::source_graph::{RevisionNamespace, SourceRevision, SourceUri};
+use crate::source_graph::{ProjectionDirection, ProjectionKind, RouteLimits, RouteSearchStatus, SourceRevision, SourceSnapshotId, SourceUri};
 use crate::source_location::{ResolvedSourcePosition, resolve_source_position_with_breadcrumb};
 use crate::source_search::{HydratedSource, HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::{
@@ -115,6 +115,7 @@ struct RuntimeSourceObservation {
     contribution: SourceContributionId,
     uri: SourceUri,
     revision: SourceRevision,
+    snapshot: SourceSnapshotId,
 }
 
 pub struct SourceEffectInterpreter {
@@ -222,27 +223,80 @@ impl SourceEffectInterpreter {
                 script,
                 view_id,
                 source_url,
+                source_revision,
                 position,
                 ..
             } => {
-                let retained = self.view_for(*view_id, script)?;
-                let mappings = retained
-                    .view
-                    .reverse(source_url, *position)
-                    .into_iter()
-                    .filter(|candidate| candidate.source_url == retained.generated_url)
-                    .map(|candidate| BreakpointMapping {
-                        generated_position: candidate.position,
-                        quality: mapping_quality_label(candidate.quality).to_owned(),
-                        generated_url: candidate.projection.generated_url.clone(),
-                        projection: candidate
-                            .projection
-                            .steps
-                            .iter()
-                            .map(projection_step_label)
-                            .collect(),
-                    })
-                    .collect::<Vec<_>>();
+                let retained = view_id.map(|id| self.view_for(id, script)).transpose()?;
+                let (endpoint, generated_url) = if let Some(retained) = retained {
+                    (retained.view.generated_snapshot(&retained.generated_url).expect("registered generated source"), retained.generated_url.clone())
+                } else {
+                    let observation = self.runtime_sources.get(script)
+                        .ok_or_else(|| SourceEffectError::UnknownRuntimeSource(script.clone()))?;
+                    (observation.snapshot, source_url.clone())
+                };
+                let uri = match retained {
+                    Some(retained) if retained.logical_to_canonical.contains_key(source_url) => {
+                        canonical_source_uri(retained.source_map_url.as_deref(), source_url)
+                    }
+                    _ => source_uri(source_url, script),
+                };
+                let start = self.model.find_snapshot(&uri, source_revision)
+                    .ok_or_else(|| SourceEffectError::UnknownSourceNode(source_url.clone()))?;
+                let search = self.model.find_routes(start, &BTreeSet::from([endpoint]), RouteLimits::default())?;
+                if search.status == RouteSearchStatus::Truncated {
+                    return Err(SourceEffectError::IncompleteBreakpointRoutes(source_url.clone()));
+                }
+                let mut mappings = Vec::new();
+                for route in search.routes {
+                    let mut positions = vec![BreakpointMapping {
+                        generated_position: *position,
+                        generated_url: generated_url.clone(),
+                        quality: "exact".to_owned(),
+                        projection: Vec::new(),
+                    }];
+                    for hop in &route.hops {
+                        let projection = self.model.projection(hop.projection)
+                            .expect("route projection is retained");
+                        let mut projected = Vec::new();
+                        for mapped in positions {
+                            match &projection.kind {
+                                ProjectionKind::Identity { .. } => {
+                                    let mut mapped = mapped;
+                                    mapped.projection.push("identity".to_owned());
+                                    projected.push(mapped);
+                                }
+                                ProjectionKind::Offset { line_delta, column_delta } => {
+                                    let sign = if hop.direction == ProjectionDirection::BasisToDerived { 1 } else { -1 };
+                                    let line = i64::from(mapped.generated_position.line) + sign * line_delta;
+                                    let column = i64::from(mapped.generated_position.column) + sign * column_delta;
+                                    if let (Ok(line), Ok(column)) = (u32::try_from(line), u32::try_from(column)) {
+                                        let mut mapped = mapped;
+                                        mapped.generated_position = Position { line, column };
+                                        mapped.projection.push(format!("offset {line_delta}:{column_delta}"));
+                                        projected.push(mapped);
+                                    }
+                                }
+                                _ => {
+                                    let candidates = self.views.values().find_map(|view| {
+                                        view.view.project_hop(hop, mapped.generated_position)
+                                    }).ok_or(SourceEffectError::UnavailableProjection(hop.projection))?;
+                                    for candidate in candidates {
+                                        let mut next = mapped.clone();
+                                        next.generated_position = candidate.position;
+                                        if candidate.quality != MappingQuality::Exact {
+                                            next.quality = mapping_quality_label(candidate.quality).to_owned();
+                                        }
+                                        next.projection.extend(candidate.projection.steps.iter().map(projection_step_label));
+                                        projected.push(next);
+                                    }
+                                }
+                            }
+                        }
+                        positions = projected;
+                    }
+                    mappings.extend(positions);
+                }
                 let mappings = mappings
                     .into_iter()
                     .fold(BTreeMap::new(), |mut result, mapping| {
@@ -316,21 +370,7 @@ impl SourceEffectInterpreter {
             .filter(|(_, script)| !matches!(script.source, ScriptSourceState::Resolved(_)))
             .map(|(key, script)| {
                 let uri = source_uri(&script.url, key);
-                let revision = SourceRevision::Version {
-                    namespace: RevisionNamespace::new("cdp-script")
-                        .expect("static revision namespace is valid"),
-                    value: if script.hash.is_empty() {
-                        format!(
-                            "anonymous:{}:{}:{}:{}",
-                            key.session.connection_generation,
-                            key.session.session_id,
-                            key.script_id,
-                            script.version
-                        )
-                    } else {
-                        script.hash.clone()
-                    },
-                };
+                let revision = script.source_revision(key);
                 (key.clone(), (uri, revision))
             })
             .collect::<BTreeMap<_, _>>();
@@ -375,6 +415,7 @@ impl SourceEffectInterpreter {
                     contribution,
                     uri,
                     revision,
+                    snapshot,
                 },
             );
         }
@@ -1003,6 +1044,16 @@ fn projection_step_label(step: &ProjectionStep) -> String {
 #[derive(Debug, thiserror::Error)]
 pub enum SourceEffectError {
     #[error(transparent)]
+    SourceGraph(#[from] crate::source_graph::SourceGraphError),
+    #[error("runtime source for {0:?} is not retained")]
+    UnknownRuntimeSource(ScriptKey),
+    #[error("source node '{0}' is not retained")]
+    UnknownSourceNode(String),
+    #[error("breakpoint route search for '{0}' exceeded its bounds")]
+    IncompleteBreakpointRoutes(String),
+    #[error("projection {0:?} has no retained location mapper")]
+    UnavailableProjection(crate::source_graph::ProjectionId),
+    #[error(transparent)]
     SourceView(#[from] SourceViewError),
     #[error("source view {0:?} is not retained")]
     UnknownView(EffectId),
@@ -1256,7 +1307,7 @@ mod tests {
         assert_eq!(
             snapshot.sources[0].revision,
             SourceRevision::Version {
-                namespace: RevisionNamespace::new("cdp-script").unwrap(),
+                namespace: crate::source_graph::RevisionNamespace::new("cdp-script").unwrap(),
                 value: "runtime-hash".into(),
             }
         );

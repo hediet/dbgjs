@@ -5,7 +5,7 @@ use crate::content_store::{ContentHash, ContentStore, ContentStoreStats};
 use crate::source_graph::{
     IdentityBasis, ProjectionId, ProjectionKind, RevisionNamespace, RouteLimits, RouteSearch,
     SourceFileStore, SourceFileStoreError, SourceGraph, SourceGraphError, SourceProjection,
-    SourceSnapshot, SourceSnapshotId, SourceUri,
+    SourceRevision, SourceSnapshot, SourceSnapshotId, SourceUri,
 };
 use crate::source_view::MapProjection;
 
@@ -259,6 +259,10 @@ impl ContextSourceModel {
 
     pub fn snapshot(&self, id: SourceSnapshotId) -> Option<SourceSnapshot> {
         self.state.lock().unwrap().files.snapshot(id).cloned()
+    }
+
+    pub fn find_snapshot(&self, uri: &SourceUri, revision: &SourceRevision) -> Option<SourceSnapshotId> {
+        self.state.lock().unwrap().files.find_snapshot(uri, revision)
     }
 
     pub fn projection(&self, id: ProjectionId) -> Option<SourceProjection> {

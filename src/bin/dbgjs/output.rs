@@ -4256,7 +4256,7 @@ fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &st
             for candidate in candidates {
                 println!(
                     "{indent}- {} [{}; {}]",
-                    candidate.source_url, candidate.content_hash, candidate.provenance
+                    candidate.source_url, candidate.content_hash.as_deref().unwrap_or("content not loaded"), candidate.provenance
                 );
             }
             if *omitted_candidate_count > 0 {
@@ -4302,7 +4302,7 @@ fn print_target_breakpoint_explanation(
             for candidate in candidates {
                 println!(
                     "      candidate {} [{}; {}]",
-                    candidate.source_url, candidate.content_hash, candidate.provenance
+                    candidate.source_url, candidate.content_hash.as_deref().unwrap_or("content not loaded"), candidate.provenance
                 );
             }
             if *omitted_candidate_count > 0 {

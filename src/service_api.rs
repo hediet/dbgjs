@@ -1021,7 +1021,7 @@ pub struct TargetBreakpointSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct BreakpointSourceCandidateSnapshot {
     pub source_url: String,
-    pub content_hash: String,
+    pub content_hash: Option<String>,
     pub provenance: String,
 }
 

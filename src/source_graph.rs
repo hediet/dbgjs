@@ -236,6 +236,10 @@ pub struct SourceFileStore {
 }
 
 impl SourceFileStore {
+    pub fn find_snapshot(&self, uri: &SourceUri, revision: &SourceRevision) -> Option<SourceSnapshotId> {
+        self.by_identity.get(&(uri.clone(), revision.clone())).copied()
+    }
+
     pub fn new(content: Arc<ContentStore>) -> Self {
         Self {
             content,

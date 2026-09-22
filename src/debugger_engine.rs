@@ -6,6 +6,7 @@ use im::{OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
 
 use crate::content_store::ContentHash;
+use crate::source_graph::{RevisionNamespace, SourceRevision};
 use crate::source_view::{ContentCandidate, Position, SourceMapData};
 
 const MAX_DIAGNOSTICS: usize = 1024;
@@ -119,9 +120,28 @@ pub struct ScriptState {
     pub captured_source: Option<CapturedScriptSource>,
 }
 
+impl ScriptState {
+    pub fn source_revision(&self, key: &ScriptKey) -> SourceRevision {
+        if matches!(self.source, ScriptSourceState::Resolved(_))
+            && let Some(source) = &self.captured_source
+        {
+            return SourceRevision::Content(source.content_hash);
+        }
+        SourceRevision::Version {
+            namespace: RevisionNamespace::new("cdp-script").expect("static namespace"),
+            value: if self.hash.is_empty() {
+                format!("anonymous:{}:{}:{}:{}", key.session.connection_generation, key.session.session_id, key.script_id, self.version)
+            } else {
+                self.hash.clone()
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturedScriptSource {
     pub content: Arc<str>,
+    pub content_hash: ContentHash,
     pub source_map: Option<SourceMapData>,
     pub source_map_url: Option<String>,
     pub source_map_error: Option<String>,
@@ -138,7 +158,8 @@ pub enum BreakpointBinding {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BreakpointSourceCandidate {
     pub source_url: String,
-    pub content: ContentCandidate,
+    pub revision: SourceRevision,
+    pub provenance: crate::source_view::Provenance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,7 +206,7 @@ pub struct BreakpointAssessment {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct BreakpointCandidateKey {
     source_url: String,
-    content: ContentHash,
+    revision: SourceRevision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,7 +234,7 @@ impl BreakpointCandidateBucket {
     fn insert(&mut self, script: &ScriptKey, candidate: BreakpointSourceCandidate) {
         let key = BreakpointCandidateKey {
             source_url: candidate.source_url.clone(),
-            content: candidate.content.content,
+            revision: candidate.revision.clone(),
         };
         self.matching_scripts.insert(script.clone());
         if self.keys.contains(&key) {
@@ -332,6 +353,15 @@ impl BreakpointCandidateSelection {
 }
 
 impl BreakpointCandidateIndex {
+    fn has_exact_runtime_endpoint(&self) -> bool {
+        self.exact.bounded.values().any(|candidate| {
+            matches!(
+                &candidate.candidate.provenance,
+                crate::source_view::Provenance::RuntimeSource { .. }
+            )
+        })
+    }
+
     fn selection(&self) -> BreakpointCandidateSelection {
         let (bucket, friendly) = if self.exact.keys.is_empty() {
             (&self.friendly, true)
@@ -577,8 +607,9 @@ pub enum Effect {
         effect_id: EffectId,
         breakpoint: BreakpointKey,
         script: ScriptKey,
-        view_id: EffectId,
+        view_id: Option<EffectId>,
         source_url: String,
+        source_revision: SourceRevision,
         position: Position,
     },
     InstallBreakpoint {
@@ -939,7 +970,11 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
                         version,
                         status,
                     );
-                    if may_expose {
+                    if may_expose
+                        && !state.breakpoints[&breakpoint]
+                            .candidate_index
+                            .has_exact_runtime_endpoint()
+                    {
                         Arc::make_mut(
                             &mut Arc::make_mut(&mut state.breakpoints)
                                 .get_mut(&breakpoint)
@@ -1026,6 +1061,7 @@ pub fn reduce(previous: &Arc<DebuggerState>, input: Input) -> Transition {
             let scripts = Arc::make_mut(&mut state.scripts);
             let script_state = Arc::make_mut(scripts.get_mut(&script).unwrap());
             script_state.captured_source = Some(CapturedScriptSource {
+                content_hash: ContentHash::of_bytes(content.as_bytes()),
                 content: content.clone(),
                 source_map: source_map.clone(),
                 source_map_url: source_map_url.clone(),
@@ -1628,6 +1664,7 @@ fn reconcile_breakpoint(
         }
     }
 
+    let discover_sources = !candidate_index.has_exact_runtime_endpoint();
     let selection = candidate_index.selection();
     {
         let breakpoint = Arc::make_mut(&mut state.breakpoints)
@@ -1641,8 +1678,10 @@ fn reconcile_breakpoint(
         apply_breakpoint_selection_to_script(state, breakpoint, script_key, &selection, effects);
     }
 
-    for script in hydrate {
-        schedule_source_hydration(state, &script, true, effects);
+    if discover_sources {
+        for script in hydrate {
+            schedule_source_hydration(state, &script, true, effects);
+        }
     }
     reconcile_physical_bindings(state, breakpoint, effects);
 }
@@ -1709,12 +1748,26 @@ fn index_breakpoint_script(
     script_key: &ScriptKey,
     script: &ScriptState,
 ) {
+    let endpoint = BreakpointSourceCandidate {
+        source_url: script.url.clone(),
+        revision: script.source_revision(script_key),
+        provenance: crate::source_view::Provenance::RuntimeSource { url: script.url.clone() },
+    };
+    if source_urls_match(&script.url, requested_source) {
+        index.exact.insert(script_key, endpoint);
+    } else if friendly_source_matches(&script.url, requested_source) {
+        index.friendly.insert(script_key, endpoint);
+    }
     match &script.source {
         ScriptSourceState::Resolved(view) => {
             for (source_url, content) in view.logical_sources.iter() {
+                if source_urls_match(source_url, &script.url) {
+                    continue;
+                }
                 let candidate = BreakpointSourceCandidate {
                     source_url: source_url.clone(),
-                    content: content.clone(),
+                    revision: SourceRevision::Content(content.content),
+                    provenance: content.provenance.clone(),
                 };
                 if source_urls_match(source_url, requested_source) {
                     index.exact.insert(script_key, candidate);
@@ -1803,6 +1856,9 @@ fn parsed_script_requires_full_reconciliation(
     breakpoint: &BreakpointKey,
     script: &ScriptKey,
 ) -> bool {
+    if source_urls_match(&state.scripts[script].url, &state.breakpoints[breakpoint].source_url) {
+        return true;
+    }
     if !script_may_expose_breakpoint(state, script, breakpoint) {
         return false;
     }
@@ -2143,12 +2199,13 @@ fn schedule_mapping(
     let breakpoint_generation = breakpoint_state.generation;
     let breakpoint_position = breakpoint_state.position;
     let script_state = &state.scripts[script];
-    let ScriptSourceState::Resolved(view) = &script_state.source else {
-        return;
+    let view_id = match &script_state.source {
+        ScriptSourceState::Resolved(view) => Some(view.view_id),
+        _ => None,
     };
     let script_version = script_state.version;
-    let view_id = view.view_id;
     let source_url = candidate.source_url.clone();
+    let source_revision = candidate.revision.clone();
     let effect_id = allocate_effect(
         state,
         PendingEffect::MapBreakpoint {
@@ -2180,6 +2237,7 @@ fn schedule_mapping(
         script: script.clone(),
         view_id,
         source_url,
+        source_revision,
         position: breakpoint_position,
     });
 }
@@ -3542,7 +3600,7 @@ mod tests {
             else {
                 panic!("expected map");
             };
-            assert_eq!(effect_view, view_id);
+            assert_eq!(effect_view, Some(view_id));
             let mapped = reduce(
                 &added.state,
                 Input::BreakpointMapped {
@@ -5159,11 +5217,9 @@ mod tests {
         let content = store.intern("shared source");
         let candidate = BreakpointSourceCandidate {
             source_url: "shared.ts".to_owned(),
-            content: ContentCandidate {
-                content,
-                provenance: crate::source_view::Provenance::Workspace {
-                    logical_url: "shared.ts".to_owned(),
-                },
+            revision: SourceRevision::Content(content),
+            provenance: crate::source_view::Provenance::Workspace {
+                logical_url: "shared.ts".to_owned(),
             },
         };
         let mut indexes = vec![BreakpointCandidateIndex::default(); BREAKPOINT_COUNT];
@@ -5215,11 +5271,9 @@ mod tests {
                 &script,
                 BreakpointSourceCandidate {
                     source_url: format!("source-{index:02}.ts"),
-                    content: ContentCandidate {
-                        content: store.intern(&format!("content-{index}")),
-                        provenance: crate::source_view::Provenance::Workspace {
-                            logical_url: format!("source-{index:02}.ts"),
-                        },
+                    revision: SourceRevision::Content(store.intern(&format!("content-{index}"))),
+                    provenance: crate::source_view::Provenance::Workspace {
+                        logical_url: format!("source-{index:02}.ts"),
                     },
                 },
             );
@@ -5233,11 +5287,9 @@ mod tests {
             &duplicate_script,
             BreakpointSourceCandidate {
                 source_url: format!("source-{duplicate_index:02}.ts"),
-                content: ContentCandidate {
-                    content: store.intern(&format!("content-{duplicate_index}")),
-                    provenance: crate::source_view::Provenance::Workspace {
-                        logical_url: "duplicate.ts".into(),
-                    },
+                revision: SourceRevision::Content(store.intern(&format!("content-{duplicate_index}"))),
+                provenance: crate::source_view::Provenance::Workspace {
+                    logical_url: "duplicate.ts".into(),
                 },
             },
         );

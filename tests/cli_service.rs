@@ -1678,6 +1678,50 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     assert_eq!(runtime_search["matches"].as_array().unwrap().len(), 1);
     assert_eq!(runtime_search["matches"][0]["kind"], "runtime");
     assert_eq!(runtime_search["matches"][0]["line"], 1);
+    let matched = &runtime_search["matches"][0];
+    run_json(
+        &cli, &service, &state_file,
+        &[
+            "breakpoint", "configure", "runtime-search-hit",
+            matched["path"].as_str().unwrap(),
+            &matched["line"].to_string(), &matched["column"].to_string(),
+            "--context", &context, "--target", "$node-root:runtime-a",
+        ],
+    );
+    let installed = run_json(
+        &cli, &service, &state_file,
+        &[
+            "target", "wait", "breakpoint-installed", "runtime-search-hit", "5000",
+            "--context", &context, "--target", "$node-root:runtime-a",
+        ],
+    );
+    assert!(installed["breakpoints"].as_array().unwrap().iter().any(|breakpoint| {
+        breakpoint["id"] == "runtime-search-hit" && breakpoint["status"]["kind"] == "installed"
+    }), "{installed}");
+    run_json(
+        &cli, &service, &state_file,
+        &[
+            "target", "eval", "void setTimeout(lateSource, 100)",
+            "--context", &context, "--target", "$node-root:runtime-a",
+        ],
+    );
+    let paused = run_json(
+        &cli, &service, &state_file,
+        &[
+            "target", "wait", "paused", "0", "5000",
+            "--context", &context, "--target", "$node-root:runtime-a",
+        ],
+    );
+    assert_eq!(paused["pause"]["frames"][0]["raw"]["sourceUrl"], matched["path"]);
+    assert_eq!(paused["pause"]["frames"][0]["raw"]["line"], matched["line"]);
+    run_json(
+        &cli, &service, &state_file,
+        &["breakpoint", "delete", "runtime-search-hit", "--context", &context],
+    );
+    run_json(
+        &cli, &service, &state_file,
+        &["target", "resume", "--context", &context, "--target", "$node-root:runtime-a"],
+    );
     let searched = run_json(
         &cli,
         &service,

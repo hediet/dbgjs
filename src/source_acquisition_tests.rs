@@ -13,6 +13,7 @@ use crate::session_transport::CdpEnvelope;
 struct SourceTransport {
     responses: BTreeMap<String, Result<String, String>>,
     requests: std::sync::Mutex<Vec<String>>,
+    breakpoint_requests: std::sync::Mutex<Vec<serde_json::Value>>,
     inbound: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<CdpEnvelope>>,
     outbound: tokio::sync::mpsc::UnboundedSender<CdpEnvelope>,
 }
@@ -23,19 +24,24 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for SourceTransport {
         let JsonRpcMessage::Request(request) = envelope.message else {
             return Ok(());
         };
-        assert_eq!(request.method, "Debugger.getScriptSource");
-        let script = request.params.as_ref().unwrap()["scriptId"]
-            .as_str()
-            .unwrap();
-        self.requests.lock().unwrap().push(script.to_owned());
-        let Some(response) = self.responses.get(script) else {
-            return Ok(());
-        };
-        let payload = match response {
-            Ok(content) => ResponsePayload::Result(json!({ "scriptSource": content })),
-            Err(message) => {
-                ResponsePayload::Error(linkrpc::prelude::JsonRpcError::new(-32000, message.clone()))
+        let payload = match request.method.as_str() {
+            "Debugger.getScriptSource" => {
+                let script = request.params.as_ref().unwrap()["scriptId"].as_str().unwrap();
+                self.requests.lock().unwrap().push(script.to_owned());
+                let Some(response) = self.responses.get(script) else {
+                    return Ok(());
+                };
+                match response {
+                    Ok(content) => ResponsePayload::Result(json!({ "scriptSource": content })),
+                    Err(message) => ResponsePayload::Error(linkrpc::prelude::JsonRpcError::new(-32000, message.clone())),
+                }
             }
+            "Debugger.setBreakpoint" => {
+                let params = request.params.as_ref().unwrap();
+                self.breakpoint_requests.lock().unwrap().push(params.clone());
+                ResponsePayload::Result(json!({ "breakpointId": "runtime-bp", "actualLocation": params["location"] }))
+            }
+            other => panic!("unexpected CDP method {other}"),
         };
         self.outbound
             .send(CdpEnvelope {
@@ -74,6 +80,7 @@ async fn source_driver(
     let transport = Arc::new(SourceTransport {
         responses,
         requests: Default::default(),
+        breakpoint_requests: Default::default(),
         inbound: tokio::sync::Mutex::new(inbound),
         outbound,
     });
@@ -120,6 +127,44 @@ async fn source_driver(
         sources,
     );
     (driver, transport)
+}
+
+#[tokio::test]
+async fn runtime_breakpoint_uses_zero_hop_route_without_loading_sources_or_maps() {
+    let (mut driver, transport) = source_driver(
+        &[
+            ("bundle", "https://test/bundle.min.js", Some("https://test/hung.map".to_owned())),
+            ("unrelated", "https://test/vendor.js", Some("https://test/also-hung.map".to_owned())),
+        ],
+        BTreeMap::new(),
+    ).await;
+    let key = BreakpointKey { client_id: "test".to_owned(), breakpoint_id: "runtime-hit".to_owned() };
+    tokio::time::timeout(Duration::from_secs(1), driver.apply(Input::SetBreakpoint {
+        key: key.clone(),
+        source_url: "https://test/bundle.min.js".to_owned(),
+        position: Position { line: 8, column: 414 },
+        condition: Some("false".to_owned()),
+    })).await.unwrap().unwrap();
+    assert!(transport.requests.lock().unwrap().is_empty());
+    assert_eq!(*transport.breakpoint_requests.lock().unwrap(), vec![json!({
+        "location": { "scriptId": "bundle", "lineNumber": 8, "columnNumber": 414 },
+        "condition": "false",
+    })]);
+    let breakpoint = &driver.state().breakpoints[&key];
+    assert_eq!(breakpoint.bindings.len(), 1);
+    assert!(breakpoint.bindings.values().all(|binding| matches!(binding, BreakpointBinding::Installed { .. })));
+    assert!(driver.state().scripts.values().all(|script| matches!(script.source, ScriptSourceState::Unresolved)));
+    assert_eq!(driver.source_effects().retained_view_count(), 0);
+    let session = driver.state().scripts.keys().next().unwrap().session.clone();
+    tokio::time::timeout(Duration::from_secs(1), driver.apply(Input::ScriptParsed {
+        session,
+        script_id: "later".to_owned(),
+        url: "https://test/later.js".to_owned(),
+        hash: "later".to_owned(),
+        source_map_url: Some("https://test/later.map".to_owned()),
+    })).await.unwrap().unwrap();
+    assert!(transport.requests.lock().unwrap().is_empty());
+    assert_eq!(transport.breakpoint_requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -364,6 +409,54 @@ async fn source_acquisition_normalizes_first_formatted_access_without_a_map() {
         .await
         .unwrap();
     assert_eq!(*transport.requests.lock().unwrap(), ["script"]);
+}
+
+#[tokio::test]
+async fn formatted_breakpoint_routes_through_the_graph_to_the_runtime_script() {
+    let url = "https://test/editor.min.js";
+    let (mut driver, transport) = source_driver(
+        &[("script", url, None)],
+        BTreeMap::from([(
+            "script".to_owned(),
+            Ok("function editor(){return 42;}editor();".to_owned()),
+        )]),
+    )
+    .await;
+    let formatted = format!("{url}?formatted");
+    hydrate_source_for_path(&mut driver, &formatted)
+        .await
+        .unwrap();
+    let formatted_position = Position { line: 1, column: 0 };
+    let expected = driver
+        .source_effects()
+        .map_source_position(&formatted, formatted_position)
+        .into_iter()
+        .find(|(_, _, direction, _)| direction == "authored-to-generated")
+        .expect("formatted position maps to the runtime script")
+        .1;
+
+    driver
+        .apply(Input::SetBreakpoint {
+            key: BreakpointKey {
+                client_id: "test".to_owned(),
+                breakpoint_id: "formatted-hit".to_owned(),
+            },
+            source_url: formatted,
+            position: formatted_position,
+            condition: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(transport.breakpoint_requests.lock().unwrap().len(), 1);
+    assert_eq!(
+        transport.breakpoint_requests.lock().unwrap()[0]["location"],
+        json!({
+            "scriptId": "script",
+            "lineNumber": expected.line,
+            "columnNumber": expected.column,
+        })
+    );
 }
 
 #[tokio::test]

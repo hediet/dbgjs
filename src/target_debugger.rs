@@ -5857,8 +5857,11 @@ fn breakpoint_candidate_snapshot(
 ) -> BreakpointSourceCandidateSnapshot {
     BreakpointSourceCandidateSnapshot {
         source_url: candidate.source_url.clone(),
-        content_hash: format!("{:?}", candidate.content.content),
-        provenance: format!("{:?}", candidate.content.provenance),
+        content_hash: match &candidate.revision {
+            crate::source_graph::SourceRevision::Content(hash) => Some(format!("{hash:?}")),
+            crate::source_graph::SourceRevision::Version { .. } => None,
+        },
+        provenance: format!("{:?}", candidate.provenance),
     }
 }
 
@@ -6794,7 +6797,8 @@ mod tests {
                             status: BreakpointAssessmentStatus::Applicable {
                                 candidate: BreakpointSourceCandidate {
                                     source_url: "app.ts".into(),
-                                    content,
+                                    revision: crate::source_graph::SourceRevision::Content(content.content),
+                                    provenance: content.provenance,
                                 },
                                 mappings: Arc::new(vec![BreakpointMapping {
                                     generated_position: new_position,
@@ -6876,11 +6880,9 @@ mod tests {
         let content = ContentStore::default().intern("source");
         let candidate = |script: &ScriptKey| BreakpointSourceCandidate {
             source_url: "app.ts".into(),
-            content: ContentCandidate {
-                content: content.clone(),
-                provenance: Provenance::Workspace {
-                    logical_url: format!("{}:app.ts", script.script_id),
-                },
+            revision: crate::source_graph::SourceRevision::Content(content),
+            provenance: Provenance::Workspace {
+                logical_url: format!("{}:app.ts", script.script_id),
             },
         };
         let mapping = |position| {

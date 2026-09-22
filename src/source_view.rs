@@ -691,6 +691,7 @@ impl ResolvedSourceView {
                                 },
                             ));
                         }
+
                     }
                 }
                 GeneratedProjection::Format { mapping, .. } => {
@@ -706,6 +707,23 @@ impl ResolvedSourceView {
             }
         }
         candidates
+    }
+
+    pub(crate) fn project_hop(
+        &self,
+        hop: &crate::source_graph::ProjectionHop,
+        position: Position,
+    ) -> Option<Vec<CandidateLocation>> {
+        if let Some((url, _)) = self.generated_snapshots.iter().find(|(_, id)| **id == hop.from) {
+            return Some(self.forward(url, position).into_iter().filter(|candidate| {
+                self.resolved_snapshot(&candidate.source_url) == Some(hop.to)
+            }).collect());
+        }
+        let (url, _) = self.generated_snapshots.iter().find(|(_, id)| **id == hop.to)?;
+        let ((logical, _), _) = self.resolved_snapshots.iter().find(|(_, id)| **id == hop.from)?;
+        Some(self.reverse(logical, position).into_iter().filter(|candidate| {
+            &candidate.source_url == url
+        }).collect())
     }
 
     pub fn resolve_edit_projection(&self, _edit_id: &str) -> Result<(), SourceViewError> {
