@@ -5,11 +5,17 @@ impl CpuProfilerApi for DebuggerService {
     async fn start_cpu_profile(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         sampling_interval_micros: Option<u64>,
     ) -> Result<bool, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .start_cpu_profile(sampling_interval_micros)
@@ -21,11 +27,17 @@ impl CpuProfilerApi for DebuggerService {
     async fn stop_cpu_profile(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
                 .promote_completed_capture(
@@ -105,14 +117,20 @@ impl CpuProfilerApi for DebuggerService {
     async fn get_cpu_profile(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         source_path: Option<String>,
         no_cache: bool,
         project: bool,
     ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_cpu_profile(capture_id, source_path, no_cache, project)

@@ -2,35 +2,32 @@
 
 ## Sources of truth
 
-There are two authored protocol inputs, combined into one checked-in contract
-bundle. Do not maintain separate Rust and TypeScript descriptions of a wire
-interface.
+There are two independent generation paths. Do not maintain separate Rust and
+TypeScript descriptions of a wire interface, or combine the browser protocol
+with the daemon's API in a shared export bundle.
 
 | Contract | Authored source of truth | Derived consumer input |
 | --- | --- | --- |
-| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../crates/cdp-protocol/src/protocol_schema.rs) | The `cdp.protocol` interface in [`schemas/dbgjs.interfaces.json`](../schemas/dbgjs.interfaces.json) |
-| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../src/service_api/) and shared serializable models in [`service_api.rs`](../src/service_api.rs) | Eleven capability interfaces in the same bundle |
+| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../tools/cdp-codegen/src/protocol_schema.rs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
+| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../src/service_api/) and shared serializable models in [`service_api.rs`](../src/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
 
-The bundle is the canonical input for consumers and generators, not an
-independently authored schema. Its interface list includes application-owned
-contracts; framework discovery interfaces remain LinkRPC's responsibility.
-Advertising the daemon service does not advertise a CDP service on the daemon's
-authenticated local transport.
+The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
+It does not advertise imported CDP domain interfaces on its own RPC connection.
 
 ## Generated consumers
 
 ```mermaid
 flowchart TD
     CDP["Pinned devtools-protocol JSON"] --> Import["protocol_schema.rs: import + compatibility overrides"]
-    Import --> Export["export_contracts: canonical bundle exporter"]
+    Import --> CdpGen["LinkRPC Rust generator: shared types + domain traits"]
+    CdpGen --> Generated["Checked-in generated Rust + bare domain targets"]
+    Generated --> CdpMacro["LinkRPC trait macro: preserves schema and hash"]
+    CdpMacro --> Cdp["Per-domain CDP clients + providers + server adapters"]
     Traits["11 authored service traits + shared Rust models"] --> Macro["LinkRPC trait macro"]
     Macro --> Rust["Rust capability clients + provider traits + server adapters"]
-    Macro --> Export
-    Export --> Bundle["schemas/dbgjs.interfaces.json"]
-    Bundle --> Build["cdp-protocol/build.rs: LinkRPC Rust generator"]
-    Build --> Generated["OUT_DIR: CDP types + schema-backed trait"]
-    Generated --> CdpMacro["LinkRPC trait macro: preserves schema and hash"]
-    CdpMacro --> Cdp["CdpClient + CdpService + server adapter"]
+    Macro --> Daemon["dbgjs-service --stdio: isolated instance + reflection"]
+    Daemon --> Export["LinkRPC CLI: contract export"]
+    Export --> Bundle["Temporary daemon endpoint contract"]
     Bundle --> CLI["LinkRPC CLI: TypeScript codegen"]
     CLI --> TS["Generated capability contracts + typed clients"]
     Rust --> RustFacade["DbgServiceClient: shared connection"]
@@ -44,19 +41,21 @@ Rust traits by LinkRPC's macro. The CLI uses those generated clients, rather tha
 constructing RPC method names or request objects independently.
 
 [`scripts/generate-contracts.mjs`](../scripts/generate-contracts.mjs) orchestrates
-the exporter and TypeScript CLI; it does not implement a code generator.
-The legacy `cdp_codegen` binary includes the exporter implementation, so
-`npm run prototype:schema` and `cargo run --bin export_contracts` share the
-same export path. The root [`build.rs`](../build.rs) only embeds Git build
-provenance; it does not generate RPC contracts.
+the stdio daemon, contract export, and TypeScript CLI; it does not implement a
+code generator. There is no custom daemon schema exporter or checked-in
+intermediate schema bundle. The root [`build.rs`](../build.rs) only embeds Git
+build provenance; it does not generate RPC contracts.
 
-The CDP crate's build reads the checked-in bundle. It does not re-import npm
-protocol JSON during an ordinary build. Generated Rust is placed in Cargo's
-`OUT_DIR`; do not edit that output. CDP providers implement supported methods of
-the generated trait. Unsupported commands retain an explicit method-not-found
+Ordinary Rust builds compile the checked-in CDP sources without importing npm
+protocol JSON or running code generation. Do not edit generated sources.
+The independent [`cdp-codegen`](../tools/cdp-codegen/) tool can regenerate them
+even if the generated directory is missing; it does not depend on the runtime
+protocol crate.
+CDP providers implement supported methods of each generated domain trait.
+Unsupported commands retain an explicit method-not-found
 response, rather than fabricated successful results.
 
-The extension's capability modules in
+The extension's interface definitions and typed root bindings in
 [`src/generated/`](../vscode-extension/src/generated/)
 are produced by the **LinkRPC CLI**, preserving the exported wire schema and
 interface identity. The extension uses its generated client and derives any
@@ -108,8 +107,8 @@ const sources = await client.sources.list_sources({
 
 Consumers that need only one capability can use its generated client directly,
 for example `ContextApiClient`; providers can implement only `ContextApi` and
-register its generated server adapter. The bundle catalog drives the composite
-Rust facade, interface export, and daemon registration from one list.
+register its generated server adapter. The capability catalog drives the composite
+Rust facade, reflection interfaces, and daemon registration from one list.
 
 Every interface is registered on the same authenticated connection and advertised
 through LinkRPC reflection. Connecting Rust clients validate every required
@@ -122,29 +121,39 @@ only; clients must use the appropriate capability for other operations.
 
 ## Bare CDP interfaces versus daemon capabilities
 
-Multiple interfaces and bare wire addressing are separate concerns. The installed
-Rust LinkRPC 0.2.1 supports registering multiple interfaces and binding distinct
-bare prefixes with `bind_bare`, for example `DOM.` and `Runtime.`. Normal qualified
-interface addressing remains available alongside those bindings. The daemon uses
-qualified addressing for its capability interfaces; no new bare bindings are
-needed for this split.
+Multiple interfaces and bare wire addressing are separate concerns. Each CDP
+domain has an interface with local members (for example `evaluate`) and a bare
+root target containing its wire prefix (`Runtime.`). The target bundles the
+interface and addressing information so consumers do not reconstruct prefixes.
+The resulting request is still `Runtime.evaluate`, including when sent through
+the existing flat-session multiplexer. Cross-domain components share Rust type
+identity rather than independently generated lookalike structs.
 
-[Upstream's CDP contract fixture](https://github.com/hediet/linkrpc/blob/f585cd07c3c4968f6e52dec95096c86cf74350e1/typescript/packages/linkrpc-infra/test/protocols/contracts/cdp.ts)
-imports one interface per CDP domain, with local member names such as `evaluate`
-and a separate `Runtime.` binding. Its
-[bare-binding tests](https://github.com/hediet/linkrpc/blob/f585cd07c3c4968f6e52dec95096c86cf74350e1/rust/crates/linkrpc/tests/bare_bindings.rs)
-exercise several prefixes on the same connection. That domain importer is a
-test fixture, not a public CDP-import CLI command.
+The daemon uses qualified addressing for its capability interfaces; it needs no
+bare bindings.
 
-This repository has adopted the supporting LinkRPC dependency, but its own CDP
-importer still exports one `cdp.protocol` interface containing fully qualified
-members such as `Runtime.evaluate`. Its root-addressed `CdpClient` and session
-multiplexer are unchanged by the daemon interface split.
+## Resource references
 
-The upstream checkout's newer registration API configures `bare_prefix` in
-`RegisterOptions` atomically instead of calling `bind_bare` separately. Use the
-API of the installed published crate, not an assumption based on the sibling
-checkout's version string.
+Methods operating on one connection accept `ConnectionRef { context_id,
+connection_id }`. Methods operating on one target accept `TargetRef {
+connection: ConnectionRef, target_id }`. Both serialize with camel-case fields.
+Context-only operations and optional filters remain separate.
+
+These references identify resources, not their freshness. Generation, pause
+epoch, expected revision, and force arguments retain their existing validation
+semantics and are not hidden inside identity objects.
+
+## Stdio transport
+
+`dbgjs-service --stdio` hosts the same reflected capabilities over raw NDJSON
+stdin/stdout. It is an isolated, ephemeral instance: it never reads or writes
+the default daemon endpoint or persistent contexts, and cannot be combined with
+`--ensure` or `--state-file`. EOF or the shutdown RPC closes its runtimes and
+removes its temporary state. Diagnostics go to stderr, not the protocol stream.
+
+Inherited stdio is a trusted transport and has no socket authentication
+preamble. The persistent daemon's Unix socket / Windows named-pipe transport
+continues to require its existing authentication preamble.
 
 ## Regeneration and drift checks
 
@@ -155,36 +164,54 @@ npm run generate:contracts
 npm run check:contracts
 ```
 
-Generation exports the CDP and service contracts into the bundle, then invokes
-`linkrpc codegen` to generate TypeScript. The check command recomputes the
-contracts and compares the generated output without overwriting stale files.
-Commit the bundle and generated TypeScript together with their source changes.
+These commands build an isolated stdio daemon, export its reflected contracts
+and endpoint bindings into a temporary document, then invoke `linkrpc codegen` to generate
+TypeScript. The check compares exact output without overwriting stale files.
+Commit generated TypeScript together with its authored source changes.
 
 The TypeScript generation step is the installed CLI, not a second generator
-inside dbgjs. The orchestrator runs it once per advertised capability:
+inside dbgjs. The orchestrator exports one endpoint contract and generates its
+interfaces and bindings together:
 
 ```sh
+npx --no-install linkrpc --context :empty --no-use-env \
+  --endpoint 'cmd-stdio:?argv=/absolute/path/to/dbgjs-service&argv=--stdio' \
+  contract export --output /tmp/daemon.json
 npx --no-install linkrpc codegen \
-  --input schemas/dbgjs.interfaces.json \
-  --interface dev.dbgjs.context \
-  --name ContextApi \
-  --output vscode-extension/src/generated/contextApi.ts \
-  --preserve-wire-schema
+  --input /tmp/daemon.json \
+  --names /tmp/names.json \
+  --output vscode-extension/src/generated/interfaces.ts
 ```
 
-Append `--check` to check that module without writing it. Use the root
-`check:contracts` command to check both the source bundle and generated module.
-The CLI generates one standalone module at a time; shared component schemas may
-appear in several generated modules. They still come from the same authored Rust
-models, rather than separately maintained TypeScript definitions.
+Use the root `check:contracts` command to check the complete generated set,
+including generated-file headers, missing files, and obsolete modules.
+The naming document maps exact interface identities to names such as
+`ContextApi`, and root bindings to names such as `ContextApiRoot`.
+`DbgServiceClient` passes those generated bindings to `connection.get`, rather
+than reconstructing their addresses. Shared component schemas come from the
+same authored Rust models, not separately maintained TypeScript definitions.
 
 When changing daemon RPC, edit the owning Rust trait/shared models first. When changing CDP
 support, update the pinned upstream protocol or an explicit compatibility
 override first. Regenerate, then compile and test the consumers; do not repair a
 type error by manually editing generated files or weakening a wire type.
 
-The checked-in bundle bootstraps the Rust exporter itself. This is why it is
-versioned even though the authored inputs above remain authoritative.
+CDP generation is independent:
+
+```sh
+npm run generate:cdp
+npm run check:cdp
+```
+
+Both generated Rust and TypeScript are checked in, carry generated-file headers,
+and are marked generated for GitHub. CI runs both drift checks; ordinary builds
+do not silently update either set.
+
+The endpoint contract contains interface schemas and optional named/root service
+bindings, a default interface, and bare interfaces with exact wire prefixes.
+Interface definitions are generated once; typed bindings reuse them. A diagnostic
+`ls --dump` is a different artifact: it contains discovery topology, progress,
+and failures, and is not the input to code generation.
 
 ## Registry dependencies and local LinkRPC development
 
@@ -194,14 +221,13 @@ dependencies; CI does not check out a sibling repository, use relative
 `file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
 be published before their versions are selected in this repository.
 
-The Rust dependencies require LinkRPC 0.2.1 or newer for schema-preserving,
-macro-backed CDP bindings, typed heap-progress streams, and shared trait schemas.
+The locked LinkRPC versions provide shared component generation, typed endpoint
+bindings, schema-preserving macro-backed CDP clients, and heap-progress streams.
 The Rust generator emits a trait annotated with
 `#[link_rpc_interface(schema_json = "...")]`; the same macro used by the daemon
 trait generates the CDP client and provider infrastructure. The imported CDP
 schema and hash are preserved rather than re-derived from generated Rust types.
-The published TypeScript runtime and CLI
-dependencies are pinned to 0.0.2.
+The TypeScript runtime and CLI dependencies are pinned together.
 Rust trait models use the same schemars 0.8 version as LinkRPC's shared-schema
 collector; schemars 1 derives implement a different `JsonSchema` trait.
 
@@ -213,6 +239,10 @@ overrides and any resulting lockfile changes uncommitted and out of staging,
 then restore the registry manifests and lockfiles before running the ordinary
 install and contract drift check. Never commit local `file:`/`path` links or
 copy package sources or tarballs into this repository.
+
+To validate an explicitly built CLI without changing existing npm links, pass
+`npm run generate:contracts -- --cli /absolute/path/to/linkrpc.js` (or the same
+option to `check:contracts`). CI always uses the pinned installed CLI.
 
 For the isolated sibling development layout, an **uncommitted**
 `.cargo/config.toml` can contain:

@@ -257,7 +257,7 @@ impl LiveSourceInspector {
                 params.non_indexed_properties_only = Some(true);
                 match tokio::time::timeout(
                     self.remaining_time(),
-                    driver.client().runtime_get_properties(params),
+                    driver.client().runtime().get_properties(params),
                 )
                 .await
                 {
@@ -358,7 +358,7 @@ impl LiveSourceInspector {
         }
         match driver
             .client()
-            .runtime_release_object_group(crate::cdp::RuntimeReleaseObjectGroupParams {
+            .runtime().release_object_group(crate::cdp::RuntimeReleaseObjectGroupParams {
                 object_group: "dbgjs-object-locations".into(),
             })
             .await

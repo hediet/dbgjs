@@ -3,9 +3,7 @@ use super::*;
 #[link_rpc_interface(id = "dev.dbgjs.relay")]
 pub trait RelayApi {
     async fn open_playwright_proxy(
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         expected_generation: u64,
     ) -> Result<PlaywrightProxyEndpoint, JsonRpcError>;
 
@@ -19,11 +17,7 @@ pub trait RelayApi {
 
     /// Opens a direct-root CDP relay exposing exactly one target. Takes the same exclusive
     /// relay ownership of the target's owning context as `open_context_relay`.
-    async fn open_target_relay(
-        context_id: String,
-        connection_id: String,
-        target_id: String,
-    ) -> Result<RelayEndpoint, JsonRpcError>;
+    async fn open_target_relay(target_ref: TargetRef) -> Result<RelayEndpoint, JsonRpcError>;
 
     /// Closes a relay opened by `open_context_relay` or `open_target_relay`, restoring ordinary
     /// local access to its context. Returns `false` if the relay was already closed.

@@ -5,10 +5,16 @@ impl CoverageApi for DebuggerService {
     async fn start_coverage(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<bool, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .start_coverage()
@@ -20,12 +26,18 @@ impl CoverageApi for DebuggerService {
     async fn take_coverage(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: Option<String>,
         raw: Option<bool>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
                 .promote_completed_capture(
@@ -106,11 +118,17 @@ impl CoverageApi for DebuggerService {
     async fn stop_coverage(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
                 .promote_completed_capture(
@@ -188,26 +206,48 @@ impl CoverageApi for DebuggerService {
     async fn finish_coverage(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<bool, JsonRpcError> {
-        self.stop_coverage(_ctx, context_id, connection_id, target_id, capture_id)
-            .await?;
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
+        self.stop_coverage(
+            _ctx,
+            crate::service_api::TargetRef {
+                connection: crate::service_api::ConnectionRef {
+                    context_id: context_id,
+                    connection_id: connection_id,
+                },
+                target_id: target_id,
+            },
+            capture_id,
+        )
+        .await?;
         Ok(true)
     }
 
     async fn get_coverage(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         source_path: Option<String>,
         no_cache: bool,
     ) -> Result<CoverageSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_coverage(capture_id, source_path, no_cache)

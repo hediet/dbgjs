@@ -18,11 +18,10 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 use crate::cdp::{
-    CdpClient, CdpServer, CdpService, DebuggerDisableParams, DebuggerEnableParams,
-    DebuggerGetScriptSourceParams, DebuggerLocation, DebuggerPausedParams,
-    DebuggerRemoveBreakpointParams, DebuggerResumeParams, DebuggerScriptParsedParams,
-    DebuggerSetBreakpointParams, DebuggerStepIntoParams, DebuggerStepOutParams,
-    DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
+    CdpClient, DebuggerDisableParams, DebuggerEnableParams, DebuggerGetScriptSourceParams,
+    DebuggerLocation, DebuggerPausedParams, DebuggerRemoveBreakpointParams, DebuggerResumeParams,
+    DebuggerScriptParsedParams, DebuggerSetBreakpointParams, DebuggerStepIntoParams,
+    DebuggerStepOutParams, DebuggerStepOverParams, HeapProfilerAddHeapSnapshotChunkParams,
     HeapProfilerReportHeapSnapshotProgressParams, IoCloseParams, IoReadParams,
     NetworkLoadNetworkResourceOptions, NetworkLoadNetworkResourceParams, PageGetFrameTreeParams,
     RuntimeConsoleApicalledParams, RuntimeEnableParams, RuntimeRunIfWaitingForDebuggerParams,
@@ -68,9 +67,12 @@ impl CdpConnection {
         let (root_event_sender, root_event_receiver) = mpsc::unbounded_channel();
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(CdpRuntimeError::OpenSession)?),
-            Box::new(RootCdpEventHandler {
-                sender: root_event_sender,
-            }),
+            Box::new(
+                RootCdpEventHandler {
+                    sender: root_event_sender,
+                }
+                .into_dispatcher(),
+            ),
         );
         let root = CdpClient::root(root_channel.clone());
         let mux_loop = mux.clone();
@@ -243,9 +245,32 @@ struct RootCdpEventHandler {
     sender: mpsc::UnboundedSender<Result<RootCdpEvent, CdpRuntimeEventError>>,
 }
 
+struct RootCdpEventDispatcher {
+    handler: RootCdpEventHandler,
+    router: linkrpc::binding::InterfaceRouter,
+}
+
+impl RootCdpEventHandler {
+    fn into_dispatcher(self) -> RootCdpEventDispatcher {
+        let router = linkrpc::binding::InterfaceRouter::new();
+        crate::cdp::target::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::target::TargetServer::new(Arc::new(
+                    self.clone(),
+                ))),
+            )
+            .expect("generated Target binding is valid");
+        RootCdpEventDispatcher {
+            handler: self,
+            router,
+        }
+    }
+}
+
 #[async_trait]
-impl CdpService for RootCdpEventHandler {
-    async fn target_target_created(
+impl crate::cdp::target::TargetService for RootCdpEventHandler {
+    async fn target_created(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: TargetTargetCreatedParams,
@@ -254,7 +279,7 @@ impl CdpService for RootCdpEventHandler {
         Ok(())
     }
 
-    async fn target_target_info_changed(
+    async fn target_info_changed(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: TargetTargetInfoChangedParams,
@@ -263,7 +288,7 @@ impl CdpService for RootCdpEventHandler {
         Ok(())
     }
 
-    async fn target_target_destroyed(
+    async fn target_destroyed(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: TargetTargetDestroyedParams,
@@ -274,7 +299,7 @@ impl CdpService for RootCdpEventHandler {
 }
 
 #[async_trait]
-impl RequestHandler for RootCdpEventHandler {
+impl RequestHandler for RootCdpEventDispatcher {
     async fn handle_request(&self, method: String, _params: Value) -> Result<Value, JsonRpcError> {
         Err(JsonRpcError::new(
             -32601,
@@ -283,9 +308,8 @@ impl RequestHandler for RootCdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
-        let server = CdpServer::new(Arc::new(self.clone()));
-        if let Err(error) = server.dispatch_notification(&method, params).await {
-            let _ = self.sender.send(Err(CdpRuntimeEventError::Decode {
+        if let Err(error) = self.router.dispatch_notification(&method, params).await {
+            let _ = self.handler.sender.send(Err(CdpRuntimeEventError::Decode {
                 method,
                 message: error.message,
             }));
@@ -510,12 +534,14 @@ impl CdpDebuggerSession {
         match effect {
             Effect::ConfigureSession { effect_id, session } if session == &self.session => {
                 self.client
-                    .runtime_enable(RuntimeEnableParams::new())
+                    .runtime()
+                    .enable(RuntimeEnableParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 if let Err(error) = self
                     .client
-                    .debugger_disable(DebuggerDisableParams::new())
+                    .debugger()
+                    .disable(DebuggerDisableParams::new())
                     .await
                 {
                     eprintln!(
@@ -523,7 +549,8 @@ impl CdpDebuggerSession {
                     );
                 }
                 self.client
-                    .debugger_enable(DebuggerEnableParams::new())
+                    .debugger()
+                    .enable(DebuggerEnableParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 Ok(Some(Input::SessionConfigured {
@@ -532,9 +559,8 @@ impl CdpDebuggerSession {
             }
             Effect::RunIfWaitingForDebugger { effect_id, session } if session == &self.session => {
                 self.client
-                    .runtime_run_if_waiting_for_debugger(
-                        RuntimeRunIfWaitingForDebuggerParams::new(),
-                    )
+                    .runtime()
+                    .run_if_waiting_for_debugger(RuntimeRunIfWaitingForDebuggerParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 Ok(Some(Input::CommandAccepted {
@@ -552,9 +578,8 @@ impl CdpDebuggerSession {
             } if script.session == self.session => {
                 let source = match self
                     .client
-                    .debugger_get_script_source(DebuggerGetScriptSourceParams::new(
-                        script.script_id.clone(),
-                    ))
+                    .debugger()
+                    .get_script_source(DebuggerGetScriptSourceParams::new(script.script_id.clone()))
                     .await
                 {
                     Ok(source) => source,
@@ -608,7 +633,8 @@ impl CdpDebuggerSession {
                 params.condition = physical.condition.clone();
                 let installed = self
                     .client
-                    .debugger_set_breakpoint(params)
+                    .debugger()
+                    .set_breakpoint(params)
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 let confirmed_position = crate::source_view::Position {
@@ -640,9 +666,8 @@ impl CdpDebuggerSession {
                 backend_id,
             } if physical.script.session == self.session => {
                 self.client
-                    .debugger_remove_breakpoint(DebuggerRemoveBreakpointParams::new(
-                        backend_id.clone(),
-                    ))
+                    .debugger()
+                    .remove_breakpoint(DebuggerRemoveBreakpointParams::new(backend_id.clone()))
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 Ok(Some(Input::BreakpointRemoved {
@@ -653,7 +678,8 @@ impl CdpDebuggerSession {
                 effect_id, session, ..
             } if session == &self.session => {
                 self.client
-                    .debugger_resume(DebuggerResumeParams::new())
+                    .debugger()
+                    .resume(DebuggerResumeParams::new())
                     .await
                     .map_err(CdpRuntimeError::protocol)?;
                 Ok(Some(Input::CommandAccepted {
@@ -669,19 +695,22 @@ impl CdpDebuggerSession {
                 match kind {
                     StepKind::Into => {
                         self.client
-                            .debugger_step_into(DebuggerStepIntoParams::new())
+                            .debugger()
+                            .step_into(DebuggerStepIntoParams::new())
                             .await
                             .map_err(CdpRuntimeError::protocol)?;
                     }
                     StepKind::Over => {
                         self.client
-                            .debugger_step_over(DebuggerStepOverParams::new())
+                            .debugger()
+                            .step_over(DebuggerStepOverParams::new())
                             .await
                             .map_err(CdpRuntimeError::protocol)?;
                     }
                     StepKind::Out => {
                         self.client
-                            .debugger_step_out(DebuggerStepOutParams::new())
+                            .debugger()
+                            .step_out(DebuggerStepOutParams::new())
                             .await
                             .map_err(CdpRuntimeError::protocol)?;
                     }
@@ -794,7 +823,8 @@ impl CdpDebuggerSession {
             None => {
                 let frame_tree = self
                     .client
-                    .page_get_frame_tree(PageGetFrameTreeParams::new())
+                    .page()
+                    .get_frame_tree(PageGetFrameTreeParams::new())
                     .await
                     .map_err(|error| CdpRuntimeError::SourceMapProtocol {
                         url: resolved_url.to_owned(),
@@ -855,19 +885,21 @@ impl CdpDebuggerSession {
             loop {
                 let mut params = IoReadParams::new(stream.clone());
                 params.size = Some(8 * 1024 * 1024);
-                let chunk =
-                    tokio::time::timeout(SOURCE_MAP_RESOURCE_TIMEOUT, self.client.io_read(params))
-                        .await
-                        .map_err(|_| CdpRuntimeError::SourceMapProtocol {
-                            url: resolved_url.to_owned(),
-                            source: Box::new(CdpRuntimeError::Transport(
-                                "resource read timed out".to_owned(),
-                            )),
-                        })?
-                        .map_err(|error| CdpRuntimeError::SourceMapProtocol {
-                            url: resolved_url.to_owned(),
-                            source: Box::new(CdpRuntimeError::protocol(error)),
-                        })?;
+                let chunk = tokio::time::timeout(
+                    SOURCE_MAP_RESOURCE_TIMEOUT,
+                    self.client.io().read(params),
+                )
+                .await
+                .map_err(|_| CdpRuntimeError::SourceMapProtocol {
+                    url: resolved_url.to_owned(),
+                    source: Box::new(CdpRuntimeError::Transport(
+                        "resource read timed out".to_owned(),
+                    )),
+                })?
+                .map_err(|error| CdpRuntimeError::SourceMapProtocol {
+                    url: resolved_url.to_owned(),
+                    source: Box::new(CdpRuntimeError::protocol(error)),
+                })?;
                 if chunk.base64_encoded.unwrap_or(false) {
                     bytes.extend(
                         BASE64_STANDARD
@@ -886,7 +918,7 @@ impl CdpDebuggerSession {
         .await;
         let close_result = tokio::time::timeout(
             SOURCE_MAP_RESOURCE_TIMEOUT,
-            self.client.io_close(IoCloseParams::new(stream)),
+            self.client.io().close(IoCloseParams::new(stream)),
         )
         .await
         .map_err(|_| CdpRuntimeError::SourceMapProtocol {
@@ -1081,20 +1113,54 @@ struct CdpEventHandler {
 }
 
 impl CdpEventHandler {
+    fn into_dispatcher(self) -> CdpEventDispatcher {
+        let handler = Arc::new(self.clone());
+        let router = linkrpc::binding::InterfaceRouter::new();
+        crate::cdp::debugger::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::debugger::DebuggerServer::new(handler.clone())),
+            )
+            .expect("generated Debugger binding is valid");
+        crate::cdp::runtime::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::runtime::RuntimeServer::new(handler.clone())),
+            )
+            .expect("generated Runtime binding is distinct");
+        crate::cdp::heap_profiler::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::heap_profiler::HeapProfilerServer::new(handler)),
+            )
+            .expect("generated HeapProfiler binding is distinct");
+        CdpEventDispatcher {
+            handler: self,
+            router,
+        }
+    }
+
     fn into_channel(self, transport: impl MessageTransport + 'static) -> Channel {
+        let dispatcher = self.into_dispatcher();
         Channel::new(
             Box::new(HeapSnapshotTransport {
                 transport: Box::new(transport),
-                handler: self.clone(),
+                handler: dispatcher.clone(),
             }),
-            Box::new(self),
+            Box::new(dispatcher),
         )
     }
 }
 
+#[derive(Clone)]
+struct CdpEventDispatcher {
+    handler: CdpEventHandler,
+    router: linkrpc::binding::InterfaceRouter,
+}
+
 struct HeapSnapshotTransport {
     transport: Box<dyn MessageTransport>,
-    handler: CdpEventHandler,
+    handler: CdpEventDispatcher,
 }
 
 #[async_trait]
@@ -1129,8 +1195,8 @@ impl MessageTransport for HeapSnapshotTransport {
 }
 
 #[async_trait]
-impl CdpService for CdpEventHandler {
-    async fn debugger_script_parsed(
+impl crate::cdp::debugger::DebuggerService for CdpEventHandler {
+    async fn script_parsed(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: DebuggerScriptParsedParams,
@@ -1142,7 +1208,7 @@ impl CdpService for CdpEventHandler {
         Ok(())
     }
 
-    async fn debugger_paused(
+    async fn paused(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: DebuggerPausedParams,
@@ -1154,7 +1220,7 @@ impl CdpService for CdpEventHandler {
         Ok(())
     }
 
-    async fn debugger_resumed(
+    async fn resumed(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         _params: crate::cdp::DebuggerResumedParams,
@@ -1164,8 +1230,11 @@ impl CdpService for CdpEventHandler {
         }));
         Ok(())
     }
+}
 
-    async fn runtime_console_apicalled(
+#[async_trait]
+impl crate::cdp::runtime::RuntimeService for CdpEventHandler {
+    async fn console_apicalled(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: RuntimeConsoleApicalledParams,
@@ -1176,8 +1245,11 @@ impl CdpService for CdpEventHandler {
         }));
         Ok(())
     }
+}
 
-    async fn heap_profiler_add_heap_snapshot_chunk(
+#[async_trait]
+impl crate::cdp::heap_profiler::HeapProfilerService for CdpEventHandler {
+    async fn add_heap_snapshot_chunk(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: HeapProfilerAddHeapSnapshotChunkParams,
@@ -1205,7 +1277,7 @@ impl CdpService for CdpEventHandler {
         Ok(())
     }
 
-    async fn heap_profiler_report_heap_snapshot_progress(
+    async fn report_heap_snapshot_progress(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: HeapProfilerReportHeapSnapshotProgressParams,
@@ -1232,7 +1304,7 @@ impl CdpService for CdpEventHandler {
 }
 
 #[async_trait]
-impl RequestHandler for CdpEventHandler {
+impl RequestHandler for CdpEventDispatcher {
     async fn handle_request(&self, method: String, _params: Value) -> Result<Value, JsonRpcError> {
         Err(JsonRpcError::new(
             -32601,
@@ -1241,6 +1313,19 @@ impl RequestHandler for CdpEventHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
+        self.handler
+            .dispatch_notification(&self.router, method, params)
+            .await;
+    }
+}
+
+impl CdpEventHandler {
+    async fn dispatch_notification(
+        &self,
+        router: &linkrpc::binding::InterfaceRouter,
+        method: String,
+        params: Value,
+    ) {
         {
             let mut history = self.raw_event_history.lock().unwrap();
             match method.as_str() {
@@ -1295,8 +1380,7 @@ impl RequestHandler for CdpEventHandler {
             }));
             return;
         }
-        let server = CdpServer::new(Arc::new(self.clone()));
-        match server.dispatch_notification(&method, params.clone()).await {
+        match router.dispatch_notification(&method, params.clone()).await {
             Ok(true) => {}
             Ok(false) => {
                 let _ = self.sender.send(Ok(CdpRuntimeEvent::Other {
@@ -1986,7 +2070,8 @@ mod tests {
             heap_snapshot_progress: heap_snapshot_progress.clone(),
             raw_events,
             raw_event_history,
-        };
+        }
+        .into_dispatcher();
 
         handler
             .handle_notification(
@@ -2062,7 +2147,8 @@ mod tests {
             heap_snapshot_progress,
             raw_events: raw_events.clone(),
             raw_event_history,
-        };
+        }
+        .into_dispatcher();
         let mut subscriber = raw_events.subscribe();
 
         // A method the reducer does not recognize (`CdpRuntimeEvent::Other`) must still be

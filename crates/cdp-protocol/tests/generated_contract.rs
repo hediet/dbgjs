@@ -1,18 +1,19 @@
-use linkrpc::prelude::{LinkRpcInterfaceSchema, compute_interface_hash};
+use linkrpc::prelude::compute_interface_hash;
+use std::collections::BTreeSet;
 
 #[test]
-fn generated_bindings_preserve_canonical_schema_and_hash() {
-    let bundle: serde_json::Value =
-        serde_json::from_str(include_str!("../../../schemas/dbgjs.interfaces.json")).unwrap();
-    let schema = bundle["interfaceSchemas"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|schema| schema["id"] == "cdp.protocol")
-        .unwrap();
-    let expected: LinkRpcInterfaceSchema = serde_json::from_value(schema.clone()).unwrap();
-    let actual = cdp_protocol::interface().to_schema();
-
-    assert_eq!(actual, expected);
-    assert_eq!(compute_interface_hash(&actual), expected.hash);
+fn generated_domains_preserve_schema_identity_and_bare_prefixes() {
+    let mut interfaces = BTreeSet::new();
+    let mut prefixes = BTreeSet::new();
+    for (prefix, definition) in cdp_protocol::interfaces() {
+        let schema = definition.to_schema();
+        assert!(interfaces.insert(schema.id.clone()));
+        assert!(prefixes.insert(prefix.clone()));
+        assert!(prefix.ends_with('.'));
+        assert_eq!(schema.hash, compute_interface_hash(&schema));
+        assert!(schema.methods.keys().all(|member| !member.contains('.')));
+    }
+    assert!(prefixes.contains("Runtime."));
+    assert!(prefixes.contains("Debugger."));
+    assert!(prefixes.contains("Target."));
 }

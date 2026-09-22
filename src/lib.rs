@@ -7,7 +7,6 @@ pub mod context_relay;
 pub mod context_source_model;
 pub mod coverage_filter;
 pub use cdp_protocol as cdp;
-pub use cdp_protocol::protocol_schema;
 pub mod cdp_runtime;
 pub mod cdp_transport;
 pub mod debugger_driver;

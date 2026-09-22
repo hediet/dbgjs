@@ -31,6 +31,20 @@ use serde::{Deserialize, Serialize};
 use crate::context_identity::ContextKind;
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRef {
+    pub context_id: String,
+    pub connection_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetRef {
+    pub connection: ConnectionRef,
+    pub target_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceInfo {
@@ -302,28 +316,17 @@ pub struct ConnectionSnapshot {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConnectionConfiguration {
     #[serde(rename_all = "camelCase")]
-    DirectCdp {
-        endpoint: String,
-    },
+    DirectCdp { endpoint: String },
     #[serde(rename_all = "camelCase")]
-    NodeInspector {
-        endpoint: String,
-    },
+    NodeInspector { endpoint: String },
     #[serde(rename_all = "camelCase")]
-    Process {
-        process_id: u32,
-    },
+    Process { process_id: u32 },
     #[serde(rename_all = "camelCase")]
-    ProcessTree {
-        root_pid: u32,
-    },
+    ProcessTree { root_pid: u32 },
     /// Uses the process tree rooted at `root_pid` as the access path while exposing only
     /// `target_id` and its descendants as this connection's public target scope.
     #[serde(rename_all = "camelCase")]
-    ScopedProcessTree {
-        root_pid: u32,
-        target_id: String,
-    },
+    ScopedProcessTree { root_pid: u32, target_id: String },
     #[serde(rename_all = "camelCase")]
     Playwright {
         url: String,
@@ -482,7 +485,9 @@ pub fn capture_relative_index(selector: &str) -> Result<Option<usize>, String> {
     }
     match index.parse::<usize>() {
         Ok(index) if index > 0 => Ok(Some(index)),
-        _ => Err(format!("invalid capture selector '{selector}': relative indices start at .1")),
+        _ => Err(format!(
+            "invalid capture selector '{selector}': relative indices start at .1"
+        )),
     }
 }
 
@@ -1883,7 +1888,6 @@ pub enum TargetWaitPredicate {
     },
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1892,6 +1896,31 @@ mod tests {
         TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector,
         ValueSnapshot,
     };
+
+    #[test]
+    fn target_references_compose_connection_identity_on_the_wire() {
+        let reference = super::TargetRef {
+            connection: super::ConnectionRef {
+                context_id: "workspace".into(),
+                connection_id: "node".into(),
+            },
+            target_id: "process".into(),
+        };
+        let wire = serde_json::json!({
+            "connection": { "contextId": "workspace", "connectionId": "node" },
+            "targetId": "process"
+        });
+        assert_eq!(serde_json::to_value(&reference).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<super::TargetRef>(wire.clone()).unwrap(),
+            reference
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(super::TargetRef)).unwrap();
+        jsonschema::validator_for(&schema)
+            .unwrap()
+            .validate(&wire)
+            .unwrap();
+    }
 
     #[test]
     fn target_wait_predicate_uses_camel_case_fields() {

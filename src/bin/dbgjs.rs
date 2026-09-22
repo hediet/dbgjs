@@ -20,16 +20,15 @@ use dbgjs::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
 };
 use dbgjs::service_api::{
-    BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus, ContextSnapshot,
-    ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
-    HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost,
-    HeapPathDirection, HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec,
-    MutationOptions, ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole,
-    ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
+    BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
+    ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
+    HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
+    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
+    ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, ProcessRootKind,
+    ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
     SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
-    TargetAttachOptions, TargetBreakpointStatus,
-    TargetDebuggerPhase, TargetDebuggerSnapshot, TargetScriptStatus, TargetWaitPredicate,
-    ValueInspectionOptions, ValueSelector,
+    TargetAttachOptions, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
+    TargetScriptStatus, TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -69,7 +68,9 @@ fn main() {
             let hint = coverage_delay_hint(&env::args().skip(1).collect::<Vec<_>>());
             let result = runtime.block_on(async {
                 match hint {
-                    Some(hint) => with_delayed_hint(run(), COVERAGE_HINT_DELAY, || eprintln!("{hint}")).await,
+                    Some(hint) => {
+                        with_delayed_hint(run(), COVERAGE_HINT_DELAY, || eprintln!("{hint}")).await
+                    }
                     None => run().await,
                 }
             });
@@ -86,9 +87,9 @@ fn main() {
 }
 
 fn coverage_delay_hint(arguments: &[String]) -> Option<&'static str> {
-    if !arguments.windows(2).any(|pair| pair[0] == "coverage"
-        && matches!(pair[1].as_str(), "capture" | "take" | "show" | "stop"))
-    {
+    if !arguments.windows(2).any(|pair| {
+        pair[0] == "coverage" && matches!(pair[1].as_str(), "capture" | "take" | "show" | "stop")
+    }) {
         return None;
     }
     Some(if arguments.iter().any(|argument| argument == "--raw") {
@@ -209,13 +210,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             select_scope(&selection_file, &scope, &snapshot)?;
             println!("Target: {selector}");
         }
@@ -223,13 +218,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [target, graph] if target == "target" && graph == "graph" => {
@@ -242,13 +231,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let mut selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .get_logs(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.get_logs(scope.target_ref()).await)?;
             let current_scope = log_scope(
                 &scope,
                 &snapshot.target_id,
@@ -285,14 +268,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 options,
             )
             .await?;
-            let snapshot = rpc(client.targets
-                .step_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                    pause_epoch,
-                    parse_step_kind(kind)?,
-                )
+            let snapshot = rpc(client
+                .targets
+                .step_target(scope.target_ref(), pause_epoch, parse_step_kind(kind)?)
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
@@ -300,13 +278,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .release_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.release_target(scope.target_ref()).await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [target, resume, options @ ..]
@@ -327,13 +299,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 options,
             )
             .await?;
-            let snapshot = rpc(client.targets
-                .resume_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                    pause_epoch,
-                )
+            let snapshot = rpc(client
+                .targets
+                .resume_target(scope.target_ref(), pause_epoch)
                 .await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
@@ -342,18 +310,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
-            let value = rpc(client.targets
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
+            let value = rpc(client
+                .targets
                 .inspect_value(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     pause_epoch(&snapshot),
                     ValueSelector::Expression {
                         expression: options.expression,
@@ -385,8 +346,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })?
                 .generation;
-            let proxy = rpc(client.relay
-                .open_playwright_proxy(scope.context, scope.connection, scope.target, generation)
+            let proxy = rpc(client
+                .relay
+                .open_playwright_proxy(scope.target_ref(), generation)
                 .await)?;
             let result = run_playwright_program(&proxy.websocket_url, &program).await;
             let _ = client.relay.close_playwright_proxy(proxy.id).await;
@@ -400,11 +362,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let result = if let Some(session_id) = options.session_id {
-                rpc(client.cdp
+                rpc(client
+                    .cdp
                     .raw_cdp_session_request(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
+                        scope.target_ref(),
                         session_id,
                         method.clone(),
                         options.params,
@@ -412,11 +373,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .await)?
             } else {
-                rpc(client.cdp
+                rpc(client
+                    .cdp
                     .raw_cdp_request(
-                        scope.context,
-                        scope.connection,
-                        scope.target,
+                        scope.target_ref(),
                         method.clone(),
                         options.params,
                         options.validate,
@@ -430,9 +390,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let relay = rpc(client.relay
-                .open_target_relay(scope.context, scope.connection, scope.target)
-                .await)?;
+            let relay = rpc(client.relay.open_target_relay(scope.target_ref()).await)?;
             let result = run_relay_stdio(&relay.websocket_url).await;
             let _ = client.relay.close_relay(relay.id).await;
             result?;
@@ -442,18 +400,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
-            let value = rpc(client.targets
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
+            let value = rpc(client
+                .targets
                 .inspect_value(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     pause_epoch(&snapshot),
                     options.selector,
                     ValueInspectionOptions {
@@ -471,11 +422,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.targets
+            let snapshot = rpc(client
+                .targets
                 .set_logpoints(
-                    scope.context,
-                    scope.connection,
-                    scope.target.clone(),
+                    scope.target_ref(),
                     vec![parse_logpoint_spec(id, source, line, column, expression)?],
                 )
                 .await)?;
@@ -496,13 +446,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.targets
-                .set_logpoints(
-                    scope.context,
-                    scope.connection,
-                    scope.target.clone(),
-                    logpoints,
-                )
+            let snapshot = rpc(client
+                .targets
+                .set_logpoints(scope.target_ref(), logpoints)
                 .await)?;
             output.print_target_with_breakpoint_sources(&snapshot, &scope.target, &ids)?;
         }
@@ -510,13 +456,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            rpc(client.browser
-                .click_target(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    selector.clone(),
-                )
+            rpc(client
+                .browser
+                .click_target(scope.target_ref(), selector.clone())
                 .await)?;
             println!("Clicked {selector}");
         }
@@ -524,8 +466,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client.browser
-                .type_target(scope.context, scope.connection, scope.target, text.clone())
+            rpc(client
+                .browser
+                .type_target(scope.target_ref(), text.clone())
                 .await)?;
             println!("Typed {text:?}");
         }
@@ -536,9 +479,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.browser
-                .capture_screenshot(scope.context, scope.connection, scope.target)
-                .await)?;
+            let snapshot = rpc(client.browser.capture_screenshot(scope.target_ref()).await)?;
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(&snapshot.data_base64)
                 .map_err(|error| {
@@ -562,9 +503,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client.coverage
-                .start_coverage(scope.context, scope.connection, scope.target)
-                .await)?;
+            rpc(client.coverage.start_coverage(scope.target_ref()).await)?;
             println!("Coverage recording started.");
         }
         [coverage, capture, options @ ..]
@@ -575,17 +514,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.coverage
+            let snapshot = rpc(client
+                .coverage
                 .take_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     options.capture_id.clone(),
                     Some(options.raw),
                 )
                 .await)?;
             let capture_id = snapshot.capture_id.as_deref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "service returned a coverage capture without its durable captureId")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "service returned a coverage capture without its durable captureId",
+                )
             })?;
             if !options.render_requested {
                 output.print_coverage_capture(&snapshot, capture_id)?;
@@ -607,16 +548,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.coverage
-                .stop_coverage(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    options.capture_id,
-                )
+            let snapshot = rpc(client
+                .coverage
+                .stop_coverage(scope.target_ref(), options.capture_id)
                 .await)?;
             let capture_id = snapshot.capture_id.as_deref().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "service returned stopped coverage without its durable captureId")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "service returned stopped coverage without its durable captureId",
+                )
             })?;
             output.print_coverage_stopped(capture_id)?;
         }
@@ -633,13 +573,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            rpc(client.cpu
-                .start_cpu_profile(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    sampling_interval_micros,
-                )
+            rpc(client
+                .cpu
+                .start_cpu_profile(scope.target_ref(), sampling_interval_micros)
                 .await)?;
             output.print_cpu_profile_started(sampling_interval_micros)?;
         }
@@ -648,8 +584,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let profile = rpc(client.cpu
-                .stop_cpu_profile(scope.context, scope.connection, scope.target, capture_id)
+            let profile = rpc(client
+                .cpu
+                .stop_cpu_profile(scope.target_ref(), capture_id)
                 .await)?;
             output.print_cpu_profile_stopped(&profile)?;
         }
@@ -666,10 +603,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let profile = rpc(client.captures
+            let profile = rpc(client
+                .captures
                 .get_stored_cpu_profile(
-                    context, options.capture_id, None,
-                    scope_options.target.clone(), scope_options.connection.clone(),
+                    context,
+                    options.capture_id,
+                    None,
+                    scope_options.target.clone(),
+                    scope_options.connection.clone(),
                 )
                 .await)?;
             let serialized = serde_json::to_vec_pretty(&cpu_profile_export(&profile))?;
@@ -681,14 +622,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let call = rpc(client.heap.capture_heap_snapshot(
-                scope.context.clone(),
-                scope.connection.clone(),
-                scope.target.clone(),
-                options.capture_id,
-                options.capture_numeric_value,
-                options.expose_internals,
-            ).await)?;
+            let call = rpc(client
+                .heap
+                .capture_heap_snapshot(
+                    scope.target_ref(),
+                    options.capture_id,
+                    options.capture_numeric_value,
+                    options.expose_internals,
+                )
+                .await)?;
             let (result, _, progress, _) = call.into_parts();
             let result = wait_for_heap_stream(&output, result, progress).await?;
             output.print(&result)?;
@@ -700,16 +642,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let selection = load_selection(&selection_file)?;
             if options.capture {
                 let scope = resolve_scope(&client, &selection, &scope_options).await?;
-                let call = rpc(client.heap.capture_heap_snapshot(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                    (capture_id != ".").then(|| capture_id.clone()),
-                    false,
-                    false,
-                ).await)?;
+                let call = rpc(client
+                    .heap
+                    .capture_heap_snapshot(
+                        scope.target_ref(),
+                        (capture_id != ".").then(|| capture_id.clone()),
+                        false,
+                        false,
+                    )
+                    .await)?;
                 let (result, _, progress, _) = call.into_parts();
-                capture_id = wait_for_heap_stream(&output, result, progress).await?.capture_id;
+                capture_id = wait_for_heap_stream(&output, result, progress)
+                    .await?
+                    .capture_id;
             }
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
@@ -719,14 +664,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, supply, capture, script, hash, map] if heap == "heap" && supply == "supply-map" => {
             let map_path = absolute_path(Path::new(map))?;
             let source_map_url = url::Url::from_file_path(&map_path)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid source map path"))?.to_string();
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid source map path")
+                })?
+                .to_string();
             let source_map = tokio::fs::read_to_string(map_path).await?;
             let client = ensure_service(&state_file).await?;
-            let context = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            rpc(client.captures.supply_stored_heap_source_map(context, capture.clone(),
-                dbgjs::service_api::HeapSourceMapSupply {
-                    script_id: script.clone(), script_hash: hash.clone(), source_map_url, source_map,
-                }).await)?;
+            let context =
+                selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            rpc(client
+                .captures
+                .supply_stored_heap_source_map(
+                    context,
+                    capture.clone(),
+                    dbgjs::service_api::HeapSourceMapSupply {
+                        script_id: script.clone(),
+                        script_hash: hash.clone(),
+                        source_map_url,
+                        source_map,
+                    },
+                )
+                .await)?;
             output.print_heap_map_supplied(capture, script)?;
         }
         [capture, list] if capture == "capture" && list == "list" => {
@@ -739,7 +697,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let capture = rpc(client.captures.get_capture(context.clone(), name.clone()).await)?;
+            let capture = rpc(client
+                .captures
+                .get_capture(context.clone(), name.clone())
+                .await)?;
             if output.is_json() {
                 output.print(&capture)?;
             } else {
@@ -747,30 +708,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 match capture.kind {
                     CaptureKind::Coverage => {
                         show_stored_coverage(
-                            &client, &output, context, &scope_options,
+                            &client,
+                            &output,
+                            context,
+                            &scope_options,
                             CoverageShowOptions {
                                 capture_id: capture.name,
                                 ..parse_coverage_show_options(&[])?
                             },
-                        ).await?;
+                        )
+                        .await?;
                     }
                     CaptureKind::CpuProfile => {
                         show_stored_cpu_profile(
-                            &client, &output, context, &scope_options,
+                            &client,
+                            &output,
+                            context,
+                            &scope_options,
                             CpuProfileShowOptions {
                                 capture_id: capture.name,
                                 ..parse_cpu_profile_show_options(&[])?
                             },
-                        ).await?;
+                        )
+                        .await?;
                     }
                     CaptureKind::HeapSnapshot => {
                         show_stored_heap_classes(
-                            &client, &output, context, &scope_options,
+                            &client,
+                            &output,
+                            context,
+                            &scope_options,
                             HeapClassOptions {
                                 capture_id: capture.name,
                                 ..parse_heap_class_options(&[])?
                             },
-                        ).await?;
+                        )
+                        .await?;
                     }
                 }
             }
@@ -779,18 +752,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.captures.delete_capture(context, name.clone()).await)?)?;
+            output.print(&rpc(client
+                .captures
+                .delete_capture(context, name.clone())
+                .await)?)?;
         }
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let selection = rpc(client.heap
+            let selection = rpc(client
+                .heap
                 .select_heap_nodes(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     options.capture_id,
                     options.selector,
                     options.max_string_length,
@@ -804,11 +779,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let selection = rpc(client.heap
+            let selection = rpc(client
+                .heap
                 .select_heap_nodes(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     options.capture_id,
                     options.selector,
                     options.max_string_length,
@@ -822,11 +796,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let promises = rpc(client.heap
+            let promises = rpc(client
+                .heap
                 .select_promises(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     options.capture_id,
                     options.state,
                     options.limit,
@@ -840,11 +813,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let properties = rpc(client.heap
+            let properties = rpc(client
+                .heap
                 .get_heap_references(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     reference.clone(),
                     HeapReferenceDirection::Outgoing,
                     HeapEdgePolicy::All,
@@ -859,11 +831,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let references = rpc(client.heap
+            let references = rpc(client
+                .heap
                 .get_heap_references(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     reference.clone(),
                     options.direction,
                     options.edge_policy,
@@ -878,11 +849,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let path = rpc(client.heap
+            let path = rpc(client
+                .heap
                 .get_heap_path(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     from.clone(),
                     to.clone(),
                     options.path,
@@ -908,11 +878,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let root = rpc(client.heap
+            let root = rpc(client
+                .heap
                 .select_heap_nodes(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
+                    scope.target_ref(),
                     capture_id,
                     HeapNodeSelector {
                         limit: Some(1),
@@ -926,11 +895,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
-            let path = rpc(client.heap
+            let path = rpc(client
+                .heap
                 .get_heap_path(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     root.reference,
                     reference.clone(),
                     options.path,
@@ -957,11 +925,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let root = rpc(client.heap
+            let root = rpc(client
+                .heap
                 .select_heap_nodes(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
+                    scope.target_ref(),
                     capture_id,
                     HeapNodeSelector {
                         limit: Some(1),
@@ -975,11 +942,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .into_iter()
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "heap graph is empty"))?;
-            let path = rpc(client.heap
+            let path = rpc(client
+                .heap
                 .get_heap_path(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     reference.clone(),
                     root.reference,
                     options.path,
@@ -1004,14 +970,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let chain = rpc(client.heap
-                .get_heap_dominator_chain(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
-                    reference.clone(),
-                    max_string_length,
-                )
+            let chain = rpc(client
+                .heap
+                .get_heap_dominator_chain(scope.target_ref(), reference.clone(), max_string_length)
                 .await)?;
             output.print(&chain)?;
         }
@@ -1020,11 +981,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let aggregate = rpc(client.heap
+            let aggregate = rpc(client
+                .heap
                 .aggregate_heap_snapshot(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     options.capture_id,
                     options.by,
                     options.limit,
@@ -1038,11 +998,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
-            let diff = rpc(client.heap
+            let diff = rpc(client
+                .heap
                 .diff_heap_snapshots(
-                    scope.context,
-                    scope.connection,
-                    scope.target,
+                    scope.target_ref(),
                     older.clone(),
                     newer.clone(),
                     options.by,
@@ -1058,14 +1017,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let call = rpc(client.heap.take_heap_snapshot(
-                scope.context.clone(),
-                scope.connection.clone(),
-                scope.target.clone(),
-                destination.to_string_lossy().into_owned(),
-                options.capture_numeric_value,
-                options.expose_internals,
-            ).await)?;
+            let call = rpc(client
+                .heap
+                .take_heap_snapshot(
+                    scope.target_ref(),
+                    destination.to_string_lossy().into_owned(),
+                    options.capture_numeric_value,
+                    options.expose_internals,
+                )
+                .await)?;
             let (result, _, progress, _) = call.into_parts();
             let result = wait_for_heap_stream(&output, result, progress).await?;
             output.print(&result)?;
@@ -1078,13 +1038,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selection.watches.push(expression.clone());
                 write_selection(&selection_file, &selection)?;
             }
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [service, status] if service == "service" && status == "status" => {
@@ -1097,11 +1051,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let mut trees = dbgjs::process_discovery::discover_process_trees(
-                options.root_kind,
-                options.stats,
-            )
-            .await?;
+            let mut trees =
+                dbgjs::process_discovery::discover_process_trees(options.root_kind, options.stats)
+                    .await?;
             if options.full {
                 dbgjs::process_discovery::populate_process_tree_targets(&mut trees).await;
             }
@@ -1154,23 +1106,39 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                     .into());
                 }
-                rpc(client.contexts
-                    .disconnect_connection(context_id.clone(), connection_id.clone())
+                rpc(client
+                    .contexts
+                    .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                        context_id: context_id.clone(),
+                        connection_id: connection_id.clone(),
+                    })
                     .await)?;
             }
             if !connected
                 || existing.is_some_and(|connection| connection.configuration != configuration)
             {
-                rpc(client.contexts
-                    .put_connection(context_id.clone(), connection_id.clone(), configuration)
+                rpc(client
+                    .contexts
+                    .put_connection(
+                        dbgjs::service_api::ConnectionRef {
+                            context_id: context_id.clone(),
+                            connection_id: connection_id.clone(),
+                        },
+                        configuration,
+                    )
                     .await)?;
-                rpc(client.contexts
-                    .connect_connection(context_id.clone(), connection_id.clone())
+                rpc(client
+                    .contexts
+                    .connect_connection(dbgjs::service_api::ConnectionRef {
+                        context_id: context_id.clone(),
+                        connection_id: connection_id.clone(),
+                    })
                     .await)?;
             }
             let target_id = match target {
                 ProcessAttachTarget::Renderer(selector) => {
-                    resolve_renderer_target_id(&client, &context_id, &connection_id, selector).await?
+                    resolve_renderer_target_id(&client, &context_id, &connection_id, selector)
+                        .await?
                 }
                 ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
                     synthetic_node_target_id(&connection_id)
@@ -1195,11 +1163,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
-            let result = rpc(client.targets
+            let result = rpc(client
+                .targets
                 .attach_target(
-                    context_id.clone(),
-                    connection_id.clone(),
-                    target_id.clone(),
+                    dbgjs::service_api::TargetRef {
+                        connection: dbgjs::service_api::ConnectionRef {
+                            context_id: context_id.clone(),
+                            connection_id: connection_id.clone(),
+                        },
+                        target_id: target_id.clone(),
+                    },
                     TargetAttachOptions {
                         force: options.force,
                         expected_connection_generation: None,
@@ -1221,7 +1194,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [context, list] if context == "context" && list == "list" => {
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
+            output.print(&rpc(client
+                .contexts
                 .list_contexts(Some(normalized_cwd.clone()))
                 .await)?)?;
         }
@@ -1247,7 +1221,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 kind,
             } = resolve_context_expression(&expression, &cwd)?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client.contexts
+            let snapshot = rpc(client
+                .contexts
                 .put_context(context_id.clone(), kind, display_name)
                 .await)?;
             if set_default {
@@ -1266,7 +1241,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            let deleted = rpc(client.contexts.delete_context(context_id.clone(), mutation).await)?;
+            let deleted = rpc(client
+                .contexts
+                .delete_context(context_id.clone(), mutation)
+                .await)?;
             output.print_context_deleted(&context_id, deleted)?;
         }
         [context, relay, options @ ..] if context == "context" && relay == "relay" => {
@@ -1291,7 +1269,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let mut cursor = parse_observation_cursor(options)?;
             loop {
-                match rpc(client.contexts
+                match rpc(client
+                    .contexts
                     .observe_context(context_id.clone(), cursor.clone(), 30_000)
                     .await)?
                 {
@@ -1314,7 +1293,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
+            output.print(&rpc(client
+                .contexts
                 .observe_context(
                     context_id.clone(),
                     ObservationCursor::After {
@@ -1536,16 +1516,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
-                .connect_connection(context_id, connection_id)
+            output.print(&rpc(client
+                .contexts
+                .connect_connection(dbgjs::service_api::ConnectionRef {
+                    context_id: context_id,
+                    connection_id: connection_id,
+                })
                 .await)?)?;
         }
         [connection, disconnect] if connection == "connection" && disconnect == "disconnect" => {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
-                .disconnect_connection(context_id, connection_id)
+            output.print(&rpc(client
+                .contexts
+                .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                    context_id: context_id,
+                    connection_id: connection_id,
+                })
                 .await)?)?;
         }
         [connection, pause_future, mode]
@@ -1565,8 +1553,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            let enabled = rpc(client.contexts
-                .set_pause_future_children(context_id, connection_id, enabled)
+            let enabled = rpc(client
+                .contexts
+                .set_pause_future_children(
+                    dbgjs::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id,
+                    },
+                    enabled,
+                )
                 .await)?;
             if output.is_json() {
                 println!("{}", serde_json::to_string_pretty(&enabled)?);
@@ -1581,8 +1576,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
-                .delete_connection(context_id, connection_id, parse_mutation_options(options)?)
+            output.print(&rpc(client
+                .contexts
+                .delete_connection(
+                    dbgjs::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id,
+                    },
+                    parse_mutation_options(options)?,
+                )
                 .await)?)?;
         }
         [breakpoint, set, breakpoint_id, source_path, line]
@@ -1635,7 +1637,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (specification, mutation) =
                 parse_breakpoint_spec(source_path, line, column, options)?;
             let client = ensure_service(&state_file).await?;
-            let context = rpc(client.contexts
+            let context = rpc(client
+                .contexts
                 .put_breakpoint_spec(context_id, breakpoint_id.clone(), specification, mutation)
                 .await)?;
             print_breakpoint_result(&client, &context, breakpoint_id, output).await?;
@@ -1646,7 +1649,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.contexts
+            output.print(&rpc(client
+                .contexts
                 .delete_breakpoint(
                     context_id,
                     breakpoint_id.clone(),
@@ -1669,7 +1673,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .set_source_formatting(context_id, parse_source_formatting_mode(mode)?)
                 .await)?)?;
         }
@@ -1695,7 +1700,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .add_source_formatting_rule(context_id, mode, target_pattern, url_pattern)
                 .await)?)?;
         }
@@ -1708,7 +1714,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .delete_source_formatting_rule(context_id, rule_id.clone())
                 .await)?)?;
         }
@@ -1716,7 +1723,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .list_sources(context_id, parse_source_list_options(options)?)
                 .await)?)?;
         }
@@ -1733,28 +1741,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources.resolve_sources(context_id, path).await)?)?;
+            output.print(&rpc(client
+                .sources
+                .resolve_sources(context_id, path)
+                .await)?)?;
         }
         [source, endpoints, arguments @ ..] if source == "source" && endpoints == "endpoints" => {
             let path = parse_source_path_arguments(arguments, "source endpoints")?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources.list_sources(context_id, Some(path)).await)?)?;
+            output.print(&rpc(client
+                .sources
+                .list_sources(context_id, Some(path))
+                .await)?)?;
         }
         [source, show, arguments @ ..] if source == "source" && show == "show" => {
             let (path, options) = parse_source_show_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources.show_source(context_id, path, options).await)?)?;
+            output.print(&rpc(client
+                .sources
+                .show_source(context_id, path, options)
+                .await)?)?;
         }
         [source, grep, arguments @ ..] if source == "source" && grep == "grep" => {
             let options = parse_source_grep_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources.grep_sources(context_id, options).await)?)?;
+            output.print(&rpc(client
+                .sources
+                .grep_sources(context_id, options)
+                .await)?)?;
         }
         [source, explain, arguments @ ..] if source == "source" && explain == "explain" => {
             let path = parse_source_path_arguments(arguments, "source explain")?;
@@ -1775,7 +1795,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .show_uncompacted_source_graph(context_id)
                 .await)?)?;
         }
@@ -1790,7 +1811,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .map_source(context_id, path, line, column)
                 .await)?)?;
         }
@@ -1804,7 +1826,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client.sources
+            output.print(&rpc(client
+                .sources
                 .export_sources(context_id, destination.clone())
                 .await)?)?;
         }
@@ -1827,11 +1850,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let result = rpc(client.targets
+            let result = rpc(client
+                .targets
                 .attach_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
+                    scope.target_ref(),
                     TargetAttachOptions {
                         force: options.force,
                         expected_connection_generation: None,
@@ -1990,6 +2012,18 @@ struct ResolvedScope {
     context: String,
     connection: String,
     target: String,
+}
+
+impl ResolvedScope {
+    fn target_ref(&self) -> dbgjs::service_api::TargetRef {
+        dbgjs::service_api::TargetRef {
+            connection: dbgjs::service_api::ConnectionRef {
+                context_id: self.context.clone(),
+                connection_id: self.connection.clone(),
+            },
+            target_id: self.target.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2214,48 +2248,54 @@ fn target_list_output(
         .collect::<Vec<_>>();
     let targets = dbgjs::target_selector::select_target_matches(
         &candidates,
-        snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
+        snapshot
+            .connections
+            .iter()
+            .map(|connection| (connection.id.as_str(), connection.generation)),
         scope.target.as_deref(),
         |node| dbgjs::target_selector::TargetSelectorCandidate {
             target: &node.target,
             connection_id: &node.connection_id,
             generation: node.connection_generation,
         },
-    ).map_err(io::Error::other)?
-        .into_iter()
-        .filter(|node| {
-            options.target_type.as_deref().is_none_or(|target_type| {
-                    node.target.target_type.eq_ignore_ascii_case(target_type)
-                })
-                && options
-                    .title
-                    .as_deref()
-                    .is_none_or(|title| contains_case_insensitive(&node.target.title, title))
-                && options
-                    .url
-                    .as_deref()
-                    .is_none_or(|url| contains_case_insensitive(&node.target.url, url))
-                && options
-                    .attached
-                    .is_none_or(|attached| node.target.attached == attached)
-        })
-        .map(|node| TargetListEntry {
-            connection_id: node.connection_id.clone(),
-            connection_generation: node.connection_generation,
-            selected: selection_applies
-                && selection.connection.as_deref() == Some(node.connection_id.as_str())
-                && selection.target.as_deref().is_some_and(|selector| {
-                    dbgjs::target_selector::match_target_selector(
-                        &node.target,
-                        &node.connection_id,
-                        node.connection_generation,
-                        selector,
-                    ).is_some_and(|rank| rank >= dbgjs::target_selector::TargetSelectorMatch::Canonical)
-                }),
-            parent_target_id: node.parent_target_id.clone(),
-            target: node.target.clone(),
-        })
-        .collect();
+    )
+    .map_err(io::Error::other)?
+    .into_iter()
+    .filter(|node| {
+        options
+            .target_type
+            .as_deref()
+            .is_none_or(|target_type| node.target.target_type.eq_ignore_ascii_case(target_type))
+            && options
+                .title
+                .as_deref()
+                .is_none_or(|title| contains_case_insensitive(&node.target.title, title))
+            && options
+                .url
+                .as_deref()
+                .is_none_or(|url| contains_case_insensitive(&node.target.url, url))
+            && options
+                .attached
+                .is_none_or(|attached| node.target.attached == attached)
+    })
+    .map(|node| TargetListEntry {
+        connection_id: node.connection_id.clone(),
+        connection_generation: node.connection_generation,
+        selected: selection_applies
+            && selection.connection.as_deref() == Some(node.connection_id.as_str())
+            && selection.target.as_deref().is_some_and(|selector| {
+                dbgjs::target_selector::match_target_selector(
+                    &node.target,
+                    &node.connection_id,
+                    node.connection_generation,
+                    selector,
+                )
+                .is_some_and(|rank| rank >= dbgjs::target_selector::TargetSelectorMatch::Canonical)
+            }),
+        parent_target_id: node.parent_target_id.clone(),
+        target: node.target.clone(),
+    })
+    .collect();
     Ok(TargetListOutput {
         agent_instance_id: snapshot.agent_instance_id.clone(),
         context_id: snapshot.id.clone(),
@@ -3130,13 +3170,18 @@ async fn resolve_scope(
     };
     let snapshot = rpc(client.contexts.get_context(context.clone()).await)?;
     if options.connection.is_some() {
-        return Ok(resolve_target_scope(context, &snapshot, selection, options)?);
+        return Ok(resolve_target_scope(
+            context, &snapshot, selection, options,
+        )?);
     }
     let use_selection = selection.context.as_deref() == Some(context.as_str());
-    if let Some(selector) = options.target.as_ref().or_else(|| {
-        use_selection.then(|| selection.target.as_ref()).flatten()
-    }) {
-        let target = rpc(client.targets
+    if let Some(selector) = options
+        .target
+        .as_ref()
+        .or_else(|| use_selection.then(|| selection.target.as_ref()).flatten())
+    {
+        let target = rpc(client
+            .targets
             .resolve_target(context.clone(), selector.clone())
             .await)?;
         return Ok(ResolvedScope {
@@ -3238,31 +3283,36 @@ fn resolve_target_scope(
     let candidates = candidate_connections
         .iter()
         .flat_map(|connection| {
-            connection.targets.iter().map(|target| (*connection, target))
+            connection
+                .targets
+                .iter()
+                .map(|target| (*connection, target))
         })
         .collect::<Vec<_>>();
     let candidates = dbgjs::target_selector::select_target_matches(
         &candidates,
-        snapshot.connections.iter().map(|connection| (connection.id.as_str(), connection.generation)),
+        snapshot
+            .connections
+            .iter()
+            .map(|connection| (connection.id.as_str(), connection.generation)),
         requested_target.map(String::as_str),
         |(connection, target)| dbgjs::target_selector::TargetSelectorCandidate {
             target,
             connection_id: &connection.id,
             generation: connection.generation,
         },
-    ).map_err(io::Error::other)?;
+    )
+    .map_err(io::Error::other)?;
     let (connection, target) = match candidates.as_slice() {
-        [(connection, target)] => {
-            (
-                connection.id.clone(),
-                dbgjs::target_selector::resolved_target_selector(
-                    &connection.id,
-                    &target.target_id,
-                    connection.generation,
-                    requested_target.map(String::as_str),
-                ),
-            )
-        }
+        [(connection, target)] => (
+            connection.id.clone(),
+            dbgjs::target_selector::resolved_target_selector(
+                &connection.id,
+                &target.target_id,
+                connection.generation,
+                requested_target.map(String::as_str),
+            ),
+        ),
         [] => {
             let selector = requested_target.map_or("<unspecified>", String::as_str);
             return Err(io::Error::new(
@@ -3287,7 +3337,9 @@ fn resolve_target_scope(
                 .iter()
                 .map(|(connection, target)| {
                     let qualified = dbgjs::target_selector::qualified_target_selector(
-                        &connection.id, &target.target_id, connection.generation,
+                        &connection.id,
+                        &target.target_id,
+                        connection.generation,
                     );
                     format!(
                         "\n  {qualified}  type={}  title={:?}  url={}",
@@ -3335,15 +3387,9 @@ async fn evaluate_watches(
     let mut evaluations = Vec::new();
     for expression in &selection.watches {
         evaluations.push(
-            match client.targets
-                .evaluate_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                    Some(epoch),
-                    0,
-                    expression.clone(),
-                )
+            match client
+                .targets
+                .evaluate_target(scope.target_ref(), Some(epoch), 0, expression.clone())
                 .await
             {
                 Ok(evaluation) => evaluation,
@@ -3384,12 +3430,15 @@ async fn resolve_pause_epoch(
 ) -> Result<u64, Box<dyn std::error::Error>> {
     match options {
         [] => {
-            let snapshot = rpc(client.targets
-                .get_target(
-                    context_id.to_owned(),
-                    connection_id.to_owned(),
-                    target_id.to_owned(),
-                )
+            let snapshot = rpc(client
+                .targets
+                .get_target(dbgjs::service_api::TargetRef {
+                    connection: dbgjs::service_api::ConnectionRef {
+                        context_id: context_id.to_owned(),
+                        connection_id: connection_id.to_owned(),
+                    },
+                    target_id: target_id.to_owned(),
+                })
                 .await)?;
             Ok(current_pause_epoch(&snapshot)?)
         }
@@ -4606,8 +4655,12 @@ fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::E
             "--all" => all = true,
             "--instances" => instances = true,
             "--sort-by-instances" => sort_by_instances = true,
-            "--no-cache" => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                "--no-cache is not supported for captured heaps; capture a new snapshot to refresh mapping metadata")),
+            "--no-cache" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--no-cache is not supported for captured heaps; capture a new snapshot to refresh mapping metadata",
+                ));
+            }
             "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
@@ -4727,10 +4780,15 @@ async fn show_stored_coverage(
     scope: &ScopeOptions,
     options: CoverageShowOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let snapshot = rpc(client.captures
+    let snapshot = rpc(client
+        .captures
         .get_stored_coverage(
-            context, options.capture_id, None,
-            scope.target.clone(), scope.connection.clone(), None,
+            context,
+            options.capture_id,
+            None,
+            scope.target.clone(),
+            scope.connection.clone(),
+            None,
             options.exclude_capture_id,
         )
         .await)?;
@@ -4755,10 +4813,14 @@ async fn show_stored_cpu_profile(
     options: CpuProfileShowOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _ = options.no_cache;
-    let profile = rpc(client.captures
+    let profile = rpc(client
+        .captures
         .get_stored_cpu_profile(
-            context, options.capture_id, options.path.clone(),
-            scope.target.clone(), scope.connection.clone(),
+            context,
+            options.capture_id,
+            options.path.clone(),
+            scope.target.clone(),
+            scope.connection.clone(),
         )
         .await)?;
     output.print_cpu_profile(
@@ -4780,10 +4842,14 @@ async fn show_stored_heap_classes(
     scope: &ScopeOptions,
     options: HeapClassOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let classes = rpc(client.captures
+    let classes = rpc(client
+        .captures
         .get_stored_heap_classes(
-            context, options.capture_id, options.filter,
-            scope.target.clone(), scope.connection.clone(),
+            context,
+            options.capture_id,
+            options.filter,
+            scope.target.clone(),
+            scope.connection.clone(),
         )
         .await)?;
     output.print_heap_classes(
@@ -4813,12 +4879,15 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
         match values[index].as_str() {
             "--exclude" => {
                 index += 1;
-                let value = values.get(index).filter(|value| {
-                    !value.is_empty() && !value.starts_with("--")
-                }).ok_or_else(|| io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "--exclude requires a baseline capture selector",
-                ))?;
+                let value = values
+                    .get(index)
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "--exclude requires a baseline capture selector",
+                        )
+                    })?;
                 if exclude_capture_id.replace(value.clone()).is_some() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -4829,12 +4898,22 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
             "--path" | "--path-prefix" | "--path-glob" => {
                 let option = values[index].as_str();
                 index += 1;
-                let value = values.get(index).filter(|value| {
-                    !value.is_empty() && !value.starts_with("--")
-                }).ok_or_else(|| io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("{option} requires a source URL {}", if option == "--path-glob" { "glob" } else { "prefix" }),
-                ))?;
+                let value = values
+                    .get(index)
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "{option} requires a source URL {}",
+                                if option == "--path-glob" {
+                                    "glob"
+                                } else {
+                                    "prefix"
+                                }
+                            ),
+                        )
+                    })?;
                 if path.is_some() || path_glob.is_some() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -4850,10 +4929,12 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
             }
 
             "--all" => all = true,
-            "--no-cache" => return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--no-cache is not supported for stored coverage: captures are immutable; take a new capture without --raw to enrich it",
-            )),
+            "--no-cache" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--no-cache is not supported for stored coverage: captures are immutable; take a new capture without --raw to enrich it",
+                ));
+            }
             "--no-trim" => trim_width = false,
             "--max-lines" => {
                 index += 1;
@@ -4923,10 +5004,16 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
         } else if values[index] == "--id" {
             let option = values[index].as_str();
             let value = values.get(index + 1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name"))
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{option} requires a capture name"),
+                )
             })?;
             if value.starts_with("--") || value.is_empty() {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a capture name")));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{option} requires a capture name"),
+                ));
             }
             if capture_id.replace(value.clone()).is_some() {
                 return Err(io::Error::new(
@@ -4962,28 +5049,33 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
 }
 
 fn parse_coverage_stop_options(values: &[String]) -> Result<CoverageStopOptions, io::Error> {
-    let mut options = CoverageStopOptions {
-        capture_id: None,
-    };
+    let mut options = CoverageStopOptions { capture_id: None };
     let mut arguments = values.iter();
     while let Some(option) = arguments.next() {
         let destination = match option.as_str() {
             "--id" => &mut options.capture_id,
-            "--exclude" => return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "--exclude is only supported by coverage show <capture> --exclude <baseline>",
-            )),
-            _ => return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown coverage stop option '{option}'; expected --id"),
-            )),
+            "--exclude" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--exclude is only supported by coverage show <capture> --exclude <baseline>",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown coverage stop option '{option}'; expected --id"),
+                ));
+            }
         };
-        let value = arguments.next().filter(|value| {
-            !value.is_empty() && !value.starts_with("--")
-        }).ok_or_else(|| io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{option} requires a capture ID"),
-        ))?;
+        let value = arguments
+            .next()
+            .filter(|value| !value.is_empty() && !value.starts_with("--"))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{option} requires a capture ID"),
+                )
+            })?;
         if destination.replace(value.clone()).is_some() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -4996,7 +5088,9 @@ fn parse_coverage_stop_options(values: &[String]) -> Result<CoverageStopOptions,
 
 fn warn_deprecated_coverage_path(deprecated: bool) {
     if deprecated {
-        eprintln!("Warning: coverage --path is a deprecated prefix alias; use --path-prefix, or --path-glob '**/issue/**' to match a directory anywhere in a source URL.");
+        eprintln!(
+            "Warning: coverage --path is a deprecated prefix alias; use --path-prefix, or --path-glob '**/issue/**' to match a directory anywhere in a source URL."
+        );
     }
 }
 
@@ -5304,7 +5398,8 @@ async fn put_selected_breakpoint(
         Err(_) if !explicit_target_scope => None,
         Err(error) => return Err(error.into()),
     };
-    let context = rpc(client.contexts
+    let context = rpc(client
+        .contexts
         .put_breakpoint(
             context_id,
             breakpoint_id.to_owned(),
@@ -5316,13 +5411,7 @@ async fn put_selected_breakpoint(
     if let Some(scope) = scope {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let snapshot = loop {
-            let snapshot = rpc(client.targets
-                .get_target(
-                    scope.context.clone(),
-                    scope.connection.clone(),
-                    scope.target.clone(),
-                )
-                .await)?;
+            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             let settled = snapshot
                 .breakpoints
                 .iter()
@@ -5365,12 +5454,15 @@ async fn print_breakpoint_result(
         .ok_or_else(|| io::Error::other("updated context omitted the requested breakpoint"))?;
     let mut sources = Vec::new();
     for application in &breakpoint.applications {
-        let target = rpc(client.targets
-            .get_target(
-                context.id.clone(),
-                application.connection_id.clone(),
-                application.target_id.clone(),
-            )
+        let target = rpc(client
+            .targets
+            .get_target(dbgjs::service_api::TargetRef {
+                connection: dbgjs::service_api::ConnectionRef {
+                    context_id: context.id.clone(),
+                    connection_id: application.connection_id.clone(),
+                },
+                target_id: application.target_id.clone(),
+            })
             .await)?;
         if let Some(source) = target
             .breakpoints
@@ -5567,7 +5659,12 @@ async fn resolve_renderer_target_id(
         connection_id,
         selector,
         Duration::from_secs(10),
-        async || Ok(rpc(client.contexts.get_resource_graph(context_id.to_owned()).await)?),
+        async || {
+            Ok(rpc(client
+                .contexts
+                .get_resource_graph(context_id.to_owned())
+                .await)?)
+        },
     )
     .await
 }
@@ -5620,16 +5717,23 @@ async fn add_connection(
             | ConnectionConfiguration::ScopedProcessTree { .. }
     );
     let client = ensure_service(state_file).await?;
-    let configured = rpc(client.contexts
+    let configured = rpc(client
+        .contexts
         .put_connection(
-            context_id.to_owned(),
-            connection_id.to_owned(),
+            dbgjs::service_api::ConnectionRef {
+                context_id: context_id.to_owned(),
+                connection_id: connection_id.to_owned(),
+            },
             configuration,
         )
         .await)?;
     if connect_now {
-        let mut connected = rpc(client.contexts
-            .connect_connection(context_id.to_owned(), connection_id.to_owned())
+        let mut connected = rpc(client
+            .contexts
+            .connect_connection(dbgjs::service_api::ConnectionRef {
+                context_id: context_id.to_owned(),
+                connection_id: connection_id.to_owned(),
+            })
             .await)?;
         if wait_for_initial_process_tree {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -5705,12 +5809,15 @@ async fn add_connection(
                     }
                 }
             };
-            let snapshot = rpc(client.targets
-                .get_target(
-                    context_id.to_owned(),
-                    connection_id.to_owned(),
-                    target_id.clone(),
-                )
+            let snapshot = rpc(client
+                .targets
+                .get_target(dbgjs::service_api::TargetRef {
+                    connection: dbgjs::service_api::ConnectionRef {
+                        context_id: context_id.to_owned(),
+                        connection_id: connection_id.to_owned(),
+                    },
+                    target_id: target_id.clone(),
+                })
                 .await)?;
             select_scope(
                 selection_file,
@@ -6041,11 +6148,16 @@ async fn wait_target(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let timeout_ms = parse_u64("timeout", timeout_ms)?;
     let client = ensure_service(state_file).await?;
-    let snapshot = rpc(client.targets
+    let snapshot = rpc(client
+        .targets
         .wait_target(
-            context_id.to_owned(),
-            connection_id.to_owned(),
-            target_id.to_owned(),
+            dbgjs::service_api::TargetRef {
+                connection: dbgjs::service_api::ConnectionRef {
+                    context_id: context_id.to_owned(),
+                    connection_id: connection_id.to_owned(),
+                },
+                target_id: target_id.to_owned(),
+            },
             predicate,
             timeout_ms,
         )
@@ -6762,10 +6874,6 @@ until the relay process exits or the context is deleted."
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
-        select_renderer_target, wait_for_renderer_target_id,
-    };
-    use super::{
         AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, ResolvedScope, ScopeOptions,
@@ -6773,7 +6881,7 @@ mod tests {
         connection_list_output, extract_scope_options, load_selection_store, parse_attach_options,
         parse_chrome_options, parse_connection_list_options, parse_context_create_options,
         parse_context_option, parse_coverage_capture_options, parse_coverage_show_options,
-        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options,
+        parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options, parse_eval_options,
         parse_heap_capture_options, parse_heap_class_options, parse_heap_path_options,
         parse_heap_select_options, parse_heap_show_options, parse_heap_string_options,
         parse_mutation_options, parse_node_options, parse_process_attach_options,
@@ -6781,16 +6889,20 @@ mod tests {
         parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
-        parse_eval_options, png_dimensions, read_eval_expression, read_playwright_program,
-        resolve_target_scope,
+        png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
         select_implicit_context, split_heap_reference_cli, target_list_output,
+    };
+    use super::{
+        ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
+        select_renderer_target, wait_for_renderer_target_id,
     };
     use dbgjs::context_identity::ContextKind;
     use dbgjs::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
-        ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, ResourceSnapshot,
-        SourceFormattingMode, SourceViewPreference, TargetSnapshot, ValueSelector,
+        ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot,
+        ResourceSnapshot, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
+        ValueSelector,
     };
     use std::fs;
     use std::time::Duration;
@@ -7528,7 +7640,8 @@ mod tests {
                 url: Some("EXAMPLE.TEST".to_owned()),
                 attached: Some(true),
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(targets.targets.len(), 1);
         assert_eq!(targets.targets[0].target.target_id, "page-1");
         assert!(targets.targets[0].selected);
@@ -7546,7 +7659,8 @@ mod tests {
                 ..ScopeOptions::default()
             },
             &TargetListOptions::default(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(filtered.targets.len(), 1);
         assert_eq!(filtered.targets[0].target.target_id, "page-1");
     }
@@ -7562,15 +7676,21 @@ mod tests {
             snapshot.connections[0].generation,
         );
         snapshot.connections[0].targets[1].title = selector.clone();
-        snapshot.target_forest = snapshot.connections.iter()
+        snapshot.target_forest = snapshot
+            .connections
+            .iter()
             .flat_map(ConnectionSnapshot::target_forest)
             .collect();
         let listed = target_list_output(
             &snapshot,
             &CliSelection::default(),
-            &ScopeOptions { target: Some(selector), ..ScopeOptions::default() },
+            &ScopeOptions {
+                target: Some(selector),
+                ..ScopeOptions::default()
+            },
             &TargetListOptions::default(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(listed.targets.len(), 1);
         assert_eq!(listed.targets[0].target.target_id, "renderer/target/frame");
     }
@@ -7581,18 +7701,38 @@ mod tests {
         let generation = snapshot.connections[0].generation;
         let stale = format!("browser/renderer/target/frame@{}", generation + 1);
         snapshot.connections[0].targets[1].title = stale.clone();
-        snapshot.target_forest = snapshot.connections.iter()
+        snapshot.target_forest = snapshot
+            .connections
+            .iter()
             .flat_map(ConnectionSnapshot::target_forest)
             .collect();
-        let options = ScopeOptions { target: Some(stale), ..ScopeOptions::default() };
+        let options = ScopeOptions {
+            target: Some(stale),
+            ..ScopeOptions::default()
+        };
         let error = target_list_output(
-            &snapshot, &CliSelection::default(), &options, &TargetListOptions::default(),
-        ).err().unwrap();
-        assert!(error.to_string().contains("stale connection generation"), "{error}");
+            &snapshot,
+            &CliSelection::default(),
+            &options,
+            &TargetListOptions::default(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error.to_string().contains("stale connection generation"),
+            "{error}"
+        );
         let error = resolve_target_scope(
-            "ctx".to_owned(), &snapshot, &CliSelection::default(), &options,
-        ).unwrap_err();
-        assert!(error.to_string().contains("stale connection generation"), "{error}");
+            "ctx".to_owned(),
+            &snapshot,
+            &CliSelection::default(),
+            &options,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("stale connection generation"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -7855,8 +7995,13 @@ mod tests {
         assert!(options.instances);
         assert_eq!(options.max_lines, 42);
         assert!(!options.trim_width);
-        assert!(parse_heap_class_options(&arguments(&["--no-cache"]))
-            .err().unwrap().to_string().contains("not supported for captured heaps"));
+        assert!(
+            parse_heap_class_options(&arguments(&["--no-cache"]))
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("not supported for captured heaps")
+        );
     }
 
     #[test]
@@ -7958,18 +8103,24 @@ mod tests {
     #[test]
     fn coverage_path_matching_is_explicit() {
         let prefix = parse_coverage_show_options(&arguments(&[
-            ".2", "--path-prefix", "https://example.test/src/",
-        ])).unwrap();
+            ".2",
+            "--path-prefix",
+            "https://example.test/src/",
+        ]))
+        .unwrap();
         assert_eq!(prefix.capture_id, ".2");
         assert_eq!(prefix.path.as_deref(), Some("https://example.test/src/"));
         assert!(!prefix.deprecated_path);
 
-        let glob = parse_coverage_show_options(&arguments(&[
-            "--path-glob", "**/issue/**",
-        ])).unwrap();
+        let glob =
+            parse_coverage_show_options(&arguments(&["--path-glob", "**/issue/**"])).unwrap();
         assert_eq!(glob.path_glob.as_deref(), Some("**/issue/**"));
         assert!(glob.path.is_none());
-        assert!(parse_coverage_show_options(&arguments(&["--path", "src/"])).unwrap().deprecated_path);
+        assert!(
+            parse_coverage_show_options(&arguments(&["--path", "src/"]))
+                .unwrap()
+                .deprecated_path
+        );
         for arguments in [
             vec!["--path-prefix"],
             vec!["--path-glob", "--all"],
@@ -7979,17 +8130,24 @@ mod tests {
             vec!["--no-cache"],
         ] {
             let arguments = arguments.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            assert!(parse_coverage_show_options(&arguments).is_err(), "{arguments:?}");
+            assert!(
+                parse_coverage_show_options(&arguments).is_err(),
+                "{arguments:?}"
+            );
         }
     }
 
     #[test]
     fn parses_named_coverage_stop_without_exclusion() {
-        let options = super::parse_coverage_stop_options(&arguments(&[
-            "--id", "after-click",
-        ])).unwrap();
+        let options =
+            super::parse_coverage_stop_options(&arguments(&["--id", "after-click"])).unwrap();
         assert_eq!(options.capture_id.as_deref(), Some("after-click"));
-        assert!(super::parse_coverage_stop_options(&[]).unwrap().capture_id.is_none());
+        assert!(
+            super::parse_coverage_stop_options(&[])
+                .unwrap()
+                .capture_id
+                .is_none()
+        );
         for values in [
             vec!["--id"],
             vec!["--id", "--exclude", "before"],
@@ -8005,8 +8163,14 @@ mod tests {
     #[test]
     fn parses_coverage_show_exclusion_with_rendering_options() {
         let options = parse_coverage_show_options(&arguments(&[
-            ".1", "--exclude", ".2", "--path-glob", "**/src/**", "--all",
-        ])).unwrap();
+            ".1",
+            "--exclude",
+            ".2",
+            "--path-glob",
+            "**/src/**",
+            "--all",
+        ]))
+        .unwrap();
         assert_eq!(options.capture_id, ".1");
         assert_eq!(options.exclude_capture_id.as_deref(), Some(".2"));
         assert_eq!(options.path_glob.as_deref(), Some("**/src/**"));
@@ -8025,13 +8189,14 @@ mod tests {
 
     #[test]
     fn playwright_failed_process_reports_exit_and_stderr_before_json_errors() {
-        #[cfg(windows)]
-        use std::os::windows::process::ExitStatusExt;
         #[cfg(unix)]
         use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
         let status = std::process::ExitStatus::from_raw(256);
         let error = super::parse_playwright_output(status, b"", b"Error: missing browserContextId")
-            .unwrap_err().to_string();
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("Playwright exited with"), "{error}");
         assert!(error.contains("missing browserContextId"), "{error}");
         assert!(!error.contains("EOF"), "{error}");
@@ -8039,17 +8204,24 @@ mod tests {
 
     #[test]
     fn playwright_success_requires_valid_result_and_preserves_return_value() {
-        #[cfg(windows)]
-        use std::os::windows::process::ExitStatusExt;
         #[cfg(unix)]
         use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
         let status = std::process::ExitStatus::from_raw(0);
         let value = super::parse_playwright_output(
-            status, br#"{"ok":true,"hasValue":true,"value":"page title"}"#, b"diagnostic",
-        ).unwrap();
+            status,
+            br#"{"ok":true,"hasValue":true,"value":"page title"}"#,
+            b"diagnostic",
+        )
+        .unwrap();
         assert_eq!(value, Some(serde_json::json!("page title")));
-        assert!(super::parse_playwright_output(status, b"not json", b"").unwrap_err()
-            .to_string().contains("invalid result"));
+        assert!(
+            super::parse_playwright_output(status, b"not json", b"")
+                .unwrap_err()
+                .to_string()
+                .contains("invalid result")
+        );
         assert!(super::parse_playwright_output(
             status, br#"{"ok":false,"error":"script failed"}"#, b"",
         ).unwrap_err().to_string().contains("script failed"));
@@ -8081,8 +8253,13 @@ mod tests {
     #[test]
     fn parses_raw_coverage_independently_of_storage_and_rendering() {
         let options = parse_coverage_capture_options(&arguments(&[
-            "--raw", "--id", "sample", "--max-lines", "5",
-        ])).unwrap();
+            "--raw",
+            "--id",
+            "sample",
+            "--max-lines",
+            "5",
+        ]))
+        .unwrap();
         assert!(options.raw);
         assert_eq!(options.capture_id.as_deref(), Some("sample"));
         assert_eq!(options.max_lines, 5);
@@ -8090,23 +8267,35 @@ mod tests {
         assert!(parse_coverage_capture_options(&arguments(&["--id", "--raw"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude", "baseline"])).is_err());
-        assert!(parse_coverage_capture_options(&arguments(&["--exclude", "a", "--exclude", "b"])).is_err());
+        assert!(
+            parse_coverage_capture_options(&arguments(&["--exclude", "a", "--exclude", "b"]))
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn coverage_hint_waits_without_restarting_or_cancelling_the_operation() {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let result = super::with_delayed_hint(receiver, std::time::Duration::ZERO, || sender.send(42).unwrap()).await;
+        let result = super::with_delayed_hint(receiver, std::time::Duration::ZERO, || {
+            sender.send(42).unwrap()
+        })
+        .await;
         assert_eq!(result.unwrap(), 42);
         let result = super::with_delayed_hint(
             std::future::ready(Err::<(), _>("original failure")),
             std::time::Duration::ZERO,
             || panic!("a completed operation must not print a hint"),
-        ).await;
+        )
+        .await;
         assert_eq!(result, Err("original failure"));
-        let hint = super::coverage_delay_hint(&arguments(&["--json", "coverage", "capture"])).unwrap();
+        let hint =
+            super::coverage_delay_hint(&arguments(&["--json", "coverage", "capture"])).unwrap();
         assert!(hint.contains("coverage capture --raw"));
-        assert!(super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"])).unwrap().contains("already skips"));
+        assert!(
+            super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"]))
+                .unwrap()
+                .contains("already skips")
+        );
         assert!(super::coverage_delay_hint(&arguments(&["source", "show"])).is_none());
     }
 

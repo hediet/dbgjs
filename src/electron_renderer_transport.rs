@@ -90,7 +90,7 @@ impl ElectronRendererBridge {
         params.generate_preview = Some(false);
         params.user_gesture = Some(false);
         params.await_promise = Some(true);
-        let response = client.runtime_evaluate(params).await.map_err(|error| {
+        let response = client.runtime().evaluate(params).await.map_err(|error| {
             transport_error(format!("failed to install renderer bridge: {error:?}"))
         })?;
         if let Some(exception) = response.exception_details {
@@ -119,7 +119,7 @@ impl ElectronRendererBridge {
             Ok(control) => control,
             Err(error) => {
                 let _ = client
-                    .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+                    .runtime().release_object_group(RuntimeReleaseObjectGroupParams {
                         object_group: BRIDGE_OBJECT_GROUP.to_owned(),
                     })
                     .await;
@@ -218,7 +218,7 @@ impl ElectronRendererBridge {
         self.control.dispose().await;
         let _ = self
             .client
-            .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+            .runtime().release_object_group(RuntimeReleaseObjectGroupParams {
                 object_group: BRIDGE_OBJECT_GROUP.to_owned(),
             })
             .await;
@@ -256,7 +256,7 @@ async fn call_bridge_object<T: DeserializeOwned>(
     params.user_gesture = Some(false);
     params.await_promise = Some(true);
     let response = client
-        .runtime_call_function_on(params)
+        .runtime().call_function_on(params)
         .await
         .map_err(|error| transport_error(format!("renderer bridge call failed: {error:?}")))?;
     if let Some(exception) = response.exception_details {

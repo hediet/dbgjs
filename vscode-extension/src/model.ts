@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { posix, win32 } from "node:path";
-import type { TargetNodeSnapshot } from "./apiTypes.js";
+import type { ConnectionRef, TargetNodeSnapshot, TargetRef } from "./apiTypes.js";
 
-export interface TargetReference {
-	readonly contextId: string;
-	readonly connectionId: string;
+export interface TargetReference extends Readonly<ConnectionRef>, Readonly<Pick<TargetRef, "targetId">> {
 	readonly connectionGeneration: number;
-	readonly targetId: string;
 }
 
 export function normalizeContextPath(value: string): string {

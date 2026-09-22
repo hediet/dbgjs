@@ -11,7 +11,7 @@ import { ErrorCode, RpcError } from "@hediet/linkrpc";
 import { parseEndpointFile } from "../daemonClient.js";
 import { connectDaemon, type DaemonConnection } from "../daemonTransport.js";
 import { DbgServiceClient } from "../dbgServiceClient.js";
-import { HeapProfilerApi } from "../generated/heapProfilerApi.js";
+import { HeapProfilerApi } from "../generated/interfaces.js";
 
 const execute = promisify(execFile);
 type Progress = typeof HeapProfilerApi.members.capture_heap_snapshot._serverStream;
@@ -57,17 +57,22 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 			connectionId: "runtime",
 			targetId: "$node-root:runtime",
 		};
+		const targetRef = {
+			connection: { contextId: scope.contextId, connectionId: scope.connectionId },
+			targetId: scope.targetId,
+		};
 		await client.contexts.put_context({ contextId: scope.contextId, kind: "named", displayName: null });
 		await client.contexts.put_connection({
-			contextId: scope.contextId,
-			connectionId: scope.connectionId,
+			connectionRef: { contextId: scope.contextId, connectionId: scope.connectionId },
 			configuration: { kind: "nodeInspector", endpoint: inspector },
 		});
-		await client.contexts.connect_connection({ contextId: scope.contextId, connectionId: scope.connectionId });
-		await client.targets.attach_target({ ...scope, options: { force: false, expectedConnectionGeneration: null } });
+		await client.contexts.connect_connection({
+			connectionRef: { contextId: scope.contextId, connectionId: scope.connectionId },
+		});
+		await client.targets.attach_target({ targetRef, options: { force: false, expectedConnectionGeneration: null } });
 
 		const parameters = {
-			...scope, captureId: "typescript", captureNumericValue: false, exposeInternals: false,
+			targetRef, captureId: "typescript", captureNumericValue: false, exposeInternals: false,
 		};
 		const messages: Progress[] = [];
 		const call = client.heap.capture_heap_snapshot(parameters, { onMessage: message => messages.push(message) });
@@ -78,7 +83,7 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		assert.equal(messages.at(-1)?.bytesWritten, result.bytesWritten);
 		assert.ok(result.bytesWritten > 0);
 		assert.ok(!wire.some(message => message.includes("::get_heap_snapshot_progress")));
-		assert.deepEqual(await client.heap.get_heap_snapshot_progress(scope), messages.at(-1));
+		assert.deepEqual(await client.heap.get_heap_snapshot_progress({ targetRef }), messages.at(-1));
 
 		let firstProgress!: () => void;
 		const observed = new Promise<void>(resolve => { firstProgress = resolve; });
@@ -123,7 +128,7 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		let snapshotProgress!: () => void;
 		const snapshotObserved = new Promise<void>(resolve => { snapshotProgress = resolve; });
 		const cancelledSnapshot = client.heap.take_heap_snapshot({
-			...scope, path: cancelledPath, captureNumericValue: false, exposeInternals: false,
+			targetRef, path: cancelledPath, captureNumericValue: false, exposeInternals: false,
 		}, { onMessage: () => snapshotProgress() });
 		const cancelledSnapshotResult = cancelledSnapshot.then(() => null, (error: unknown) => error);
 		await snapshotObserved;

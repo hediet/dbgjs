@@ -263,7 +263,10 @@ fn handle_service_event(event: ServiceEvent, app: &mut App, service: &ServiceCon
                 if detail.is_some() {
                     app.set_target_detail(detail);
                 } else {
-                    app.remove_target_detail(&target.connection_id, &target.target_id);
+                    app.remove_target_detail(
+                        &target.reference.connection.connection_id,
+                        &target.reference.target_id,
+                    );
                 }
             }
         }

@@ -19,14 +19,13 @@ use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, CdpServer, CdpService,
-    TargetAttachToBrowserTargetParams, TargetAttachToBrowserTargetResult,
-    TargetAttachToTargetParams, TargetAttachToTargetResult, TargetAttachedToTargetParams,
-    TargetDetachFromTargetParams, TargetDetachFromTargetResult, TargetDetachedFromTargetParams,
-    TargetGetTargetInfoParams, TargetGetTargetInfoResult, TargetGetTargetsParams,
-    TargetGetTargetsResult, TargetSetAutoAttachParams, TargetSetAutoAttachResult,
-    TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult, TargetTargetCreatedParams,
-    TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, TargetAttachToBrowserTargetParams,
+    TargetAttachToBrowserTargetResult, TargetAttachToTargetParams, TargetAttachToTargetResult,
+    TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
+    TargetDetachedFromTargetParams, TargetGetTargetInfoParams, TargetGetTargetInfoResult,
+    TargetGetTargetsParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
+    TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
+    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::cdp_transport::ManagedCdpTransport;
@@ -565,7 +564,8 @@ impl ContextRelayState {
                 waiting_for_debugger,
             };
             let _ = CdpClient::root(self.root_channel().clone())
-                .target_attached_to_target(params)
+                .target()
+                .attached_to_target(params)
                 .await;
         }
         session_id
@@ -699,7 +699,8 @@ impl ContextRelayState {
                 target_id: Some(session.target_id),
             };
             let _ = CdpClient::root(self.root_channel().clone())
-                .target_detached_from_target(params)
+                .target()
+                .detached_from_target(params)
                 .await;
         }
     }
@@ -723,7 +724,8 @@ impl ContextRelayState {
             target_info: target_info_from_snapshot(snapshot),
         };
         let _ = CdpClient::root(self.root_channel().clone())
-            .target_target_created(params)
+            .target()
+            .target_created(params)
             .await;
     }
 
@@ -732,7 +734,8 @@ impl ContextRelayState {
             target_info: target_info_from_snapshot(snapshot),
         };
         let _ = CdpClient::root(self.root_channel().clone())
-            .target_target_info_changed(params)
+            .target()
+            .target_info_changed(params)
             .await;
     }
 
@@ -741,7 +744,8 @@ impl ContextRelayState {
             target_id: target_id.to_owned(),
         };
         let _ = CdpClient::root(self.root_channel().clone())
-            .target_target_destroyed(params)
+            .target()
+            .target_destroyed(params)
             .await;
     }
 }
@@ -749,8 +753,8 @@ impl ContextRelayState {
 struct ContextRelayProvider(Arc<ContextRelayState>);
 
 #[async_trait]
-impl CdpService for ContextRelayProvider {
-    async fn browser_get_version(
+impl crate::cdp::browser::BrowserService for ContextRelayProvider {
+    async fn get_version(
         &self,
         _ctx: &CallCtx,
         _params: BrowserGetVersionParams,
@@ -763,8 +767,11 @@ impl CdpService for ContextRelayProvider {
             js_version: String::new(),
         })
     }
+}
 
-    async fn target_get_targets(
+#[async_trait]
+impl crate::cdp::target::TargetService for ContextRelayProvider {
+    async fn get_targets(
         &self,
         _ctx: &CallCtx,
         _params: TargetGetTargetsParams,
@@ -778,7 +785,7 @@ impl CdpService for ContextRelayProvider {
         })
     }
 
-    async fn target_get_target_info(
+    async fn get_target_info(
         &self,
         _ctx: &CallCtx,
         params: TargetGetTargetInfoParams,
@@ -796,7 +803,7 @@ impl CdpService for ContextRelayProvider {
         })
     }
 
-    async fn target_attach_to_browser_target(
+    async fn attach_to_browser_target(
         &self,
         _ctx: &CallCtx,
         _params: TargetAttachToBrowserTargetParams,
@@ -806,7 +813,7 @@ impl CdpService for ContextRelayProvider {
         })
     }
 
-    async fn target_set_discover_targets(
+    async fn set_discover_targets(
         &self,
         _ctx: &CallCtx,
         params: TargetSetDiscoverTargetsParams,
@@ -828,7 +835,7 @@ impl CdpService for ContextRelayProvider {
         Ok(TargetSetDiscoverTargetsResult::new())
     }
 
-    async fn target_set_auto_attach(
+    async fn set_auto_attach(
         &self,
         _ctx: &CallCtx,
         params: TargetSetAutoAttachParams,
@@ -855,7 +862,7 @@ impl CdpService for ContextRelayProvider {
         Ok(TargetSetAutoAttachResult::new())
     }
 
-    async fn target_attach_to_target(
+    async fn attach_to_target(
         &self,
         _ctx: &CallCtx,
         params: TargetAttachToTargetParams,
@@ -895,7 +902,7 @@ impl CdpService for ContextRelayProvider {
         Ok(TargetAttachToTargetResult { session_id })
     }
 
-    async fn target_detach_from_target(
+    async fn detach_from_target(
         &self,
         _ctx: &CallCtx,
         params: TargetDetachFromTargetParams,
@@ -958,24 +965,38 @@ fn index_targets(
         .collect()
 }
 
-struct RootHandler(CdpServer<ContextRelayProvider>);
+struct RootHandler(linkrpc::binding::InterfaceRouter);
 
 impl RootHandler {
     fn new(state: Arc<ContextRelayState>) -> Self {
-        Self(CdpServer::new(Arc::new(ContextRelayProvider(state))))
+        let provider = Arc::new(ContextRelayProvider(state));
+        let router = linkrpc::binding::InterfaceRouter::new();
+        crate::cdp::browser::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::browser::BrowserServer::new(provider.clone())),
+            )
+            .expect("generated Browser binding is valid");
+        crate::cdp::target::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::target::TargetServer::new(provider)),
+            )
+            .expect("generated Target binding is distinct");
+        Self(router)
     }
 }
 
 #[async_trait]
 impl RequestHandler for RootHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        self.0
-            .handle_request(
-                &method,
-                normalize_typed_cdp_params(params),
-                CallCtx::default(),
-            )
-            .await
+        InterfaceHandler::handle_request(
+            &self.0,
+            &method,
+            normalize_typed_cdp_params(params),
+            CallCtx::default(),
+        )
+        .await
     }
 }
 

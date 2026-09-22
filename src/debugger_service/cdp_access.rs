@@ -5,13 +5,19 @@ impl CdpAccessApi for DebuggerService {
     async fn raw_cdp_request(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         method: String,
         params: serde_json::Value,
         validate: bool,
     ) -> Result<serde_json::Value, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if validate {
             validate_raw_cdp_params(&method, &params).map_err(|message| {
                 invalid_params(&format!(
@@ -50,14 +56,20 @@ impl CdpAccessApi for DebuggerService {
     async fn raw_cdp_session_request(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         session_id: String,
         method: String,
         params: serde_json::Value,
         validate: bool,
     ) -> Result<serde_json::Value, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if validate {
             validate_raw_cdp_params(&method, &params).map_err(|message| {
                 invalid_params(&format!(

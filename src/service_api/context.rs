@@ -26,30 +26,25 @@ pub trait ContextApi {
     ) -> Result<bool, JsonRpcError>;
 
     async fn put_connection(
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         configuration: ConnectionConfiguration,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 
     async fn connect_connection(
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 
     async fn disconnect_connection(
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 
     async fn set_pause_future_children(
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         enabled: bool,
     ) -> Result<bool, JsonRpcError>;
 
     async fn delete_connection(
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError>;
 

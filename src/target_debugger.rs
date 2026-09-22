@@ -23,6 +23,7 @@ use crate::cdp::{
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::context_source_model::ContextSourceModel;
+use crate::context_source_model::SourceContributionId;
 use crate::debugger_driver::{DebuggerDriver, DebuggerDriverError};
 use crate::debugger_engine::{
     BreakpointAssessmentStatus, BreakpointBinding, BreakpointKey, BreakpointMapping,
@@ -41,9 +42,9 @@ use crate::service_api::{
     BreakpointApplicationSnapshot, BreakpointApplicationStatus, BreakpointMappingSnapshot,
     BreakpointScriptAssessmentSnapshot, BreakpointScriptAssessmentStatus,
     BreakpointSourceCandidateSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
-    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot,
-    CpuProfileAnalysisSnapshot, CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot,
-    CpuProfileNodeSnapshot, CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
+    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
+    CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot, CpuProfileNodeSnapshot,
+    CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
     FrameProjectionSnapshot, FrameSnapshot, HeapAggregateBy, HeapAggregateEntrySnapshot,
     HeapAggregateSnapshot, HeapCaptureResult, HeapClassAnalysisSnapshot, HeapClassSnapshot,
     HeapClassSnapshotEntry, HeapDiffEntrySnapshot, HeapDiffSnapshot, HeapDominatorSnapshot,
@@ -58,15 +59,14 @@ use crate::service_api::{
     TargetScriptStatus, TargetWaitPredicate, ValueInspectionOptions, ValuePreviewSnapshot,
     ValuePropertySnapshot, ValueSelector, ValueSnapshot, VariableSnapshot,
 };
+use crate::service_api::{
+    HeapMappingSnapshot, HeapMappingStatus, HeapScriptMappingDiagnostic, HeapScriptSnapshot,
+    HeapSourceMapSupply, ScriptProvenance,
+};
 use crate::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
 use crate::source_search::{HydratedSourceBatch, SearchControl, SearchError};
 use crate::source_view::Position;
-use crate::service_api::{
-    HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapScriptMappingDiagnostic,
-    HeapSourceMapSupply, ScriptProvenance,
-};
-use crate::source_view::{GeneratedSourceInput, ResolvedSourceView, ResolutionPolicy};
-use crate::context_source_model::SourceContributionId;
+use crate::source_view::{GeneratedSourceInput, ResolutionPolicy, ResolvedSourceView};
 
 const COMMAND_BUFFER: usize = 32;
 const MAX_WAIT: Duration = Duration::from_secs(5 * 60);
@@ -754,34 +754,24 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
-    pub async fn stop_coverage(
-        &self,
-    ) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    pub async fn stop_coverage(&self) -> Result<CoverageSnapshot, TargetDebuggerError> {
         self.stop_coverage_with_projection().await
     }
 
-    pub async fn finish_coverage(
-        &self,
-    ) -> Result<(), TargetDebuggerError> {
+    pub async fn finish_coverage(&self) -> Result<(), TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
-            .send(TargetCommand::FinishCoverage {
-                response,
-            })
+            .send(TargetCommand::FinishCoverage { response })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)??;
         Ok(())
     }
 
-    async fn stop_coverage_with_projection(
-        &self,
-    ) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    async fn stop_coverage_with_projection(&self) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
-            .send(TargetCommand::StopCoverage {
-                response,
-            })
+            .send(TargetCommand::StopCoverage { response })
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
@@ -1537,8 +1527,14 @@ async fn run_target(
                 expression,
                 response,
             })) => {
-                let result =
-                    evaluate(&mut driver, &session_key, pause_epoch, frame_index, expression).await;
+                let result = evaluate(
+                    &mut driver,
+                    &session_key,
+                    pause_epoch,
+                    frame_index,
+                    expression,
+                )
+                .await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::ScopeVariables {
@@ -1547,9 +1543,14 @@ async fn run_target(
                 scope_index,
                 response,
             })) => {
-                let result =
-                    scope_variables(&mut driver, &session_key, pause_epoch, frame_index, scope_index)
-                        .await;
+                let result = scope_variables(
+                    &mut driver,
+                    &session_key,
+                    pause_epoch,
+                    frame_index,
+                    scope_index,
+                )
+                .await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::ObjectProperties {
@@ -1557,7 +1558,8 @@ async fn run_target(
                 object_id,
                 response,
             })) => {
-                let result = object_properties(&mut driver, &session_key, pause_epoch, object_id).await;
+                let result =
+                    object_properties(&mut driver, &session_key, pause_epoch, object_id).await;
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::InspectValue {
@@ -1580,9 +1582,8 @@ async fn run_target(
                 let result = if let Some(object_group) = object_group {
                     let release = driver
                         .client()
-                        .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
-                            object_group,
-                        })
+                        .runtime()
+                        .release_object_group(RuntimeReleaseObjectGroupParams { object_group })
                         .await
                         .map_err(|error| {
                             TargetDebuggerError::Properties(format!(
@@ -1694,7 +1695,8 @@ async fn run_target(
                 params.capture_beyond_viewport = Some(false);
                 let result = driver
                     .client()
-                    .page_capture_screenshot(params)
+                    .page()
+                    .capture_screenshot(params)
                     .await
                     .map(|result| ScreenshotSnapshot {
                         media_type: "image/png".to_owned(),
@@ -1720,50 +1722,33 @@ async fn run_target(
             })) => {
                 let result = match coverage.as_mut() {
                     Some(recording) => {
-                        capture_coverage(
-                            &mut driver,
-                            &session_key,
-                            recording,
-                            capture_id,
-                            raw,
-                        )
-                        .await
+                        capture_coverage(&mut driver, &session_key, recording, capture_id, raw)
+                            .await
                     }
                     None => Err(TargetDebuggerError::CoverageNotActive),
                 };
                 let _ = response.send(result);
             }
-            Next::Command(Some(TargetCommand::StopCoverage {
-                response,
-            })) => {
+            Next::Command(Some(TargetCommand::StopCoverage { response })) => {
                 let result = async {
                     if coverage.is_some() {
-                        let completed =
-                            finish_coverage_recording(&driver, &mut coverage)
-                                .await?;
+                        let completed = finish_coverage_recording(&driver, &mut coverage).await?;
                         let stored = completed.snapshot();
                         completed_recordings.remove(".");
                         coverage_objects.insert(".".to_owned(), stored.clone());
                         pending_stopped_coverage = Some(stored);
                     }
-                    project_stopped_coverage(
-                        &mut pending_stopped_coverage,
-                        async |snapshot| {
-                            project_coverage(&mut driver, &session_key, snapshot, None, false).await
-                        },
-                    )
+                    project_stopped_coverage(&mut pending_stopped_coverage, async |snapshot| {
+                        project_coverage(&mut driver, &session_key, snapshot, None, false).await
+                    })
                     .await
                 }
                 .await;
                 let _ = response.send(result);
             }
-            Next::Command(Some(TargetCommand::FinishCoverage {
-                response,
-            })) => {
+            Next::Command(Some(TargetCommand::FinishCoverage { response })) => {
                 let result = async {
-                    let completed =
-                        finish_coverage_recording(&driver, &mut coverage)
-                            .await?;
+                    let completed = finish_coverage_recording(&driver, &mut coverage).await?;
                     completed_recordings.insert(".".to_owned(), completed);
                     coverage_objects.remove(".");
                     pending_stopped_coverage = None;
@@ -1842,7 +1827,8 @@ async fn run_target(
                     }
                     let stopped = driver
                         .client()
-                        .profiler_stop(ProfilerStopParams::new())
+                        .profiler()
+                        .stop(ProfilerStopParams::new())
                         .await
                         .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
                     cpu_profile = None;
@@ -1919,10 +1905,15 @@ async fn run_target(
                     params.capture_numeric_value = capture_numeric_value.then_some(true);
                     params.expose_internals = expose_internals.then_some(true);
                     let mut progress_updates = driver.heap_snapshot_progress();
-                    let snapshot = driver.client().heap_profiler_take_heap_snapshot(params);
+                    let heap_profiler = driver.client().heap_profiler();
+                    let snapshot = heap_profiler.take_heap_snapshot(params);
                     tokio::pin!(snapshot);
-                    if let Err(error) =
-                        forward_heap_snapshot_progress(&mut progress_updates, &progress, &mut snapshot).await
+                    if let Err(error) = forward_heap_snapshot_progress(
+                        &mut progress_updates,
+                        &progress,
+                        &mut snapshot,
+                    )
+                    .await
                     {
                         driver.abort_heap_snapshot().await;
                         return Err(TargetDebuggerError::HeapSnapshot(format!("{error:?}")));
@@ -1931,7 +1922,12 @@ async fn run_target(
                         .finish_heap_snapshot()
                         .await
                         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
-                    send_finished_heap_snapshot_progress(&progress_updates, &progress, written.bytes_written).await?;
+                    send_finished_heap_snapshot_progress(
+                        &progress_updates,
+                        &progress,
+                        written.bytes_written,
+                    )
+                    .await?;
                     Ok(HeapSnapshotResult {
                         path,
                         bytes_written: written.bytes_written,
@@ -1950,7 +1946,8 @@ async fn run_target(
             })) => {
                 let capture_id = capture_id.unwrap_or_else(|| ".".to_owned());
                 let path = temporary_heap_snapshot_path();
-                let mapping = capture_heap_mapping(&mut driver, &session_key, connection_generation).await;
+                let mapping =
+                    capture_heap_mapping(&mut driver, &session_key, connection_generation).await;
                 let result = take_heap_snapshot(
                     &driver,
                     path.clone(),
@@ -1967,12 +1964,15 @@ async fn run_target(
                 });
                 if let Ok(capture) = &result {
                     let timing = capture.timing.clone();
-                    if let Some(previous) =
-                        heap_captures.insert(capture_id.clone(), StoredHeapCapture {
-                            path, timing, mapping,
+                    if let Some(previous) = heap_captures.insert(
+                        capture_id.clone(),
+                        StoredHeapCapture {
+                            path,
+                            timing,
+                            mapping,
                             source_resolver: Default::default(),
-                        })
-                    {
+                        },
+                    ) {
                         let _ = tokio::fs::remove_file(previous.path).await;
                     }
                     heap_constructor_groups.remove(&capture_id);
@@ -1984,7 +1984,10 @@ async fn run_target(
                         && let Err(error) = tokio::fs::remove_file(&capture.path).await
                         && error.kind() != std::io::ErrorKind::NotFound
                     {
-                        eprintln!("failed to remove orphaned heap capture '{}': {error}", capture.path.display());
+                        eprintln!(
+                            "failed to remove orphaned heap capture '{}': {error}",
+                            capture.path.display()
+                        );
                     }
                 }
             }
@@ -2247,7 +2250,8 @@ async fn run_target(
                         .collect::<Result<Vec<_>, _>>()?;
                     let mut inspector = crate::object_inspection::LiveSourceInspector::default();
                     for node in &mut nodes {
-                        enrich_heap_live_source(&mut driver, &session_key, node, &mut inspector).await;
+                        enrich_heap_live_source(&mut driver, &session_key, node, &mut inspector)
+                            .await;
                     }
                     Ok(HeapNodeSelectionSnapshot {
                         capture_id,
@@ -2308,8 +2312,16 @@ async fn run_target(
                     let omitted_reference_count =
                         references.len().saturating_sub(limit as usize) as u64;
                     references.truncate(limit as usize);
-                    let references = references.into_iter()
-                        .map(|reference| heap_reference_snapshot(&graph, &capture_id, reference, heap_captures.get(&capture_id)))
+                    let references = references
+                        .into_iter()
+                        .map(|reference| {
+                            heap_reference_snapshot(
+                                &graph,
+                                &capture_id,
+                                reference,
+                                heap_captures.get(&capture_id),
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     let mut snapshot = HeapReferencesSnapshot {
                         capture_id: capture_id.clone(),
@@ -2327,9 +2339,12 @@ async fn run_target(
                         omitted_reference_count,
                     };
                     enrich_heap_live_source(
-                        &mut driver, &session_key, &mut snapshot.node,
+                        &mut driver,
+                        &session_key,
+                        &mut snapshot.node,
                         &mut crate::object_inspection::LiveSourceInspector::default(),
-                    ).await;
+                    )
+                    .await;
                     Ok(snapshot)
                 }
                 .await;
@@ -2779,9 +2794,17 @@ fn heap_object_source(
     node: NodeIndex,
     capture: Option<&StoredHeapCapture>,
 ) -> Result<crate::object_inspection::ObjectSourceSnapshot, TargetDebuggerError> {
-    capture.map(|capture| {
-        capture.source_resolver.lock().unwrap().inspect(graph, &capture.mapping, node)
-    }).transpose().map_err(heap_analysis_error).map(Option::unwrap_or_default)
+    capture
+        .map(|capture| {
+            capture
+                .source_resolver
+                .lock()
+                .unwrap()
+                .inspect(graph, &capture.mapping, node)
+        })
+        .transpose()
+        .map_err(heap_analysis_error)
+        .map(Option::unwrap_or_default)
 }
 
 async fn enrich_heap_live_source(
@@ -2794,31 +2817,55 @@ async fn enrich_heap_live_source(
         return;
     }
     if !inspector.take_request() {
-        node.source.diagnostics.push("live comparison skipped: location lookup budget exhausted".into());
+        node.source
+            .diagnostics
+            .push("live comparison skipped: location lookup budget exhausted".into());
         return;
     }
     let materialized = tokio::time::timeout(
         inspector.remaining_time(),
-        driver.raw_cdp_request("HeapProfiler.getObjectByHeapObjectId", serde_json::json!({
-            "objectId": node.heap_object_id,
-            "objectGroup": "dbgjs-heap-location",
-        })),
-    ).await;
+        driver.raw_cdp_request(
+            "HeapProfiler.getObjectByHeapObjectId",
+            serde_json::json!({
+                "objectId": node.heap_object_id,
+                "objectGroup": "dbgjs-heap-location",
+            }),
+        ),
+    )
+    .await;
     match materialized {
         Ok(Ok(value)) => {
-            if let Some(id) = value.pointer("/result/objectId").and_then(serde_json::Value::as_str) {
-                node.source.merge(inspector.inspect(driver, session, id, None).await);
+            if let Some(id) = value
+                .pointer("/result/objectId")
+                .and_then(serde_json::Value::as_str)
+            {
+                node.source
+                    .merge(inspector.inspect(driver, session, id, None).await);
             } else {
-                node.source.diagnostics.push("heap object is not available for live location comparison".into());
+                node.source
+                    .diagnostics
+                    .push("heap object is not available for live location comparison".into());
             }
         }
-        Ok(Err(error)) => node.source.diagnostics.push(format!("live heap location comparison unavailable: {error:?}")),
-        Err(_) => node.source.diagnostics.push("live heap location comparison timed out".into()),
+        Ok(Err(error)) => node.source.diagnostics.push(format!(
+            "live heap location comparison unavailable: {error:?}"
+        )),
+        Err(_) => node
+            .source
+            .diagnostics
+            .push("live heap location comparison timed out".into()),
     }
-    if let Err(error) = driver.client().runtime_release_object_group(RuntimeReleaseObjectGroupParams {
-        object_group: "dbgjs-heap-location".into(),
-    }).await {
-        node.source.diagnostics.push(format!("failed to release live heap location object: {error:?}"));
+    if let Err(error) = driver
+        .client()
+        .runtime()
+        .release_object_group(RuntimeReleaseObjectGroupParams {
+            object_group: "dbgjs-heap-location".into(),
+        })
+        .await
+    {
+        node.source.diagnostics.push(format!(
+            "failed to release live heap location object: {error:?}"
+        ));
     }
 }
 
@@ -2841,8 +2888,14 @@ fn heap_reference_snapshot(
         name_or_index: reference.name_or_index,
         source: heap_node_reference(capture_id, source.heap_object_id),
         target: heap_node_reference(capture_id, target.heap_object_id),
-        source_preview: Some(crate::heap_preview::heap_preview(graph, reference.source).map_err(heap_analysis_error)?),
-        target_preview: Some(crate::heap_preview::heap_preview(graph, reference.target).map_err(heap_analysis_error)?),
+        source_preview: Some(
+            crate::heap_preview::heap_preview(graph, reference.source)
+                .map_err(heap_analysis_error)?,
+        ),
+        target_preview: Some(
+            crate::heap_preview::heap_preview(graph, reference.target)
+                .map_err(heap_analysis_error)?,
+        ),
         source_locations: heap_object_source(graph, reference.source, capture)?,
         target_locations: heap_object_source(graph, reference.target, capture)?,
     })
@@ -2939,7 +2992,8 @@ async fn take_heap_snapshot(
     params.capture_numeric_value = capture_numeric_value.then_some(true);
     params.expose_internals = expose_internals.then_some(true);
     let mut progress_updates = driver.heap_snapshot_progress();
-    let snapshot = driver.client().heap_profiler_take_heap_snapshot(params);
+    let heap_profiler = driver.client().heap_profiler();
+    let snapshot = heap_profiler.take_heap_snapshot(params);
     tokio::pin!(snapshot);
     if let Err(error) =
         forward_heap_snapshot_progress(&mut progress_updates, progress, &mut snapshot).await
@@ -2951,7 +3005,8 @@ async fn take_heap_snapshot(
         .finish_heap_snapshot()
         .await
         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
-    send_finished_heap_snapshot_progress(&progress_updates, progress, written.bytes_written).await?;
+    send_finished_heap_snapshot_progress(&progress_updates, progress, written.bytes_written)
+        .await?;
     Ok(written)
 }
 
@@ -3045,34 +3100,57 @@ async fn capture_heap_mapping(
     connection_generation: u64,
 ) -> HeapMappingSnapshot {
     let started = Instant::now();
-    let keys = driver.state().scripts.keys()
-        .filter(|key| &key.session == session).cloned().collect::<Vec<_>>();
+    let keys = driver
+        .state()
+        .scripts
+        .keys()
+        .filter(|key| &key.session == session)
+        .cloned()
+        .collect::<Vec<_>>();
     let mut errors = BTreeMap::new();
     for key in &keys {
-        let Some(script) = driver.state().scripts.get(key) else { continue };
+        let Some(script) = driver.state().scripts.get(key) else {
+            continue;
+        };
         let previous = captured_heap_script(key, script, None);
         let retry = previous.mapping_status == HeapMappingStatus::MapLoadingFailed
-            || (script.captured_source.is_some() && script.source_map_url.is_some()
+            || (script.captured_source.is_some()
+                && script.source_map_url.is_some()
                 && previous.source_map.is_none());
         if retry || script.captured_source.is_none() {
-            if retry { driver.set_source_map_cache_enabled(false); }
+            if retry {
+                driver.set_source_map_cache_enabled(false);
+            }
             let input = if retry {
-                Input::RefreshScriptSource { script: key.clone() }
+                Input::RefreshScriptSource {
+                    script: key.clone(),
+                }
             } else {
-                Input::RequestScriptSource { script: key.clone() }
+                Input::RequestScriptSource {
+                    script: key.clone(),
+                }
             };
             let result = driver.apply(input).await;
-            if retry { driver.set_source_map_cache_enabled(true); }
+            if retry {
+                driver.set_source_map_cache_enabled(true);
+            }
             if let Err(error) = result {
                 errors.insert(key.clone(), error.to_string());
             }
         }
     }
-    let scripts = keys.iter().filter_map(|key| {
-        let script = driver.state().scripts.get(key)?;
-        Some(captured_heap_script(key, script, errors.get(key).cloned()))
-    }).collect();
-    HeapMappingSnapshot { connection_generation, scripts, hydration_duration_micros: started.elapsed().as_micros() as u64 }
+    let scripts = keys
+        .iter()
+        .filter_map(|key| {
+            let script = driver.state().scripts.get(key)?;
+            Some(captured_heap_script(key, script, errors.get(key).cloned()))
+        })
+        .collect();
+    HeapMappingSnapshot {
+        connection_generation,
+        scripts,
+        hydration_duration_micros: started.elapsed().as_micros() as u64,
+    }
 }
 
 fn captured_heap_script(
@@ -3080,56 +3158,72 @@ fn captured_heap_script(
     script: &crate::debugger_engine::ScriptState,
     acquisition_error: Option<String>,
 ) -> HeapScriptSnapshot {
-        let fetched = script.captured_source.as_ref();
-        let source_map = fetched.and_then(|source| source.source_map.as_ref())
-            .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
-        let diagnostic = acquisition_error
-            .or_else(|| fetched.and_then(|source| source.source_map_error.clone()))
-            .or_else(|| match &script.source {
-                ScriptSourceState::Failed(error) => Some(error.clone()),
-                _ => None,
-            });
-        let mapping_status = if diagnostic.is_some() {
-            HeapMappingStatus::MapLoadingFailed
-        } else if source_map.is_some() {
-            HeapMappingStatus::Mapped
-        } else if script.source_map_url.is_none() {
-            HeapMappingStatus::NoMapSupplied
-        } else {
-            HeapMappingStatus::NotAttempted
-        };
-        let mut captured = HeapScriptSnapshot {
-            script_id: key.script_id.clone(), url: script.url.clone(), hash: script.hash.clone(),
-            provenance: script.provenance.clone(),
-            source_map_url: fetched.and_then(|source| source.source_map_url.clone())
-                .or_else(|| script.source_map_url.clone()),
-            generated_source: fetched.map(|source| source.content.to_string()),
-            source_map, mapping_status, diagnostic,
-        };
-        if let Some(map) = &captured.source_map {
-            if let Err(error) = heap_source_view(&captured, map) {
-                captured.mapping_status = HeapMappingStatus::MapLoadingFailed;
-                captured.diagnostic = Some(error);
-            }
+    let fetched = script.captured_source.as_ref();
+    let source_map = fetched
+        .and_then(|source| source.source_map.as_ref())
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+    let diagnostic = acquisition_error
+        .or_else(|| fetched.and_then(|source| source.source_map_error.clone()))
+        .or_else(|| match &script.source {
+            ScriptSourceState::Failed(error) => Some(error.clone()),
+            _ => None,
+        });
+    let mapping_status = if diagnostic.is_some() {
+        HeapMappingStatus::MapLoadingFailed
+    } else if source_map.is_some() {
+        HeapMappingStatus::Mapped
+    } else if script.source_map_url.is_none() {
+        HeapMappingStatus::NoMapSupplied
+    } else {
+        HeapMappingStatus::NotAttempted
+    };
+    let mut captured = HeapScriptSnapshot {
+        script_id: key.script_id.clone(),
+        url: script.url.clone(),
+        hash: script.hash.clone(),
+        provenance: script.provenance.clone(),
+        source_map_url: fetched
+            .and_then(|source| source.source_map_url.clone())
+            .or_else(|| script.source_map_url.clone()),
+        generated_source: fetched.map(|source| source.content.to_string()),
+        source_map,
+        mapping_status,
+        diagnostic,
+    };
+    if let Some(map) = &captured.source_map {
+        if let Err(error) = heap_source_view(&captured, map) {
+            captured.mapping_status = HeapMappingStatus::MapLoadingFailed;
+            captured.diagnostic = Some(error);
         }
-        captured
+    }
+    captured
 }
 
 fn heap_source_view(script: &HeapScriptSnapshot, map: &str) -> Result<ResolvedSourceView, String> {
-    sourcemap::decode_slice(map.as_bytes()).map_err(|error| format!("invalid source map: {error}"))?;
+    sourcemap::decode_slice(map.as_bytes())
+        .map_err(|error| format!("invalid source map: {error}"))?;
     let mut view = ResolvedSourceView::new(
-        ResolutionPolicy::PreferSourcesContent, Arc::new(ContextSourceModel::new()),
-        SourceContributionId::new("stored-heap"), BTreeMap::new(),
+        ResolutionPolicy::PreferSourcesContent,
+        Arc::new(ContextSourceModel::new()),
+        SourceContributionId::new("stored-heap"),
+        BTreeMap::new(),
     );
     view.add_generated(GeneratedSourceInput {
-        url: &script.url, content: script.generated_source.as_deref().unwrap_or(""),
-        source_map: Some(map.as_bytes()), source_map_url: script.source_map_url.as_deref(),
+        url: &script.url,
+        content: script.generated_source.as_deref().unwrap_or(""),
+        source_map: Some(map.as_bytes()),
+        source_map_url: script.source_map_url.as_deref(),
         minified: false,
-    }).map_err(|error| error.to_string())?;
-    if let Some(error) = view.diagnostics().iter().find_map(|diagnostic| match diagnostic {
-        crate::source_view::SourceDiagnostic::SourceMapFailed { error, .. } => Some(error),
-        _ => None,
-    }) {
+    })
+    .map_err(|error| error.to_string())?;
+    if let Some(error) = view
+        .diagnostics()
+        .iter()
+        .find_map(|diagnostic| match diagnostic {
+            crate::source_view::SourceDiagnostic::SourceMapFailed { error, .. } => Some(error),
+            _ => None,
+        })
+    {
         return Err(error.clone());
     }
     Ok(view)
@@ -3139,18 +3233,38 @@ pub(crate) fn supply_heap_source_map(
     mapping: &mut HeapMappingSnapshot,
     supply: HeapSourceMapSupply,
 ) -> Result<(), TargetDebuggerError> {
-    let script = mapping.scripts.iter_mut().find(|script| script.script_id == supply.script_id)
-        .ok_or_else(|| TargetDebuggerError::HeapAnalysis(format!("captured script '{}' not found", supply.script_id)))?;
+    let script = mapping
+        .scripts
+        .iter_mut()
+        .find(|script| script.script_id == supply.script_id)
+        .ok_or_else(|| {
+            TargetDebuggerError::HeapAnalysis(format!(
+                "captured script '{}' not found",
+                supply.script_id
+            ))
+        })?;
     if script.hash.is_empty() || script.hash != supply.script_hash {
-        return Err(TargetDebuggerError::HeapAnalysis("source map script hash does not match the captured script".into()));
+        return Err(TargetDebuggerError::HeapAnalysis(
+            "source map script hash does not match the captured script".into(),
+        ));
     }
-    let json: serde_json::Value = serde_json::from_str(&supply.source_map)
-        .map_err(|error| TargetDebuggerError::HeapAnalysis(format!("invalid source map: {error}")))?;
+    let json: serde_json::Value = serde_json::from_str(&supply.source_map).map_err(|error| {
+        TargetDebuggerError::HeapAnalysis(format!("invalid source map: {error}"))
+    })?;
     if let Some(file) = json.get("file").and_then(serde_json::Value::as_str) {
-        let basename = |url: &str| url.split(['?', '#']).next().unwrap_or(url)
-            .rsplit(['/', '\\']).next().unwrap_or(url).to_owned();
+        let basename = |url: &str| {
+            url.split(['?', '#'])
+                .next()
+                .unwrap_or(url)
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(url)
+                .to_owned()
+        };
         if basename(file) != basename(&script.url) {
-            return Err(TargetDebuggerError::HeapAnalysis("source map file does not match the captured script URL".into()));
+            return Err(TargetDebuggerError::HeapAnalysis(
+                "source map file does not match the captured script URL".into(),
+            ));
         }
     }
     let mut updated = script.clone();
@@ -3192,23 +3306,42 @@ fn project_heap_classes(
     filter: Option<&regex::Regex>,
     mapping: Option<&HeapMappingSnapshot>,
 ) -> Result<HeapClassSnapshot, TargetDebuggerError> {
-    let scripts = mapping.map(|mapping| mapping.scripts.iter()
-        .map(|script| (script.script_id.clone(), script)).collect::<BTreeMap<_, _>>())
+    let scripts = mapping
+        .map(|mapping| {
+            mapping
+                .scripts
+                .iter()
+                .map(|script| (script.script_id.clone(), script))
+                .collect::<BTreeMap<_, _>>()
+        })
         .unwrap_or_default();
     let mut views = BTreeMap::new();
     let mut diagnostics = Vec::new();
-    for script_id in groups.iter().map(|group| group.script_id.to_string()).collect::<BTreeSet<_>>() {
+    for script_id in groups
+        .iter()
+        .map(|group| group.script_id.to_string())
+        .collect::<BTreeSet<_>>()
+    {
         let Some(script) = scripts.get(&script_id) else {
             diagnostics.push(HeapScriptMappingDiagnostic {
-                script_id: script_id.clone(), url: format!("script:{script_id}"), hash: String::new(),
-                provenance: Default::default(), status: HeapMappingStatus::NotAttempted,
-                diagnostic: Some("capture has no script mapping metadata (legacy capture or unobserved script)".into()),
+                script_id: script_id.clone(),
+                url: format!("script:{script_id}"),
+                hash: String::new(),
+                provenance: Default::default(),
+                status: HeapMappingStatus::NotAttempted,
+                diagnostic: Some(
+                    "capture has no script mapping metadata (legacy capture or unobserved script)"
+                        .into(),
+                ),
             });
             continue;
         };
         let mut diagnostic = HeapScriptMappingDiagnostic {
-            script_id: script_id.clone(), url: script.url.clone(), hash: script.hash.clone(),
-            provenance: script.provenance.clone(), status: script.mapping_status.clone(),
+            script_id: script_id.clone(),
+            url: script.url.clone(),
+            hash: script.hash.clone(),
+            provenance: script.provenance.clone(),
+            status: script.mapping_status.clone(),
             diagnostic: script.diagnostic.clone(),
         };
         if let Some(map) = &script.source_map {
@@ -3231,29 +3364,42 @@ fn project_heap_classes(
     for group in groups {
         let script_id = group.script_id.to_string();
         let script = scripts.get(&script_id);
-        let generated_url = script.map(|script| script.url.clone())
-            .filter(|url| !url.is_empty()).unwrap_or_else(|| format!("script:{script_id}"));
+        let generated_url = script
+            .map(|script| script.url.clone())
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| format!("script:{script_id}"));
         let mapped = views.get(&script_id).map(|view| {
             let resolved = crate::source_location::resolve_source_position(
-                view, &generated_url,
+                view,
+                &generated_url,
                 script.and_then(|script| script.source_map_url.as_deref()),
-                Position { line: group.line, column: group.column },
+                Position {
+                    line: group.line,
+                    column: group.column,
+                },
                 symbol_indexes.entry(script_id.clone()).or_default(),
             );
-            (resolved.resolved.source_url,
+            (
+                resolved.resolved.source_url,
                 Position {
                     line: resolved.resolved.line.saturating_sub(1),
                     column: resolved.resolved.column.saturating_sub(1),
                 },
-                resolved.breadcrumb)
+                resolved.breadcrumb,
+            )
         });
         let (source_url, location, name) = match mapped {
             Some((url, position, name)) => (
-                url.clone(), source_location(url, position.line, position.column),
-                name.map(|name| heap_class_display_name(&name).to_owned()).unwrap_or_else(|| group.generated_name.clone()),
+                url.clone(),
+                source_location(url, position.line, position.column),
+                name.map(|name| heap_class_display_name(&name).to_owned())
+                    .unwrap_or_else(|| group.generated_name.clone()),
             ),
-            None => (generated_url.clone(), source_location(generated_url, group.line, group.column),
-                heap_class_display_name(&group.generated_name).to_owned()),
+            None => (
+                generated_url.clone(),
+                source_location(generated_url, group.line, group.column),
+                heap_class_display_name(&group.generated_name).to_owned(),
+            ),
         };
         if filter.is_some_and(|filter| {
             !filter.is_match(&name)
@@ -3272,7 +3418,9 @@ fn project_heap_classes(
             ))
             .or_insert_with(|| ProjectedHeapClass {
                 script_id,
-                provenance: script.map(|script| script.provenance.clone()).unwrap_or_default(),
+                provenance: script
+                    .map(|script| script.provenance.clone())
+                    .unwrap_or_default(),
                 name,
                 source_url,
                 location,
@@ -3324,31 +3472,42 @@ fn project_heap_classes(
             }
         })
         .collect();
-    let mapping_status = if diagnostics.iter().any(|d| d.status == HeapMappingStatus::Mapped) {
+    let mapping_status = if diagnostics
+        .iter()
+        .any(|d| d.status == HeapMappingStatus::Mapped)
+    {
         HeapMappingStatus::Mapped
-    } else if diagnostics.iter().any(|d| d.status == HeapMappingStatus::MapLoadingFailed) {
+    } else if diagnostics
+        .iter()
+        .any(|d| d.status == HeapMappingStatus::MapLoadingFailed)
+    {
         HeapMappingStatus::MapLoadingFailed
-    } else if mapping.is_none() || diagnostics.iter().any(|d| d.status == HeapMappingStatus::NotAttempted) {
+    } else if mapping.is_none()
+        || diagnostics
+            .iter()
+            .any(|d| d.status == HeapMappingStatus::NotAttempted)
+    {
         HeapMappingStatus::NotAttempted
     } else {
         HeapMappingStatus::NoMapSupplied
     };
     Ok(HeapClassSnapshot {
-            capture_id,
-            total_instances,
-            total_shallow_size,
-            classes,
-            analysis: HeapClassAnalysisSnapshot {
-                snapshot_timing: None,
-                parse_duration_micros: 0,
-                projection_duration_micros: 0,
-                source_map_hydration_duration_micros: mapping.map_or(0, |mapping| mapping.hydration_duration_micros),
-                constructor_group_count: groups.len() as u64,
-                used_cached_groups: false,
-                mapping_status,
-                script_mappings: diagnostics,
-            },
-        })
+        capture_id,
+        total_instances,
+        total_shallow_size,
+        classes,
+        analysis: HeapClassAnalysisSnapshot {
+            snapshot_timing: None,
+            parse_duration_micros: 0,
+            projection_duration_micros: 0,
+            source_map_hydration_duration_micros: mapping
+                .map_or(0, |mapping| mapping.hydration_duration_micros),
+            constructor_group_count: groups.len() as u64,
+            used_cached_groups: false,
+            mapping_status,
+            script_mappings: diagnostics,
+        },
+    })
 }
 
 fn heap_class_display_name(name: &str) -> &str {
@@ -3361,12 +3520,14 @@ async fn begin_click(
 ) -> Result<tokio::task::JoinHandle<Result<(), TargetDebuggerError>>, TargetDebuggerError> {
     let document = driver
         .client()
-        .dom_get_document(DomGetDocumentParams::new())
+        .dom()
+        .get_document(DomGetDocumentParams::new())
         .await
         .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
     let node = driver
         .client()
-        .dom_query_selector(DomQuerySelectorParams::new(
+        .dom()
+        .query_selector(DomQuerySelectorParams::new(
             document.root.node_id,
             selector.clone(),
         ))
@@ -3380,7 +3541,8 @@ async fn begin_click(
     box_params.node_id = Some(node.node_id);
     let model = driver
         .client()
-        .dom_get_box_model(box_params)
+        .dom()
+        .get_box_model(box_params)
         .await
         .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?
         .model;
@@ -3397,7 +3559,8 @@ async fn begin_click(
             event.button = Some(InputMouseButton::Left);
             event.click_count = Some(1);
             client
-                .input_dispatch_mouse_event(event)
+                .input()
+                .dispatch_mouse_event(event)
                 .await
                 .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
         }
@@ -3413,7 +3576,8 @@ fn begin_type_text(
     let client = driver.client().clone();
     tokio::spawn(async move {
         client
-            .input_insert_text(InputInsertTextParams::new(text))
+            .input()
+            .insert_text(InputInsertTextParams::new(text))
             .await
             .map(|_| ())
             .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))
@@ -3454,7 +3618,8 @@ async fn finish_coverage_recording(
     update_coverage(driver, active).await?;
     driver
         .client()
-        .profiler_stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
+        .profiler()
+        .stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     let completed = recording
@@ -3486,7 +3651,8 @@ async fn start_coverage(
 ) -> Result<(), TargetDebuggerError> {
     driver
         .client()
-        .profiler_enable(ProfilerEnableParams::new())
+        .profiler()
+        .enable(ProfilerEnableParams::new())
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     let mut params = ProfilerStartPreciseCoverageParams::new();
@@ -3494,7 +3660,8 @@ async fn start_coverage(
     params.detailed = Some(true);
     driver
         .client()
-        .profiler_start_precise_coverage(params)
+        .profiler()
+        .start_precise_coverage(params)
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     Ok(())
@@ -3514,7 +3681,8 @@ async fn update_coverage(
 ) -> Result<(), TargetDebuggerError> {
     let coverage = driver
         .client()
-        .profiler_take_precise_coverage(ProfilerTakePreciseCoverageParams::new())
+        .profiler()
+        .take_precise_coverage(ProfilerTakePreciseCoverageParams::new())
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     recording.timestamp_micros = (coverage.timestamp * 1_000_000.0).max(0.0) as u64;
@@ -3821,9 +3989,9 @@ fn source_acquisition_candidates(
                 }
                 SourceAcquisition::Exact(_) => script.source_map_url.is_some(),
                 SourceAcquisition::Search(selector) => {
-                    selector.is_none_or(|selector| {
-                        script.url.contains(original_source_path(selector))
-                    }) || script.source_map_url.is_some()
+                    selector
+                        .is_none_or(|selector| script.url.contains(original_source_path(selector)))
+                        || script.source_map_url.is_some()
                 }
                 SourceAcquisition::All { include_unmapped } => {
                     include_unmapped || script.source_map_url.is_some()
@@ -3846,13 +4014,22 @@ async fn acquire_sources(
 ) -> Result<(), TargetDebuggerError> {
     let authored_path = match request {
         SourceAcquisition::Exact(path)
-            if !driver.state().scripts.values().any(|script| {
-                script.url == original_source_path(path)
-            }) => Some(original_source_path(path)),
+            if !driver
+                .state()
+                .scripts
+                .values()
+                .any(|script| script.url == original_source_path(path)) =>
+        {
+            Some(original_source_path(path))
+        }
         _ => None,
     };
     if let Some(path) = authored_path
-        && driver.state().scripts.keys().any(|script| script_contains_source(driver, script, path))
+        && driver
+            .state()
+            .scripts
+            .keys()
+            .any(|script| script_contains_source(driver, script, path))
     {
         return Ok(());
     }
@@ -3860,7 +4037,9 @@ async fn acquire_sources(
         if let Some(control) = control {
             control.check()?;
         }
-        driver.acquire_script_source(script.clone(), control).await?;
+        driver
+            .acquire_script_source(script.clone(), control)
+            .await?;
         if let Some(control) = control {
             control.check()?;
         }
@@ -3900,19 +4079,22 @@ async fn start_cpu_profile(
     }
     driver
         .client()
-        .profiler_enable(ProfilerEnableParams::new())
+        .profiler()
+        .enable(ProfilerEnableParams::new())
         .await
         .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
     if let Some(interval) = sampling_interval_micros {
         driver
             .client()
-            .profiler_set_sampling_interval(ProfilerSetSamplingIntervalParams::new(interval as i64))
+            .profiler()
+            .set_sampling_interval(ProfilerSetSamplingIntervalParams::new(interval as i64))
             .await
             .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
     }
     driver
         .client()
-        .profiler_start(ProfilerStartParams::new())
+        .profiler()
+        .start(ProfilerStartParams::new())
         .await
         .map(|_| ())
         .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))
@@ -4344,27 +4526,40 @@ pub(crate) fn exclude_coverage(
             }
             // Rebuild derived ranges using persisted mappings, never a live target.
             if !function.effective_ranges.is_empty() {
-                let projected = original_ranges.iter()
-                    .chain(&function.effective_ranges).collect::<Vec<_>>();
+                let projected = original_ranges
+                    .iter()
+                    .chain(&function.effective_ranges)
+                    .collect::<Vec<_>>();
                 let mut effective = effective_coverage_ranges(&function.ranges);
                 for range in &mut effective {
-                    range.authored_start = projected.iter()
-                        .find(|original| original.start_offset == range.start_offset
-                            && original.authored_start.is_some())
+                    range.authored_start = projected
+                        .iter()
+                        .find(|original| {
+                            original.start_offset == range.start_offset
+                                && original.authored_start.is_some()
+                        })
                         .and_then(|original| original.authored_start.clone());
-                    range.authored_end = projected.iter()
-                        .find(|original| original.end_offset == range.end_offset
-                            && original.authored_end.is_some())
+                    range.authored_end = projected
+                        .iter()
+                        .find(|original| {
+                            original.end_offset == range.end_offset
+                                && original.authored_end.is_some()
+                        })
                         .and_then(|original| original.authored_end.clone());
                 }
-                function.authored_location = effective.iter()
+                function.authored_location = effective
+                    .iter()
                     .find_map(|range| range.authored_start.clone());
                 function.effective_ranges = effective;
             }
         }
-        source.functions.retain(|function| !function.ranges.is_empty());
+        source
+            .functions
+            .retain(|function| !function.ranges.is_empty());
     }
-    selected.sources.retain(|source| !source.functions.is_empty());
+    selected
+        .sources
+        .retain(|source| !source.functions.is_empty());
     selected
 }
 
@@ -4637,32 +4832,34 @@ async fn evaluate(
     .await;
     let snapshot = match result {
         Ok(result) => {
-        let mut preview = remote_value_snapshot(
-            &result.remote,
-            crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
-        );
-        preview.truncated |= result.preview_truncated;
-        if let Some(object_id) = &result.remote.object_id {
-            preview.source = crate::object_inspection::LiveSourceInspector::default()
-                .inspect(driver, session_key, object_id, None).await;
-        }
-        preview.reference = None;
-        let kind = remote_object_kind(&result.remote);
-        Ok(EvaluationSnapshot {
-            expression,
-            kind,
-            value: result.remote.value,
-            unserializable_value: result.remote.unserializable_value,
-            description: result.remote.description,
-            object_id: None,
-            preview,
-        })
+            let mut preview = remote_value_snapshot(
+                &result.remote,
+                crate::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
+            );
+            preview.truncated |= result.preview_truncated;
+            if let Some(object_id) = &result.remote.object_id {
+                preview.source = crate::object_inspection::LiveSourceInspector::default()
+                    .inspect(driver, session_key, object_id, None)
+                    .await;
+            }
+            preview.reference = None;
+            let kind = remote_object_kind(&result.remote);
+            Ok(EvaluationSnapshot {
+                expression,
+                kind,
+                value: result.remote.value,
+                unserializable_value: result.remote.unserializable_value,
+                description: result.remote.description,
+                object_id: None,
+                preview,
+            })
         }
         Err(error) => Err(error),
     };
     let release = driver
         .client()
-        .runtime_release_object_group(RuntimeReleaseObjectGroupParams {
+        .runtime()
+        .release_object_group(RuntimeReleaseObjectGroupParams {
             object_group: OBJECT_GROUP.to_owned(),
         })
         .await
@@ -4709,7 +4906,8 @@ async fn evaluate_remote(
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
-            .debugger_evaluate_on_call_frame(params)
+            .debugger()
+            .evaluate_on_call_frame(params)
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
@@ -4726,7 +4924,8 @@ async fn evaluate_remote(
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
-            .runtime_evaluate(params)
+            .runtime()
+            .evaluate(params)
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
@@ -4747,7 +4946,8 @@ async fn evaluate_remote(
     projection_params.object_group = object_group.map(str::to_owned);
     let projected = driver
         .client()
-        .runtime_call_function_on(projection_params)
+        .runtime()
+        .call_function_on(projection_params)
         .await
         .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
     if let Some(exception) = projected.exception_details {
@@ -4858,7 +5058,8 @@ async fn release_evaluation_objects(
     for object_id in object_ids {
         driver
             .client()
-            .runtime_release_object(RuntimeReleaseObjectParams::new(object_id))
+            .runtime()
+            .release_object(RuntimeReleaseObjectParams::new(object_id))
             .await
             .map_err(|error| {
                 TargetDebuggerError::Properties(format!(
@@ -4988,7 +5189,9 @@ async fn object_properties(
     let mut inspector = crate::object_inspection::LiveSourceInspector::default();
     for variable in &mut variables {
         if let Some(object_id) = &variable.object_id {
-            variable.preview.source = inspector.inspect(driver, session_key, object_id, None).await;
+            variable.preview.source = inspector
+                .inspect(driver, session_key, object_id, None)
+                .await;
         }
     }
     Ok(variables)
@@ -5014,7 +5217,8 @@ async fn get_object_property_descriptors(
     params.generate_preview = Some(true);
     let result = driver
         .client()
-        .runtime_get_properties(params)
+        .runtime()
+        .get_properties(params)
         .await
         .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
     if let Some(exception) = result.exception_details {
@@ -5084,8 +5288,12 @@ async fn inspect_value(
     };
     let mut inspector = crate::object_inspection::LiveSourceInspector::default();
     let source = if let Some(object_id) = &object_id {
-        let known = object_group.is_none().then_some((properties.as_slice(), internal_properties.as_slice()));
-        inspector.inspect(driver, session_key, object_id, known).await
+        let known = object_group
+            .is_none()
+            .then_some((properties.as_slice(), internal_properties.as_slice()));
+        inspector
+            .inspect(driver, session_key, object_id, known)
+            .await
     } else {
         Default::default()
     };
@@ -5193,13 +5401,19 @@ async fn inspect_value(
     properties.truncate(options.max_properties as usize);
     for property in &mut properties {
         if let Some(object_id) = &property.value.reference {
-            property.value.source = inspector.inspect(driver, session_key, object_id, None).await;
+            property.value.source = inspector
+                .inspect(driver, session_key, object_id, None)
+                .await;
         }
     }
-    if let Some(settlement) = promise.as_mut().and_then(|promise| promise.settlement.as_mut())
+    if let Some(settlement) = promise
+        .as_mut()
+        .and_then(|promise| promise.settlement.as_mut())
         && let Some(object_id) = &settlement.reference
     {
-        settlement.source = inspector.inspect(driver, session_key, object_id, None).await;
+        settlement.source = inspector
+            .inspect(driver, session_key, object_id, None)
+            .await;
     }
     Ok(ValueSnapshot {
         selector,
@@ -6147,9 +6361,6 @@ mod coverage_finalization_regression_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{project_heap_classes, supply_heap_source_map};
-    use crate::heap_snapshot::HeapConstructorGroup;
-    use crate::service_api::{HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapSourceMapSupply, ScriptProvenance};
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
@@ -6158,6 +6369,7 @@ mod tests {
         heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
         window_highlighted_line,
     };
+    use super::{project_heap_classes, supply_heap_source_map};
     use crate::cdp::{
         RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
         TargetAttachToTargetParams, TargetCloseTargetParams, TargetCreateTargetParams,
@@ -6170,11 +6382,16 @@ mod tests {
         BreakpointMapping, BreakpointSourceCandidate, BreakpointState, DebuggerState, EffectId,
         Input, PhysicalBreakpointKey, ScriptKey, ScriptSourceState, ScriptState, SessionKey,
     };
+    use crate::heap_snapshot::HeapConstructorGroup;
     use crate::service_api::{
         BreakpointApplicationStatus, CoverageRangeSnapshot, CpuProfileCallFrameSnapshot,
         CpuProfileNodeSnapshot, CpuProfileSnapshot, SourceExcerpt, SourceLocation,
         TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
         ValueInspectionOptions, ValueSelector, ValueSnapshot,
+    };
+    use crate::service_api::{
+        HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapSourceMapSupply,
+        ScriptProvenance,
     };
     use crate::source_search::{SearchControl, SearchError};
     use crate::source_view::{ContentCandidate, Position, Provenance};
@@ -6197,16 +6414,24 @@ mod tests {
         let (output, mut received) = mpsc::channel(16);
         let operation = async {
             updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
-                done: 5, total: 10, finished: Some(false), bytes_written: 50,
+                done: 5,
+                total: 10,
+                finished: Some(false),
+                bytes_written: 50,
             }));
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
-                done: 10, total: 10, finished: Some(true), bytes_written: 100,
+                done: 10,
+                total: 10,
+                finished: Some(true),
+                bytes_written: 100,
             }));
             Ok::<_, ()>(())
         };
         tokio::pin!(operation);
-        forward_heap_snapshot_progress(&mut updates, &output, &mut operation).await.unwrap();
+        forward_heap_snapshot_progress(&mut updates, &output, &mut operation)
+            .await
+            .unwrap();
         drop(output);
         let mut progress = Vec::new();
         while let Some(update) = received.recv().await {
@@ -6226,10 +6451,15 @@ mod tests {
 
         for finished in [None, Some(true)] {
             let (_updates_tx, updates) = watch::channel(Some(HeapSnapshotStreamProgress {
-                done: 10, total: 10, finished, bytes_written: 100,
+                done: 10,
+                total: 10,
+                finished,
+                bytes_written: 100,
             }));
             let (output, mut received) = mpsc::channel(1);
-            super::send_finished_heap_snapshot_progress(&updates, &output, 100).await.unwrap();
+            super::send_finished_heap_snapshot_progress(&updates, &output, 100)
+                .await
+                .unwrap();
             let progress = received.try_recv().expect("terminal progress must be sent");
             assert_eq!(progress.finished, Some(true));
             assert_eq!(progress.bytes_written, 100);
@@ -6241,13 +6471,15 @@ mod tests {
         use crate::cdp_runtime::HeapSnapshotStreamProgress;
         use tokio::sync::{mpsc, watch};
 
-        let (updates_tx, mut updates) =
-            watch::channel(Some(HeapSnapshotStreamProgress::default()));
+        let (updates_tx, mut updates) = watch::channel(Some(HeapSnapshotStreamProgress::default()));
         let (output, received) = mpsc::channel(16);
         drop(received);
         let operation = async {
             updates_tx.send_replace(Some(HeapSnapshotStreamProgress {
-                done: 1, total: 1, finished: Some(true), bytes_written: 12,
+                done: 1,
+                total: 1,
+                finished: Some(true),
+                bytes_written: 12,
             }));
             Err::<(), _>("expected command failure")
         };
@@ -6820,13 +7052,15 @@ mod tests {
                 .expect("connect to Chromium");
             let root = connection.root();
             let created = root
-                .target_create_target(TargetCreateTargetParams::new("about:blank".into()))
+                .target()
+                .create_target(TargetCreateTargetParams::new("about:blank".into()))
                 .await
                 .expect("create target");
             let mut attach = TargetAttachToTargetParams::new(created.target_id.clone());
             attach.flatten = Some(true);
             let attached = root
-                .target_attach_to_target(attach)
+                .target()
+                .attach_to_target(attach)
                 .await
                 .expect("attach target");
             let session_key = SessionKey {
@@ -7129,7 +7363,8 @@ mod tests {
                 "{}",
                 include_str!("../tests/transcripts/bounded-evaluation.txt")
             );
-            root.target_close_target(TargetCloseTargetParams::new(created.target_id))
+            root.target()
+                .close_target(TargetCloseTargetParams::new(created.target_id))
                 .await
                 .expect("close target");
         })
@@ -7330,7 +7565,11 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(cpu_profile_sample_durations(&snapshot).unwrap(), expected);
             assert_eq!(
-                snapshot.nodes.iter().map(|node| node.sample_count).sum::<u64>(),
+                snapshot
+                    .nodes
+                    .iter()
+                    .map(|node| node.sample_count)
+                    .sum::<u64>(),
                 samples.len() as u64
             );
             assert_eq!(snapshot.samples, samples);
@@ -7350,12 +7589,8 @@ mod tests {
             assert!(error.to_string().contains("timestamp offset is outside"));
         }
         for (samples, deltas) in [(vec![2], vec![]), (vec![], vec![10])] {
-            let error = cpu_profile_snapshot(
-                "test".into(),
-                None,
-                raw_cpu_profile(samples, deltas),
-            )
-            .unwrap_err();
+            let error = cpu_profile_snapshot("test".into(), None, raw_cpu_profile(samples, deltas))
+                .unwrap_err();
             assert!(error.to_string().contains("samples but"));
         }
 
@@ -7365,7 +7600,11 @@ mod tests {
             raw_cpu_profile(vec![2, 99], vec![100, 0]),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("sample references missing node 99"));
+        assert!(
+            error
+                .to_string()
+                .contains("sample references missing node 99")
+        );
     }
 
     #[test]
@@ -7411,13 +7650,20 @@ mod tests {
         let restored: HeapMappingSnapshot =
             serde_json::from_slice(&serde_json::to_vec(&mapping).unwrap()).unwrap();
         let groups = heap_mapping_groups();
-        let snapshot = project_heap_classes("offline".into(), &groups, None, Some(&restored)).unwrap();
+        let snapshot =
+            project_heap_classes("offline".into(), &groups, None, Some(&restored)).unwrap();
         assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
         assert_eq!(snapshot.classes.len(), 2);
         assert_eq!(snapshot.classes[0].name, "Original");
         assert_eq!(snapshot.classes[0].location.line, 1);
-        assert_eq!(snapshot.classes[0].source_url, "https://example.test/original.ts");
-        assert_ne!(snapshot.classes[0].provenance.frame_id, snapshot.classes[1].provenance.frame_id);
+        assert_eq!(
+            snapshot.classes[0].source_url,
+            "https://example.test/original.ts"
+        );
+        assert_ne!(
+            snapshot.classes[0].provenance.frame_id,
+            snapshot.classes[1].provenance.frame_id
+        );
         assert_eq!(snapshot.analysis.script_mappings[0].hash, "captured-hash");
         assert_eq!(restored.connection_generation, 42);
     }
@@ -7426,33 +7672,65 @@ mod tests {
     fn heap_mapping_reports_legacy_absent_and_invalid_maps() {
         let groups = heap_mapping_groups();
         let legacy = project_heap_classes("old".into(), &groups, None, None).unwrap();
-        assert_eq!(legacy.analysis.mapping_status, HeapMappingStatus::NotAttempted);
-        assert!(legacy.analysis.script_mappings.iter().all(|script| script.diagnostic.is_some()));
+        assert_eq!(
+            legacy.analysis.mapping_status,
+            HeapMappingStatus::NotAttempted
+        );
+        assert!(
+            legacy
+                .analysis
+                .script_mappings
+                .iter()
+                .all(|script| script.diagnostic.is_some())
+        );
         let mut mapping = heap_mapping_fixture();
         for script in &mut mapping.scripts {
             script.source_map = None;
             script.mapping_status = HeapMappingStatus::NoMapSupplied;
         }
         let absent = project_heap_classes("absent".into(), &groups, None, Some(&mapping)).unwrap();
-        assert_eq!(absent.analysis.mapping_status, HeapMappingStatus::NoMapSupplied);
+        assert_eq!(
+            absent.analysis.mapping_status,
+            HeapMappingStatus::NoMapSupplied
+        );
         assert_eq!(absent.classes[0].source_url, "https://example.test/app.js");
         mapping.scripts[0].source_map = Some("{broken".into());
-        let invalid = project_heap_classes("invalid".into(), &groups, None, Some(&mapping)).unwrap();
-        assert_eq!(invalid.analysis.script_mappings[0].status, HeapMappingStatus::MapLoadingFailed);
-        assert!(invalid.analysis.script_mappings[0].diagnostic.as_ref().unwrap().contains("invalid source map"));
+        let invalid =
+            project_heap_classes("invalid".into(), &groups, None, Some(&mapping)).unwrap();
+        assert_eq!(
+            invalid.analysis.script_mappings[0].status,
+            HeapMappingStatus::MapLoadingFailed
+        );
+        assert!(
+            invalid.analysis.script_mappings[0]
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .contains("invalid source map")
+        );
     }
 
     #[test]
     fn heap_maps_without_sources_content_still_project_locations() {
         let mut mapping = heap_mapping_fixture();
         for script in &mut mapping.scripts {
-            let mut map: serde_json::Value = serde_json::from_str(script.source_map.as_ref().unwrap()).unwrap();
+            let mut map: serde_json::Value =
+                serde_json::from_str(script.source_map.as_ref().unwrap()).unwrap();
             map.as_object_mut().unwrap().remove("sourcesContent");
             script.source_map = Some(map.to_string());
         }
-        let snapshot = project_heap_classes("without-content".into(), &heap_mapping_groups(), None, Some(&mapping)).unwrap();
+        let snapshot = project_heap_classes(
+            "without-content".into(),
+            &heap_mapping_groups(),
+            None,
+            Some(&mapping),
+        )
+        .unwrap();
         assert_eq!(snapshot.analysis.mapping_status, HeapMappingStatus::Mapped);
-        assert_eq!(snapshot.classes[0].source_url, "https://example.test/original.ts");
+        assert_eq!(
+            snapshot.classes[0].source_url,
+            "https://example.test/original.ts"
+        );
         assert_eq!(snapshot.classes[0].name, "a");
     }
 
@@ -7461,22 +7739,36 @@ mod tests {
         let mut mapping = heap_mapping_fixture();
         let original = mapping.clone();
         let mut supply = HeapSourceMapSupply {
-            script_id: "7".into(), script_hash: "wrong-hash".into(),
+            script_id: "7".into(),
+            script_hash: "wrong-hash".into(),
             source_map_url: "file:///maps/app.js.map".into(),
             source_map: mapping.scripts[0].source_map.clone().unwrap(),
         };
-        assert!(supply_heap_source_map(&mut mapping, supply.clone()).unwrap_err().to_string().contains("hash"));
+        assert!(
+            supply_heap_source_map(&mut mapping, supply.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("hash")
+        );
         assert_eq!(mapping, original);
         supply.script_hash = "captured-hash".into();
         supply.source_map = supply.source_map.replace("\"app.js\"", "\"other.js\"");
-        assert!(supply_heap_source_map(&mut mapping, supply.clone()).unwrap_err().to_string().contains("file"));
+        assert!(
+            supply_heap_source_map(&mut mapping, supply.clone())
+                .unwrap_err()
+                .to_string()
+                .contains("file")
+        );
         assert_eq!(mapping, original);
         supply.source_map = "{invalid".into();
         assert!(supply_heap_source_map(&mut mapping, supply.clone()).is_err());
         assert_eq!(mapping, original);
         supply.source_map = original.scripts[0].source_map.clone().unwrap();
         supply_heap_source_map(&mut mapping, supply).unwrap();
-        assert_eq!(mapping.scripts[0].source_map_url.as_deref(), Some("file:///maps/app.js.map"));
+        assert_eq!(
+            mapping.scripts[0].source_map_url.as_deref(),
+            Some("file:///maps/app.js.map")
+        );
         assert_eq!(mapping.scripts[0].hash, "captured-hash");
     }
 
@@ -7500,11 +7792,21 @@ mod tests {
     }
 
     fn heap_mapping_groups() -> Vec<HeapConstructorGroup> {
-        [7, 8].into_iter().map(|script_id| HeapConstructorGroup {
-            script_id, generated_name: "a".into(), line: 0, column: 0,
-            instance_count: 1, shallow_size: 16,
-            instances: vec![crate::heap_snapshot::HeapInstanceRecord { heap_object_id: script_id as u64, shallow_size: 16 }],
-        }).collect()
+        [7, 8]
+            .into_iter()
+            .map(|script_id| HeapConstructorGroup {
+                script_id,
+                generated_name: "a".into(),
+                line: 0,
+                column: 0,
+                instance_count: 1,
+                shallow_size: 16,
+                instances: vec![crate::heap_snapshot::HeapInstanceRecord {
+                    heap_object_id: script_id as u64,
+                    shallow_size: 16,
+                }],
+            })
+            .collect()
     }
 
     #[test]

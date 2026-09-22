@@ -1,17 +1,18 @@
-mod service;
-mod context;
-mod source;
-mod capture;
-mod target_debugger;
-mod cdp_access;
-mod relay;
 mod browser_automation;
+mod capture;
+mod cdp_access;
+mod context;
 mod coverage;
 mod cpu_profiler;
 mod heap_profiler;
+mod relay;
+mod service;
+mod source;
+mod target_debugger;
 
 use crate::service_api::{
-    ServiceApi, ContextApi, SourceApi, CaptureApi, TargetDebuggerApi, CdpAccessApi, RelayApi, BrowserAutomationApi, CoverageApi, CpuProfilerApi, HeapProfilerApi,
+    BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, CoverageApi, CpuProfilerApi,
+    HeapProfilerApi, RelayApi, ServiceApi, SourceApi, TargetDebuggerApi,
 };
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -61,25 +62,24 @@ use crate::service_api::{
     BreakpointPendingReason, BreakpointSnapshot, BreakpointSpec, BreakpointStatus,
     CanonicalTargetSnapshot, CaptureKind, CaptureSnapshot, CompactedSourceEdgeSnapshot,
     CompactedSourceGraphSnapshot, CompactedSourceNodeSnapshot, ConnectionConfiguration,
-    ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
-    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot,
-    EvaluationSnapshot, HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult,
-    HeapClassSnapshot, HeapDiffSnapshot, HeapDominatorSnapshot, HeapEdgePolicy,
-    HeapNodeSelectionSnapshot, HeapNodeSelector, HeapPathOptions, HeapPathSnapshot,
-    HeapReferenceDirection, HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
-    LogpointSpec, MutationOptions, ObservationCursor, ObservationResult, PlaywrightProxyEndpoint,
-    ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseState, RelayEndpoint,
-    ResourceCapabilitySnapshot, ResourceFrontierSnapshot, ResourceGraphSnapshot,
-    ResourceRelationSnapshot, ResourceSnapshot, ScreenshotSnapshot, ServiceInfo,
-    SourceContentSnapshot, SourceDisplayOptions, SourceFormattingMode, SourceFormattingRule,
-    SourceFormattingSettings, SourceGraphViewSnapshot, SourceMappingSnapshot, SourceMatchSnapshot,
-    SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo, SourceSuffixRewriteSnapshot,
-    SourceTreeKind, SourceTreeSnapshot, SourceViewPreference, StepKind as ApiStepKind,
-    TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult, TargetAttachmentState,
-    TargetDebuggerSnapshot, TargetSnapshot, TargetWaitPredicate, UncompactedProjectionSnapshot,
-    UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
-    UncompactedSourceRevisionSnapshot, ValueInspectionOptions, ValueSelector, ValueSnapshot,
-    VariableSnapshot, breakpoint_applies_to_target,
+    ConnectionRef, ConnectionSnapshot, ConnectionStatus, ContextEventSnapshot, ContextObservation,
+    ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
+    HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot,
+    HeapDominatorSnapshot, HeapEdgePolicy, HeapNodeSelectionSnapshot, HeapNodeSelector,
+    HeapPathOptions, HeapPathSnapshot, HeapReferenceDirection, HeapReferencesSnapshot,
+    HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec, MutationOptions, ObservationCursor,
+    ObservationResult, PlaywrightProxyEndpoint, ProcessTreeSnapshot, PromiseSelectionSnapshot,
+    PromiseState, RelayEndpoint, ResourceCapabilitySnapshot, ResourceFrontierSnapshot,
+    ResourceGraphSnapshot, ResourceRelationSnapshot, ResourceSnapshot, ScreenshotSnapshot,
+    ServiceInfo, SourceContentSnapshot, SourceDisplayOptions, SourceFormattingMode,
+    SourceFormattingRule, SourceFormattingSettings, SourceGraphViewSnapshot, SourceMappingSnapshot,
+    SourceMatchSnapshot, SourceSearchOptions, SourceSearchSnapshot, SourceSnapshotInfo,
+    SourceSuffixRewriteSnapshot, SourceTreeKind, SourceTreeSnapshot, SourceViewPreference,
+    StepKind as ApiStepKind, TargetAttachOptions, TargetAttachmentOutcome, TargetAttachmentResult,
+    TargetAttachmentState, TargetDebuggerSnapshot, TargetRef, TargetSnapshot, TargetWaitPredicate,
+    UncompactedProjectionSnapshot, UncompactedSourceEdgeSnapshot, UncompactedSourceGraphSnapshot,
+    UncompactedSourceNodeSnapshot, UncompactedSourceRevisionSnapshot, ValueInspectionOptions,
+    ValueSelector, ValueSnapshot, VariableSnapshot, breakpoint_applies_to_target,
 };
 use crate::source_graph::{IdentityBasis, ProjectionKind, SourceRevision};
 use crate::source_search::{
@@ -838,16 +838,24 @@ impl Drop for CaptureReservationGuard {
                 if let Some(debugger) = heap_debugger {
                     // Keep the name reserved until the serialized target command and scratch cleanup finish.
                     let metadata = &reservation.metadata;
-                    let pending = service.state.lock().await.capture_reservations
+                    let pending = service
+                        .state
+                        .lock()
+                        .await
+                        .capture_reservations
                         .get(&(metadata.context_id.clone(), metadata.name.clone()))
                         .is_some_and(|current| {
                             current.metadata.storage_id == metadata.storage_id
                                 && current.completed.is_none()
                         });
                     if pending
-                        && let Err(error) = debugger.delete_stored_capture(metadata.name.clone()).await
+                        && let Err(error) =
+                            debugger.delete_stored_capture(metadata.name.clone()).await
                     {
-                        eprintln!("failed to clean up interrupted heap capture '{}': {error}", metadata.name);
+                        eprintln!(
+                            "failed to clean up interrupted heap capture '{}': {error}",
+                            metadata.name
+                        );
                     }
                 }
                 if service.abandon_capture(&reservation).await
@@ -988,12 +996,18 @@ fn select_stored_capture<'a>(
     });
     let resolved_selector = canonical_target.as_ref().map(|target| {
         crate::target_selector::resolved_target_selector(
-            &target.connection_id, &target.target_id, target.connection_generation, target_id,
+            &target.connection_id,
+            &target.target_id,
+            target.connection_generation,
+            target_id,
         )
     });
     let target_id = resolved_selector.as_deref().or(target_id);
-    let connection_id = connection_id.or_else(||
-        canonical_target.as_ref().map(|target| target.connection_id.as_str()));
+    let connection_id = connection_id.or_else(|| {
+        canonical_target
+            .as_ref()
+            .map(|target| target.connection_id.as_str())
+    });
     let matches = |capture: &&StoredCapture| {
         let metadata = &capture.metadata;
         metadata.context_id == context_id
@@ -1435,7 +1449,6 @@ impl DebuggerService {
     }
 }
 
-
 impl DebuggerService {
     async fn promote_completed_capture(
         &self,
@@ -1498,8 +1511,14 @@ impl DebuggerService {
         kind: CaptureKind,
     ) -> Result<CaptureReservation, JsonRpcError> {
         self.reserve_capture_optional(
-            context_id, connection_id, target_id, connection_generation, Some(name), kind,
-        ).await
+            context_id,
+            connection_id,
+            target_id,
+            connection_generation,
+            Some(name),
+            kind,
+        )
+        .await
     }
 
     async fn reserve_capture_optional(
@@ -1518,18 +1537,24 @@ impl DebuggerService {
             Some(name) => {
                 validate_id("capture", &name)?;
                 if crate::service_api::capture_relative_index(&name)
-                    .map_err(invalid_params)?.is_some()
+                    .map_err(invalid_params)?
+                    .is_some()
                 {
-                    return Err(invalid_params("relative capture selectors cannot be used as permanent capture IDs"));
+                    return Err(invalid_params(
+                        "relative capture selectors cannot be used as permanent capture IDs",
+                    ));
                 }
                 name
             }
             None => loop {
                 let candidate = format!("{}-{next_capture_id}", capture_prefix(kind));
-                next_capture_id = next_capture_id.checked_add(1)
+                next_capture_id = next_capture_id
+                    .checked_add(1)
                     .ok_or_else(|| invalid_state("capture ID sequence exhausted"))?;
                 let key = (context_id.to_owned(), candidate.clone());
-                if !state.captures.contains_key(&key) && !state.capture_reservations.contains_key(&key) {
+                if !state.captures.contains_key(&key)
+                    && !state.capture_reservations.contains_key(&key)
+                {
                     break candidate;
                 }
             },
@@ -1707,7 +1732,8 @@ impl DebuggerService {
             .completed = Some(completed.clone());
         let previous = state.clone();
         let publication_order = state.next_publication_order.max(1);
-        state.next_publication_order = publication_order.checked_add(1)
+        state.next_publication_order = publication_order
+            .checked_add(1)
             .ok_or_else(|| invalid_state("capture publication sequence exhausted"))?;
         state.capture_reservations.remove(&key);
         state.captures.insert(
@@ -1716,7 +1742,10 @@ impl DebuggerService {
                 metadata: metadata.clone(),
                 payload: completed.payload,
                 publication_order,
-                heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
+                heap_mapping: completed
+                    .heap_result
+                    .as_ref()
+                    .and_then(|result| result.mapping.clone()),
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -1745,7 +1774,8 @@ impl DebuggerService {
         }
         let previous = state.clone();
         let publication_order = state.next_publication_order.max(1);
-        state.next_publication_order = publication_order.checked_add(1)
+        state.next_publication_order = publication_order
+            .checked_add(1)
             .ok_or_else(|| invalid_state("capture publication sequence exhausted"))?;
         state.capture_reservations.remove(&key);
         state.captures.insert(
@@ -1754,7 +1784,10 @@ impl DebuggerService {
                 metadata: metadata.clone(),
                 payload: completed.payload.clone(),
                 publication_order,
-                heap_mapping: completed.heap_result.as_ref().and_then(|result| result.mapping.clone()),
+                heap_mapping: completed
+                    .heap_result
+                    .as_ref()
+                    .and_then(|result| result.mapping.clone()),
             },
         );
         self.persist_or_restore(&mut state, previous)?;
@@ -1905,13 +1938,26 @@ impl DebuggerService {
             if owner.runtime.is_direct_debugger()
                 && owner.key.2 == synthetic_node_target_id(&owner.key.1)
             {
-                self.disconnect_connection(ctx, owner.key.0.clone(), owner.key.1.clone())
-                    .await?;
+                self.disconnect_connection(
+                    ctx,
+                    crate::service_api::ConnectionRef {
+                        context_id: owner.key.0.clone(),
+                        connection_id: owner.key.1.clone(),
+                    },
+                )
+                .await?;
                 if owner_is_requested {
                     let connected = self
-                        .connect_connection(ctx, context_id.clone(), connection_id.clone())
+                        .connect_connection(
+                            ctx,
+                            crate::service_api::ConnectionRef {
+                                context_id: context_id.clone(),
+                                connection_id: connection_id.clone(),
+                            },
+                        )
                         .await?;
-                    resolved_generation = connected.connections
+                    resolved_generation = connected
+                        .connections
                         .iter()
                         .find(|connection| connection.id == connection_id)
                         .ok_or_else(|| not_found("connection", &connection_id))?
@@ -2701,14 +2747,18 @@ impl DebuggerService {
         }
         let matches = crate::target_selector::select_target_matches(
             &candidates,
-            context.connections.iter().map(|(id, connection)| (id.as_str(), connection.generation)),
+            context
+                .connections
+                .iter()
+                .map(|(id, connection)| (id.as_str(), connection.generation)),
             Some(selector),
             |target| crate::target_selector::TargetSelectorCandidate {
                 target: &target.target,
                 connection_id: &target.connection_id,
                 generation: target.connection_generation,
             },
-        ).map_err(|message| invalid_params(&message))?;
+        )
+        .map_err(|message| invalid_params(&message))?;
         match matches.as_slice() {
             [target] => Ok((*target).clone()),
             [] => Err(not_found("target selector", selector)),
@@ -2766,7 +2816,9 @@ impl DebuggerService {
             .collect::<Vec<_>>();
         let matches = crate::target_selector::select_target_matches(
             &candidates,
-            state.contexts[context_id].connections.iter()
+            state.contexts[context_id]
+                .connections
+                .iter()
                 .map(|(id, connection)| (id.as_str(), connection.generation)),
             Some(selector),
             |target| crate::target_selector::TargetSelectorCandidate {
@@ -2774,10 +2826,11 @@ impl DebuggerService {
                 connection_id,
                 generation: connection.generation,
             },
-        ).map_err(|message| invalid_params(&message))?
-            .into_iter()
-            .map(|target| target.target_id.clone())
-            .collect::<Vec<_>>();
+        )
+        .map_err(|message| invalid_params(&message))?
+        .into_iter()
+        .map(|target| target.target_id.clone())
+        .collect::<Vec<_>>();
         match matches.as_slice() {
             [target_id] => Ok(target_id.clone()),
             [] => Err(not_found("target selector", selector)),
@@ -2786,11 +2839,13 @@ impl DebuggerService {
                 matches.len(),
                 matches
                     .iter()
-                    .map(|target_id| crate::target_selector::qualified_target_selector(
-                        connection_id,
-                        target_id,
-                        connection.generation,
-                    ))
+                    .map(
+                        |target_id| crate::target_selector::qualified_target_selector(
+                            connection_id,
+                            target_id,
+                            connection.generation,
+                        )
+                    )
                     .collect::<Vec<_>>()
                     .join(", ")
             ))),
@@ -2922,7 +2977,7 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
     runtime.retire_session(session_id);
     let mut detach = TargetDetachFromTargetParams::new();
     detach.session_id = Some(session_id.to_owned());
-    let _ = runtime.root().target_detach_from_target(detach).await;
+    let _ = runtime.root().target().detach_from_target(detach).await;
 }
 
 fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> String {
@@ -3987,7 +4042,8 @@ async fn connect_runtime(
     }
     let version = match connection
         .root()
-        .browser_get_version(BrowserGetVersionParams::new())
+        .browser()
+        .get_version(BrowserGetVersionParams::new())
         .await
     {
         Ok(version) => version,
@@ -3998,7 +4054,8 @@ async fn connect_runtime(
     };
     if let Err(error) = connection
         .root()
-        .target_set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+        .target()
+        .set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
         .await
     {
         connection.close().await;
@@ -4006,7 +4063,8 @@ async fn connect_runtime(
     }
     let targets = match connection
         .root()
-        .target_get_targets(TargetGetTargetsParams::new())
+        .target()
+        .get_targets(TargetGetTargetsParams::new())
         .await
     {
         Ok(targets) => targets.target_infos,
@@ -4578,14 +4636,23 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
 }
 
 fn migrate_capture_order(stored: &mut StoredServiceState) {
-    let mut keys = stored.captures.iter()
-        .map(|capture| (capture.metadata.context_id.clone(), capture.metadata.name.clone()))
+    let mut keys = stored
+        .captures
+        .iter()
+        .map(|capture| {
+            (
+                capture.metadata.context_id.clone(),
+                capture.metadata.name.clone(),
+            )
+        })
         .collect::<BTreeSet<_>>();
     let mut next_id = 1_u64;
     for (index, capture) in stored.captures.iter_mut().enumerate() {
         capture.publication_order = index as u64 + 1;
         let metadata = &mut capture.metadata;
-        if crate::service_api::capture_relative_index(&metadata.name).is_ok_and(|index| index.is_some()) {
+        if crate::service_api::capture_relative_index(&metadata.name)
+            .is_ok_and(|index| index.is_some())
+        {
             loop {
                 let name = format!("{}-{next_id}", capture_prefix(metadata.kind));
                 next_id += 1;
@@ -5152,21 +5219,25 @@ fn capture_payload_rpc_error(error: ServicePersistenceError) -> JsonRpcError {
 }
 
 fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(), String> {
-    static INTERFACE: OnceLock<Result<linkrpc::prelude::LinkRpcInterfaceSchema, String>> =
+    static INTERFACES: OnceLock<Vec<(String, linkrpc::prelude::LinkRpcInterfaceSchema)>> =
         OnceLock::new();
-    let interface = INTERFACE
+    let (member, interface) = INTERFACES
         .get_or_init(|| {
-            crate::protocol_schema::import_typed_cdp_protocol(
-                include_str!("../node_modules/devtools-protocol/json/browser_protocol.json"),
-                include_str!("../node_modules/devtools-protocol/json/js_protocol.json"),
-            )
-            .map_err(|error| error.to_string())
+            crate::cdp::interfaces()
+                .into_iter()
+                .map(|(prefix, interface)| (prefix, interface.to_schema()))
+                .collect()
         })
-        .as_ref()
-        .map_err(Clone::clone)?;
+        .iter()
+        .find_map(|(prefix, interface)| {
+            method
+                .strip_prefix(prefix)
+                .map(|member| (member, interface))
+        })
+        .ok_or_else(|| format!("unknown request method '{method}'"))?;
     let method_schema = interface
         .methods
-        .get(method)
+        .get(member)
         .filter(|schema| schema.result.is_some())
         .ok_or_else(|| format!("unknown request method '{method}'"))?;
     let mut schema = method_schema.params.clone();
@@ -5271,7 +5342,11 @@ where
             delivery_error = progress.send(update).await.err();
         }
     }
-    HeapStreamOutcome { result, cancellation, delivery_error }
+    HeapStreamOutcome {
+        result,
+        cancellation,
+        delivery_error,
+    }
 }
 
 async fn finish_heap_streamed_call<T>(
@@ -5754,75 +5829,203 @@ mod tests {
     }
 
     fn capture_catalog_service() -> (PathBuf, DebuggerService) {
-        let root = std::env::current_dir().unwrap().join("target")
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
             .join(format!("capture-catalog-{}", random_instance_id().unwrap()));
         let mut state = ServiceState::default();
         insert_context_with_targets(
-            &mut state, "test",
-            [("runtime", 1, vec![
-                target("target-a", "A", "https://a.test"),
-                target("target-b", "B", "https://b.test"),
-            ])],
+            &mut state,
+            "test",
+            [(
+                "runtime",
+                1,
+                vec![
+                    target("target-a", "A", "https://a.test"),
+                    target("target-b", "B", "https://b.test"),
+                ],
+            )],
         );
-        (root.clone(), service_with_state(root.join("service.json"), state))
+        (
+            root.clone(),
+            service_with_state(root.join("service.json"), state),
+        )
     }
 
     fn empty_coverage(timestamp_micros: u64) -> CapturePayload {
         CapturePayload::Coverage(CoverageSnapshot {
             capture_id: None,
-            timestamp_micros, sources: Vec::new(), analysis: None,
+            timestamp_micros,
+            sources: Vec::new(),
+            analysis: None,
         })
     }
 
     #[tokio::test]
     async fn generated_capture_ids_and_publication_order_survive_restart() {
         let (root, service) = capture_catalog_service();
-        let first = service.reserve_capture_optional(
-            "test", "runtime", "target-a", 1, None, CaptureKind::Coverage,
-        ).await.unwrap();
-        let second = service.reserve_capture_optional(
-            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
-        ).await.unwrap();
+        let first = service
+            .reserve_capture_optional(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                None,
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
+        let second = service
+            .reserve_capture_optional(
+                "test",
+                "runtime",
+                "target-b",
+                1,
+                None,
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
         assert_eq!(first.metadata.name, "cov-1");
         assert_eq!(second.metadata.name, "cov-2");
-        service.store_capture(&second, empty_coverage(2)).await.unwrap();
-        service.store_capture(&first, empty_coverage(1)).await.unwrap();
-        let snapshot = service.get_stored_coverage(
-            &CallCtx::default(), "test".into(), ".1".into(), None, None, None, None, None,
-        ).await.unwrap();
+        service
+            .store_capture(&second, empty_coverage(2))
+            .await
+            .unwrap();
+        service
+            .store_capture(&first, empty_coverage(1))
+            .await
+            .unwrap();
+        let snapshot = service
+            .get_stored_coverage(
+                &CallCtx::default(),
+                "test".into(),
+                ".1".into(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
         assert_eq!(snapshot.capture_id.as_deref(), Some("cov-1"));
         let restored = load_state(&root.join("service.json")).unwrap();
         for selector in [".", ".1"] {
-            assert_eq!(select_stored_capture(
-                &restored, "test", selector, Some(CaptureKind::Coverage), None, None,
-            ).unwrap().metadata.name, "cov-1");
+            assert_eq!(
+                select_stored_capture(
+                    &restored,
+                    "test",
+                    selector,
+                    Some(CaptureKind::Coverage),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .metadata
+                .name,
+                "cov-1"
+            );
         }
-        assert_eq!(select_stored_capture(
-            &restored, "test", ".2", Some(CaptureKind::Coverage), None, None,
-        ).unwrap().metadata.name, "cov-2");
-        assert_eq!(select_stored_capture(
-            &restored, "test", ".", Some(CaptureKind::Coverage), Some("target-b"), None,
-        ).unwrap().metadata.name, "cov-2");
+        assert_eq!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".2",
+                Some(CaptureKind::Coverage),
+                None,
+                None,
+            )
+            .unwrap()
+            .metadata
+            .name,
+            "cov-2"
+        );
+        assert_eq!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".",
+                Some(CaptureKind::Coverage),
+                Some("target-b"),
+                None,
+            )
+            .unwrap()
+            .metadata
+            .name,
+            "cov-2"
+        );
         for target in ["runtime/target-b", "runtime/target-b@1"] {
-            assert_eq!(select_stored_capture(
-                &restored, "test", ".", Some(CaptureKind::Coverage), Some(target), None,
-            ).unwrap().metadata.name, "cov-2");
+            assert_eq!(
+                select_stored_capture(
+                    &restored,
+                    "test",
+                    ".",
+                    Some(CaptureKind::Coverage),
+                    Some(target),
+                    None,
+                )
+                .unwrap()
+                .metadata
+                .name,
+                "cov-2"
+            );
         }
-        assert!(select_stored_capture(
-            &restored, "test", ".", Some(CaptureKind::Coverage), Some("runtime/target-b@2"), None,
-        ).is_err());
-        assert!(select_stored_capture(
-            &restored, "test", ".", Some(CaptureKind::Coverage), None, Some("other-runtime"),
-        ).is_err());
-        assert!(select_stored_capture(
-            &restored, "test", ".2", Some(CaptureKind::Coverage), Some("target-b"), None,
-        ).is_err());
-        assert!(select_stored_capture(
-            &restored, "test", ".", Some(CaptureKind::CpuProfile), None, None,
-        ).is_err());
-        assert!(select_stored_capture(
-            &restored, "test", "cov-1", Some(CaptureKind::Coverage), Some("target-b"), None,
-        ).is_err());
+        assert!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".",
+                Some(CaptureKind::Coverage),
+                Some("runtime/target-b@2"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".",
+                Some(CaptureKind::Coverage),
+                None,
+                Some("other-runtime"),
+            )
+            .is_err()
+        );
+        assert!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".2",
+                Some(CaptureKind::Coverage),
+                Some("target-b"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            select_stored_capture(
+                &restored,
+                "test",
+                ".",
+                Some(CaptureKind::CpuProfile),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            select_stored_capture(
+                &restored,
+                "test",
+                "cov-1",
+                Some(CaptureKind::Coverage),
+                Some("target-b"),
+                None,
+            )
+            .is_err()
+        );
         assert_eq!(restored.next_capture_id, 3);
         assert_eq!(restored.next_publication_order, 3);
         drop(service);
@@ -5832,28 +6035,83 @@ mod tests {
     #[tokio::test]
     async fn automatic_names_skip_named_reservations_and_are_never_reused_after_deletion() {
         let (root, service) = capture_catalog_service();
-        service.reserve_capture(
-            "test", "runtime", "target-a", 1, "cov-1".into(), CaptureKind::CpuProfile,
-        ).await.unwrap();
-        let automatic = service.reserve_capture_optional(
-            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
-        ).await.unwrap();
+        service
+            .reserve_capture(
+                "test",
+                "runtime",
+                "target-a",
+                1,
+                "cov-1".into(),
+                CaptureKind::CpuProfile,
+            )
+            .await
+            .unwrap();
+        let automatic = service
+            .reserve_capture_optional(
+                "test",
+                "runtime",
+                "target-b",
+                1,
+                None,
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
         assert_eq!(automatic.metadata.name, "cov-2");
-        service.store_capture(&automatic, empty_coverage(1)).await.unwrap();
-        service.delete_capture(&CallCtx::default(), "test".into(), "cov-2".into()).await.unwrap();
-        assert_eq!(load_state(&root.join("service.json")).unwrap().next_capture_id, 3);
-        let next = service.reserve_capture_optional(
-            "test", "runtime", "target-b", 1, None, CaptureKind::Coverage,
-        ).await.unwrap();
+        service
+            .store_capture(&automatic, empty_coverage(1))
+            .await
+            .unwrap();
+        service
+            .delete_capture(&CallCtx::default(), "test".into(), "cov-2".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            load_state(&root.join("service.json"))
+                .unwrap()
+                .next_capture_id,
+            3
+        );
+        let next = service
+            .reserve_capture_optional(
+                "test",
+                "runtime",
+                "target-b",
+                1,
+                None,
+                CaptureKind::Coverage,
+            )
+            .await
+            .unwrap();
         assert_eq!(next.metadata.name, "cov-3");
         for selector in [".", ".1", ".2", ".0"] {
-            assert!(service.reserve_capture(
-                "test", "runtime", "target-a", 1, selector.into(), CaptureKind::Coverage,
-            ).await.is_err());
+            assert!(
+                service
+                    .reserve_capture(
+                        "test",
+                        "runtime",
+                        "target-a",
+                        1,
+                        selector.into(),
+                        CaptureKind::Coverage,
+                    )
+                    .await
+                    .is_err()
+            );
         }
-        assert!(service.reserve_capture(
-            "test", "runtime", "target-b", 1, "cov-1".into(), CaptureKind::Coverage,
-        ).await.is_err());
+        assert!(
+            service
+                .reserve_capture(
+                    "test",
+                    "runtime",
+                    "target-b",
+                    1,
+                    "cov-1".into(),
+                    CaptureKind::Coverage,
+                )
+                .await
+                .is_err()
+        );
         drop(service);
         fs::remove_dir_all(root).unwrap();
     }
@@ -5869,7 +6127,13 @@ mod tests {
         );
         let named = stored_capture_from_payload(
             &root.join("service.json"),
-            capture_metadata("test", "cov-1", CaptureKind::Coverage, "target-b", "runtime"),
+            capture_metadata(
+                "test",
+                "cov-1",
+                CaptureKind::Coverage,
+                "target-b",
+                "runtime",
+            ),
             payload,
         );
         let legacy_payload = legacy.payload.clone();
@@ -5883,10 +6147,15 @@ mod tests {
         assert_eq!(migrated.payload.path, legacy_payload.path);
         assert_eq!(migrated.payload.sha256, legacy_payload.sha256);
         assert_eq!(migrated.metadata.storage_id, "storage-.");
-        assert_eq!(load_state(&root.join("service.json")).unwrap().captures.len(), 2);
-        let persisted: serde_json::Value = serde_json::from_slice(
-            &fs::read(root.join("service.json")).unwrap(),
-        ).unwrap();
+        assert_eq!(
+            load_state(&root.join("service.json"))
+                .unwrap()
+                .captures
+                .len(),
+            2
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("service.json")).unwrap()).unwrap();
         assert_eq!(persisted["schemaVersion"], 6);
         drop(service);
         fs::remove_dir_all(root).unwrap();
@@ -5908,9 +6177,17 @@ mod tests {
         let legacy = serde_json::json!({"timestampMicros": 1, "sources": []});
         let mut snapshot: CoverageSnapshot = serde_json::from_value(legacy).unwrap();
         assert_eq!(snapshot.capture_id, None);
-        assert!(serde_json::to_value(&snapshot).unwrap().get("captureId").is_none());
+        assert!(
+            serde_json::to_value(&snapshot)
+                .unwrap()
+                .get("captureId")
+                .is_none()
+        );
         snapshot.capture_id = Some("cov-1".into());
-        assert_eq!(serde_json::to_value(snapshot).unwrap()["captureId"], "cov-1");
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["captureId"],
+            "cov-1"
+        );
     }
 
     #[tokio::test]
@@ -6019,9 +6296,13 @@ mod tests {
         let retried = service
             .stop_cpu_profile(
                 &CallCtx::default(),
-                "test".into(),
-                "runtime".into(),
-                "target-a".into(),
+                crate::service_api::TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "test".into(),
+                        connection_id: "runtime".into(),
+                    },
+                    target_id: "target-a".into(),
+                },
                 Some("profile".into()),
             )
             .await
@@ -6049,7 +6330,11 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    fn exclusion_test_coverage(root_count: u64, child_count: u64, enriched: bool) -> CoverageSnapshot {
+    fn exclusion_test_coverage(
+        root_count: u64,
+        child_count: u64,
+        enriched: bool,
+    ) -> CoverageSnapshot {
         let mut snapshot: CoverageSnapshot = serde_json::from_value(serde_json::json!({
             "timestampMicros": 42,
             "sources": [{
@@ -6064,15 +6349,20 @@ mod tests {
                     ]
                 }]
             }]
-        })).unwrap();
+        }))
+        .unwrap();
         if enriched {
             let function = &mut snapshot.sources[0].functions[0];
             for range in &mut function.ranges {
                 range.authored_start = Some(crate::service_api::SourceLocation {
-                    source_url: "src/app.ts".into(), line: range.start_offset + 1, column: 1,
+                    source_url: "src/app.ts".into(),
+                    line: range.start_offset + 1,
+                    column: 1,
                 });
                 range.authored_end = Some(crate::service_api::SourceLocation {
-                    source_url: "src/app.ts".into(), line: range.end_offset, column: 1,
+                    source_url: "src/app.ts".into(),
+                    line: range.end_offset,
+                    column: 1,
                 });
             }
             function.effective_ranges = function.ranges.clone();
@@ -6091,15 +6381,22 @@ mod tests {
             let baseline = exclusion_test_coverage(1, 0, false);
             let mut payloads = Vec::new();
             for (index, (name, snapshot)) in [
-                ("baseline", baseline.clone()), ("selected", selected.clone()),
-            ].into_iter().enumerate() {
+                ("baseline", baseline.clone()),
+                ("selected", selected.clone()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let mut capture = stored_capture_from_payload(
                     &persistence_path,
                     capture_metadata("test", name, CaptureKind::Coverage, "target-a", "runtime"),
                     CapturePayload::Coverage(snapshot),
                 );
                 capture.publication_order = index as u64 + 1;
-                payloads.push((capture.payload.clone(), fs::read(&capture.payload.path).unwrap()));
+                payloads.push((
+                    capture.payload.clone(),
+                    fs::read(&capture.payload.path).unwrap(),
+                ));
                 state.captures.insert(("test".into(), name.into()), capture);
             }
             // No contexts, connections, or live debuggers are needed to read stored captures.
@@ -6107,10 +6404,19 @@ mod tests {
             let catalog_bytes = fs::read(&persistence_path).unwrap();
             let restored = load_state(&persistence_path).unwrap();
             let service = service_with_state(persistence_path.clone(), restored);
-            let shown = service.get_stored_coverage(
-                &CallCtx::default(), "test".into(), ".".into(), None, None, None,
-                Some("**/app.ts".into()), Some(".2".into()),
-            ).await.unwrap();
+            let shown = service
+                .get_stored_coverage(
+                    &CallCtx::default(),
+                    "test".into(),
+                    ".".into(),
+                    None,
+                    None,
+                    None,
+                    Some("**/app.ts".into()),
+                    Some(".2".into()),
+                )
+                .await
+                .unwrap();
             assert_eq!(shown.capture_id.as_deref(), Some("selected"));
             let function = &shown.sources[0].functions[0];
             assert_eq!(function.ranges.len(), 1);
@@ -6118,7 +6424,10 @@ mod tests {
             assert_eq!(function.ranges[0].count, 4);
             if enriched {
                 assert_eq!(function.effective_ranges, function.ranges);
-                assert_eq!(function.authored_location, function.ranges[0].authored_start);
+                assert_eq!(
+                    function.authored_location,
+                    function.ranges[0].authored_start
+                );
             } else {
                 assert!(function.effective_ranges.is_empty());
             }
@@ -6126,15 +6435,34 @@ mod tests {
             assert_eq!(json["sources"][0]["functions"][0]["ranges"][0]["count"], 4);
             for (name, mut original) in [("selected", selected), ("baseline", baseline)] {
                 original.capture_id = Some(name.into());
-                let unchanged = service.get_stored_coverage(
-                    &CallCtx::default(), "test".into(), name.into(), None, None, None, None, None,
-                ).await.unwrap();
+                let unchanged = service
+                    .get_stored_coverage(
+                        &CallCtx::default(),
+                        "test".into(),
+                        name.into(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
                 assert_eq!(unchanged, original);
             }
-            let self_excluded = service.get_stored_coverage(
-                &CallCtx::default(), "test".into(), "selected".into(), None, None, None,
-                None, Some("selected".into()),
-            ).await.unwrap();
+            let self_excluded = service
+                .get_stored_coverage(
+                    &CallCtx::default(),
+                    "test".into(),
+                    "selected".into(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("selected".into()),
+                )
+                .await
+                .unwrap();
             assert!(self_excluded.sources.is_empty());
             for (payload, bytes) in payloads {
                 assert_eq!(fs::read(&payload.path).unwrap(), bytes);
@@ -6181,7 +6509,13 @@ mod tests {
         let (root, _) = capture_catalog_service();
         let persistence_path = root.join("service.json");
         let mut state = ServiceState::default();
-        for name in ["selected", "other-target", "other-connection", "other-generation", "wrong-kind"] {
+        for name in [
+            "selected",
+            "other-target",
+            "other-connection",
+            "other-generation",
+            "wrong-kind",
+        ] {
             let mut metadata =
                 capture_metadata("test", name, CaptureKind::Coverage, "target-a", "runtime");
             match name {
@@ -6210,13 +6544,33 @@ mod tests {
             state.captures.insert(("test".into(), name.into()), capture);
         }
         let service = service_with_state(persistence_path, state);
-        for baseline in ["missing", "other-target", "other-connection", "other-generation", "wrong-kind"] {
-            let error = service.get_stored_coverage(
-                &CallCtx::default(), "test".into(), "selected".into(), None, None, None,
-                None, Some(baseline.into()),
-            ).await.unwrap_err();
+        for baseline in [
+            "missing",
+            "other-target",
+            "other-connection",
+            "other-generation",
+            "wrong-kind",
+        ] {
+            let error = service
+                .get_stored_coverage(
+                    &CallCtx::default(),
+                    "test".into(),
+                    "selected".into(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(baseline.into()),
+                )
+                .await
+                .unwrap_err();
             if baseline.starts_with("other-") {
-                assert!(error.message.contains("same target and connection generation"), "{error:?}");
+                assert!(
+                    error
+                        .message
+                        .contains("same target and connection generation"),
+                    "{error:?}"
+                );
             }
         }
         let _ = fs::remove_dir_all(root);
@@ -6354,7 +6708,14 @@ mod tests {
         let service = service_with_state(persistence_path, state);
 
         let profile = service
-            .get_stored_cpu_profile(&CallCtx::default(), "test".into(), "profile".into(), None, None, None)
+            .get_stored_cpu_profile(
+                &CallCtx::default(),
+                "test".into(),
+                "profile".into(),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -7172,20 +7533,28 @@ mod tests {
 
     #[test]
     fn stored_heap_maps_survive_service_restart_without_a_live_target() {
-        use crate::service_api::{HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, ScriptProvenance};
-        let root = std::env::current_dir().unwrap().join("target")
+        use crate::service_api::{
+            HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, ScriptProvenance,
+        };
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
             .join(format!("offline-heap-{}", random_instance_id().unwrap()));
         fs::create_dir_all(&root).unwrap();
         let persistence_path = root.join("service.json");
         let heap_path = root.join("capture.heapsnapshot");
-        fs::write(&heap_path, r#"{
+        fs::write(
+            &heap_path,
+            r#"{
             "snapshot":{"meta":{
                 "node_fields":["type","name","id","self_size","edge_count"],
                 "node_types":[["hidden","object"],"string","number","number","number"],
                 "location_fields":["object_index","script_id","line","column"]
             }},
             "nodes":[1,0,7,16,0],"locations":[0,7,0,0],"strings":["a"]
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let mut capture = heap_capture("test", "heap", "target-a", "runtime", &heap_path);
         capture.heap_mapping = Some(HeapMappingSnapshot {
             connection_generation: 42, hydration_duration_micros: 10,
@@ -7200,7 +7569,9 @@ mod tests {
             }],
         });
         let mut state = ServiceState::default();
-        state.captures.insert(("test".into(), "heap".into()), capture);
+        state
+            .captures
+            .insert(("test".into(), "heap".into()), capture);
         let writer = service_with_state(persistence_path.clone(), state);
         writer.persist(&writer.state.blocking_lock()).unwrap();
         drop(writer);
@@ -7229,8 +7600,17 @@ mod tests {
         let (shutdown, _) = watch::channel(false);
         let reloaded = DebuggerService::load(shutdown, persistence_path).unwrap();
         runtime.block_on(async {
-            let snapshot = reloaded.get_stored_heap_classes(&CallCtx::default(),
-                "test".into(), "heap".into(), None, None, None).await.unwrap();
+            let snapshot = reloaded
+                .get_stored_heap_classes(
+                    &CallCtx::default(),
+                    "test".into(),
+                    "heap".into(),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
             assert_eq!(snapshot.classes[0].name, "Supplied");
             assert_eq!(snapshot.analysis.script_mappings[0].hash, "captured-hash");
         });
@@ -7347,19 +7727,28 @@ mod tests {
         insert_context_with_targets(
             &mut state,
             "test",
-            [("browser", 7, vec![
-                target("browser/frame", "Nested", "https://nested.test"),
-                target("frame", "Other", "https://other.test"),
-            ])],
+            [(
+                "browser",
+                7,
+                vec![
+                    target("browser/frame", "Nested", "https://nested.test"),
+                    target("frame", "Other", "https://other.test"),
+                ],
+            )],
         );
         for selector in ["browser/browser/frame", "browser/browser/frame@7"] {
-            let resolved = DebuggerService::resolve_canonical_target(&state, "test", selector).unwrap();
+            let resolved =
+                DebuggerService::resolve_canonical_target(&state, "test", selector).unwrap();
             assert_eq!(resolved.target_id, "browser/frame");
             let request = crate::target_selector::resolved_target_selector(
-                &resolved.connection_id, &resolved.target_id, resolved.connection_generation, Some(selector),
+                &resolved.connection_id,
+                &resolved.target_id,
+                resolved.connection_generation,
+                Some(selector),
             );
             assert_eq!(
-                DebuggerService::resolve_target_id_in_state(&state, "test", "browser", &request).unwrap(),
+                DebuggerService::resolve_target_id_in_state(&state, "test", "browser", &request)
+                    .unwrap(),
                 "browser/frame",
             );
         }
@@ -7372,27 +7761,59 @@ mod tests {
             &mut state,
             "test",
             [
-                ("browser", 2, vec![target("frame/child", "Current", "https://current.test")]),
-                ("decoy", 1, vec![target("other", "browser/frame/child@1", "https://other.test")]),
+                (
+                    "browser",
+                    2,
+                    vec![target("frame/child", "Current", "https://current.test")],
+                ),
+                (
+                    "decoy",
+                    1,
+                    vec![target(
+                        "other",
+                        "browser/frame/child@1",
+                        "https://other.test",
+                    )],
+                ),
             ],
         );
-        let error = DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
-            .unwrap_err();
-        assert!(error.message.contains("stale connection generation"), "{error:?}");
-        let missing = DebuggerService::resolve_canonical_target(&state, "test", "browser/missing@2")
-            .unwrap_err();
-        assert!(missing.message.contains("discovery may be incomplete"), "{missing:?}");
+        let error =
+            DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
+                .unwrap_err();
+        assert!(
+            error.message.contains("stale connection generation"),
+            "{error:?}"
+        );
+        let missing =
+            DebuggerService::resolve_canonical_target(&state, "test", "browser/missing@2")
+                .unwrap_err();
+        assert!(
+            missing.message.contains("discovery may be incomplete"),
+            "{missing:?}"
+        );
         insert_context_with_targets(
             &mut state,
             "test",
             [
                 ("browser", 2, vec![]),
-                ("decoy", 1, vec![target("other", "browser/frame/child@1", "https://other.test")]),
+                (
+                    "decoy",
+                    1,
+                    vec![target(
+                        "other",
+                        "browser/frame/child@1",
+                        "https://other.test",
+                    )],
+                ),
             ],
         );
-        let error = DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
-            .unwrap_err();
-        assert!(error.message.contains("stale connection generation"), "{error:?}");
+        let error =
+            DebuggerService::resolve_canonical_target(&state, "test", "browser/frame/child@1")
+                .unwrap_err();
+        assert!(
+            error.message.contains("stale connection generation"),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -7403,15 +7824,24 @@ mod tests {
             &mut state,
             "test",
             [
-                ("browser", 2, vec![target(literal, "Exact", "https://exact.test")]),
-                ("decoy", 1, vec![target("other", literal, "https://other.test")]),
+                (
+                    "browser",
+                    2,
+                    vec![target(literal, "Exact", "https://exact.test")],
+                ),
+                (
+                    "decoy",
+                    1,
+                    vec![target("other", literal, "https://other.test")],
+                ),
             ],
         );
         let resolved = DebuggerService::resolve_canonical_target(&state, "test", literal).unwrap();
         assert_eq!(resolved.target_id, literal);
         assert_eq!(resolved.connection_id, "browser");
         assert_eq!(
-            DebuggerService::resolve_target_id_in_state(&state, "test", "browser", literal).unwrap(),
+            DebuggerService::resolve_target_id_in_state(&state, "test", "browser", literal)
+                .unwrap(),
             literal,
         );
     }
@@ -7421,10 +7851,20 @@ mod tests {
         let mut state = ServiceState::default();
         insert_context_with_targets(&mut state, "test", [("browser", 1, vec![])]);
         for error in [
-            DebuggerService::resolve_canonical_target(&state, "test", "browser/frame@1").unwrap_err(),
-            DebuggerService::resolve_target_id_in_state(&state, "test", "browser", "browser/frame@1").unwrap_err(),
+            DebuggerService::resolve_canonical_target(&state, "test", "browser/frame@1")
+                .unwrap_err(),
+            DebuggerService::resolve_target_id_in_state(
+                &state,
+                "test",
+                "browser",
+                "browser/frame@1",
+            )
+            .unwrap_err(),
         ] {
-            assert!(error.message.contains("discovery may be incomplete"), "{error:?}");
+            assert!(
+                error.message.contains("discovery may be incomplete"),
+                "{error:?}"
+            );
         }
     }
 
@@ -7485,31 +7925,42 @@ mod tests {
         let logs = service
             .get_logs(
                 &CallCtx::default(),
-                "test".into(),
-                "browser".into(),
-                "browser/renderer/target/frame@2".into(),
+                crate::service_api::TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "test".into(),
+                        connection_id: "browser".into(),
+                    },
+                    target_id: "browser/renderer/target/frame@2".into(),
+                },
             )
             .await
             .unwrap();
-        assert_eq!(serde_json::to_value(&logs).unwrap(), serde_json::json!({
-            "contextId": "test", "connectionId": "browser",
-            "targetId": "renderer/target/frame", "connectionGeneration": 2,
-            "messages": [],
-            "capture": {
-                "status": "inactive", "captureId": null, "sessionId": null,
-                "startedAtUnixMs": null, "collectedEvents": [],
-                "evictedCount": null, "droppedCount": null
-            }
-        }));
+        assert_eq!(
+            serde_json::to_value(&logs).unwrap(),
+            serde_json::json!({
+                "contextId": "test", "connectionId": "browser",
+                "targetId": "renderer/target/frame", "connectionGeneration": 2,
+                "messages": [],
+                "capture": {
+                    "status": "inactive", "captureId": null, "sessionId": null,
+                    "startedAtUnixMs": null, "collectedEvents": [],
+                    "evictedCount": null, "droppedCount": null
+                }
+            })
+        );
         assert!(service.state.lock().await.target_debuggers.is_empty());
         for selector in ["browser/renderer/target/frame@1", "missing"] {
             assert!(
                 service
                     .get_logs(
                         &CallCtx::default(),
-                        "test".into(),
-                        "browser".into(),
-                        selector.into(),
+                        crate::service_api::TargetRef {
+                            connection: crate::service_api::ConnectionRef {
+                                context_id: "test".into(),
+                                connection_id: "browser".into()
+                            },
+                            target_id: selector.into()
+                        },
                     )
                     .await
                     .is_err()
@@ -7549,35 +8000,56 @@ mod tests {
         let service = service_with_state(PathBuf::from("unused"), state);
         let ctx = CallCtx::default();
         let errors = [
-            service.get_target(
-                &ctx,
-                "test".to_owned(),
-                "browser".to_owned(),
-                request_target.clone(),
-            ).await.unwrap_err(),
-            service.inspect_value(
-                &ctx,
-                "test".to_owned(),
-                "browser".to_owned(),
-                request_target.clone(),
-                None,
-                ValueSelector::Expression {
-                    expression: "1".to_owned(),
-                    allow_side_effects: true,
-                },
-                ValueInspectionOptions {
-                    max_preview_length: 120,
-                    max_properties: 20,
-                    retain_references: false,
-                },
-            ).await.unwrap_err(),
-            service.attach_target(
-                &ctx,
-                "test".to_owned(),
-                "browser".to_owned(),
-                request_target,
-                TargetAttachOptions::default(),
-            ).await.unwrap_err(),
+            service
+                .get_target(
+                    &ctx,
+                    crate::service_api::TargetRef {
+                        connection: crate::service_api::ConnectionRef {
+                            context_id: "test".to_owned(),
+                            connection_id: "browser".to_owned(),
+                        },
+                        target_id: request_target.clone(),
+                    },
+                )
+                .await
+                .unwrap_err(),
+            service
+                .inspect_value(
+                    &ctx,
+                    crate::service_api::TargetRef {
+                        connection: crate::service_api::ConnectionRef {
+                            context_id: "test".to_owned(),
+                            connection_id: "browser".to_owned(),
+                        },
+                        target_id: request_target.clone(),
+                    },
+                    None,
+                    ValueSelector::Expression {
+                        expression: "1".to_owned(),
+                        allow_side_effects: true,
+                    },
+                    ValueInspectionOptions {
+                        max_preview_length: 120,
+                        max_properties: 20,
+                        retain_references: false,
+                    },
+                )
+                .await
+                .unwrap_err(),
+            service
+                .attach_target(
+                    &ctx,
+                    crate::service_api::TargetRef {
+                        connection: crate::service_api::ConnectionRef {
+                            context_id: "test".to_owned(),
+                            connection_id: "browser".to_owned(),
+                        },
+                        target_id: request_target,
+                    },
+                    TargetAttachOptions::default(),
+                )
+                .await
+                .unwrap_err(),
         ];
         for error in errors {
             assert!(error.message.contains("target selector"), "{error:?}");
@@ -8149,9 +8621,13 @@ mod tests {
         let guarded = service
             .attach_target(
                 &CallCtx::default(),
-                "ctx".into(),
-                "conn".into(),
-                "page-1".into(),
+                crate::service_api::TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "ctx".into(),
+                        connection_id: "conn".into(),
+                    },
+                    target_id: "page-1".into(),
+                },
                 TargetAttachOptions::default(),
             )
             .await

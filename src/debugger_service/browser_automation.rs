@@ -5,11 +5,17 @@ impl BrowserAutomationApi for DebuggerService {
     async fn click_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         selector: String,
     ) -> Result<bool, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .click(selector)
@@ -21,11 +27,17 @@ impl BrowserAutomationApi for DebuggerService {
     async fn type_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         text: String,
     ) -> Result<bool, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .type_text(text)
@@ -37,10 +49,16 @@ impl BrowserAutomationApi for DebuggerService {
     async fn capture_screenshot(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<ScreenshotSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let selected = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;

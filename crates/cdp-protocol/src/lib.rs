@@ -1,3 +1,3 @@
-pub mod protocol_schema;
-
-include!(concat!(env!("OUT_DIR"), "/cdp_generated.rs"));
+#[rustfmt::skip]
+mod generated;
+pub use generated::*;

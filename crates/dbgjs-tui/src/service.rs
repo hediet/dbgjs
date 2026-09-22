@@ -36,7 +36,8 @@ impl Bootstrap {
         );
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let normalized_cwd = normalize_absolute_path(&cwd).map_err(|error| error.to_string())?;
-        let contexts = client.contexts
+        let contexts = client
+            .contexts
             .list_contexts(Some(normalized_cwd.clone()))
             .await
             .map_err(rpc_error)?;
@@ -84,7 +85,8 @@ impl Bootstrap {
                 })
                 .unwrap_or(0)
         };
-        let context = client.contexts
+        let context = client
+            .contexts
             .get_context(contexts[context_index].id.clone())
             .await
             .map_err(rpc_error)?;
@@ -181,12 +183,9 @@ impl ServiceController {
             let events = self.events.clone();
             let task_target = target.clone();
             let task = tokio::spawn(async move {
-                let mut snapshot = match client.targets
-                    .get_target(
-                        task_target.context_id.clone(),
-                        task_target.connection_id.clone(),
-                        task_target.target_id.clone(),
-                    )
+                let mut snapshot = match client
+                    .targets
+                    .get_target(task_target.reference.clone())
                     .await
                 {
                     Ok(snapshot) => snapshot,
@@ -213,14 +212,9 @@ impl ServiceController {
                     return;
                 }
                 loop {
-                    match client.targets
-                        .observe_target(
-                            task_target.context_id.clone(),
-                            task_target.connection_id.clone(),
-                            task_target.target_id.clone(),
-                            snapshot.revision,
-                            1_000,
-                        )
+                    match client
+                        .targets
+                        .observe_target(task_target.reference.clone(), snapshot.revision, 1_000)
                         .await
                     {
                         Ok(Some(next)) => {
@@ -252,7 +246,10 @@ impl ServiceController {
                 }
             });
             self.target_tasks.insert(
-                (target.connection_id.clone(), target.target_id.clone()),
+                (
+                    target.reference.connection.connection_id.clone(),
+                    target.reference.target_id.clone(),
+                ),
                 task,
             );
         }
@@ -277,27 +274,32 @@ impl ServiceController {
         tokio::spawn(async move {
             let load = async {
                 match section {
-                    Section::Contexts => client.contexts
+                    Section::Contexts => client
+                        .contexts
                         .list_contexts(Some(cwd))
                         .await
                         .map(Data::Contexts)
                         .map_err(rpc_error),
-                    Section::Processes => client.service
+                    Section::Processes => client
+                        .service
                         .get_process_projection(context_id.clone(), expanded_process_roots)
                         .await
                         .map(Data::Processes)
                         .map_err(rpc_error),
-                    Section::Connections => client.contexts
+                    Section::Connections => client
+                        .contexts
                         .get_resource_graph(context_id.clone())
                         .await
                         .map(Data::Resources)
                         .map_err(rpc_error),
-                    Section::Sources => client.sources
+                    Section::Sources => client
+                        .sources
                         .show_source_tree(context_id.clone(), source_kind)
                         .await
                         .map(Data::Sources)
                         .map_err(rpc_error),
-                    Section::Captures => client.captures
+                    Section::Captures => client
+                        .captures
                         .list_captures(context_id.clone())
                         .await
                         .map(Data::Captures)
@@ -401,7 +403,8 @@ impl ServiceController {
         let events = self.events.clone();
         self.context_task = Some(tokio::spawn(async move {
             loop {
-                match client.contexts
+                match client
+                    .contexts
                     .observe_context(context_id.clone(), cursor.clone(), 1_000)
                     .await
                 {
@@ -473,12 +476,20 @@ async fn perform_action(
             connected,
         } => {
             let snapshot = if connected {
-                client.contexts
-                    .connect_connection(context_id, connection_id.clone())
+                client
+                    .contexts
+                    .connect_connection(dbgjs::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id.clone(),
+                    })
                     .await
             } else {
-                client.contexts
-                    .disconnect_connection(context_id, connection_id.clone())
+                client
+                    .contexts
+                    .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id.clone(),
+                    })
                     .await
             }
             .map_err(rpc_error)?;
@@ -499,10 +510,13 @@ async fn perform_action(
             connection_id,
             expected_revision,
         } => {
-            let snapshot = client.contexts
+            let snapshot = client
+                .contexts
                 .delete_connection(
-                    context_id,
-                    connection_id.clone(),
+                    dbgjs::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id.clone(),
+                    },
                     MutationOptions {
                         expected_revision: Some(expected_revision),
                         request_id: None,
@@ -518,11 +532,10 @@ async fn perform_action(
             force,
         } => {
             let snapshot = if attached {
-                client.targets
+                client
+                    .targets
                     .attach_target(
-                        target.context_id.clone(),
-                        target.connection_id.clone(),
-                        target.target_id.clone(),
+                        target.reference.clone(),
                         TargetAttachOptions {
                             force,
                             expected_connection_generation: Some(target.connection_generation),
@@ -530,26 +543,23 @@ async fn perform_action(
                     )
                     .await
                     .map_err(rpc_error)?;
-                client.contexts
-                    .get_context(target.context_id.clone())
+                client
+                    .contexts
+                    .get_context(target.reference.connection.context_id.clone())
                     .await
                     .map_err(rpc_error)?
             } else {
-                client.targets
-                    .detach_target(
-                        target.context_id.clone(),
-                        target.connection_id.clone(),
-                        target.target_id.clone(),
-                        Some(target.connection_generation),
-                    )
+                client
+                    .targets
+                    .detach_target(target.reference.clone(), Some(target.connection_generation))
                     .await
                     .map_err(rpc_error)?
             };
             Ok((
                 format!(
                     "Target {}/{} {}",
-                    target.connection_id,
-                    target.target_id,
+                    target.reference.connection.connection_id,
+                    target.reference.target_id,
                     if attached { "attached" } else { "detached" }
                 ),
                 snapshot,
@@ -561,7 +571,8 @@ async fn perform_action(
             source_path,
             line,
         } => {
-            let snapshot = client.contexts
+            let snapshot = client
+                .contexts
                 .put_breakpoint(context_id, breakpoint_id.clone(), source_path, line, 1)
                 .await
                 .map_err(rpc_error)?;
@@ -572,7 +583,8 @@ async fn perform_action(
             breakpoint_id,
             expected_revision,
         } => {
-            let snapshot = client.contexts
+            let snapshot = client
+                .contexts
                 .delete_breakpoint(
                     context_id,
                     breakpoint_id.clone(),
@@ -598,7 +610,8 @@ async fn configure_connection_path(
         path.debug_target_id.as_deref(),
     );
     let connection_id = path.connection_id.clone();
-    let context = client.contexts
+    let context = client
+        .contexts
         .get_context(path.context_id.clone())
         .await
         .map_err(rpc_error)?;
@@ -630,17 +643,24 @@ async fn configure_connection_path(
         }
     }
     if needs_configuration {
-        client.contexts
+        client
+            .contexts
             .put_connection(
-                path.context_id.clone(),
-                connection_id.clone(),
+                dbgjs::service_api::ConnectionRef {
+                    context_id: path.context_id.clone(),
+                    connection_id: connection_id.clone(),
+                },
                 configuration.clone(),
             )
             .await
             .map_err(rpc_error)?;
     }
-    let snapshot = client.contexts
-        .connect_connection(path.context_id, connection_id.clone())
+    let snapshot = client
+        .contexts
+        .connect_connection(dbgjs::service_api::ConnectionRef {
+            context_id: path.context_id,
+            connection_id: connection_id.clone(),
+        })
         .await
         .map_err(rpc_error)?;
     Ok((
@@ -660,14 +680,22 @@ async fn set_connection_path_configured(
         path.debug_target_id.as_deref(),
     );
     if configured {
-        let snapshot = client.contexts
-            .put_connection(path.context_id, path.connection_id.clone(), configuration)
+        let snapshot = client
+            .contexts
+            .put_connection(
+                dbgjs::service_api::ConnectionRef {
+                    context_id: path.context_id,
+                    connection_id: path.connection_id.clone(),
+                },
+                configuration,
+            )
             .await
             .map_err(rpc_error)?;
         return Ok((format!("Connection {} added", path.connection_id), snapshot));
     }
 
-    let context = client.contexts
+    let context = client
+        .contexts
         .get_context(path.context_id.clone())
         .await
         .map_err(rpc_error)?;
@@ -684,8 +712,12 @@ async fn set_connection_path_configured(
             )
         })?;
     let snapshot = match connection.status {
-        ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client.contexts
-            .disconnect_connection(path.context_id.clone(), path.connection_id.clone())
+        ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client
+            .contexts
+            .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                context_id: path.context_id.clone(),
+                connection_id: path.connection_id.clone(),
+            })
             .await
             .map_err(rpc_error)?,
         ConnectionStatus::Disconnecting => {
@@ -696,10 +728,13 @@ async fn set_connection_path_configured(
         }
         ConnectionStatus::Disconnected | ConnectionStatus::Failed { .. } => context,
     };
-    let snapshot = client.contexts
+    let snapshot = client
+        .contexts
         .delete_connection(
-            path.context_id,
-            path.connection_id.clone(),
+            dbgjs::service_api::ConnectionRef {
+                context_id: path.context_id,
+                connection_id: path.connection_id.clone(),
+            },
             MutationOptions {
                 expected_revision: Some(snapshot.revision),
                 request_id: None,

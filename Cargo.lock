@@ -213,6 +213,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdp-codegen"
+version = "0.1.0"
+dependencies = [
+ "heck",
+ "linkrpc",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "cdp-protocol"
 version = "0.1.0"
 dependencies = [
@@ -461,6 +471,7 @@ dependencies = [
  "sha2",
  "sourcemap",
  "sysinfo",
+ "tempfile",
  "terminal_size",
  "thiserror 2.0.20",
  "tokio",
@@ -1329,9 +1340,9 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "linkrpc"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0387272778158c1183c56006306494123e6d7fd10eecc4729e6796b58f7d5eba"
+checksum = "531d825ef27fd9bd9cf296bde60b5e3bb67d1a9b91a262adb31cc8272913e40e"
 dependencies = [
  "async-trait",
  "futures",
@@ -1349,9 +1360,9 @@ dependencies = [
 
 [[package]]
 name = "linkrpc-macros"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f506de27904c9c70f82a917bcee1873f4e3a22c5e51463ae5fadc92ebacb42a"
+checksum = "d98a6ae0e73aad3ba7a84693f84bdf408c5bd5a97fb1b07d39ae6fb72165c6c5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1361,9 +1372,9 @@ dependencies = [
 
 [[package]]
 name = "linkrpc-tokio"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e96b8ed9ad108e41f46f4cae56de1dfc0c0ce43c457c77d065c1dd05675429"
+checksum = "570ac47a2c5b13334254cfa1fec76d07af290ed0c12342aa9c65f9c5dda6aff5"
 dependencies = [
  "async-trait",
  "futures-util",

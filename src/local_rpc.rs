@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
-use linkrpc::prelude::{DirectoryServiceClient, LinkRpcConnection};
+use linkrpc::prelude::{CallCtx, DirectoryServiceClient, LinkRpcConnection};
 use linkrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -17,9 +17,42 @@ use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
 
 use crate::debugger_service::DebuggerService;
-use crate::service_api::{self, DbgServiceClient};
+use crate::service_api::{self, DbgServiceClient, ServiceApi};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub async fn serve_stdio() -> Result<(), LocalRpcError> {
+    let state_directory = tempfile::Builder::new().prefix("dbgjs-stdio-").tempdir()?;
+    let (shutdown_sender, mut shutdown_receiver) = watch::channel(false);
+    let service = Arc::new(DebuggerService::load(
+        shutdown_sender,
+        state_directory.path().join("contexts.json"),
+    )?);
+    let connection = service_connection(
+        NdjsonTransport::new(tokio::io::stdin(), tokio::io::stdout()),
+        service.clone(),
+    )?;
+    tokio::select! {
+        () = connection.run() => {},
+        result = shutdown_receiver.wait_for(|shutdown| *shutdown) => {
+            result.map_err(|error| LocalRpcError::Rpc(error.to_string()))?;
+        },
+    }
+    if !*shutdown_receiver.borrow() {
+        service
+            .shutdown(&CallCtx::default())
+            .await
+            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+        shutdown_receiver
+            .wait_for(|shutdown| *shutdown)
+            .await
+            .map_err(|error| LocalRpcError::Rpc(error.to_string()))?;
+    }
+    drop(connection);
+    drop(service);
+    state_directory.close()?;
+    Ok(())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,11 +497,19 @@ async fn serve_peer(
         return Err(LocalRpcError::AuthenticationFailed);
     }
 
+    let connection = service_connection(transport, service)?;
+    connection.run().await;
+    Ok(())
+}
+
+fn service_connection(
+    transport: NdjsonTransport,
+    service: Arc<DebuggerService>,
+) -> Result<LinkRpcConnection, LocalRpcError> {
     let connection = LinkRpcConnection::new(Box::new(transport));
     service_api::register(&connection, service)?;
     connection.enable_reflection();
-    connection.run().await;
-    Ok(())
+    Ok(connection)
 }
 
 fn write_endpoint(path: &Path, endpoint: &LocalServiceEndpoint) -> Result<(), LocalRpcError> {
@@ -812,17 +853,23 @@ mod tests {
             .unwrap();
         assert_eq!(created.revision, 1);
 
+        let connection_ref = service_api::ConnectionRef {
+            context_id: "shop".into(),
+            connection_id: "server".into(),
+        };
         let server_connection = client
             .contexts
-            .put_connection("shop".into(), "server".into(), "ws://127.0.0.1:9229".into())
+            .put_connection(connection_ref.clone(), "ws://127.0.0.1:9229".into())
             .await
             .unwrap();
         assert_eq!(server_connection.connections.len(), 1);
         let browser_connection = client
             .contexts
             .put_connection(
-                "shop".into(),
-                "browser".into(),
+                service_api::ConnectionRef {
+                    context_id: "shop".into(),
+                    connection_id: "browser".into(),
+                },
                 "ws://127.0.0.1:9222".into(),
             )
             .await
@@ -881,18 +928,20 @@ mod tests {
         );
         assert!(!client.relay.close_relay("missing".into()).await.unwrap());
 
+        let target_ref = service_api::TargetRef {
+            connection: connection_ref,
+            target_id: "missing".into(),
+        };
         let errors = [
             client
                 .targets
-                .get_target("shop".into(), "server".into(), "missing".into())
+                .get_target(target_ref.clone())
                 .await
                 .unwrap_err(),
             client
                 .cdp
                 .raw_cdp_request(
-                    "shop".into(),
-                    "server".into(),
-                    "missing".into(),
+                    target_ref.clone(),
                     "Runtime.evaluate".into(),
                     serde_json::json!({"expression": "1"}),
                     true,
@@ -901,27 +950,22 @@ mod tests {
                 .unwrap_err(),
             client
                 .browser
-                .click_target(
-                    "shop".into(),
-                    "server".into(),
-                    "missing".into(),
-                    "button".into(),
-                )
+                .click_target(target_ref.clone(), "button".into())
                 .await
                 .unwrap_err(),
             client
                 .coverage
-                .start_coverage("shop".into(), "server".into(), "missing".into())
+                .start_coverage(target_ref.clone())
                 .await
                 .unwrap_err(),
             client
                 .cpu
-                .start_cpu_profile("shop".into(), "server".into(), "missing".into(), None)
+                .start_cpu_profile(target_ref.clone(), None)
                 .await
                 .unwrap_err(),
             client
                 .heap
-                .get_heap_snapshot_progress("shop".into(), "server".into(), "missing".into())
+                .get_heap_snapshot_progress(target_ref)
                 .await
                 .unwrap_err(),
         ];

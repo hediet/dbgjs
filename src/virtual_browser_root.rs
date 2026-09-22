@@ -24,12 +24,12 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, CdpServer, CdpService,
-    TargetAttachToTargetParams, TargetAttachToTargetResult, TargetAttachedToTargetParams,
-    TargetDetachFromTargetParams, TargetDetachFromTargetResult, TargetDetachedFromTargetParams,
-    TargetGetTargetsParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
-    TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
-    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
+    BrowserGetVersionParams, BrowserGetVersionResult, CdpClient, TargetAttachToTargetParams,
+    TargetAttachToTargetResult, TargetAttachedToTargetParams, TargetDetachFromTargetParams,
+    TargetDetachFromTargetResult, TargetDetachedFromTargetParams, TargetGetTargetsParams,
+    TargetGetTargetsResult, TargetSetAutoAttachParams, TargetSetAutoAttachResult,
+    TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult, TargetTargetCreatedParams,
+    TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
 };
 use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::service_api::TargetSnapshot;
@@ -196,7 +196,8 @@ impl TargetEndpoint {
         params.flatten = Some(true);
         let attached = self
             .client()
-            .target_attach_to_target(params)
+            .target()
+            .attach_to_target(params)
             .await
             .map_err(|error| format!("Target.attachToTarget failed: {error:?}"))?;
         let session_id = attached.session_id;
@@ -250,7 +251,7 @@ impl TargetEndpoint {
             if let Some(parent) = &self.parent_client {
                 let mut params = TargetDetachFromTargetParams::new();
                 params.session_id = Some(session_id.clone());
-                let _ = parent.target_detach_from_target(params).await;
+                let _ = parent.target().detach_from_target(params).await;
             }
             self.mux.retire_session(session_id);
         } else if self.owns_transport {
@@ -589,14 +590,16 @@ impl VirtualRootState {
                     if is_new {
                         let _ = self
                             .root_client()
-                            .target_target_created(TargetTargetCreatedParams {
+                            .target()
+                            .target_created(TargetTargetCreatedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
                             })
                             .await;
                     } else {
                         let _ = self
                             .root_client()
-                            .target_target_info_changed(TargetTargetInfoChangedParams {
+                            .target()
+                            .target_info_changed(TargetTargetInfoChangedParams {
                                 target_info: target_info_from_snapshot(&target.snapshot),
                             })
                             .await;
@@ -619,7 +622,8 @@ impl VirtualRootState {
                 if existed && self.discover.load(Ordering::Relaxed) {
                     let _ = self
                         .root_client()
-                        .target_target_destroyed(TargetTargetDestroyedParams {
+                        .target()
+                        .target_destroyed(TargetTargetDestroyedParams {
                             target_id: target_id.clone(),
                         })
                         .await;
@@ -687,7 +691,8 @@ impl VirtualRootState {
         target_info.attached = true;
         let _ = self
             .root_client()
-            .target_attached_to_target(TargetAttachedToTargetParams {
+            .target()
+            .attached_to_target(TargetAttachedToTargetParams {
                 session_id: session_id.clone(),
                 target_info,
                 waiting_for_debugger: target.waiting_for_debugger,
@@ -742,7 +747,8 @@ impl VirtualRootState {
         }
         let _ = self
             .root_client()
-            .target_detached_from_target(TargetDetachedFromTargetParams {
+            .target()
+            .detached_from_target(TargetDetachedFromTargetParams {
                 session_id,
                 target_id: Some(session.target_id),
             })
@@ -778,8 +784,8 @@ impl VirtualRootState {
 }
 
 #[async_trait]
-impl CdpService for VirtualRootState {
-    async fn browser_get_version(
+impl crate::cdp::browser::BrowserService for VirtualRootState {
+    async fn get_version(
         &self,
         _ctx: &CallCtx,
         _params: BrowserGetVersionParams,
@@ -792,8 +798,11 @@ impl CdpService for VirtualRootState {
             js_version: String::new(),
         })
     }
+}
 
-    async fn target_get_targets(
+#[async_trait]
+impl crate::cdp::target::TargetService for VirtualRootState {
+    async fn get_targets(
         &self,
         _ctx: &CallCtx,
         _params: TargetGetTargetsParams,
@@ -807,7 +816,7 @@ impl CdpService for VirtualRootState {
         })
     }
 
-    async fn target_set_discover_targets(
+    async fn set_discover_targets(
         &self,
         _ctx: &CallCtx,
         params: TargetSetDiscoverTargetsParams,
@@ -818,7 +827,8 @@ impl CdpService for VirtualRootState {
             for target in self.refresh_known().await {
                 let _ = self
                     .root_client()
-                    .target_target_created(TargetTargetCreatedParams {
+                    .target()
+                    .target_created(TargetTargetCreatedParams {
                         target_info: target_info_from_snapshot(&target.snapshot),
                     })
                     .await;
@@ -827,7 +837,7 @@ impl CdpService for VirtualRootState {
         Ok(TargetSetDiscoverTargetsResult::new())
     }
 
-    async fn target_set_auto_attach(
+    async fn set_auto_attach(
         &self,
         _ctx: &CallCtx,
         params: TargetSetAutoAttachParams,
@@ -847,7 +857,7 @@ impl CdpService for VirtualRootState {
         Ok(TargetSetAutoAttachResult::new())
     }
 
-    async fn target_attach_to_target(
+    async fn attach_to_target(
         &self,
         _ctx: &CallCtx,
         params: TargetAttachToTargetParams,
@@ -858,7 +868,7 @@ impl CdpService for VirtualRootState {
         })
     }
 
-    async fn target_detach_from_target(
+    async fn detach_from_target(
         &self,
         _ctx: &CallCtx,
         params: TargetDetachFromTargetParams,
@@ -869,24 +879,37 @@ impl CdpService for VirtualRootState {
     }
 }
 
-struct RootHandler(CdpServer<VirtualRootState>);
+struct RootHandler(linkrpc::binding::InterfaceRouter);
 
 impl RootHandler {
     fn new(state: Arc<VirtualRootState>) -> Self {
-        Self(CdpServer::new(state))
+        let router = linkrpc::binding::InterfaceRouter::new();
+        crate::cdp::browser::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::browser::BrowserServer::new(state.clone())),
+            )
+            .expect("generated Browser binding is valid");
+        crate::cdp::target::DOMAIN
+            .register(
+                &router,
+                Arc::new(crate::cdp::target::TargetServer::new(state)),
+            )
+            .expect("generated Target binding is distinct");
+        Self(router)
     }
 }
 
 #[async_trait]
 impl RequestHandler for RootHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        self.0
-            .handle_request(
-                &method,
-                normalize_typed_cdp_params(params),
-                CallCtx::default(),
-            )
-            .await
+        InterfaceHandler::handle_request(
+            &self.0,
+            &method,
+            normalize_typed_cdp_params(params),
+            CallCtx::default(),
+        )
+        .await
     }
 }
 

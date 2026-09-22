@@ -64,13 +64,15 @@ async fn run_breakpoint_scenario() {
     let root = connection.root();
 
     let created = root
-        .target_create_target(TargetCreateTargetParams::new("about:blank".into()))
+        .target()
+        .create_target(TargetCreateTargetParams::new("about:blank".into()))
         .await
         .expect("Target.createTarget failed");
     let mut attach_params = TargetAttachToTargetParams::new(created.target_id.clone());
     attach_params.flatten = Some(true);
     let attached = root
-        .target_attach_to_target(attach_params)
+        .target()
+        .attach_to_target(attach_params)
         .await
         .expect("Target.attachToTarget failed");
 
@@ -117,7 +119,7 @@ async fn run_breakpoint_scenario() {
 
     driver
         .client()
-        .runtime_evaluate(RuntimeEvaluateParams::new(format!(
+        .runtime().evaluate(RuntimeEvaluateParams::new(format!(
             "function add(a, b) {{\n  return a + b;\n}}\n//# sourceMappingURL={}\n//# sourceURL={GENERATED_URL}",
             source_map_url,
         )))
@@ -158,7 +160,8 @@ async fn run_breakpoint_scenario() {
         let mut params = RuntimeEvaluateParams::new("add(20, 22)".into());
         params.return_by_value = Some(true);
         evaluation_client
-            .runtime_evaluate(params)
+            .runtime()
+            .evaluate(params)
             .await
             .expect("breakpoint evaluation failed")
     });
@@ -226,7 +229,8 @@ async fn run_breakpoint_scenario() {
         .await
         .expect("source-map server task completes");
 
-    root.target_close_target(TargetCloseTargetParams::new(created.target_id))
+    root.target()
+        .close_target(TargetCloseTargetParams::new(created.target_id))
         .await
         .expect("Target.closeTarget failed");
 }
@@ -238,14 +242,16 @@ async fn run_heap_snapshot_scenario() {
         .expect("connect to Playwright-launched Chromium CDP endpoint");
     let created = connection
         .root()
-        .target_create_target(TargetCreateTargetParams::new("about:blank".into()))
+        .target()
+        .create_target(TargetCreateTargetParams::new("about:blank".into()))
         .await
         .expect("Target.createTarget failed");
     let mut attach_params = TargetAttachToTargetParams::new(created.target_id.clone());
     attach_params.flatten = Some(true);
     let attached = connection
         .root()
-        .target_attach_to_target(attach_params)
+        .target()
+        .attach_to_target(attach_params)
         .await
         .expect("Target.attachToTarget failed");
     let session = connection
@@ -267,7 +273,8 @@ async fn run_heap_snapshot_scenario() {
     params.report_progress = Some(true);
     session
         .client()
-        .heap_profiler_take_heap_snapshot(params)
+        .heap_profiler()
+        .take_heap_snapshot(params)
         .await
         .expect("HeapProfiler.takeHeapSnapshot failed");
     let bytes_written = session
@@ -298,7 +305,8 @@ async fn run_heap_snapshot_scenario() {
     tokio::fs::remove_file(destination).await.unwrap();
     connection
         .root()
-        .target_close_target(TargetCloseTargetParams::new(created.target_id))
+        .target()
+        .close_target(TargetCloseTargetParams::new(created.target_id))
         .await
         .expect("Target.closeTarget failed");
     connection.close().await;
@@ -314,7 +322,8 @@ async fn run_vscode_dev_scenario() {
     let mut attach_params = TargetAttachToTargetParams::new(target_id.clone());
     attach_params.flatten = Some(true);
     let attached = root
-        .target_attach_to_target(attach_params)
+        .target()
+        .attach_to_target(attach_params)
         .await
         .expect("attach to vscode.dev target");
     let session_key = SessionKey {
@@ -425,7 +434,8 @@ async fn run_vscode_dev_scenario() {
     let input_client = driver.client().clone();
     let typing = tokio::spawn(async move {
         input_client
-            .input_insert_text(InputInsertTextParams::new("vscode".into()))
+            .input()
+            .insert_text(InputInsertTextParams::new("vscode".into()))
             .await
             .expect("CDP text insertion succeeds")
     });
@@ -481,9 +491,7 @@ async fn run_vscode_dev_scenario() {
     assert_eq!(replayed, *driver.state());
 }
 
-async fn dispatch_ctrl_n(
-    client: &dbgjs::cdp::CdpClient<linkrpc::connection::channel::Channel>,
-) {
+async fn dispatch_ctrl_n(client: &dbgjs::cdp::CdpClient<linkrpc::connection::channel::Channel>) {
     let mut key_down =
         InputDispatchKeyEventParams::new(InputDispatchKeyEventParamsType::RawKeyDown);
     key_down.modifiers = Some(2);
@@ -491,7 +499,8 @@ async fn dispatch_ctrl_n(
     key_down.key = Some("n".into());
     key_down.windows_virtual_key_code = Some(78);
     client
-        .input_dispatch_key_event(key_down)
+        .input()
+        .dispatch_key_event(key_down)
         .await
         .expect("Ctrl+N key-down succeeds");
 
@@ -501,7 +510,8 @@ async fn dispatch_ctrl_n(
     key_up.key = Some("n".into());
     key_up.windows_virtual_key_code = Some(78);
     client
-        .input_dispatch_key_event(key_up)
+        .input()
+        .dispatch_key_event(key_up)
         .await
         .expect("Ctrl+N key-up succeeds");
 }

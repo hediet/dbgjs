@@ -15,8 +15,7 @@ import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../dae
 import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { connectDaemon } from "../daemonTransport.js";
 import { DbgServiceClient } from "../dbgServiceClient.js";
-import { ContextApi } from "../generated/contextApi.js";
-import { TargetDebuggerApi } from "../generated/targetDebuggerApi.js";
+import { ContextApi, TargetDebuggerApi } from "../generated/interfaces.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
@@ -313,17 +312,22 @@ test("debug service facets route through one authenticated connection", async ()
 	const daemon = await connectDaemon(endpoint, "facet-token");
 	try {
 		const client = new DbgServiceClient(daemon.connection);
-		const scope = { contextId: "workspace", connectionId: "node", targetId: "process" };
+		const scope = {
+			targetRef: {
+				connection: { contextId: "workspace", connectionId: "node" },
+				targetId: "process",
+			},
+		};
 		const coverage = { ...scope, captureId: "capture", noCache: false, sourcePath: null };
 		const cpu = { ...coverage, project: false };
 		const cdp = { ...scope, method: "Runtime.enable", params: {}, validate: true };
 		const cases = [
 			["dev.dbgjs.cdp-debugger::service_info", {}, () => client.service.service_info({})],
 			["dev.dbgjs.context::list_contexts", { cwd: null }, () => client.contexts.list_contexts({ cwd: null })],
-			["dev.dbgjs.source::list_sources", { contextId: scope.contextId, path: null },
-				() => client.sources.list_sources({ contextId: scope.contextId, path: null })],
-			["dev.dbgjs.capture::list_captures", { contextId: scope.contextId },
-				() => client.captures.list_captures({ contextId: scope.contextId })],
+			["dev.dbgjs.source::list_sources", { contextId: scope.targetRef.connection.contextId, path: null },
+				() => client.sources.list_sources({ contextId: scope.targetRef.connection.contextId, path: null })],
+			["dev.dbgjs.capture::list_captures", { contextId: scope.targetRef.connection.contextId },
+				() => client.captures.list_captures({ contextId: scope.targetRef.connection.contextId })],
 			["dev.dbgjs.target-debugger::get_target", scope, () => client.targets.get_target(scope)],
 			["dev.dbgjs.cdp-access::raw_cdp_request", cdp, () => client.cdp.raw_cdp_request(cdp)],
 			["dev.dbgjs.relay::close_relay", { relayId: "relay" }, () => client.relay.close_relay({ relayId: "relay" })],

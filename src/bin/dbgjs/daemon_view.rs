@@ -47,7 +47,8 @@ async fn capture(
     all_contexts: bool,
 ) -> Result<Vec<ContextView>, io::Error> {
     let context_ids = if all_contexts {
-        client.contexts
+        client
+            .contexts
             .list_contexts(None)
             .await
             .map_err(rpc_error)?
@@ -71,12 +72,15 @@ async fn capture(
         };
         let mut debuggers = BTreeMap::new();
         for target in &snapshot.target_forest {
-            let debugger = client.targets
-                .get_target(
-                    snapshot.id.clone(),
-                    target.connection_id.clone(),
-                    target.target.target_id.clone(),
-                )
+            let debugger = client
+                .targets
+                .get_target(dbgjs::service_api::TargetRef {
+                    connection: dbgjs::service_api::ConnectionRef {
+                        context_id: snapshot.id.clone(),
+                        connection_id: target.connection_id.clone(),
+                    },
+                    target_id: target.target.target_id.clone(),
+                })
                 .await;
             if let Ok(debugger) = debugger
                 && debugger.connection_generation == target.connection_generation
@@ -155,7 +159,8 @@ async fn wait_for_change(
             context_id,
             revision,
         }) => {
-            let _ = client.contexts
+            let _ = client
+                .contexts
                 .observe_context(
                     context_id,
                     dbgjs::service_api::ObservationCursor::After { revision },
@@ -169,11 +174,16 @@ async fn wait_for_change(
             target_id,
             revision,
         }) => {
-            let _ = client.targets
+            let _ = client
+                .targets
                 .observe_target(
-                    context_id,
-                    connection_id,
-                    target_id,
+                    dbgjs::service_api::TargetRef {
+                        connection: dbgjs::service_api::ConnectionRef {
+                            context_id: context_id,
+                            connection_id: connection_id,
+                        },
+                        target_id: target_id,
+                    },
                     revision,
                     VIEW_OBSERVE_TIMEOUT_MS,
                 )

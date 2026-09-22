@@ -84,9 +84,9 @@ jobs:
           key: contracts-debug
           cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build contract exporters
-        run: cargo build --locked --bin export_contracts
-      - name: Check generated contracts
+      - name: Check generated CDP Rust bindings
+        run: npm run check:cdp
+      - name: Check TypeScript contracts against daemon reflection
         run: npm run check:contracts
 
   rust:

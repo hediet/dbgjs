@@ -30,15 +30,15 @@
     "test:readme:render": "node --test tests/readme/transcript.test.mjs tests/readme/recorder.test.mjs",
     "generate:contracts": "node scripts/generate-contracts.mjs",
     "check:contracts": "node scripts/generate-contracts.mjs --check",
-    "generate:cdp": "npm run generate:contracts",
-    "prototype:schema": "cargo run --bin cdp_codegen",
+    "generate:cdp": "cargo run --locked -p cdp-codegen --bin generate-cdp",
+    "check:cdp": "cargo run --locked -p cdp-codegen --bin generate-cdp -- --check",
     "prototype:memory": "cargo run --bin source_memory",
     "benchmark:vscode-coverage": "node scripts/vscode-coverage-benchmark.mjs",
     "test:vscode-coverage-benchmark": "node --test scripts/vscode-coverage-benchmark.test.mjs"
   },
   "devDependencies": {
     "@hediet/dbgjs": "^0.1.0-next.20260915.3",
-    "@hediet/linkrpc-cli": "0.0.2",
+    "@hediet/linkrpc-cli": "0.0.3",
     "@playwright/test": "^1.62.1",
     "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",

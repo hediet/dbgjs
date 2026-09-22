@@ -12,6 +12,10 @@ export type ContextSnapshot = MethodResult<ContextClient["get_context"]>;
 export type ContextKind =
 	Parameters<ContextClient["put_context"]>[0]["kind"];
 export type ConnectionSnapshot = ContextSnapshot["connections"][number];
+export type ConnectionRef =
+	Parameters<ContextClient["connect_connection"]>[0]["connectionRef"];
+export type TargetRef =
+	Parameters<TargetClient["get_target"]>[0]["targetRef"];
 export type ConnectionConfiguration =
 	Parameters<ContextClient["put_connection"]>[0]["configuration"];
 export type PlaywrightChannel =

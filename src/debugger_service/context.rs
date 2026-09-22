@@ -293,10 +293,13 @@ impl ContextApi for DebuggerService {
     async fn put_connection(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         configuration: ConnectionConfiguration,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let ConnectionRef {
+            context_id,
+            connection_id,
+        } = connection_ref;
         validate_id("connection", &connection_id)?;
         validate_connection_configuration(&configuration)?;
 
@@ -323,9 +326,12 @@ impl ContextApi for DebuggerService {
     async fn connect_connection(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let ConnectionRef {
+            context_id,
+            connection_id,
+        } = connection_ref;
         let (configuration, attempt) = {
             let mut state = self.state.lock().await;
             let context = state
@@ -493,9 +499,12 @@ impl ContextApi for DebuggerService {
     async fn disconnect_connection(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let ConnectionRef {
+            context_id,
+            connection_id,
+        } = connection_ref;
         let (runtime, attempt) = {
             let mut state = self.state.lock().await;
             let context = state
@@ -570,10 +579,13 @@ impl ContextApi for DebuggerService {
     async fn set_pause_future_children(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         enabled: bool,
     ) -> Result<bool, JsonRpcError> {
+        let ConnectionRef {
+            context_id,
+            connection_id,
+        } = connection_ref;
         let key = (context_id.clone(), connection_id.clone());
         if !enabled {
             self.state.lock().await.pause_children_leases.remove(&key);
@@ -637,10 +649,13 @@ impl ContextApi for DebuggerService {
     async fn delete_connection(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
+        connection_ref: ConnectionRef,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let ConnectionRef {
+            context_id,
+            connection_id,
+        } = connection_ref;
         let mut state = self.state.lock().await;
         if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
             return Ok(existing);

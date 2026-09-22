@@ -195,7 +195,11 @@ built-in WebSocket support.
 ## Transport
 
 The extension uses `@hediet/linkrpc` for its JSON-RPC connection and public
-Node NDJSON transport, with typed interfaces generated from the shared contract.
+Node NDJSON transport, with typed interfaces generated from daemon reflection.
+The generation script starts an isolated `dbgjs-service --stdio`, uses the
+LinkRPC CLI to export its reflected endpoint contract, then generates the checked-in
+TypeScript modules. The extension itself still uses the persistent authenticated
+local daemon; stdio does not change its connection lifecycle.
 `DbgServiceClient` groups these generated clients into readonly `service`,
 `contexts`, `sources`, `captures`, `targets`, `cdp`, `relay`, `browser`,
 `coverage`, `cpu`, and `heap` facets on one caller-owned `LinkRpcConnection`.

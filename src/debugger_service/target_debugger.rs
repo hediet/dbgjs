@@ -15,11 +15,17 @@ impl TargetDebuggerApi for DebuggerService {
     async fn attach_target(
         &self,
         ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         self.attach_target_internal(ctx, context_id, connection_id, target_id, options)
@@ -29,10 +35,16 @@ impl TargetDebuggerApi for DebuggerService {
     async fn get_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         Ok(self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?
@@ -42,10 +54,16 @@ impl TargetDebuggerApi for DebuggerService {
     async fn get_logs(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<crate::service_api::TargetLogSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         use crate::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
         let state = self.state.lock().await;
         ensure_context_not_relayed(&state, &context_id)?;
@@ -91,12 +109,18 @@ impl TargetDebuggerApi for DebuggerService {
     async fn wait_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         predicate: TargetWaitPredicate,
         timeout_ms: u64,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .wait(predicate, Duration::from_millis(timeout_ms))
@@ -107,12 +131,18 @@ impl TargetDebuggerApi for DebuggerService {
     async fn observe_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         after_revision: u64,
         timeout_ms: u64,
     ) -> Result<Option<TargetDebuggerSnapshot>, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         match self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?
@@ -131,10 +161,16 @@ impl TargetDebuggerApi for DebuggerService {
     async fn release_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .release_if_waiting()
@@ -145,11 +181,17 @@ impl TargetDebuggerApi for DebuggerService {
     async fn detach_target(
         &self,
         ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         expected_connection_generation: Option<u64>,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         let _attachment_guard = self.attachment_lock.lock().await;
@@ -197,7 +239,13 @@ impl TargetDebuggerApi for DebuggerService {
 
         if runtime.is_direct_debugger() {
             return self
-                .disconnect_connection(ctx, context_id, connection_id)
+                .disconnect_connection(
+                    ctx,
+                    crate::service_api::ConnectionRef {
+                        context_id: context_id,
+                        connection_id: connection_id,
+                    },
+                )
                 .await;
         }
         let close_error = if let Some(attachment) = attachment {
@@ -239,11 +287,17 @@ impl TargetDebuggerApi for DebuggerService {
     async fn resume_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: u64,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .resume(pause_epoch)
@@ -254,12 +308,18 @@ impl TargetDebuggerApi for DebuggerService {
     async fn step_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: u64,
         kind: ApiStepKind,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .step(
@@ -277,13 +337,19 @@ impl TargetDebuggerApi for DebuggerService {
     async fn evaluate_target(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .evaluate(pause_epoch, frame_index, expression)
@@ -294,13 +360,19 @@ impl TargetDebuggerApi for DebuggerService {
     async fn get_scope_variables(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: u64,
         frame_index: u32,
         scope_index: u32,
     ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .scope_variables(pause_epoch, frame_index, scope_index)
@@ -311,12 +383,18 @@ impl TargetDebuggerApi for DebuggerService {
     async fn get_object_properties(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: Option<u64>,
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .object_properties(pause_epoch, object_id)
@@ -327,13 +405,19 @@ impl TargetDebuggerApi for DebuggerService {
     async fn inspect_value(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         pause_epoch: Option<u64>,
         selector: ValueSelector,
         options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .inspect_value(pause_epoch, selector, options)
@@ -344,20 +428,30 @@ impl TargetDebuggerApi for DebuggerService {
     async fn set_logpoint(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         logpoint_id: String,
         source_url: String,
         line: u32,
         column: u32,
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.set_logpoints(
             _ctx,
-            context_id,
-            connection_id,
-            target_id,
+            crate::service_api::TargetRef {
+                connection: crate::service_api::ConnectionRef {
+                    context_id: context_id,
+                    connection_id: connection_id,
+                },
+                target_id: target_id,
+            },
             vec![LogpointSpec {
                 id: logpoint_id,
                 source_url,
@@ -372,11 +466,17 @@ impl TargetDebuggerApi for DebuggerService {
     async fn set_logpoints(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         logpoints: Vec<LogpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if logpoints.is_empty() {
             return Err(invalid_params("at least one logpoint is required"));
         }

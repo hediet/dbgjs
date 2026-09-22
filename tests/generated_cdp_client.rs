@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dbgjs::cdp::{
-    CdpClient, CdpService, DebuggerPausedParams, DebuggerScriptParsedParams,
+    CdpClient, DebuggerPausedParams, DebuggerScriptParsedParams,
     DebuggerSetBreakpointByUrlParams, RuntimeEvaluateParams, RuntimeRemoteObjectType,
     TargetAttachToTargetParams,
 };
@@ -53,14 +53,14 @@ fn attach_to_target_accepts_the_dbgjs_auto_attach_hint() {
     );
 }
 
-struct DefaultCdpService;
+struct DefaultRuntimeService;
 
-impl CdpService for DefaultCdpService {}
+impl dbgjs::cdp::runtime::RuntimeService for DefaultRuntimeService {}
 
 #[test]
 fn generated_cdp_provider_trait_can_use_default_methods() {
-    fn assert_provider<T: CdpService>() {}
-    assert_provider::<DefaultCdpService>();
+    fn assert_provider<T: dbgjs::cdp::runtime::RuntimeService>() {}
+    assert_provider::<DefaultRuntimeService>();
 }
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     );
     let client = CdpClient::root(channel.clone());
     assert_eq!(
-        client.debugger_script_parsed_event_name(),
+        client.debugger().script_parsed_event_name(),
         "Debugger.scriptParsed"
     );
 
@@ -111,7 +111,7 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     let target_params: TargetAttachToTargetParams =
         serde_json::from_value(json!({ "targetId": "target-1", "flatten": true })).unwrap();
     let target = client
-        .target_attach_to_target(target_params)
+        .target().attach_to_target(target_params)
         .await
         .expect("target attaches");
     assert_eq!(target.session_id, "child-session");
@@ -129,7 +129,7 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     let runtime_params: RuntimeEvaluateParams =
         serde_json::from_value(json!({ "expression": "6 * 7", "returnByValue": true })).unwrap();
     let runtime = child_client
-        .runtime_evaluate(runtime_params)
+        .runtime().evaluate(runtime_params)
         .await
         .expect("runtime evaluates");
     assert_eq!(runtime.result.r#type, RuntimeRemoteObjectType::Number);
@@ -138,7 +138,7 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     let breakpoint_params: DebuggerSetBreakpointByUrlParams =
         serde_json::from_value(json!({ "lineNumber": 0, "url": "file:///app.js" })).unwrap();
     let breakpoint = child_client
-        .debugger_set_breakpoint_by_url(breakpoint_params)
+        .debugger().set_breakpoint_by_url(breakpoint_params)
         .await
         .expect("breakpoint installs");
     assert_eq!(breakpoint.breakpoint_id, "breakpoint-1");

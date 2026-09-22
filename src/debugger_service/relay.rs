@@ -5,11 +5,17 @@ impl RelayApi for DebuggerService {
     async fn open_playwright_proxy(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         expected_generation: u64,
     ) -> Result<PlaywrightProxyEndpoint, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let (target_id, runtime, browser_context_id) = {
             let state = self.state.lock().await;
             let target_id =
@@ -195,10 +201,16 @@ impl RelayApi for DebuggerService {
     async fn open_target_relay(
         &self,
         ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<RelayEndpoint, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
         {
             let state = self.state.lock().await;

@@ -108,10 +108,8 @@ struct FocusPath {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetRef {
-    pub context_id: String,
-    pub connection_id: String,
+    pub reference: dbgjs::service_api::TargetRef,
     pub connection_generation: u64,
-    pub target_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,7 +172,10 @@ impl UiAction {
                 format!("connection:{connection_id}")
             }
             Self::SetTargetAttachment { target, .. } => {
-                format!("target:{}:{}", target.connection_id, target.target_id)
+                format!(
+                    "target:{}:{}",
+                    target.reference.connection.connection_id, target.reference.target_id
+                )
             }
             Self::PutBreakpoint {
                 source_path, line, ..
@@ -217,8 +218,8 @@ impl UiAction {
             } => format!(
                 "{} target {}/{}",
                 if *attached { "Attaching" } else { "Detaching" },
-                target.connection_id,
-                target.target_id
+                target.reference.connection.connection_id,
+                target.reference.target_id
             ),
             Self::PutBreakpoint {
                 source_path, line, ..
@@ -863,9 +864,10 @@ impl App {
             .iter()
             .filter(|tree| {
                 (!self.is_section_collapsed(Section::Connections)
-                    && tree.processes.iter().any(|process| {
-                        process.role == dbgjs::service_api::ProcessRole::Renderer
-                    }))
+                    && tree
+                        .processes
+                        .iter()
+                        .any(|process| process.role == dbgjs::service_api::ProcessRole::Renderer))
                     || tree.processes.iter().any(|process| {
                         self.expanded.contains(&format!(
                             "process:{}:{}",
@@ -1133,30 +1135,42 @@ impl App {
                 match target.attachment {
                     TargetAttachmentState::Debugger => Ok(UiAction::SetTargetAttachment {
                         target: TargetRef {
-                            context_id: self.context_id().to_owned(),
-                            connection_id,
+                            reference: dbgjs::service_api::TargetRef {
+                                connection: dbgjs::service_api::ConnectionRef {
+                                    context_id: self.context_id().to_owned(),
+                                    connection_id,
+                                },
+                                target_id,
+                            },
                             connection_generation: target.connection_generation,
-                            target_id,
                         },
                         attached: false,
                         force: false,
                     }),
                     TargetAttachmentState::Detached => Ok(UiAction::SetTargetAttachment {
                         target: TargetRef {
-                            context_id: self.context_id().to_owned(),
-                            connection_id,
+                            reference: dbgjs::service_api::TargetRef {
+                                connection: dbgjs::service_api::ConnectionRef {
+                                    context_id: self.context_id().to_owned(),
+                                    connection_id,
+                                },
+                                target_id,
+                            },
                             connection_generation: target.connection_generation,
-                            target_id,
                         },
                         attached: true,
                         force: false,
                     }),
                     TargetAttachmentState::External if force => Ok(UiAction::SetTargetAttachment {
                         target: TargetRef {
-                            context_id: self.context_id().to_owned(),
-                            connection_id,
+                            reference: dbgjs::service_api::TargetRef {
+                                connection: dbgjs::service_api::ConnectionRef {
+                                    context_id: self.context_id().to_owned(),
+                                    connection_id,
+                                },
+                                target_id,
+                            },
                             connection_generation: target.connection_generation,
-                            target_id,
                         },
                         attached: true,
                         force: true,
@@ -1303,10 +1317,14 @@ impl App {
             .flat_map(|context| &context.target_forest)
             .filter(|target| target.attachment == TargetAttachmentState::Debugger)
             .map(|target| TargetRef {
-                context_id: self.context_id().to_owned(),
-                connection_id: target.connection_id.clone(),
+                reference: dbgjs::service_api::TargetRef {
+                    connection: dbgjs::service_api::ConnectionRef {
+                        context_id: self.context_id().to_owned(),
+                        connection_id: target.connection_id.clone(),
+                    },
+                    target_id: target.target.target_id.clone(),
+                },
                 connection_generation: target.connection_generation,
-                target_id: target.target.target_id.clone(),
             })
             .collect()
     }
@@ -4350,16 +4368,14 @@ mod tests {
         app.set_sources(SourceTreeSnapshot {
             kind: SourceTreeKind::SourceMapped,
             sources: (0..4_282)
-                .map(
-                    |id| dbgjs::service_api::UncompactedSourceNodeSnapshot {
-                        id,
-                        uri: format!("https://example.test/src/folder-{}/file-{id}.ts", id / 100),
-                        revision: UncompactedSourceRevisionSnapshot::Version {
-                            namespace: "test".to_owned(),
-                            value: id.to_string(),
-                        },
+                .map(|id| dbgjs::service_api::UncompactedSourceNodeSnapshot {
+                    id,
+                    uri: format!("https://example.test/src/folder-{}/file-{id}.ts", id / 100),
+                    revision: UncompactedSourceRevisionSnapshot::Version {
+                        namespace: "test".to_owned(),
+                        value: id.to_string(),
                     },
-                )
+                })
                 .collect(),
         });
         app.collapsed_sections.remove(&Section::Sources);

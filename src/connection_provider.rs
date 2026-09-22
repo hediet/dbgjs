@@ -703,7 +703,7 @@ impl ConnectionRuntime {
         let mut detach = TargetDetachFromTargetParams::new();
         detach.session_id = Some(session_id.to_owned());
         self.root()
-            .target_detach_from_target(detach)
+            .target().detach_from_target(detach)
             .await
             .map_err(|error| {
                 CdpRuntimeError::Transport(format!("Target.detachFromTarget failed: {error:?}"))
@@ -779,7 +779,7 @@ impl ConnectionRuntime {
         let attached = self
             .cdp
             .root()
-            .target_attach_to_target(TargetAttachToTargetParams {
+            .target().attach_to_target(TargetAttachToTargetParams {
                 target_id: target_id.to_owned(),
                 flatten: Some(true),
                 dbgjs_auto_attach: None,

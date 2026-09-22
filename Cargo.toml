@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cdp-protocol", "crates/dbgjs-tui"]
+members = ["crates/cdp-protocol", "crates/dbgjs-tui", "tools/cdp-codegen"]
 resolver = "3"
 
 [package]
@@ -24,8 +24,8 @@ getrandom = "0.3"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-linkrpc = "0.2.1"
-linkrpc-tokio = "0.2.1"
+linkrpc = "0.3.0"
+linkrpc-tokio = "0.3.0"
 im = "15.1"
 libc = "0.2"
 schemars = "0.8"
@@ -53,6 +53,7 @@ rayon = "1.12.0"
 regex = "1"
 reqwest = "0.12"
 jsonschema = { version = "0.33.0", default-features = false }
+tempfile = "3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }

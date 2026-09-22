@@ -13,9 +13,9 @@ root Markdown files or agent skills do not
 start Rust or packaging jobs. The VS Code extension has a separate build and
 unit-test job, including its LinkRPC socket transport tests, on every CI run.
 The separate required contract-check job installs the LinkRPC CLI from the npm
-registry, builds the Rust exporter against registry dependencies, then checks
-that the canonical bundle and generated TypeScript match their authored
-sources. CI never checks out a sibling LinkRPC repository.
+registry, checks the generated CDP Rust sources, then builds an isolated stdio
+daemon and checks generated TypeScript against its reflected contracts.
+CI never checks out a sibling LinkRPC repository.
 Extension-only changes still skip the native build and packaging jobs.
 Documentation inside an npm package still triggers packaging. Unknown paths,
 Rust sources, embedded JavaScript, test fixtures, contract schemas, dependency
@@ -35,8 +35,8 @@ restore-only, preventing unmerged changes from modifying caches consumed by
 [rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
 downloads; `npm ci` installs the locked registry dependencies. Cargo likewise
 uses the registry packages selected by the checked-in manifests and lockfile.
-It consumes the checked-in interface bundle rather than importing npm CDP
-schemas during ordinary builds. See
+It compiles checked-in generated Rust rather than importing npm CDP schemas or
+running a generator during ordinary builds. See
 [RPC contracts and code generation](./contracts.md) for source ownership,
 regeneration checks, and the opt-in local LinkRPC development workflow.
 

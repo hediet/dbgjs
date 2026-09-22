@@ -71,8 +71,7 @@ export class DaemonClient {
 		configuration: ConnectionConfiguration,
 	): Promise<ContextSnapshot> {
 		return this._service.contexts.put_connection({
-			contextId,
-			connectionId,
+			connectionRef: { contextId, connectionId },
 			configuration,
 		});
 	}
@@ -82,8 +81,7 @@ export class DaemonClient {
 		connectionId: string,
 	): Promise<ContextSnapshot> {
 		return this._service.contexts.connect_connection({
-			contextId,
-			connectionId,
+			connectionRef: { contextId, connectionId },
 		});
 	}
 
@@ -92,8 +90,7 @@ export class DaemonClient {
 		connectionId: string,
 	): Promise<ContextSnapshot> {
 		return this._service.contexts.disconnect_connection({
-			contextId,
-			connectionId,
+			connectionRef: { contextId, connectionId },
 		});
 	}
 
@@ -103,8 +100,7 @@ export class DaemonClient {
 		requestId: string,
 	): Promise<ContextSnapshot> {
 		return this._service.contexts.delete_connection({
-			contextId,
-			connectionId,
+			connectionRef: { contextId, connectionId },
 			options: { expectedRevision: null, requestId },
 		});
 	}
@@ -130,9 +126,7 @@ export class DaemonClient {
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
 		return this._service.targets.get_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 		});
 	}
 
@@ -143,9 +137,7 @@ export class DaemonClient {
 		expectedConnectionGeneration: number,
 	): Promise<TargetDebuggerSnapshot> {
 		const result = await this._service.targets.attach_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			options: {
 				force: false,
 				expectedConnectionGeneration,
@@ -162,9 +154,7 @@ export class DaemonClient {
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot> {
 		return this._service.targets.wait_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			predicate,
 			timeoutMs,
 		});
@@ -178,9 +168,7 @@ export class DaemonClient {
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot | undefined> {
 		const result = await this._service.targets.observe_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			afterRevision,
 			timeoutMs,
 		});
@@ -193,9 +181,7 @@ export class DaemonClient {
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
 		return this._service.targets.release_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 		});
 	}
 
@@ -206,9 +192,7 @@ export class DaemonClient {
 		pauseEpoch: number,
 	): Promise<TargetDebuggerSnapshot> {
 		return this._service.targets.resume_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
 		});
 	}
@@ -221,9 +205,7 @@ export class DaemonClient {
 		kind: StepKind,
 	): Promise<TargetDebuggerSnapshot> {
 		return this._service.targets.step_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
 			kind,
 		});
@@ -238,9 +220,7 @@ export class DaemonClient {
 		expression: string,
 	): Promise<EvaluationSnapshot> {
 		return this._service.targets.evaluate_target({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch: pauseEpoch ?? null,
 			frameIndex,
 			expression,
@@ -256,9 +236,7 @@ export class DaemonClient {
 		scopeIndex: number,
 	): Promise<readonly VariableSnapshot[]> {
 		return this._service.targets.get_scope_variables({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
 			frameIndex,
 			scopeIndex,
@@ -273,9 +251,7 @@ export class DaemonClient {
 		objectId: string,
 	): Promise<readonly VariableSnapshot[]> {
 		return this._service.targets.get_object_properties({
-			contextId,
-			connectionId,
-			targetId,
+			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch: pauseEpoch ?? null,
 			objectId,
 		});

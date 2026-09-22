@@ -5,14 +5,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn take_heap_snapshot(
         &self,
         ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         path: String,
         capture_numeric_value: bool,
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapSnapshotResult, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
@@ -38,14 +44,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn capture_heap_snapshot(
         &self,
         ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: Option<String>,
         capture_numeric_value: bool,
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapCaptureResult, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         if let Some(name) = capture_id.as_ref()
             && let Some(completed) = self
                 .promote_completed_capture(
@@ -214,13 +226,19 @@ impl HeapProfilerApi for DebuggerService {
     async fn get_heap_classes(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         filter: Option<String>,
         no_cache: bool,
     ) -> Result<HeapClassSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_classes(capture_id, filter, no_cache)
@@ -231,14 +249,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn select_promises(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         state: Option<PromiseState>,
         limit: u32,
         max_preview_length: u32,
     ) -> Result<PromiseSelectionSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .select_promises(capture_id, state, limit, max_preview_length)
@@ -249,14 +273,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn select_heap_nodes(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         selector: HeapNodeSelector,
         max_string_length: Option<u32>,
         include_dominators: bool,
     ) -> Result<HeapNodeSelectionSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .select_heap_nodes(capture_id, selector, max_string_length, include_dominators)
@@ -267,15 +297,21 @@ impl HeapProfilerApi for DebuggerService {
     async fn get_heap_references(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         reference: String,
         direction: HeapReferenceDirection,
         edge_policy: HeapEdgePolicy,
         limit: u32,
         max_string_length: Option<u32>,
     ) -> Result<HeapReferencesSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_references(reference, direction, edge_policy, limit, max_string_length)
@@ -286,14 +322,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn get_heap_path(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         from: String,
         to: String,
         options: HeapPathOptions,
         max_string_length: Option<u32>,
     ) -> Result<Option<HeapPathSnapshot>, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_path(from, to, options, max_string_length)
@@ -304,12 +346,18 @@ impl HeapProfilerApi for DebuggerService {
     async fn get_heap_dominator_chain(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         reference: String,
         max_string_length: Option<u32>,
     ) -> Result<HeapDominatorSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .get_heap_dominator_chain(reference, max_string_length)
@@ -320,14 +368,20 @@ impl HeapProfilerApi for DebuggerService {
     async fn aggregate_heap_snapshot(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         capture_id: String,
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
     ) -> Result<HeapAggregateSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .aggregate_heap_snapshot(capture_id, by, limit, max_string_length)
@@ -338,15 +392,21 @@ impl HeapProfilerApi for DebuggerService {
     async fn diff_heap_snapshots(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
         older_capture_id: String,
         newer_capture_id: String,
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
     ) -> Result<HeapDiffSnapshot, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         self.target_debugger(&context_id, &connection_id, &target_id)
             .await?
             .diff_heap_snapshots(
@@ -363,10 +423,16 @@ impl HeapProfilerApi for DebuggerService {
     async fn get_heap_snapshot_progress(
         &self,
         _ctx: &CallCtx,
-        context_id: String,
-        connection_id: String,
-        target_id: String,
+        target_ref: TargetRef,
     ) -> Result<Option<HeapSnapshotProgress>, JsonRpcError> {
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
         Ok(self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?
