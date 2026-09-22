@@ -387,7 +387,7 @@ pub async fn ensure_service(state_file: &Path) -> Result<DbgServiceClient, Local
     loop {
         match startup_lock.try_lock_exclusive() {
             Ok(()) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(error) if is_startup_lock_contention(&error) => {
                 if let Ok(client) = connect_existing(state_file).await {
                     return Ok(client);
                 }
@@ -614,6 +614,11 @@ fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io:
     command.spawn()
 }
 
+fn is_startup_lock_contention(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
 fn random_token() -> Result<String, LocalRpcError> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| LocalRpcError::Random(error.to_string()))?;
@@ -816,6 +821,20 @@ mod tests {
         assert!(message.contains("target/debug/dbgjs-service"));
         assert!(message.contains("service has old, client expects new"));
         assert!(message.contains("cargo build --bin dbgjs-service"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lock_violation_is_startup_contention() {
+        assert!(is_startup_lock_contention(
+            &std::io::Error::from_raw_os_error(33)
+        ));
+        assert!(!is_startup_lock_contention(&std::io::Error::other(
+            "not a lock error"
+        )));
+        assert!(!is_startup_lock_contention(
+            &std::io::Error::from_raw_os_error(5)
+        ));
     }
 
     #[tokio::test]
