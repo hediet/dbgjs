@@ -142,8 +142,11 @@ and register `runtime_events::RuntimeEventsServer` on their receive router.
 The shared payload types retain their existing names.
 
 The Rust generator uses its default inline-parameter mode. Methods take their
-typed fields directly, including native `#[serde(...)]` renames and optional
-field omission; methods with empty parameter objects take no arguments:
+typed fields directly, retaining native `#[serde(...)]` renames. Each generated
+trait opts into `omit_optional_params = true`, so the macro omits absent optional
+fields according to the frozen schema rather than repeating Serde omission
+attributes on each parameter. Handwritten service traits keep their existing
+serialization defaults. Methods with empty parameter objects take no arguments:
 
 ```rust,ignore
 client.runtime().enable().await?;
@@ -254,7 +257,7 @@ and failures, and is not the input to code generation.
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
 dependencies resolve from public crates.io packages. The root
 `[workspace.dependencies]` pins `linkrpc` and `linkrpc-tokio` to the exact
-published version `=0.3.0-next.20260922.1`; the runtime, protocol crate, and
+published version `=0.3.0-next.20260922.2`; the runtime, protocol crate, and
 generator inherit these dependencies. `Cargo.lock` also locks the transitive
 macro crate and registry checksums.
 Ordinary installs and CI do not need access to the private LinkRPC Git

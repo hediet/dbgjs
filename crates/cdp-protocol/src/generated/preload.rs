@@ -6,6 +6,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"cdp.Preload\",\"hash\":\"8f2f74def2e42581\",\"methods\":{\"disable\":{\"params\":{\"$ref\":\"#/components/schemas/Preload.disableParams\"},\"result\":{\"$ref\":\"#/components/schemas/Preload.disableResult\"},\"x-linkrpc-codegen\":{\"profile\":\"cdp\",\"kind\":\"request\",\"wireMethod\":\"Preload.disable\",\"domain\":\"Preload\",\"experimental\":false,\"redirect\":null}},\"enable\":{\"params\":{\"$ref\":\"#/components/schemas/Preload.enableParams\"},\"result\":{\"$ref\":\"#/components/schemas/Preload.enableResult\"},\"x-linkrpc-codegen\":{\"profile\":\"cdp\",\"kind\":\"request\",\"wireMethod\":\"Preload.enable\",\"domain\":\"Preload\",\"experimental\":false,\"redirect\":null}}},\"components\":{\"schemas\":{\"Preload.disableParams\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"Preload.disableResult\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"Preload.enableParams\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"Preload.enableResult\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}},\"x-linkrpc-codegen\":{\"profile\":\"cdp\",\"wireAddressing\":\"root\",\"wirePrefix\":\"Preload.\",\"sessionMultiplexing\":\"transport\"}}",
+    omit_optional_params = true,
     client = "PreloadClient",
     server = "PreloadServer",
     module = "__linkrpc_interface",

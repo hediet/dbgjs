@@ -6,6 +6,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"cdp.Tethering.events\",\"hash\":\"20f4c27539bda874\",\"description\":\"The Tethering domain defines methods and events for browser port binding.\",\"methods\":{\"accepted\":{\"params\":{\"$ref\":\"#/components/schemas/Tethering.acceptedParams\"},\"description\":\"Informs that port was successfully bound and got a specified connection id.\",\"x-linkrpc-codegen\":{\"profile\":\"cdp\",\"kind\":\"notification\",\"wireMethod\":\"Tethering.accepted\",\"domain\":\"Tethering\",\"experimental\":false,\"redirect\":null}}},\"components\":{\"schemas\":{\"Tethering.acceptedParams\":{\"type\":\"object\",\"properties\":{\"port\":{\"type\":\"integer\",\"description\":\"Port number that was successfully bound.\",\"x-linkrpc-codegen\":{\"cdpType\":\"integer\",\"originalRef\":null,\"optional\":false,\"experimental\":false,\"deprecated\":false}},\"connectionId\":{\"type\":\"string\",\"description\":\"Connection id to be used.\",\"x-linkrpc-codegen\":{\"cdpType\":\"string\",\"originalRef\":null,\"optional\":false,\"experimental\":false,\"deprecated\":false}}},\"additionalProperties\":false,\"required\":[\"port\",\"connectionId\"]}}},\"x-linkrpc-codegen\":{\"profile\":\"cdp\",\"wireAddressing\":\"root\",\"wirePrefix\":\"Tethering.\",\"sessionMultiplexing\":\"transport\"}}",
+    omit_optional_params = true,
     client = "TetheringEventsClient",
     server = "TetheringEventsServer",
     module = "__linkrpc_interface",
