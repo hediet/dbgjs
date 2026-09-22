@@ -16,8 +16,8 @@
 pub trait AuditsEventsService {
     #[name("issueAdded")]
     #[notification]
-    async fn issue_added(#[params] params: super::types::AuditsIssueAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn issue_added(issue: super::types::AuditsInspectorIssue) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, issue,);
         Ok(())
     }
 }

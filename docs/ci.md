@@ -34,7 +34,8 @@ restore-only, preventing unmerged changes from modifying caches consumed by
 `main`. The Rust version is pinned in
 [rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
 downloads; `npm ci` installs the locked registry dependencies. Cargo likewise
-uses the registry packages selected by the checked-in manifests and lockfile.
+uses the packages selected by the checked-in manifests and lockfile, including
+the immutable public Git revision for the unreleased Rust LinkRPC generator.
 It compiles checked-in generated Rust rather than importing npm CDP schemas or
 running a generator during ordinary builds. See
 [RPC contracts and code generation](./contracts.md) for source ownership,
@@ -60,10 +61,10 @@ enabled on both ARM64 platforms as well. Intel macOS is not supported or built.
 The Linux Rust job also runs the generated TypeScript heap-streaming client
 against the freshly built daemon and a real Node inspector, including CLI
 capture/snapshot progress, cancellation, disconnect, and recovery. It installs
-only the registry dependencies from the extension lockfile. The unreleased Rust
-streaming prerequisite and local-only development overrides are documented in
-[the contract integration notes](./contracts.md#registry-dependencies-and-local-linkrpc-development);
-CI never substitutes a sibling checkout for a missing published release.
+only the registry dependencies from the extension lockfile. The pinned Rust
+Git dependencies and local-only development overrides are documented in
+[the contract integration notes](./contracts.md#pinned-dependencies-and-local-linkrpc-development);
+CI never substitutes a sibling checkout for the pinned public sources.
 
 The native package matrix builds Windows x64/ARM64, Linux
 x64/ARM64 (GNU), and macOS ARM64. Each npm package has its own GitHub

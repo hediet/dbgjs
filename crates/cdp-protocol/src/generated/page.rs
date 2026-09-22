@@ -17,124 +17,143 @@ pub trait PageService {
     /// Seeds compilation cache for given url. Compilation cache does not survive
     /// cross-process navigation.
     #[name("addCompilationCache")]
-    async fn add_compilation_cache(#[params] params: super::types::PageAddCompilationCacheParams) -> Result<super::types::PageAddCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_compilation_cache(
+        url: String,
+        data: String,
+    ) -> Result<super::types::PageAddCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, url, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addCompilationCache"))
     }
     /// Deprecated, please use addScriptToEvaluateOnNewDocument instead.
     #[name("addScriptToEvaluateOnLoad")]
-    async fn add_script_to_evaluate_on_load(#[params] params: super::types::PageAddScriptToEvaluateOnLoadParams) -> Result<super::types::PageAddScriptToEvaluateOnLoadResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_script_to_evaluate_on_load(#[serde(rename = "scriptSource")] script_source: String) -> Result<super::types::PageAddScriptToEvaluateOnLoadResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_source,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScriptToEvaluateOnLoad"))
     }
     /// Evaluates given script in every frame upon creation (before loading frame's scripts).
     #[name("addScriptToEvaluateOnNewDocument")]
-    async fn add_script_to_evaluate_on_new_document(#[params] params: super::types::PageAddScriptToEvaluateOnNewDocumentParams) -> Result<super::types::PageAddScriptToEvaluateOnNewDocumentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_script_to_evaluate_on_new_document(
+        source: String,
+        #[serde(rename = "worldName")] #[serde(default, skip_serializing_if = "Option::is_none")] world_name: Option<String>,
+        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(rename = "runImmediately")] #[serde(default, skip_serializing_if = "Option::is_none")] run_immediately: Option<bool>,
+    ) -> Result<super::types::PageAddScriptToEvaluateOnNewDocumentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, source, world_name, include_command_line_api, run_immediately,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScriptToEvaluateOnNewDocument"))
     }
     /// Brings page to front (activates tab).
     #[name("bringToFront")]
-    async fn bring_to_front(#[params] params: super::types::PageBringToFrontParams) -> Result<super::types::PageBringToFrontResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn bring_to_front() -> Result<super::types::PageBringToFrontResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "bringToFront"))
     }
     /// Capture page screenshot.
     #[name("captureScreenshot")]
     async fn capture_screenshot(#[params] params: super::types::PageCaptureScreenshotParams) -> Result<super::types::PageCaptureScreenshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureScreenshot"))
     }
     /// Returns a snapshot of the page as a string. For MHTML format, the serialization includes
     /// iframes, shadow DOM, external resources, and element-inline styles.
     #[name("captureSnapshot")]
     async fn capture_snapshot(#[params] params: super::types::PageCaptureSnapshotParams) -> Result<super::types::PageCaptureSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureSnapshot"))
     }
     /// Clears seeded compilation cache.
     #[name("clearCompilationCache")]
-    async fn clear_compilation_cache(#[params] params: super::types::PageClearCompilationCacheParams) -> Result<super::types::PageClearCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_compilation_cache() -> Result<super::types::PageClearCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearCompilationCache"))
     }
     /// Clears the overridden device metrics.
     #[name("clearDeviceMetricsOverride")]
-    async fn clear_device_metrics_override(#[params] params: super::types::PageClearDeviceMetricsOverrideParams) -> Result<super::types::PageClearDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_device_metrics_override() -> Result<super::types::PageClearDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDeviceMetricsOverride"))
     }
     /// Clears the overridden Device Orientation.
     #[name("clearDeviceOrientationOverride")]
-    async fn clear_device_orientation_override(#[params] params: super::types::PageClearDeviceOrientationOverrideParams) -> Result<super::types::PageClearDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_device_orientation_override() -> Result<super::types::PageClearDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDeviceOrientationOverride"))
     }
     /// Clears the overridden Geolocation Position and Error.
     #[name("clearGeolocationOverride")]
-    async fn clear_geolocation_override(#[params] params: super::types::PageClearGeolocationOverrideParams) -> Result<super::types::PageClearGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_geolocation_override() -> Result<super::types::PageClearGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearGeolocationOverride"))
     }
     /// Tries to close page, running its beforeunload hooks, if any.
     #[name("close")]
-    async fn close(#[params] params: super::types::PageCloseParams) -> Result<super::types::PageCloseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn close() -> Result<super::types::PageCloseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close"))
     }
     /// Crashes renderer on the IO thread, generates minidumps.
     #[name("crash")]
-    async fn crash(#[params] params: super::types::PageCrashParams) -> Result<super::types::PageCrashResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn crash() -> Result<super::types::PageCrashResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "crash"))
     }
     /// Creates an isolated world for the given frame.
     #[name("createIsolatedWorld")]
-    async fn create_isolated_world(#[params] params: super::types::PageCreateIsolatedWorldParams) -> Result<super::types::PageCreateIsolatedWorldResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn create_isolated_world(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        #[serde(rename = "worldName")] #[serde(default, skip_serializing_if = "Option::is_none")] world_name: Option<String>,
+        #[serde(rename = "grantUniveralAccess")] #[serde(default, skip_serializing_if = "Option::is_none")] grant_univeral_access: Option<bool>,
+        #[serde(rename = "contentSecurityPolicy")] #[serde(default, skip_serializing_if = "Option::is_none")] content_security_policy: Option<String>,
+    ) -> Result<super::types::PageCreateIsolatedWorldResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, world_name, grant_univeral_access, content_security_policy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createIsolatedWorld"))
     }
     /// Deletes browser cookie with given name, domain and path.
     #[name("deleteCookie")]
-    async fn delete_cookie(#[params] params: super::types::PageDeleteCookieParams) -> Result<super::types::PageDeleteCookieResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_cookie(
+        #[serde(rename = "cookieName")] cookie_name: String,
+        url: String,
+    ) -> Result<super::types::PageDeleteCookieResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, cookie_name, url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteCookie"))
     }
     /// Disables page domain notifications.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::PageDisableParams) -> Result<super::types::PageDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::PageDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables page domain notifications.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::PageEnableParams) -> Result<super::types::PageEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(#[serde(rename = "enableFileChooserOpenedEvent")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_file_chooser_opened_event: Option<bool>) -> Result<super::types::PageEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enable_file_chooser_opened_event,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Generates a report for testing.
     #[name("generateTestReport")]
-    async fn generate_test_report(#[params] params: super::types::PageGenerateTestReportParams) -> Result<super::types::PageGenerateTestReportResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn generate_test_report(
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] group: Option<String>,
+    ) -> Result<super::types::PageGenerateTestReportResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, message, group,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "generateTestReport"))
     }
     #[name("getAdScriptAncestry")]
-    async fn get_ad_script_ancestry(#[params] params: super::types::PageGetAdScriptAncestryParams) -> Result<super::types::PageGetAdScriptAncestryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_ad_script_ancestry(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::PageGetAdScriptAncestryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAdScriptAncestry"))
     }
     /// Get the annotated page content for the main frame.
     /// This is an experimental command that is subject to change.
     #[name("getAnnotatedPageContent")]
-    async fn get_annotated_page_content(#[params] params: super::types::PageGetAnnotatedPageContentParams) -> Result<super::types::PageGetAnnotatedPageContentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_annotated_page_content(#[serde(rename = "includeActionableInformation")] #[serde(default, skip_serializing_if = "Option::is_none")] include_actionable_information: Option<bool>) -> Result<super::types::PageGetAnnotatedPageContentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, include_actionable_information,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnnotatedPageContent"))
     }
     /// Returns the unique (PWA) app id.
     /// Only returns values if the feature flag 'WebAppEnableManifestId' is enabled
     #[name("getAppId")]
-    async fn get_app_id(#[params] params: super::types::PageGetAppIdParams) -> Result<super::types::PageGetAppIdResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_app_id() -> Result<super::types::PageGetAppIdResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAppId"))
     }
     /// Gets the processed manifest for this current document.
@@ -143,85 +162,97 @@ pub trait PageService {
     ///     current document, this API errors out.
     ///   If there is not a loaded page, this API errors out immediately.
     #[name("getAppManifest")]
-    async fn get_app_manifest(#[params] params: super::types::PageGetAppManifestParams) -> Result<super::types::PageGetAppManifestResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_app_manifest(#[serde(rename = "manifestId")] #[serde(default, skip_serializing_if = "Option::is_none")] manifest_id: Option<String>) -> Result<super::types::PageGetAppManifestResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, manifest_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAppManifest"))
     }
     /// Returns present frame tree structure.
     #[name("getFrameTree")]
-    async fn get_frame_tree(#[params] params: super::types::PageGetFrameTreeParams) -> Result<super::types::PageGetFrameTreeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_frame_tree() -> Result<super::types::PageGetFrameTreeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFrameTree"))
     }
     #[name("getInstallabilityErrors")]
-    async fn get_installability_errors(#[params] params: super::types::PageGetInstallabilityErrorsParams) -> Result<super::types::PageGetInstallabilityErrorsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_installability_errors() -> Result<super::types::PageGetInstallabilityErrorsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getInstallabilityErrors"))
     }
     /// Returns metrics relating to the layouting of the page, such as viewport bounds/scale.
     #[name("getLayoutMetrics")]
-    async fn get_layout_metrics(#[params] params: super::types::PageGetLayoutMetricsParams) -> Result<super::types::PageGetLayoutMetricsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_layout_metrics() -> Result<super::types::PageGetLayoutMetricsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getLayoutMetrics"))
     }
     /// Deprecated because it's not guaranteed that the returned icon is in fact the one used for PWA installation.
     #[name("getManifestIcons")]
-    async fn get_manifest_icons(#[params] params: super::types::PageGetManifestIconsParams) -> Result<super::types::PageGetManifestIconsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_manifest_icons() -> Result<super::types::PageGetManifestIconsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getManifestIcons"))
     }
     /// Returns navigation history for the current page.
     #[name("getNavigationHistory")]
-    async fn get_navigation_history(#[params] params: super::types::PageGetNavigationHistoryParams) -> Result<super::types::PageGetNavigationHistoryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_navigation_history() -> Result<super::types::PageGetNavigationHistoryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNavigationHistory"))
     }
     /// Get Origin Trials on given frame.
     #[name("getOriginTrials")]
-    async fn get_origin_trials(#[params] params: super::types::PageGetOriginTrialsParams) -> Result<super::types::PageGetOriginTrialsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_origin_trials(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::PageGetOriginTrialsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOriginTrials"))
     }
     /// Get Permissions Policy state on given frame.
     #[name("getPermissionsPolicyState")]
-    async fn get_permissions_policy_state(#[params] params: super::types::PageGetPermissionsPolicyStateParams) -> Result<super::types::PageGetPermissionsPolicyStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_permissions_policy_state(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::PageGetPermissionsPolicyStateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPermissionsPolicyState"))
     }
     /// Returns content of the given resource.
     #[name("getResourceContent")]
-    async fn get_resource_content(#[params] params: super::types::PageGetResourceContentParams) -> Result<super::types::PageGetResourceContentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_resource_content(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        url: String,
+    ) -> Result<super::types::PageGetResourceContentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResourceContent"))
     }
     /// Returns present frame / resource tree structure.
     #[name("getResourceTree")]
-    async fn get_resource_tree(#[params] params: super::types::PageGetResourceTreeParams) -> Result<super::types::PageGetResourceTreeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_resource_tree() -> Result<super::types::PageGetResourceTreeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResourceTree"))
     }
     /// Accepts or dismisses a JavaScript initiated dialog (alert, confirm, prompt, or onbeforeunload).
     #[name("handleJavaScriptDialog")]
-    async fn handle_java_script_dialog(#[params] params: super::types::PageHandleJavaScriptDialogParams) -> Result<super::types::PageHandleJavaScriptDialogResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn handle_java_script_dialog(
+        accept: bool,
+        #[serde(rename = "promptText")] #[serde(default, skip_serializing_if = "Option::is_none")] prompt_text: Option<String>,
+    ) -> Result<super::types::PageHandleJavaScriptDialogResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, accept, prompt_text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "handleJavaScriptDialog"))
     }
     /// Navigates current page to the given URL.
     #[name("navigate")]
-    async fn navigate(#[params] params: super::types::PageNavigateParams) -> Result<super::types::PageNavigateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn navigate(
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] referrer: Option<String>,
+        #[serde(rename = "transitionType")] #[serde(default, skip_serializing_if = "Option::is_none")] transition_type: Option<super::types::PageTransitionType>,
+        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(rename = "referrerPolicy")] #[serde(default, skip_serializing_if = "Option::is_none")] referrer_policy: Option<super::types::PageReferrerPolicy>,
+    ) -> Result<super::types::PageNavigateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, url, referrer, transition_type, frame_id, referrer_policy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "navigate"))
     }
     /// Navigates current page to the given history entry.
     #[name("navigateToHistoryEntry")]
-    async fn navigate_to_history_entry(#[params] params: super::types::PageNavigateToHistoryEntryParams) -> Result<super::types::PageNavigateToHistoryEntryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn navigate_to_history_entry(#[serde(rename = "entryId")] entry_id: i64) -> Result<super::types::PageNavigateToHistoryEntryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, entry_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "navigateToHistoryEntry"))
     }
     /// Print page as PDF.
     #[name("printToPDF")]
     async fn print_to_pdf(#[params] params: super::types::PagePrintToPdfparams) -> Result<super::types::PagePrintToPdfresult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "printToPDF"))
     }
     /// Requests backend to produce compilation cache for the specified scripts.
@@ -231,115 +262,155 @@ pub trait PageService {
     /// produced upon backend discretion, based on internal heuristics.
     /// See also: `Page.compilationCacheProduced`.
     #[name("produceCompilationCache")]
-    async fn produce_compilation_cache(#[params] params: super::types::PageProduceCompilationCacheParams) -> Result<super::types::PageProduceCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn produce_compilation_cache(scripts: Vec<super::types::PageCompilationCacheParams>) -> Result<super::types::PageProduceCompilationCacheResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scripts,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "produceCompilationCache"))
     }
     /// Reloads given page optionally ignoring the cache.
     #[name("reload")]
-    async fn reload(#[params] params: super::types::PageReloadParams) -> Result<super::types::PageReloadResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn reload(
+        #[serde(rename = "ignoreCache")] #[serde(default, skip_serializing_if = "Option::is_none")] ignore_cache: Option<bool>,
+        #[serde(rename = "scriptToEvaluateOnLoad")] #[serde(default, skip_serializing_if = "Option::is_none")] script_to_evaluate_on_load: Option<String>,
+        #[serde(rename = "loaderId")] #[serde(default, skip_serializing_if = "Option::is_none")] loader_id: Option<super::types::NetworkLoaderId>,
+    ) -> Result<super::types::PageReloadResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, ignore_cache, script_to_evaluate_on_load, loader_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reload"))
     }
     /// Deprecated, please use removeScriptToEvaluateOnNewDocument instead.
     #[name("removeScriptToEvaluateOnLoad")]
-    async fn remove_script_to_evaluate_on_load(#[params] params: super::types::PageRemoveScriptToEvaluateOnLoadParams) -> Result<super::types::PageRemoveScriptToEvaluateOnLoadResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_script_to_evaluate_on_load(identifier: super::types::PageScriptIdentifier) -> Result<super::types::PageRemoveScriptToEvaluateOnLoadResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, identifier,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeScriptToEvaluateOnLoad"))
     }
     /// Removes given script from the list.
     #[name("removeScriptToEvaluateOnNewDocument")]
-    async fn remove_script_to_evaluate_on_new_document(#[params] params: super::types::PageRemoveScriptToEvaluateOnNewDocumentParams) -> Result<super::types::PageRemoveScriptToEvaluateOnNewDocumentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_script_to_evaluate_on_new_document(identifier: super::types::PageScriptIdentifier) -> Result<super::types::PageRemoveScriptToEvaluateOnNewDocumentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, identifier,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeScriptToEvaluateOnNewDocument"))
     }
     /// Resets navigation history for the current page.
     #[name("resetNavigationHistory")]
-    async fn reset_navigation_history(#[params] params: super::types::PageResetNavigationHistoryParams) -> Result<super::types::PageResetNavigationHistoryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn reset_navigation_history() -> Result<super::types::PageResetNavigationHistoryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetNavigationHistory"))
     }
     /// Acknowledges that a screencast frame has been received by the frontend.
     #[name("screencastFrameAck")]
-    async fn screencast_frame_ack(#[params] params: super::types::PageScreencastFrameAckParams) -> Result<super::types::PageScreencastFrameAckResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn screencast_frame_ack(#[serde(rename = "sessionId")] session_id: i64) -> Result<super::types::PageScreencastFrameAckResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, session_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "screencastFrameAck"))
     }
     /// Searches for given string in resource content.
     #[name("searchInResource")]
-    async fn search_in_resource(#[params] params: super::types::PageSearchInResourceParams) -> Result<super::types::PageSearchInResourceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn search_in_resource(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        url: String,
+        query: String,
+        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+    ) -> Result<super::types::PageSearchInResourceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, url, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInResource"))
     }
     /// Enable Chrome's experimental ad filter on all sites.
     #[name("setAdBlockingEnabled")]
-    async fn set_ad_blocking_enabled(#[params] params: super::types::PageSetAdBlockingEnabledParams) -> Result<super::types::PageSetAdBlockingEnabledResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_ad_blocking_enabled(enabled: bool) -> Result<super::types::PageSetAdBlockingEnabledResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAdBlockingEnabled"))
     }
     /// Enable page Content Security Policy by-passing.
     #[name("setBypassCSP")]
-    async fn set_bypass_csp(#[params] params: super::types::PageSetBypassCspparams) -> Result<super::types::PageSetBypassCspresult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_bypass_csp(enabled: bool) -> Result<super::types::PageSetBypassCspresult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBypassCSP"))
     }
     /// Overrides the values of device screen dimensions (window.screen.width, window.screen.height,
     /// window.innerWidth, window.innerHeight, and "device-width"/"device-height"-related CSS media
     /// query results).
     #[name("setDeviceMetricsOverride")]
-    async fn set_device_metrics_override(#[params] params: super::types::PageSetDeviceMetricsOverrideParams) -> Result<super::types::PageSetDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_device_metrics_override(
+        width: i64,
+        height: i64,
+        #[serde(rename = "deviceScaleFactor")] device_scale_factor: f64,
+        mobile: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")] scale: Option<f64>,
+        #[serde(rename = "screenWidth")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_width: Option<i64>,
+        #[serde(rename = "screenHeight")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_height: Option<i64>,
+        #[serde(rename = "positionX")] #[serde(default, skip_serializing_if = "Option::is_none")] position_x: Option<i64>,
+        #[serde(rename = "positionY")] #[serde(default, skip_serializing_if = "Option::is_none")] position_y: Option<i64>,
+        #[serde(rename = "dontSetVisibleSize")] #[serde(default, skip_serializing_if = "Option::is_none")] dont_set_visible_size: Option<bool>,
+        #[serde(rename = "screenOrientation")] #[serde(default, skip_serializing_if = "Option::is_none")] screen_orientation: Option<super::types::EmulationScreenOrientation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] viewport: Option<super::types::PageViewport>,
+    ) -> Result<super::types::PageSetDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, width, height, device_scale_factor, mobile, scale, screen_width, screen_height, position_x, position_y, dont_set_visible_size, screen_orientation, viewport,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceMetricsOverride"))
     }
     /// Overrides the Device Orientation.
     #[name("setDeviceOrientationOverride")]
-    async fn set_device_orientation_override(#[params] params: super::types::PageSetDeviceOrientationOverrideParams) -> Result<super::types::PageSetDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_device_orientation_override(
+        alpha: f64,
+        beta: f64,
+        gamma: f64,
+    ) -> Result<super::types::PageSetDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, alpha, beta, gamma,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceOrientationOverride"))
     }
     /// Sets given markup as the document's HTML.
     #[name("setDocumentContent")]
-    async fn set_document_content(#[params] params: super::types::PageSetDocumentContentParams) -> Result<super::types::PageSetDocumentContentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_document_content(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        html: String,
+    ) -> Result<super::types::PageSetDocumentContentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, html,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDocumentContent"))
     }
     /// Set the behavior when downloading a file.
     #[name("setDownloadBehavior")]
     async fn set_download_behavior(#[params] params: super::types::PageSetDownloadBehaviorParams) -> Result<super::types::PageSetDownloadBehaviorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDownloadBehavior"))
     }
     /// Set generic font families.
     #[name("setFontFamilies")]
-    async fn set_font_families(#[params] params: super::types::PageSetFontFamiliesParams) -> Result<super::types::PageSetFontFamiliesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_font_families(
+        #[serde(rename = "fontFamilies")] font_families: super::types::PageFontFamilies,
+        #[serde(rename = "forScripts")] #[serde(default, skip_serializing_if = "Option::is_none")] for_scripts: Option<Vec<super::types::PageScriptFontFamilies>>,
+    ) -> Result<super::types::PageSetFontFamiliesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, font_families, for_scripts,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFontFamilies"))
     }
     /// Set default font sizes.
     #[name("setFontSizes")]
-    async fn set_font_sizes(#[params] params: super::types::PageSetFontSizesParams) -> Result<super::types::PageSetFontSizesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_font_sizes(#[serde(rename = "fontSizes")] font_sizes: super::types::PageFontSizes) -> Result<super::types::PageSetFontSizesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, font_sizes,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFontSizes"))
     }
     /// Overrides the Geolocation Position or Error. Omitting any of the parameters emulates position
     /// unavailable.
     #[name("setGeolocationOverride")]
-    async fn set_geolocation_override(#[params] params: super::types::PageSetGeolocationOverrideParams) -> Result<super::types::PageSetGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_geolocation_override(
+        #[serde(default, skip_serializing_if = "Option::is_none")] latitude: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] longitude: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] accuracy: Option<f64>,
+    ) -> Result<super::types::PageSetGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, latitude, longitude, accuracy,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setGeolocationOverride"))
     }
     /// Intercept file chooser requests and transfer control to protocol clients.
     /// When file chooser interception is enabled, native file chooser dialog is not shown.
     /// Instead, a protocol event `Page.fileChooserOpened` is emitted.
     #[name("setInterceptFileChooserDialog")]
-    async fn set_intercept_file_chooser_dialog(#[params] params: super::types::PageSetInterceptFileChooserDialogParams) -> Result<super::types::PageSetInterceptFileChooserDialogResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_intercept_file_chooser_dialog(
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")] cancel: Option<bool>,
+    ) -> Result<super::types::PageSetInterceptFileChooserDialogResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled, cancel,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInterceptFileChooserDialog"))
     }
     /// Controls whether page will emit lifecycle events.
     #[name("setLifecycleEventsEnabled")]
-    async fn set_lifecycle_events_enabled(#[params] params: super::types::PageSetLifecycleEventsEnabledParams) -> Result<super::types::PageSetLifecycleEventsEnabledResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_lifecycle_events_enabled(enabled: bool) -> Result<super::types::PageSetLifecycleEventsEnabledResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setLifecycleEventsEnabled"))
     }
     /// Enable/disable prerendering manually.
@@ -350,28 +421,28 @@ pub trait PageService {
     ///
     /// TODO(https://crbug.com/1440085): Remove this once Puppeteer supports tab targets.
     #[name("setPrerenderingAllowed")]
-    async fn set_prerendering_allowed(#[params] params: super::types::PageSetPrerenderingAllowedParams) -> Result<super::types::PageSetPrerenderingAllowedResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_prerendering_allowed(#[serde(rename = "isAllowed")] is_allowed: bool) -> Result<super::types::PageSetPrerenderingAllowedResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, is_allowed,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPrerenderingAllowed"))
     }
     /// Extensions for Custom Handlers API:
     /// https://html.spec.whatwg.org/multipage/system-state.html#rph-automation
     #[name("setRPHRegistrationMode")]
     async fn set_rphregistration_mode(#[params] params: super::types::PageSetRphregistrationModeParams) -> Result<super::types::PageSetRphregistrationModeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRPHRegistrationMode"))
     }
     /// Sets the Secure Payment Confirmation transaction mode.
     /// https://w3c.github.io/secure-payment-confirmation/#sctn-automation-set-spc-transaction-mode
     #[name("setSPCTransactionMode")]
     async fn set_spctransaction_mode(#[params] params: super::types::PageSetSpctransactionModeParams) -> Result<super::types::PageSetSpctransactionModeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSPCTransactionMode"))
     }
     /// Toggles mouse event-based touch event emulation.
     #[name("setTouchEmulationEnabled")]
     async fn set_touch_emulation_enabled(#[params] params: super::types::PageSetTouchEmulationEnabledParams) -> Result<super::types::PageSetTouchEmulationEnabledResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTouchEmulationEnabled"))
     }
     /// Tries to update the web lifecycle state of the page.
@@ -379,43 +450,48 @@ pub trait PageService {
     /// https://github.com/WICG/web-lifecycle/
     #[name("setWebLifecycleState")]
     async fn set_web_lifecycle_state(#[params] params: super::types::PageSetWebLifecycleStateParams) -> Result<super::types::PageSetWebLifecycleStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setWebLifecycleState"))
     }
     /// Starts screencast video recording.
     #[name("startScreenRecording")]
-    async fn start_screen_recording(#[params] params: super::types::PageStartScreenRecordingParams) -> Result<super::types::PageStartScreenRecordingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_screen_recording(
+        #[serde(default, skip_serializing_if = "Option::is_none")] audio: Option<bool>,
+        #[serde(rename = "maxWidth")] #[serde(default, skip_serializing_if = "Option::is_none")] max_width: Option<i64>,
+        #[serde(rename = "maxHeight")] #[serde(default, skip_serializing_if = "Option::is_none")] max_height: Option<i64>,
+        #[serde(rename = "frameRate")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_rate: Option<i64>,
+    ) -> Result<super::types::PageStartScreenRecordingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, audio, max_width, max_height, frame_rate,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startScreenRecording"))
     }
     /// Starts sending each frame using the `screencastFrame` event.
     #[name("startScreencast")]
     async fn start_screencast(#[params] params: super::types::PageStartScreencastParams) -> Result<super::types::PageStartScreencastResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startScreencast"))
     }
     /// Force the page stop all navigations and pending resource fetches.
     #[name("stopLoading")]
-    async fn stop_loading(#[params] params: super::types::PageStopLoadingParams) -> Result<super::types::PageStopLoadingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_loading() -> Result<super::types::PageStopLoadingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopLoading"))
     }
     /// Stops screencast video recording.
     #[name("stopScreenRecording")]
-    async fn stop_screen_recording(#[params] params: super::types::PageStopScreenRecordingParams) -> Result<super::types::PageStopScreenRecordingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_screen_recording() -> Result<super::types::PageStopScreenRecordingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopScreenRecording"))
     }
     /// Stops sending each frame in the `screencastFrame`.
     #[name("stopScreencast")]
-    async fn stop_screencast(#[params] params: super::types::PageStopScreencastParams) -> Result<super::types::PageStopScreencastResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_screencast() -> Result<super::types::PageStopScreencastResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopScreencast"))
     }
     /// Pauses page execution. Can be resumed using generic Runtime.runIfWaitingForDebugger.
     #[name("waitForDebugger")]
-    async fn wait_for_debugger(#[params] params: super::types::PageWaitForDebuggerParams) -> Result<super::types::PageWaitForDebuggerResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn wait_for_debugger() -> Result<super::types::PageWaitForDebuggerResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "waitForDebugger"))
     }
 }

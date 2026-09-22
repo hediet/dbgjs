@@ -18,14 +18,20 @@ pub trait FedCmEventsService {
     /// or a command below.
     #[name("dialogClosed")]
     #[notification]
-    async fn dialog_closed(#[params] params: super::types::FedCmDialogClosedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dialog_closed(#[serde(rename = "dialogId")] dialog_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id,);
         Ok(())
     }
     #[name("dialogShown")]
     #[notification]
-    async fn dialog_shown(#[params] params: super::types::FedCmDialogShownParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dialog_shown(
+        #[serde(rename = "dialogId")] dialog_id: String,
+        #[serde(rename = "dialogType")] dialog_type: super::types::FedCmDialogType,
+        accounts: Vec<super::types::FedCmAccount>,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] subtitle: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id, dialog_type, accounts, title, subtitle,);
         Ok(())
     }
 }

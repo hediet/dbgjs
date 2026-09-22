@@ -17,8 +17,11 @@ pub trait AutofillEventsService {
     /// Emitted when an address form is filled.
     #[name("addressFormFilled")]
     #[notification]
-    async fn address_form_filled(#[params] params: super::types::AutofillAddressFormFilledParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn address_form_filled(
+        #[serde(rename = "filledFields")] filled_fields: Vec<super::types::AutofillFilledField>,
+        #[serde(rename = "addressUi")] address_ui: super::types::AutofillAddressUi,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, filled_fields, address_ui,);
         Ok(())
     }
 }

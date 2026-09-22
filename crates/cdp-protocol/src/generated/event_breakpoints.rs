@@ -18,20 +18,20 @@
 pub trait EventBreakpointsService {
     /// Removes all breakpoints
     #[name("disable")]
-    async fn disable(#[params] params: super::types::EventBreakpointsDisableParams) -> Result<super::types::EventBreakpointsDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::EventBreakpointsDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Removes breakpoint on particular native event.
     #[name("removeInstrumentationBreakpoint")]
-    async fn remove_instrumentation_breakpoint(#[params] params: super::types::EventBreakpointsRemoveInstrumentationBreakpointParams) -> Result<super::types::EventBreakpointsRemoveInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::EventBreakpointsRemoveInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeInstrumentationBreakpoint"))
     }
     /// Sets breakpoint on particular native event.
     #[name("setInstrumentationBreakpoint")]
-    async fn set_instrumentation_breakpoint(#[params] params: super::types::EventBreakpointsSetInstrumentationBreakpointParams) -> Result<super::types::EventBreakpointsSetInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::EventBreakpointsSetInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInstrumentationBreakpoint"))
     }
 }

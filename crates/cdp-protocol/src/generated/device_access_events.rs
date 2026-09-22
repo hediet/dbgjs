@@ -17,8 +17,11 @@ pub trait DeviceAccessEventsService {
     /// selectPrompt or cancelPrompt command.
     #[name("deviceRequestPrompted")]
     #[notification]
-    async fn device_request_prompted(#[params] params: super::types::DeviceAccessDeviceRequestPromptedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn device_request_prompted(
+        id: super::types::DeviceAccessRequestId,
+        devices: Vec<super::types::DeviceAccessPromptDevice>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id, devices,);
         Ok(())
     }
 }

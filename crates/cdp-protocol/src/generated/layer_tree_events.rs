@@ -15,14 +15,17 @@
 pub trait LayerTreeEventsService {
     #[name("layerPainted")]
     #[notification]
-    async fn layer_painted(#[params] params: super::types::LayerTreeLayerPaintedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn layer_painted(
+        #[serde(rename = "layerId")] layer_id: super::types::LayerTreeLayerId,
+        clip: super::types::DomRect,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, layer_id, clip,);
         Ok(())
     }
     #[name("layerTreeDidChange")]
     #[notification]
-    async fn layer_tree_did_change(#[params] params: super::types::LayerTreeLayerTreeDidChangeParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn layer_tree_did_change(#[serde(default, skip_serializing_if = "Option::is_none")] layers: Option<Vec<super::types::LayerTreeLayer>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, layers,);
         Ok(())
     }
 }

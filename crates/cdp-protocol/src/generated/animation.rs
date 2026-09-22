@@ -15,62 +15,72 @@
 pub trait AnimationService {
     /// Disables animation domain notifications.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::AnimationDisableParams) -> Result<super::types::AnimationDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::AnimationDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables animation domain notifications.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::AnimationEnableParams) -> Result<super::types::AnimationEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::AnimationEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Returns the current time of the an animation.
     #[name("getCurrentTime")]
-    async fn get_current_time(#[params] params: super::types::AnimationGetCurrentTimeParams) -> Result<super::types::AnimationGetCurrentTimeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_current_time(id: String) -> Result<super::types::AnimationGetCurrentTimeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCurrentTime"))
     }
     /// Gets the playback rate of the document timeline.
     #[name("getPlaybackRate")]
-    async fn get_playback_rate(#[params] params: super::types::AnimationGetPlaybackRateParams) -> Result<super::types::AnimationGetPlaybackRateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_playback_rate() -> Result<super::types::AnimationGetPlaybackRateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPlaybackRate"))
     }
     /// Releases a set of animations to no longer be manipulated.
     #[name("releaseAnimations")]
-    async fn release_animations(#[params] params: super::types::AnimationReleaseAnimationsParams) -> Result<super::types::AnimationReleaseAnimationsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn release_animations(animations: Vec<String>) -> Result<super::types::AnimationReleaseAnimationsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, animations,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseAnimations"))
     }
     /// Gets the remote object of the Animation.
     #[name("resolveAnimation")]
-    async fn resolve_animation(#[params] params: super::types::AnimationResolveAnimationParams) -> Result<super::types::AnimationResolveAnimationResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn resolve_animation(#[serde(rename = "animationId")] animation_id: String) -> Result<super::types::AnimationResolveAnimationResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, animation_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveAnimation"))
     }
     /// Seek a set of animations to a particular time within each animation.
     #[name("seekAnimations")]
-    async fn seek_animations(#[params] params: super::types::AnimationSeekAnimationsParams) -> Result<super::types::AnimationSeekAnimationsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn seek_animations(
+        animations: Vec<String>,
+        #[serde(rename = "currentTime")] current_time: f64,
+    ) -> Result<super::types::AnimationSeekAnimationsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, animations, current_time,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "seekAnimations"))
     }
     /// Sets the paused state of a set of animations.
     #[name("setPaused")]
-    async fn set_paused(#[params] params: super::types::AnimationSetPausedParams) -> Result<super::types::AnimationSetPausedResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_paused(
+        animations: Vec<String>,
+        paused: bool,
+    ) -> Result<super::types::AnimationSetPausedResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, animations, paused,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPaused"))
     }
     /// Sets the playback rate of the document timeline.
     #[name("setPlaybackRate")]
-    async fn set_playback_rate(#[params] params: super::types::AnimationSetPlaybackRateParams) -> Result<super::types::AnimationSetPlaybackRateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_playback_rate(#[serde(rename = "playbackRate")] playback_rate: f64) -> Result<super::types::AnimationSetPlaybackRateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, playback_rate,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPlaybackRate"))
     }
     /// Sets the timing of an animation node.
     #[name("setTiming")]
-    async fn set_timing(#[params] params: super::types::AnimationSetTimingParams) -> Result<super::types::AnimationSetTimingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_timing(
+        #[serde(rename = "animationId")] animation_id: String,
+        duration: f64,
+        delay: f64,
+    ) -> Result<super::types::AnimationSetTimingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, animation_id, duration, delay,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTiming"))
     }
 }

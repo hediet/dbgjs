@@ -17,53 +17,68 @@ pub trait TargetEventsService {
     /// Issued when attached to target because of auto-attach or `attachToTarget` command.
     #[name("attachedToTarget")]
     #[notification]
-    async fn attached_to_target(#[params] params: super::types::TargetAttachedToTargetParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn attached_to_target(
+        #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
+        #[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo,
+        #[serde(rename = "waitingForDebugger")] waiting_for_debugger: bool,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, session_id, target_info, waiting_for_debugger,);
         Ok(())
     }
     /// Issued when detached from target for any reason (including `detachFromTarget` command). Can be
     /// issued multiple times per target if multiple sessions have been attached to it.
     #[name("detachedFromTarget")]
     #[notification]
-    async fn detached_from_target(#[params] params: super::types::TargetDetachedFromTargetParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn detached_from_target(
+        #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
+        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, session_id, target_id,);
         Ok(())
     }
     /// Notifies about a new protocol message received from the session (as reported in
     /// `attachedToTarget` event).
     #[name("receivedMessageFromTarget")]
     #[notification]
-    async fn received_message_from_target(#[params] params: super::types::TargetReceivedMessageFromTargetParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn received_message_from_target(
+        #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
+        message: String,
+        #[serde(rename = "targetId")] #[serde(default, skip_serializing_if = "Option::is_none")] target_id: Option<super::types::TargetTargetId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, session_id, message, target_id,);
         Ok(())
     }
     /// Issued when a target has crashed.
     #[name("targetCrashed")]
     #[notification]
-    async fn target_crashed(#[params] params: super::types::TargetTargetCrashedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_crashed(
+        #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
+        status: String,
+        #[serde(rename = "errorCode")] error_code: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, target_id, status, error_code,);
         Ok(())
     }
     /// Issued when a possible inspection target is created.
     #[name("targetCreated")]
     #[notification]
-    async fn target_created(#[params] params: super::types::TargetTargetCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_created(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, target_info,);
         Ok(())
     }
     /// Issued when a target is destroyed.
     #[name("targetDestroyed")]
     #[notification]
-    async fn target_destroyed(#[params] params: super::types::TargetTargetDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_destroyed(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, target_id,);
         Ok(())
     }
     /// Issued when some information about a target has changed. This only happens between
     /// `targetCreated` and `targetDestroyed`.
     #[name("targetInfoChanged")]
     #[notification]
-    async fn target_info_changed(#[params] params: super::types::TargetTargetInfoChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_info_changed(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, target_info,);
         Ok(())
     }
 }

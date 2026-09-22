@@ -4,9 +4,7 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::cdp::{
-    RuntimeGetPropertiesParams, RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor,
-};
+use crate::cdp::{RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor};
 use crate::debugger_driver::DebuggerDriver;
 use crate::debugger_engine::{ScriptKey, SessionKey};
 use crate::service_api::SourceLocation;
@@ -251,13 +249,15 @@ impl LiveSourceInspector {
                     }
                     continue;
                 }
-                let mut params = RuntimeGetPropertiesParams::new(owned_id);
-                params.own_properties = Some(true);
-                params.generate_preview = Some(false);
-                params.non_indexed_properties_only = Some(true);
                 match tokio::time::timeout(
                     self.remaining_time(),
-                    driver.client().runtime().get_properties(params),
+                    driver.client().runtime().get_properties(
+                        owned_id,
+                        Some(true),
+                        None,
+                        Some(false),
+                        Some(true),
+                    ),
                 )
                 .await
                 {
@@ -358,9 +358,8 @@ impl LiveSourceInspector {
         }
         match driver
             .client()
-            .runtime().release_object_group(crate::cdp::RuntimeReleaseObjectGroupParams {
-                object_group: "dbgjs-object-locations".into(),
-            })
+            .runtime()
+            .release_object_group("dbgjs-object-locations".into())
             .await
         {
             Ok(_) => {}

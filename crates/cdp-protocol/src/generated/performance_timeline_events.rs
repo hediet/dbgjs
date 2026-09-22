@@ -18,8 +18,8 @@ pub trait PerformanceTimelineEventsService {
     /// Sent when a performance timeline event is added. See reportPerformanceTimeline method.
     #[name("timelineEventAdded")]
     #[notification]
-    async fn timeline_event_added(#[params] params: super::types::PerformanceTimelineTimelineEventAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn timeline_event_added(event: super::types::PerformanceTimelineTimelineEvent) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event,);
         Ok(())
     }
 }

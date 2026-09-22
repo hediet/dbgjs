@@ -16,57 +16,92 @@ pub trait StorageEventsService {
     /// A cache's contents have been modified.
     #[name("cacheStorageContentUpdated")]
     #[notification]
-    async fn cache_storage_content_updated(#[params] params: super::types::StorageCacheStorageContentUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn cache_storage_content_updated(
+        origin: String,
+        #[serde(rename = "storageKey")] storage_key: String,
+        #[serde(rename = "bucketId")] bucket_id: String,
+        #[serde(rename = "cacheName")] cache_name: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, storage_key, bucket_id, cache_name,);
         Ok(())
     }
     /// A cache has been added/deleted.
     #[name("cacheStorageListUpdated")]
     #[notification]
-    async fn cache_storage_list_updated(#[params] params: super::types::StorageCacheStorageListUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn cache_storage_list_updated(
+        origin: String,
+        #[serde(rename = "storageKey")] storage_key: String,
+        #[serde(rename = "bucketId")] bucket_id: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, storage_key, bucket_id,);
         Ok(())
     }
     /// The origin's IndexedDB object store has been modified.
     #[name("indexedDBContentUpdated")]
     #[notification]
-    async fn indexed_dbcontent_updated(#[params] params: super::types::StorageIndexedDbcontentUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn indexed_dbcontent_updated(
+        origin: String,
+        #[serde(rename = "storageKey")] storage_key: String,
+        #[serde(rename = "bucketId")] bucket_id: String,
+        #[serde(rename = "databaseName")] database_name: String,
+        #[serde(rename = "objectStoreName")] object_store_name: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, storage_key, bucket_id, database_name, object_store_name,);
         Ok(())
     }
     /// The origin's IndexedDB database list has been modified.
     #[name("indexedDBListUpdated")]
     #[notification]
-    async fn indexed_dblist_updated(#[params] params: super::types::StorageIndexedDblistUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn indexed_dblist_updated(
+        origin: String,
+        #[serde(rename = "storageKey")] storage_key: String,
+        #[serde(rename = "bucketId")] bucket_id: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, storage_key, bucket_id,);
         Ok(())
     }
     /// Shared storage was accessed by the associated page.
     /// The following parameters are included in all events.
     #[name("sharedStorageAccessed")]
     #[notification]
-    async fn shared_storage_accessed(#[params] params: super::types::StorageSharedStorageAccessedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn shared_storage_accessed(
+        #[serde(rename = "accessTime")] access_time: super::types::NetworkTimeSinceEpoch,
+        scope: super::types::StorageSharedStorageAccessScope,
+        method: super::types::StorageSharedStorageAccessMethod,
+        #[serde(rename = "mainFrameId")] main_frame_id: super::types::PageFrameId,
+        #[serde(rename = "ownerOrigin")] owner_origin: String,
+        #[serde(rename = "ownerSite")] owner_site: String,
+        params: super::types::StorageSharedStorageAccessParams,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, access_time, scope, method, main_frame_id, owner_origin, owner_site, params,);
         Ok(())
     }
     /// A shared storage run or selectURL operation finished its execution.
     /// The following parameters are included in all events.
     #[name("sharedStorageWorkletOperationExecutionFinished")]
     #[notification]
-    async fn shared_storage_worklet_operation_execution_finished(#[params] params: super::types::StorageSharedStorageWorkletOperationExecutionFinishedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn shared_storage_worklet_operation_execution_finished(
+        #[serde(rename = "finishedTime")] finished_time: super::types::NetworkTimeSinceEpoch,
+        #[serde(rename = "executionTime")] execution_time: i64,
+        method: super::types::StorageSharedStorageAccessMethod,
+        #[serde(rename = "operationId")] operation_id: String,
+        #[serde(rename = "workletTargetId")] worklet_target_id: super::types::TargetTargetId,
+        #[serde(rename = "mainFrameId")] main_frame_id: super::types::PageFrameId,
+        #[serde(rename = "ownerOrigin")] owner_origin: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, finished_time, execution_time, method, operation_id, worklet_target_id, main_frame_id, owner_origin,);
         Ok(())
     }
     #[name("storageBucketCreatedOrUpdated")]
     #[notification]
-    async fn storage_bucket_created_or_updated(#[params] params: super::types::StorageStorageBucketCreatedOrUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn storage_bucket_created_or_updated(#[serde(rename = "bucketInfo")] bucket_info: super::types::StorageStorageBucketInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, bucket_info,);
         Ok(())
     }
     #[name("storageBucketDeleted")]
     #[notification]
-    async fn storage_bucket_deleted(#[params] params: super::types::StorageStorageBucketDeletedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn storage_bucket_deleted(#[serde(rename = "bucketId")] bucket_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, bucket_id,);
         Ok(())
     }
 }

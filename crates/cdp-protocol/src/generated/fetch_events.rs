@@ -18,8 +18,14 @@ pub trait FetchEventsService {
     /// The request is paused until client responds with continueWithAuth.
     #[name("authRequired")]
     #[notification]
-    async fn auth_required(#[params] params: super::types::FetchAuthRequiredParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn auth_required(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        request: super::types::NetworkRequest,
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        #[serde(rename = "resourceType")] resource_type: super::types::NetworkResourceType,
+        #[serde(rename = "authChallenge")] auth_challenge: super::types::FetchAuthChallenge,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, request, frame_id, resource_type, auth_challenge,);
         Ok(())
     }
     /// Issued when the domain is enabled and the request URL matches the
@@ -35,8 +41,19 @@ pub trait FetchEventsService {
     /// have `redirectedRequestId` field set.
     #[name("requestPaused")]
     #[notification]
-    async fn request_paused(#[params] params: super::types::FetchRequestPausedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn request_paused(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        request: super::types::NetworkRequest,
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        #[serde(rename = "resourceType")] resource_type: super::types::NetworkResourceType,
+        #[serde(rename = "responseErrorReason")] #[serde(default, skip_serializing_if = "Option::is_none")] response_error_reason: Option<super::types::NetworkErrorReason>,
+        #[serde(rename = "responseStatusCode")] #[serde(default, skip_serializing_if = "Option::is_none")] response_status_code: Option<i64>,
+        #[serde(rename = "responseStatusText")] #[serde(default, skip_serializing_if = "Option::is_none")] response_status_text: Option<String>,
+        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "networkId")] #[serde(default, skip_serializing_if = "Option::is_none")] network_id: Option<super::types::NetworkRequestId>,
+        #[serde(rename = "redirectedRequestId")] #[serde(default, skip_serializing_if = "Option::is_none")] redirected_request_id: Option<super::types::FetchRequestId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, request, frame_id, resource_type, response_error_reason, response_status_code, response_status_text, response_headers, network_id, redirected_request_id,);
         Ok(())
     }
 }

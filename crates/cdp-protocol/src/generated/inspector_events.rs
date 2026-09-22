@@ -16,29 +16,29 @@ pub trait InspectorEventsService {
     /// Fired when remote debugging connection is about to be terminated. Contains detach reason.
     #[name("detached")]
     #[notification]
-    async fn detached(#[params] params: super::types::InspectorDetachedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn detached(reason: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, reason,);
         Ok(())
     }
     /// Fired when debugging target has crashed
     #[name("targetCrashed")]
     #[notification]
-    async fn target_crashed(#[params] params: super::types::InspectorTargetCrashedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_crashed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired when debugging target has reloaded after crash
     #[name("targetReloadedAfterCrash")]
     #[notification]
-    async fn target_reloaded_after_crash(#[params] params: super::types::InspectorTargetReloadedAfterCrashParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn target_reloaded_after_crash() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired on worker targets when main worker script and any imported scripts have been evaluated.
     #[name("workerScriptLoaded")]
     #[notification]
-    async fn worker_script_loaded(#[params] params: super::types::InspectorWorkerScriptLoadedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn worker_script_loaded() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
 }

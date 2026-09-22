@@ -15,84 +15,115 @@
 pub trait InputService {
     /// Cancels any active dragging in the page.
     #[name("cancelDragging")]
-    async fn cancel_dragging(#[params] params: super::types::InputCancelDraggingParams) -> Result<super::types::InputCancelDraggingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn cancel_dragging() -> Result<super::types::InputCancelDraggingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelDragging"))
     }
     /// Dispatches a drag event into the page.
     #[name("dispatchDragEvent")]
     async fn dispatch_drag_event(#[params] params: super::types::InputDispatchDragEventParams) -> Result<super::types::InputDispatchDragEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchDragEvent"))
     }
     /// Dispatches a key event to the page.
     #[name("dispatchKeyEvent")]
     async fn dispatch_key_event(#[params] params: super::types::InputDispatchKeyEventParams) -> Result<super::types::InputDispatchKeyEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchKeyEvent"))
     }
     /// Dispatches a mouse event to the page.
     #[name("dispatchMouseEvent")]
     async fn dispatch_mouse_event(#[params] params: super::types::InputDispatchMouseEventParams) -> Result<super::types::InputDispatchMouseEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchMouseEvent"))
     }
     /// Dispatches a touch event to the page.
     #[name("dispatchTouchEvent")]
     async fn dispatch_touch_event(#[params] params: super::types::InputDispatchTouchEventParams) -> Result<super::types::InputDispatchTouchEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchTouchEvent"))
     }
     /// Emulates touch event from the mouse event parameters.
     #[name("emulateTouchFromMouseEvent")]
     async fn emulate_touch_from_mouse_event(#[params] params: super::types::InputEmulateTouchFromMouseEventParams) -> Result<super::types::InputEmulateTouchFromMouseEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "emulateTouchFromMouseEvent"))
     }
     /// This method sets the current candidate text for IME.
     /// Use imeCommitComposition to commit the final text.
     /// Use imeSetComposition with empty string as text to cancel composition.
     #[name("imeSetComposition")]
-    async fn ime_set_composition(#[params] params: super::types::InputImeSetCompositionParams) -> Result<super::types::InputImeSetCompositionResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn ime_set_composition(
+        text: String,
+        #[serde(rename = "selectionStart")] selection_start: i64,
+        #[serde(rename = "selectionEnd")] selection_end: i64,
+        #[serde(rename = "replacementStart")] #[serde(default, skip_serializing_if = "Option::is_none")] replacement_start: Option<i64>,
+        #[serde(rename = "replacementEnd")] #[serde(default, skip_serializing_if = "Option::is_none")] replacement_end: Option<i64>,
+    ) -> Result<super::types::InputImeSetCompositionResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, text, selection_start, selection_end, replacement_start, replacement_end,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "imeSetComposition"))
     }
     /// This method emulates inserting text that doesn't come from a key press,
     /// for example an emoji keyboard or an IME.
     #[name("insertText")]
-    async fn insert_text(#[params] params: super::types::InputInsertTextParams) -> Result<super::types::InputInsertTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn insert_text(text: String) -> Result<super::types::InputInsertTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "insertText"))
     }
     /// Ignores input events (useful while auditing page).
     #[name("setIgnoreInputEvents")]
-    async fn set_ignore_input_events(#[params] params: super::types::InputSetIgnoreInputEventsParams) -> Result<super::types::InputSetIgnoreInputEventsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_ignore_input_events(ignore: bool) -> Result<super::types::InputSetIgnoreInputEventsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, ignore,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setIgnoreInputEvents"))
     }
     /// Prevents default drag and drop behavior and instead emits `Input.dragIntercepted` events.
     /// Drag and drop behavior can be directly controlled via `Input.dispatchDragEvent`.
     #[name("setInterceptDrags")]
-    async fn set_intercept_drags(#[params] params: super::types::InputSetInterceptDragsParams) -> Result<super::types::InputSetInterceptDragsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_intercept_drags(enabled: bool) -> Result<super::types::InputSetInterceptDragsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInterceptDrags"))
     }
     /// Synthesizes a pinch gesture over a time period by issuing appropriate touch events.
     #[name("synthesizePinchGesture")]
-    async fn synthesize_pinch_gesture(#[params] params: super::types::InputSynthesizePinchGestureParams) -> Result<super::types::InputSynthesizePinchGestureResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn synthesize_pinch_gesture(
+        x: f64,
+        y: f64,
+        #[serde(rename = "scaleFactor")] scale_factor: f64,
+        #[serde(rename = "relativeSpeed")] #[serde(default, skip_serializing_if = "Option::is_none")] relative_speed: Option<i64>,
+        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+    ) -> Result<super::types::InputSynthesizePinchGestureResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, x, y, scale_factor, relative_speed, gesture_source_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizePinchGesture"))
     }
     /// Synthesizes a scroll gesture over a time period by issuing appropriate touch events.
     #[name("synthesizeScrollGesture")]
-    async fn synthesize_scroll_gesture(#[params] params: super::types::InputSynthesizeScrollGestureParams) -> Result<super::types::InputSynthesizeScrollGestureResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn synthesize_scroll_gesture(
+        x: f64,
+        y: f64,
+        #[serde(rename = "xDistance")] #[serde(default, skip_serializing_if = "Option::is_none")] x_distance: Option<f64>,
+        #[serde(rename = "yDistance")] #[serde(default, skip_serializing_if = "Option::is_none")] y_distance: Option<f64>,
+        #[serde(rename = "xOverscroll")] #[serde(default, skip_serializing_if = "Option::is_none")] x_overscroll: Option<f64>,
+        #[serde(rename = "yOverscroll")] #[serde(default, skip_serializing_if = "Option::is_none")] y_overscroll: Option<f64>,
+        #[serde(rename = "preventFling")] #[serde(default, skip_serializing_if = "Option::is_none")] prevent_fling: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] speed: Option<i64>,
+        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+        #[serde(rename = "repeatCount")] #[serde(default, skip_serializing_if = "Option::is_none")] repeat_count: Option<i64>,
+        #[serde(rename = "repeatDelayMs")] #[serde(default, skip_serializing_if = "Option::is_none")] repeat_delay_ms: Option<i64>,
+        #[serde(rename = "interactionMarkerName")] #[serde(default, skip_serializing_if = "Option::is_none")] interaction_marker_name: Option<String>,
+    ) -> Result<super::types::InputSynthesizeScrollGestureResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, x, y, x_distance, y_distance, x_overscroll, y_overscroll, prevent_fling, speed, gesture_source_type, repeat_count, repeat_delay_ms, interaction_marker_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizeScrollGesture"))
     }
     /// Synthesizes a tap gesture over a time period by issuing appropriate touch events.
     #[name("synthesizeTapGesture")]
-    async fn synthesize_tap_gesture(#[params] params: super::types::InputSynthesizeTapGestureParams) -> Result<super::types::InputSynthesizeTapGestureResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn synthesize_tap_gesture(
+        x: f64,
+        y: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")] duration: Option<i64>,
+        #[serde(rename = "tapCount")] #[serde(default, skip_serializing_if = "Option::is_none")] tap_count: Option<i64>,
+        #[serde(rename = "gestureSourceType")] #[serde(default, skip_serializing_if = "Option::is_none")] gesture_source_type: Option<super::types::InputGestureSourceType>,
+    ) -> Result<super::types::InputSynthesizeTapGestureResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, x, y, duration, tap_count, gesture_source_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "synthesizeTapGesture"))
     }
 }

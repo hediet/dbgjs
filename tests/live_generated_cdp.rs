@@ -3,10 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dbgjs::cdp::{
-    HeapProfilerTakeHeapSnapshotParams, InputDispatchKeyEventParams,
-    InputDispatchKeyEventParamsType, InputInsertTextParams, RuntimeEvaluateParams,
-    RuntimeRemoteObjectType, TargetAttachToTargetParams, TargetCloseTargetParams,
-    TargetCreateTargetParams,
+    InputDispatchKeyEventParams, InputDispatchKeyEventParamsType, RuntimeRemoteObjectType,
 };
 use dbgjs::cdp_runtime::CdpConnection;
 use dbgjs::context_source_model::ContextSourceModel;
@@ -65,14 +62,26 @@ async fn run_breakpoint_scenario() {
 
     let created = root
         .target()
-        .create_target(TargetCreateTargetParams::new("about:blank".into()))
+        .create_target(
+            "about:blank".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("Target.createTarget failed");
-    let mut attach_params = TargetAttachToTargetParams::new(created.target_id.clone());
-    attach_params.flatten = Some(true);
     let attached = root
         .target()
-        .attach_to_target(attach_params)
+        .attach_to_target(created.target_id.clone(), Some(true), None)
         .await
         .expect("Target.attachToTarget failed");
 
@@ -119,10 +128,10 @@ async fn run_breakpoint_scenario() {
 
     driver
         .client()
-        .runtime().evaluate(RuntimeEvaluateParams::new(format!(
+        .runtime().evaluate(format!(
             "function add(a, b) {{\n  return a + b;\n}}\n//# sourceMappingURL={}\n//# sourceURL={GENERATED_URL}",
             source_map_url,
-        )))
+        ), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None)
         .await
         .expect("function definition failed");
 
@@ -157,11 +166,26 @@ async fn run_breakpoint_scenario() {
 
     let evaluation_client = driver.client().clone();
     let evaluation = tokio::spawn(async move {
-        let mut params = RuntimeEvaluateParams::new("add(20, 22)".into());
-        params.return_by_value = Some(true);
         evaluation_client
             .runtime()
-            .evaluate(params)
+            .evaluate(
+                "add(20, 22)".into(),
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("breakpoint evaluation failed")
     });
@@ -230,7 +254,7 @@ async fn run_breakpoint_scenario() {
         .expect("source-map server task completes");
 
     root.target()
-        .close_target(TargetCloseTargetParams::new(created.target_id))
+        .close_target(created.target_id)
         .await
         .expect("Target.closeTarget failed");
 }
@@ -243,15 +267,27 @@ async fn run_heap_snapshot_scenario() {
     let created = connection
         .root()
         .target()
-        .create_target(TargetCreateTargetParams::new("about:blank".into()))
+        .create_target(
+            "about:blank".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("Target.createTarget failed");
-    let mut attach_params = TargetAttachToTargetParams::new(created.target_id.clone());
-    attach_params.flatten = Some(true);
     let attached = connection
         .root()
         .target()
-        .attach_to_target(attach_params)
+        .attach_to_target(created.target_id.clone(), Some(true), None)
         .await
         .expect("Target.attachToTarget failed");
     let session = connection
@@ -269,12 +305,10 @@ async fn run_heap_snapshot_scenario() {
         .begin_heap_snapshot(destination.clone())
         .await
         .expect("heap snapshot output opens");
-    let mut params = HeapProfilerTakeHeapSnapshotParams::new();
-    params.report_progress = Some(true);
     session
         .client()
         .heap_profiler()
-        .take_heap_snapshot(params)
+        .take_heap_snapshot(Some(true), None, None, None)
         .await
         .expect("HeapProfiler.takeHeapSnapshot failed");
     let bytes_written = session
@@ -306,7 +340,7 @@ async fn run_heap_snapshot_scenario() {
     connection
         .root()
         .target()
-        .close_target(TargetCloseTargetParams::new(created.target_id))
+        .close_target(created.target_id)
         .await
         .expect("Target.closeTarget failed");
     connection.close().await;
@@ -319,11 +353,9 @@ async fn run_vscode_dev_scenario() {
         .await
         .expect("connect to Playwright-launched Chromium CDP endpoint");
     let root = connection.root();
-    let mut attach_params = TargetAttachToTargetParams::new(target_id.clone());
-    attach_params.flatten = Some(true);
     let attached = root
         .target()
-        .attach_to_target(attach_params)
+        .attach_to_target(target_id.clone(), Some(true), None)
         .await
         .expect("attach to vscode.dev target");
     let session_key = SessionKey {
@@ -435,7 +467,7 @@ async fn run_vscode_dev_scenario() {
     let typing = tokio::spawn(async move {
         input_client
             .input()
-            .insert_text(InputInsertTextParams::new("vscode".into()))
+            .insert_text("vscode".into())
             .await
             .expect("CDP text insertion succeeds")
     });

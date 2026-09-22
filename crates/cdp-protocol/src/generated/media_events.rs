@@ -19,38 +19,50 @@ pub trait MediaEventsService {
     /// event for each active player.
     #[name("playerCreated")]
     #[notification]
-    async fn player_created(#[params] params: super::types::MediaPlayerCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn player_created(player: super::types::MediaPlayer) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, player,);
         Ok(())
     }
     /// Send a list of any errors that need to be delivered.
     #[name("playerErrorsRaised")]
     #[notification]
-    async fn player_errors_raised(#[params] params: super::types::MediaPlayerErrorsRaisedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn player_errors_raised(
+        #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
+        errors: Vec<super::types::MediaPlayerError>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, player_id, errors,);
         Ok(())
     }
     /// Send events as a list, allowing them to be batched on the browser for less
     /// congestion. If batched, events must ALWAYS be in chronological order.
     #[name("playerEventsAdded")]
     #[notification]
-    async fn player_events_added(#[params] params: super::types::MediaPlayerEventsAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn player_events_added(
+        #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
+        events: Vec<super::types::MediaPlayerEvent>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, player_id, events,);
         Ok(())
     }
     /// Send a list of any messages that need to be delivered.
     #[name("playerMessagesLogged")]
     #[notification]
-    async fn player_messages_logged(#[params] params: super::types::MediaPlayerMessagesLoggedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn player_messages_logged(
+        #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
+        messages: Vec<super::types::MediaPlayerMessage>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, player_id, messages,);
         Ok(())
     }
     /// This can be called multiple times, and can be used to set / override /
     /// remove player properties. A null propValue indicates removal.
     #[name("playerPropertiesChanged")]
     #[notification]
-    async fn player_properties_changed(#[params] params: super::types::MediaPlayerPropertiesChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn player_properties_changed(
+        #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
+        properties: Vec<super::types::MediaPlayerProperty>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, player_id, properties,);
         Ok(())
     }
 }

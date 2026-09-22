@@ -17,44 +17,44 @@ pub trait OverlayEventsService {
     /// Fired when user cancels the inspect mode.
     #[name("inspectModeCanceled")]
     #[notification]
-    async fn inspect_mode_canceled(#[params] params: super::types::OverlayInspectModeCanceledParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inspect_mode_canceled() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired when the node should be inspected. This happens after call to `setInspectMode` or when
     /// user manually inspects an element.
     #[name("inspectNodeRequested")]
     #[notification]
-    async fn inspect_node_requested(#[params] params: super::types::OverlayInspectNodeRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inspect_node_requested(#[serde(rename = "backendNodeId")] backend_node_id: super::types::DomBackendNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, backend_node_id,);
         Ok(())
     }
     /// Fired when user asks to show the Inspect panel.
     #[name("inspectPanelShowRequested")]
     #[notification]
-    async fn inspect_panel_show_requested(#[params] params: super::types::OverlayInspectPanelShowRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inspect_panel_show_requested(#[serde(rename = "backendNodeId")] backend_node_id: super::types::DomBackendNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, backend_node_id,);
         Ok(())
     }
     /// Fired when user asks to restore the Inspected Element floating window.
     #[name("inspectedElementWindowRestored")]
     #[notification]
-    async fn inspected_element_window_restored(#[params] params: super::types::OverlayInspectedElementWindowRestoredParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inspected_element_window_restored(#[serde(rename = "backendNodeId")] backend_node_id: super::types::DomBackendNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, backend_node_id,);
         Ok(())
     }
     /// Fired when the node should be highlighted. This happens after call to `setInspectMode`.
     #[name("nodeHighlightRequested")]
     #[notification]
-    async fn node_highlight_requested(#[params] params: super::types::OverlayNodeHighlightRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn node_highlight_requested(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Ok(())
     }
     /// Fired when user asks to capture screenshot of some area on the page.
     #[name("screenshotRequested")]
     #[notification]
-    async fn screenshot_requested(#[params] params: super::types::OverlayScreenshotRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn screenshot_requested(viewport: super::types::PageViewport) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, viewport,);
         Ok(())
     }
 }

@@ -19,37 +19,89 @@ pub trait DebuggerEventsService {
     /// Deprecated in favor of `resolvedBreakpoints` in the `scriptParsed` event.
     #[name("breakpointResolved")]
     #[notification]
-    async fn breakpoint_resolved(#[params] params: super::types::DebuggerBreakpointResolvedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn breakpoint_resolved(
+        #[serde(rename = "breakpointId")] breakpoint_id: super::types::DebuggerBreakpointId,
+        location: super::types::DebuggerLocation,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, breakpoint_id, location,);
         Ok(())
     }
     /// Fired when the virtual machine stopped on breakpoint or exception or any other stop criteria.
     #[name("paused")]
     #[notification]
-    async fn paused(#[params] params: super::types::DebuggerPausedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn paused(
+        #[serde(rename = "callFrames")] call_frames: Vec<super::types::DebuggerCallFrame>,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<std::collections::HashMap<String, serde_json::Value>>,
+        #[serde(rename = "hitBreakpoints")] #[serde(default, skip_serializing_if = "Option::is_none")] hit_breakpoints: Option<Vec<String>>,
+        #[serde(rename = "asyncStackTrace")] #[serde(default, skip_serializing_if = "Option::is_none")] async_stack_trace: Option<super::types::RuntimeStackTrace>,
+        #[serde(rename = "asyncStackTraceId")] #[serde(default, skip_serializing_if = "Option::is_none")] async_stack_trace_id: Option<super::types::RuntimeStackTraceId>,
+        #[serde(rename = "asyncCallStackTraceId")] #[serde(default, skip_serializing_if = "Option::is_none")] async_call_stack_trace_id: Option<super::types::RuntimeStackTraceId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, call_frames, reason, data, hit_breakpoints, async_stack_trace, async_stack_trace_id, async_call_stack_trace_id,);
         Ok(())
     }
     /// Fired when the virtual machine resumed execution.
     #[name("resumed")]
     #[notification]
-    async fn resumed(#[params] params: super::types::DebuggerResumedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn resumed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired when virtual machine fails to parse the script.
     #[name("scriptFailedToParse")]
     #[notification]
-    async fn script_failed_to_parse(#[params] params: super::types::DebuggerScriptFailedToParseParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn script_failed_to_parse(
+        #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
+        url: String,
+        #[serde(rename = "startLine")] start_line: i64,
+        #[serde(rename = "startColumn")] start_column: i64,
+        #[serde(rename = "endLine")] end_line: i64,
+        #[serde(rename = "endColumn")] end_column: i64,
+        #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
+        hash: String,
+        #[serde(rename = "buildId")] #[serde(default, skip_serializing_if = "Option::is_none")] build_id: Option<String>,
+        #[serde(rename = "executionContextAuxData")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_aux_data: Option<std::collections::HashMap<String, serde_json::Value>>,
+        #[serde(rename = "sourceMapURL")] #[serde(default, skip_serializing_if = "Option::is_none")] source_map_url: Option<String>,
+        #[serde(rename = "hasSourceURL")] #[serde(default, skip_serializing_if = "Option::is_none")] has_source_url: Option<bool>,
+        #[serde(rename = "isModule")] #[serde(default, skip_serializing_if = "Option::is_none")] is_module: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] length: Option<i64>,
+        #[serde(rename = "stackTrace")] #[serde(default, skip_serializing_if = "Option::is_none")] stack_trace: Option<super::types::RuntimeStackTrace>,
+        #[serde(rename = "codeOffset")] #[serde(default, skip_serializing_if = "Option::is_none")] code_offset: Option<i64>,
+        #[serde(rename = "scriptLanguage")] #[serde(default, skip_serializing_if = "Option::is_none")] script_language: Option<super::types::DebuggerScriptLanguage>,
+        #[serde(rename = "embedderName")] #[serde(default, skip_serializing_if = "Option::is_none")] embedder_name: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id, url, start_line, start_column, end_line, end_column, execution_context_id, hash, build_id, execution_context_aux_data, source_map_url, has_source_url, is_module, length, stack_trace, code_offset, script_language, embedder_name,);
         Ok(())
     }
     /// Fired when virtual machine parses script. This event is also fired for all known and uncollected
     /// scripts upon enabling debugger.
     #[name("scriptParsed")]
     #[notification]
-    async fn script_parsed(#[params] params: super::types::DebuggerScriptParsedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn script_parsed(
+        #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
+        url: String,
+        #[serde(rename = "startLine")] start_line: i64,
+        #[serde(rename = "startColumn")] start_column: i64,
+        #[serde(rename = "endLine")] end_line: i64,
+        #[serde(rename = "endColumn")] end_column: i64,
+        #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
+        hash: String,
+        #[serde(rename = "buildId")] #[serde(default, skip_serializing_if = "Option::is_none")] build_id: Option<String>,
+        #[serde(rename = "executionContextAuxData")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_aux_data: Option<std::collections::HashMap<String, serde_json::Value>>,
+        #[serde(rename = "isLiveEdit")] #[serde(default, skip_serializing_if = "Option::is_none")] is_live_edit: Option<bool>,
+        #[serde(rename = "sourceMapURL")] #[serde(default, skip_serializing_if = "Option::is_none")] source_map_url: Option<String>,
+        #[serde(rename = "hasSourceURL")] #[serde(default, skip_serializing_if = "Option::is_none")] has_source_url: Option<bool>,
+        #[serde(rename = "isModule")] #[serde(default, skip_serializing_if = "Option::is_none")] is_module: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] length: Option<i64>,
+        #[serde(rename = "stackTrace")] #[serde(default, skip_serializing_if = "Option::is_none")] stack_trace: Option<super::types::RuntimeStackTrace>,
+        #[serde(rename = "codeOffset")] #[serde(default, skip_serializing_if = "Option::is_none")] code_offset: Option<i64>,
+        #[serde(rename = "scriptLanguage")] #[serde(default, skip_serializing_if = "Option::is_none")] script_language: Option<super::types::DebuggerScriptLanguage>,
+        #[serde(rename = "debugSymbols")] #[serde(default, skip_serializing_if = "Option::is_none")] debug_symbols: Option<Vec<super::types::DebuggerDebugSymbols>>,
+        #[serde(rename = "embedderName")] #[serde(default, skip_serializing_if = "Option::is_none")] embedder_name: Option<String>,
+        #[serde(rename = "resolvedBreakpoints")] #[serde(default, skip_serializing_if = "Option::is_none")] resolved_breakpoints: Option<Vec<super::types::DebuggerResolvedBreakpoint>>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id, url, start_line, start_column, end_line, end_column, execution_context_id, hash, build_id, execution_context_aux_data, is_live_edit, source_map_url, has_source_url, is_module, length, stack_trace, code_offset, script_language, debug_symbols, embedder_name, resolved_breakpoints,);
         Ok(())
     }
 }

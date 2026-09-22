@@ -17,15 +17,15 @@ pub trait AccessibilityEventsService {
     /// technology when the web page has finished loading.
     #[name("loadComplete")]
     #[notification]
-    async fn load_complete(#[params] params: super::types::AccessibilityLoadCompleteParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn load_complete(root: super::types::AccessibilityAxnode) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, root,);
         Ok(())
     }
     /// The nodesUpdated event is sent every time a previously requested node has changed the in tree.
     #[name("nodesUpdated")]
     #[notification]
-    async fn nodes_updated(#[params] params: super::types::AccessibilityNodesUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn nodes_updated(nodes: Vec<super::types::AccessibilityAxnode>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, nodes,);
         Ok(())
     }
 }

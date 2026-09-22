@@ -19,22 +19,32 @@ pub trait SecurityEventsService {
     /// certificate errors at the same time.
     #[name("certificateError")]
     #[notification]
-    async fn certificate_error(#[params] params: super::types::SecurityCertificateErrorParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn certificate_error(
+        #[serde(rename = "eventId")] event_id: i64,
+        #[serde(rename = "errorType")] error_type: String,
+        #[serde(rename = "requestURL")] request_url: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event_id, error_type, request_url,);
         Ok(())
     }
     /// The security state of the page changed. No longer being sent.
     #[name("securityStateChanged")]
     #[notification]
-    async fn security_state_changed(#[params] params: super::types::SecuritySecurityStateChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn security_state_changed(
+        #[serde(rename = "securityState")] security_state: super::types::SecuritySecurityState,
+        #[serde(rename = "schemeIsCryptographic")] scheme_is_cryptographic: bool,
+        explanations: Vec<super::types::SecuritySecurityStateExplanation>,
+        #[serde(rename = "insecureContentStatus")] insecure_content_status: super::types::SecurityInsecureContentStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")] summary: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_state, scheme_is_cryptographic, explanations, insecure_content_status, summary,);
         Ok(())
     }
     /// The security state of the page changed.
     #[name("visibleSecurityStateChanged")]
     #[notification]
-    async fn visible_security_state_changed(#[params] params: super::types::SecurityVisibleSecurityStateChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn visible_security_state_changed(#[serde(rename = "visibleSecurityState")] visible_security_state: super::types::SecurityVisibleSecurityState) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, visible_security_state,);
         Ok(())
     }
 }

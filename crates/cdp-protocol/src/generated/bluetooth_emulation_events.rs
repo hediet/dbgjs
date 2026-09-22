@@ -20,8 +20,13 @@ pub trait BluetoothEmulationEventsService {
     /// expected to exist when |type| is write.
     #[name("characteristicOperationReceived")]
     #[notification]
-    async fn characteristic_operation_received(#[params] params: super::types::BluetoothEmulationCharacteristicOperationReceivedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn characteristic_operation_received(
+        #[serde(rename = "characteristicId")] characteristic_id: String,
+        r#type: super::types::BluetoothEmulationCharacteristicOperationType,
+        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+        #[serde(rename = "writeType")] #[serde(default, skip_serializing_if = "Option::is_none")] write_type: Option<super::types::BluetoothEmulationCharacteristicWriteType>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, characteristic_id, r#type, data, write_type,);
         Ok(())
     }
     /// Event for when a descriptor operation of |type| to the descriptor
@@ -29,16 +34,23 @@ pub trait BluetoothEmulationEventsService {
     /// |type| is write.
     #[name("descriptorOperationReceived")]
     #[notification]
-    async fn descriptor_operation_received(#[params] params: super::types::BluetoothEmulationDescriptorOperationReceivedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn descriptor_operation_received(
+        #[serde(rename = "descriptorId")] descriptor_id: String,
+        r#type: super::types::BluetoothEmulationDescriptorOperationType,
+        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, descriptor_id, r#type, data,);
         Ok(())
     }
     /// Event for when a GATT operation of |type| to the peripheral with |address|
     /// happened.
     #[name("gattOperationReceived")]
     #[notification]
-    async fn gatt_operation_received(#[params] params: super::types::BluetoothEmulationGattOperationReceivedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn gatt_operation_received(
+        address: String,
+        r#type: super::types::BluetoothEmulationGattoperationType,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, address, r#type,);
         Ok(())
     }
 }

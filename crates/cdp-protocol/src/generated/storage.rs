@@ -15,187 +15,210 @@
 pub trait StorageService {
     /// Clears cookies.
     #[name("clearCookies")]
-    async fn clear_cookies(#[params] params: super::types::StorageClearCookiesParams) -> Result<super::types::StorageClearCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_cookies(#[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageClearCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearCookies"))
     }
     /// Clears storage for origin.
     #[name("clearDataForOrigin")]
-    async fn clear_data_for_origin(#[params] params: super::types::StorageClearDataForOriginParams) -> Result<super::types::StorageClearDataForOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_data_for_origin(
+        origin: String,
+        #[serde(rename = "storageTypes")] storage_types: String,
+    ) -> Result<super::types::StorageClearDataForOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, storage_types,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDataForOrigin"))
     }
     /// Clears storage for storage key.
     #[name("clearDataForStorageKey")]
-    async fn clear_data_for_storage_key(#[params] params: super::types::StorageClearDataForStorageKeyParams) -> Result<super::types::StorageClearDataForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_data_for_storage_key(
+        #[serde(rename = "storageKey")] storage_key: String,
+        #[serde(rename = "storageTypes")] storage_types: String,
+    ) -> Result<super::types::StorageClearDataForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key, storage_types,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDataForStorageKey"))
     }
     /// Clears all entries for a given origin's shared storage.
     #[name("clearSharedStorageEntries")]
-    async fn clear_shared_storage_entries(#[params] params: super::types::StorageClearSharedStorageEntriesParams) -> Result<super::types::StorageClearSharedStorageEntriesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_shared_storage_entries(#[serde(rename = "ownerOrigin")] owner_origin: String) -> Result<super::types::StorageClearSharedStorageEntriesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearSharedStorageEntries"))
     }
     /// Removes all Trust Tokens issued by the provided issuerOrigin.
     /// Leaves other stored data, including the issuer's Redemption Records, intact.
     #[name("clearTrustTokens")]
-    async fn clear_trust_tokens(#[params] params: super::types::StorageClearTrustTokensParams) -> Result<super::types::StorageClearTrustTokensResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_trust_tokens(#[serde(rename = "issuerOrigin")] issuer_origin: String) -> Result<super::types::StorageClearTrustTokensResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, issuer_origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearTrustTokens"))
     }
     /// Deletes entry for `key` (if it exists) for a given origin's shared storage.
     #[name("deleteSharedStorageEntry")]
-    async fn delete_shared_storage_entry(#[params] params: super::types::StorageDeleteSharedStorageEntryParams) -> Result<super::types::StorageDeleteSharedStorageEntryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_shared_storage_entry(
+        #[serde(rename = "ownerOrigin")] owner_origin: String,
+        key: String,
+    ) -> Result<super::types::StorageDeleteSharedStorageEntryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin, key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteSharedStorageEntry"))
     }
     /// Deletes the Storage Bucket with the given storage key and bucket name.
     #[name("deleteStorageBucket")]
-    async fn delete_storage_bucket(#[params] params: super::types::StorageDeleteStorageBucketParams) -> Result<super::types::StorageDeleteStorageBucketResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_storage_bucket(bucket: super::types::StorageStorageBucket) -> Result<super::types::StorageDeleteStorageBucketResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, bucket,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteStorageBucket"))
     }
     /// Returns all browser cookies.
     #[name("getCookies")]
-    async fn get_cookies(#[params] params: super::types::StorageGetCookiesParams) -> Result<super::types::StorageGetCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_cookies(#[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::StorageGetCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCookies"))
     }
     /// Returns the effective Related Website Sets in use by this profile for the browser
     /// session. The effective Related Website Sets will not change during a browser session.
     #[name("getRelatedWebsiteSets")]
-    async fn get_related_website_sets(#[params] params: super::types::StorageGetRelatedWebsiteSetsParams) -> Result<super::types::StorageGetRelatedWebsiteSetsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_related_website_sets() -> Result<super::types::StorageGetRelatedWebsiteSetsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRelatedWebsiteSets"))
     }
     /// Gets the entries in an given origin's shared storage.
     #[name("getSharedStorageEntries")]
-    async fn get_shared_storage_entries(#[params] params: super::types::StorageGetSharedStorageEntriesParams) -> Result<super::types::StorageGetSharedStorageEntriesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_shared_storage_entries(#[serde(rename = "ownerOrigin")] owner_origin: String) -> Result<super::types::StorageGetSharedStorageEntriesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSharedStorageEntries"))
     }
     /// Gets metadata for an origin's shared storage.
     #[name("getSharedStorageMetadata")]
-    async fn get_shared_storage_metadata(#[params] params: super::types::StorageGetSharedStorageMetadataParams) -> Result<super::types::StorageGetSharedStorageMetadataResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_shared_storage_metadata(#[serde(rename = "ownerOrigin")] owner_origin: String) -> Result<super::types::StorageGetSharedStorageMetadataResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSharedStorageMetadata"))
     }
     /// Returns storage key for the given frame. If no frame ID is provided,
     /// the storage key of the target executing this command is returned.
     #[name("getStorageKey")]
-    async fn get_storage_key(#[params] params: super::types::StorageGetStorageKeyParams) -> Result<super::types::StorageGetStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_storage_key(#[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::StorageGetStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageKey"))
     }
     /// Returns a storage key given a frame id.
     /// Deprecated. Please use Storage.getStorageKey instead.
     #[name("getStorageKeyForFrame")]
-    async fn get_storage_key_for_frame(#[params] params: super::types::StorageGetStorageKeyForFrameParams) -> Result<super::types::StorageGetStorageKeyForFrameResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_storage_key_for_frame(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::StorageGetStorageKeyForFrameResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageKeyForFrame"))
     }
     /// Returns the number of stored Trust Tokens per issuer for the
     /// current browsing context.
     #[name("getTrustTokens")]
-    async fn get_trust_tokens(#[params] params: super::types::StorageGetTrustTokensParams) -> Result<super::types::StorageGetTrustTokensResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_trust_tokens() -> Result<super::types::StorageGetTrustTokensResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTrustTokens"))
     }
     /// Returns usage and quota in bytes.
     #[name("getUsageAndQuota")]
-    async fn get_usage_and_quota(#[params] params: super::types::StorageGetUsageAndQuotaParams) -> Result<super::types::StorageGetUsageAndQuotaResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_usage_and_quota(origin: String) -> Result<super::types::StorageGetUsageAndQuotaResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getUsageAndQuota"))
     }
     /// Override quota for the specified origin
     #[name("overrideQuotaForOrigin")]
-    async fn override_quota_for_origin(#[params] params: super::types::StorageOverrideQuotaForOriginParams) -> Result<super::types::StorageOverrideQuotaForOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn override_quota_for_origin(
+        origin: String,
+        #[serde(rename = "quotaSize")] #[serde(default, skip_serializing_if = "Option::is_none")] quota_size: Option<f64>,
+    ) -> Result<super::types::StorageOverrideQuotaForOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, quota_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "overrideQuotaForOrigin"))
     }
     /// Resets the budget for `ownerOrigin` by clearing all budget withdrawals.
     #[name("resetSharedStorageBudget")]
-    async fn reset_shared_storage_budget(#[params] params: super::types::StorageResetSharedStorageBudgetParams) -> Result<super::types::StorageResetSharedStorageBudgetResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn reset_shared_storage_budget(#[serde(rename = "ownerOrigin")] owner_origin: String) -> Result<super::types::StorageResetSharedStorageBudgetResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetSharedStorageBudget"))
     }
     /// Deletes state for sites identified as potential bounce trackers, immediately.
     #[name("runBounceTrackingMitigations")]
-    async fn run_bounce_tracking_mitigations(#[params] params: super::types::StorageRunBounceTrackingMitigationsParams) -> Result<super::types::StorageRunBounceTrackingMitigationsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn run_bounce_tracking_mitigations() -> Result<super::types::StorageRunBounceTrackingMitigationsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runBounceTrackingMitigations"))
     }
     /// Sets given cookies.
     #[name("setCookies")]
-    async fn set_cookies(#[params] params: super::types::StorageSetCookiesParams) -> Result<super::types::StorageSetCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_cookies(
+        cookies: Vec<super::types::NetworkCookieParam>,
+        #[serde(rename = "browserContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
+    ) -> Result<super::types::StorageSetCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, cookies, browser_context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookies"))
     }
     /// Sets entry with `key` and `value` for a given origin's shared storage.
     #[name("setSharedStorageEntry")]
-    async fn set_shared_storage_entry(#[params] params: super::types::StorageSetSharedStorageEntryParams) -> Result<super::types::StorageSetSharedStorageEntryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_shared_storage_entry(
+        #[serde(rename = "ownerOrigin")] owner_origin: String,
+        key: String,
+        value: String,
+        #[serde(rename = "ignoreIfPresent")] #[serde(default, skip_serializing_if = "Option::is_none")] ignore_if_present: Option<bool>,
+    ) -> Result<super::types::StorageSetSharedStorageEntryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, owner_origin, key, value, ignore_if_present,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSharedStorageEntry"))
     }
     /// Enables/disables issuing of sharedStorageAccessed events.
     #[name("setSharedStorageTracking")]
-    async fn set_shared_storage_tracking(#[params] params: super::types::StorageSetSharedStorageTrackingParams) -> Result<super::types::StorageSetSharedStorageTrackingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_shared_storage_tracking(enable: bool) -> Result<super::types::StorageSetSharedStorageTrackingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enable,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSharedStorageTracking"))
     }
     /// Set tracking for a storage key's buckets.
     #[name("setStorageBucketTracking")]
-    async fn set_storage_bucket_tracking(#[params] params: super::types::StorageSetStorageBucketTrackingParams) -> Result<super::types::StorageSetStorageBucketTrackingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_storage_bucket_tracking(
+        #[serde(rename = "storageKey")] storage_key: String,
+        enable: bool,
+    ) -> Result<super::types::StorageSetStorageBucketTrackingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key, enable,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStorageBucketTracking"))
     }
     /// Registers origin to be notified when an update occurs to its cache storage list.
     #[name("trackCacheStorageForOrigin")]
-    async fn track_cache_storage_for_origin(#[params] params: super::types::StorageTrackCacheStorageForOriginParams) -> Result<super::types::StorageTrackCacheStorageForOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_cache_storage_for_origin(origin: String) -> Result<super::types::StorageTrackCacheStorageForOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackCacheStorageForOrigin"))
     }
     /// Registers storage key to be notified when an update occurs to its cache storage list.
     #[name("trackCacheStorageForStorageKey")]
-    async fn track_cache_storage_for_storage_key(#[params] params: super::types::StorageTrackCacheStorageForStorageKeyParams) -> Result<super::types::StorageTrackCacheStorageForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_cache_storage_for_storage_key(#[serde(rename = "storageKey")] storage_key: String) -> Result<super::types::StorageTrackCacheStorageForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackCacheStorageForStorageKey"))
     }
     /// Registers origin to be notified when an update occurs to its IndexedDB.
     #[name("trackIndexedDBForOrigin")]
-    async fn track_indexed_dbfor_origin(#[params] params: super::types::StorageTrackIndexedDbforOriginParams) -> Result<super::types::StorageTrackIndexedDbforOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_indexed_dbfor_origin(origin: String) -> Result<super::types::StorageTrackIndexedDbforOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackIndexedDBForOrigin"))
     }
     /// Registers storage key to be notified when an update occurs to its IndexedDB.
     #[name("trackIndexedDBForStorageKey")]
-    async fn track_indexed_dbfor_storage_key(#[params] params: super::types::StorageTrackIndexedDbforStorageKeyParams) -> Result<super::types::StorageTrackIndexedDbforStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_indexed_dbfor_storage_key(#[serde(rename = "storageKey")] storage_key: String) -> Result<super::types::StorageTrackIndexedDbforStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackIndexedDBForStorageKey"))
     }
     /// Unregisters origin from receiving notifications for cache storage.
     #[name("untrackCacheStorageForOrigin")]
-    async fn untrack_cache_storage_for_origin(#[params] params: super::types::StorageUntrackCacheStorageForOriginParams) -> Result<super::types::StorageUntrackCacheStorageForOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn untrack_cache_storage_for_origin(origin: String) -> Result<super::types::StorageUntrackCacheStorageForOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "untrackCacheStorageForOrigin"))
     }
     /// Unregisters storage key from receiving notifications for cache storage.
     #[name("untrackCacheStorageForStorageKey")]
-    async fn untrack_cache_storage_for_storage_key(#[params] params: super::types::StorageUntrackCacheStorageForStorageKeyParams) -> Result<super::types::StorageUntrackCacheStorageForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn untrack_cache_storage_for_storage_key(#[serde(rename = "storageKey")] storage_key: String) -> Result<super::types::StorageUntrackCacheStorageForStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "untrackCacheStorageForStorageKey"))
     }
     /// Unregisters origin from receiving notifications for IndexedDB.
     #[name("untrackIndexedDBForOrigin")]
-    async fn untrack_indexed_dbfor_origin(#[params] params: super::types::StorageUntrackIndexedDbforOriginParams) -> Result<super::types::StorageUntrackIndexedDbforOriginResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn untrack_indexed_dbfor_origin(origin: String) -> Result<super::types::StorageUntrackIndexedDbforOriginResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "untrackIndexedDBForOrigin"))
     }
     /// Unregisters storage key from receiving notifications for IndexedDB.
     #[name("untrackIndexedDBForStorageKey")]
-    async fn untrack_indexed_dbfor_storage_key(#[params] params: super::types::StorageUntrackIndexedDbforStorageKeyParams) -> Result<super::types::StorageUntrackIndexedDbforStorageKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn untrack_indexed_dbfor_storage_key(#[serde(rename = "storageKey")] storage_key: String) -> Result<super::types::StorageUntrackIndexedDbforStorageKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "untrackIndexedDBForStorageKey"))
     }
 }

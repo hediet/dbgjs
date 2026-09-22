@@ -17,225 +17,290 @@
 pub trait NetworkService {
     /// Tells whether clearing browser cache is supported.
     #[name("canClearBrowserCache")]
-    async fn can_clear_browser_cache(#[params] params: super::types::NetworkCanClearBrowserCacheParams) -> Result<super::types::NetworkCanClearBrowserCacheResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn can_clear_browser_cache() -> Result<super::types::NetworkCanClearBrowserCacheResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "canClearBrowserCache"))
     }
     /// Tells whether clearing browser cookies is supported.
     #[name("canClearBrowserCookies")]
-    async fn can_clear_browser_cookies(#[params] params: super::types::NetworkCanClearBrowserCookiesParams) -> Result<super::types::NetworkCanClearBrowserCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn can_clear_browser_cookies() -> Result<super::types::NetworkCanClearBrowserCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "canClearBrowserCookies"))
     }
     /// Tells whether emulation of network conditions is supported.
     #[name("canEmulateNetworkConditions")]
-    async fn can_emulate_network_conditions(#[params] params: super::types::NetworkCanEmulateNetworkConditionsParams) -> Result<super::types::NetworkCanEmulateNetworkConditionsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn can_emulate_network_conditions() -> Result<super::types::NetworkCanEmulateNetworkConditionsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "canEmulateNetworkConditions"))
     }
     /// Clears browser cache.
     #[name("clearBrowserCache")]
-    async fn clear_browser_cache(#[params] params: super::types::NetworkClearBrowserCacheParams) -> Result<super::types::NetworkClearBrowserCacheResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_browser_cache() -> Result<super::types::NetworkClearBrowserCacheResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearBrowserCache"))
     }
     /// Clears browser cookies.
     #[name("clearBrowserCookies")]
-    async fn clear_browser_cookies(#[params] params: super::types::NetworkClearBrowserCookiesParams) -> Result<super::types::NetworkClearBrowserCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_browser_cookies() -> Result<super::types::NetworkClearBrowserCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearBrowserCookies"))
     }
     /// Configures storing response bodies outside of renderer, so that these survive
     /// a cross-process navigation.
     /// If maxTotalBufferSize is not set, durable messages are disabled.
     #[name("configureDurableMessages")]
-    async fn configure_durable_messages(#[params] params: super::types::NetworkConfigureDurableMessagesParams) -> Result<super::types::NetworkConfigureDurableMessagesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn configure_durable_messages(
+        #[serde(rename = "maxTotalBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
+        #[serde(rename = "maxResourceBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
+    ) -> Result<super::types::NetworkConfigureDurableMessagesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, max_total_buffer_size, max_resource_buffer_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configureDurableMessages"))
     }
     /// Deletes browser cookies with matching name and url or domain/path/partitionKey pair.
     #[name("deleteCookies")]
-    async fn delete_cookies(#[params] params: super::types::NetworkDeleteCookiesParams) -> Result<super::types::NetworkDeleteCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_cookies(
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] domain: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] path: Option<String>,
+        #[serde(rename = "partitionKey")] #[serde(default, skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
+    ) -> Result<super::types::NetworkDeleteCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, name, url, domain, path, partition_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteCookies"))
     }
     /// Deletes a device bound session.
     #[name("deleteDeviceBoundSession")]
-    async fn delete_device_bound_session(#[params] params: super::types::NetworkDeleteDeviceBoundSessionParams) -> Result<super::types::NetworkDeleteDeviceBoundSessionResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_device_bound_session(key: super::types::NetworkDeviceBoundSessionKey) -> Result<super::types::NetworkDeleteDeviceBoundSessionResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteDeviceBoundSession"))
     }
     /// Disables network tracking, prevents network events from being sent to the client.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::NetworkDisableParams) -> Result<super::types::NetworkDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::NetworkDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Activates emulation of network conditions. This command is deprecated in favor of the emulateNetworkConditionsByRule
     /// and overrideNetworkState commands, which can be used together to the same effect.
     #[name("emulateNetworkConditions")]
-    async fn emulate_network_conditions(#[params] params: super::types::NetworkEmulateNetworkConditionsParams) -> Result<super::types::NetworkEmulateNetworkConditionsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn emulate_network_conditions(
+        offline: bool,
+        latency: f64,
+        #[serde(rename = "downloadThroughput")] download_throughput: f64,
+        #[serde(rename = "uploadThroughput")] upload_throughput: f64,
+        #[serde(rename = "connectionType")] #[serde(default, skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
+        #[serde(rename = "packetLoss")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_loss: Option<f64>,
+        #[serde(rename = "packetQueueLength")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_queue_length: Option<i64>,
+        #[serde(rename = "packetReordering")] #[serde(default, skip_serializing_if = "Option::is_none")] packet_reordering: Option<bool>,
+    ) -> Result<super::types::NetworkEmulateNetworkConditionsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, offline, latency, download_throughput, upload_throughput, connection_type, packet_loss, packet_queue_length, packet_reordering,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "emulateNetworkConditions"))
     }
     /// Activates emulation of network conditions for individual requests using URL match patterns. Unlike the deprecated
     /// Network.emulateNetworkConditions this method does not affect `navigator` state. Use Network.overrideNetworkState to
     /// explicitly modify `navigator` behavior.
     #[name("emulateNetworkConditionsByRule")]
-    async fn emulate_network_conditions_by_rule(#[params] params: super::types::NetworkEmulateNetworkConditionsByRuleParams) -> Result<super::types::NetworkEmulateNetworkConditionsByRuleResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn emulate_network_conditions_by_rule(
+        #[serde(default, skip_serializing_if = "Option::is_none")] offline: Option<bool>,
+        #[serde(rename = "emulateOfflineServiceWorker")] #[serde(default, skip_serializing_if = "Option::is_none")] emulate_offline_service_worker: Option<bool>,
+        #[serde(rename = "matchedNetworkConditions")] matched_network_conditions: Vec<super::types::NetworkNetworkConditions>,
+    ) -> Result<super::types::NetworkEmulateNetworkConditionsByRuleResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, offline, emulate_offline_service_worker, matched_network_conditions,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "emulateNetworkConditionsByRule"))
     }
     /// Enables network tracking, network events will now be delivered to the client.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::NetworkEnableParams) -> Result<super::types::NetworkEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(
+        #[serde(rename = "maxTotalBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_total_buffer_size: Option<i64>,
+        #[serde(rename = "maxResourceBufferSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_resource_buffer_size: Option<i64>,
+        #[serde(rename = "maxPostDataSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_post_data_size: Option<i64>,
+        #[serde(rename = "reportDirectSocketTraffic")] #[serde(default, skip_serializing_if = "Option::is_none")] report_direct_socket_traffic: Option<bool>,
+        #[serde(rename = "enableDurableMessages")] #[serde(default, skip_serializing_if = "Option::is_none")] enable_durable_messages: Option<bool>,
+    ) -> Result<super::types::NetworkEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, max_total_buffer_size, max_resource_buffer_size, max_post_data_size, report_direct_socket_traffic, enable_durable_messages,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Sets up tracking device bound sessions and fetching of initial set of sessions.
     #[name("enableDeviceBoundSessions")]
-    async fn enable_device_bound_sessions(#[params] params: super::types::NetworkEnableDeviceBoundSessionsParams) -> Result<super::types::NetworkEnableDeviceBoundSessionsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable_device_bound_sessions(enable: bool) -> Result<super::types::NetworkEnableDeviceBoundSessionsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enable,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enableDeviceBoundSessions"))
     }
     /// Enables tracking for the Reporting API, events generated by the Reporting API will now be delivered to the client.
     /// Enabling triggers 'reportingApiReportAdded' for all existing reports.
     #[name("enableReportingApi")]
-    async fn enable_reporting_api(#[params] params: super::types::NetworkEnableReportingApiParams) -> Result<super::types::NetworkEnableReportingApiResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable_reporting_api(enable: bool) -> Result<super::types::NetworkEnableReportingApiResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enable,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enableReportingApi"))
     }
     /// Fetches the schemeful site for a specific origin.
     #[name("fetchSchemefulSite")]
-    async fn fetch_schemeful_site(#[params] params: super::types::NetworkFetchSchemefulSiteParams) -> Result<super::types::NetworkFetchSchemefulSiteResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn fetch_schemeful_site(origin: String) -> Result<super::types::NetworkFetchSchemefulSiteResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fetchSchemefulSite"))
     }
     /// Returns all browser cookies. Depending on the backend support, will return detailed cookie
     /// information in the `cookies` field.
     /// Deprecated. Use Storage.getCookies instead.
     #[name("getAllCookies")]
-    async fn get_all_cookies(#[params] params: super::types::NetworkGetAllCookiesParams) -> Result<super::types::NetworkGetAllCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_all_cookies() -> Result<super::types::NetworkGetAllCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAllCookies"))
     }
     /// Returns the DER-encoded certificate.
     #[name("getCertificate")]
-    async fn get_certificate(#[params] params: super::types::NetworkGetCertificateParams) -> Result<super::types::NetworkGetCertificateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_certificate(origin: String) -> Result<super::types::NetworkGetCertificateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCertificate"))
     }
     /// Returns all browser cookies for the current URL. Depending on the backend support, will return
     /// detailed cookie information in the `cookies` field.
     #[name("getCookies")]
-    async fn get_cookies(#[params] params: super::types::NetworkGetCookiesParams) -> Result<super::types::NetworkGetCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_cookies(#[serde(default, skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>) -> Result<super::types::NetworkGetCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, urls,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCookies"))
     }
     /// Returns post data sent with the request. Returns an error when no data was sent with the request.
     #[name("getRequestPostData")]
-    async fn get_request_post_data(#[params] params: super::types::NetworkGetRequestPostDataParams) -> Result<super::types::NetworkGetRequestPostDataResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_request_post_data(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<super::types::NetworkGetRequestPostDataResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRequestPostData"))
     }
     /// Returns content served for the given request.
     #[name("getResponseBody")]
-    async fn get_response_body(#[params] params: super::types::NetworkGetResponseBodyParams) -> Result<super::types::NetworkGetResponseBodyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_response_body(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<super::types::NetworkGetResponseBodyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResponseBody"))
     }
     /// Returns information about the COEP/COOP isolation status.
     #[name("getSecurityIsolationStatus")]
-    async fn get_security_isolation_status(#[params] params: super::types::NetworkGetSecurityIsolationStatusParams) -> Result<super::types::NetworkGetSecurityIsolationStatusResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_security_isolation_status(#[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>) -> Result<super::types::NetworkGetSecurityIsolationStatusResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSecurityIsolationStatus"))
     }
     /// Fetches the resource and returns the content.
     #[name("loadNetworkResource")]
-    async fn load_network_resource(#[params] params: super::types::NetworkLoadNetworkResourceParams) -> Result<super::types::NetworkLoadNetworkResourceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn load_network_resource(
+        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        url: String,
+        options: super::types::NetworkLoadNetworkResourceOptions,
+    ) -> Result<super::types::NetworkLoadNetworkResourceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, url, options,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "loadNetworkResource"))
     }
     /// Override the state of navigator.onLine and navigator.connection.
     #[name("overrideNetworkState")]
-    async fn override_network_state(#[params] params: super::types::NetworkOverrideNetworkStateParams) -> Result<super::types::NetworkOverrideNetworkStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn override_network_state(
+        offline: bool,
+        latency: f64,
+        #[serde(rename = "downloadThroughput")] download_throughput: f64,
+        #[serde(rename = "uploadThroughput")] upload_throughput: f64,
+        #[serde(rename = "connectionType")] #[serde(default, skip_serializing_if = "Option::is_none")] connection_type: Option<super::types::NetworkConnectionType>,
+    ) -> Result<super::types::NetworkOverrideNetworkStateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, offline, latency, download_throughput, upload_throughput, connection_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "overrideNetworkState"))
     }
     /// This method sends a new XMLHttpRequest which is identical to the original one. The following
     /// parameters should be identical: method, url, async, request body, extra headers, withCredentials
     /// attribute, user, password.
     #[name("replayXHR")]
-    async fn replay_xhr(#[params] params: super::types::NetworkReplayXhrparams) -> Result<super::types::NetworkReplayXhrresult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn replay_xhr(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<super::types::NetworkReplayXhrresult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "replayXHR"))
     }
     /// Searches for given string in response content.
     #[name("searchInResponseBody")]
-    async fn search_in_response_body(#[params] params: super::types::NetworkSearchInResponseBodyParams) -> Result<super::types::NetworkSearchInResponseBodyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn search_in_response_body(
+        #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
+        query: String,
+        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+    ) -> Result<super::types::NetworkSearchInResponseBodyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInResponseBody"))
     }
     /// Specifies whether to attach a page script stack id in requests
     #[name("setAttachDebugStack")]
-    async fn set_attach_debug_stack(#[params] params: super::types::NetworkSetAttachDebugStackParams) -> Result<super::types::NetworkSetAttachDebugStackResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_attach_debug_stack(enabled: bool) -> Result<super::types::NetworkSetAttachDebugStackResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttachDebugStack"))
     }
     /// Blocks URLs from loading.
     #[name("setBlockedURLs")]
-    async fn set_blocked_urls(#[params] params: super::types::NetworkSetBlockedUrlsParams) -> Result<super::types::NetworkSetBlockedUrlsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_blocked_urls(
+        #[serde(rename = "urlPatterns")] #[serde(default, skip_serializing_if = "Option::is_none")] url_patterns: Option<Vec<super::types::NetworkBlockPattern>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] urls: Option<Vec<String>>,
+    ) -> Result<super::types::NetworkSetBlockedUrlsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, url_patterns, urls,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlockedURLs"))
     }
     /// Toggles ignoring of service worker for each request.
     #[name("setBypassServiceWorker")]
-    async fn set_bypass_service_worker(#[params] params: super::types::NetworkSetBypassServiceWorkerParams) -> Result<super::types::NetworkSetBypassServiceWorkerResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_bypass_service_worker(bypass: bool) -> Result<super::types::NetworkSetBypassServiceWorkerResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, bypass,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBypassServiceWorker"))
     }
     /// Toggles ignoring cache for each request. If `true`, cache will not be used.
     #[name("setCacheDisabled")]
-    async fn set_cache_disabled(#[params] params: super::types::NetworkSetCacheDisabledParams) -> Result<super::types::NetworkSetCacheDisabledResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_cache_disabled(#[serde(rename = "cacheDisabled")] cache_disabled: bool) -> Result<super::types::NetworkSetCacheDisabledResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, cache_disabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCacheDisabled"))
     }
     /// Sets a cookie with the given cookie data; may overwrite equivalent cookies if they exist.
     #[name("setCookie")]
-    async fn set_cookie(#[params] params: super::types::NetworkSetCookieParams) -> Result<super::types::NetworkSetCookieResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_cookie(
+        name: String,
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] domain: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] secure: Option<bool>,
+        #[serde(rename = "httpOnly")] #[serde(default, skip_serializing_if = "Option::is_none")] http_only: Option<bool>,
+        #[serde(rename = "sameSite")] #[serde(default, skip_serializing_if = "Option::is_none")] same_site: Option<super::types::NetworkCookieSameSite>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] expires: Option<super::types::NetworkTimeSinceEpoch>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] priority: Option<super::types::NetworkCookiePriority>,
+        #[serde(rename = "sourceScheme")] #[serde(default, skip_serializing_if = "Option::is_none")] source_scheme: Option<super::types::NetworkCookieSourceScheme>,
+        #[serde(rename = "sourcePort")] #[serde(default, skip_serializing_if = "Option::is_none")] source_port: Option<i64>,
+        #[serde(rename = "partitionKey")] #[serde(default, skip_serializing_if = "Option::is_none")] partition_key: Option<super::types::NetworkCookiePartitionKey>,
+    ) -> Result<super::types::NetworkSetCookieResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, name, value, url, domain, path, secure, http_only, same_site, expires, priority, source_scheme, source_port, partition_key,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookie"))
     }
     /// Sets Controls for third-party cookie access
     /// Page reload is required before the new cookie behavior will be observed
     #[name("setCookieControls")]
-    async fn set_cookie_controls(#[params] params: super::types::NetworkSetCookieControlsParams) -> Result<super::types::NetworkSetCookieControlsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_cookie_controls(#[serde(rename = "enableThirdPartyCookieRestriction")] enable_third_party_cookie_restriction: bool) -> Result<super::types::NetworkSetCookieControlsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enable_third_party_cookie_restriction,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookieControls"))
     }
     /// Sets given cookies.
     #[name("setCookies")]
-    async fn set_cookies(#[params] params: super::types::NetworkSetCookiesParams) -> Result<super::types::NetworkSetCookiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_cookies(cookies: Vec<super::types::NetworkCookieParam>) -> Result<super::types::NetworkSetCookiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, cookies,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCookies"))
     }
     /// Specifies whether to always send extra HTTP headers with the requests from this page.
     #[name("setExtraHTTPHeaders")]
-    async fn set_extra_httpheaders(#[params] params: super::types::NetworkSetExtraHttpheadersParams) -> Result<super::types::NetworkSetExtraHttpheadersResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_extra_httpheaders(headers: super::types::NetworkHeaders) -> Result<super::types::NetworkSetExtraHttpheadersResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, headers,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setExtraHTTPHeaders"))
     }
     /// Allows overriding user agent with the given string.
     #[name("setUserAgentOverride")]
-    async fn set_user_agent_override(#[params] params: super::types::NetworkSetUserAgentOverrideParams) -> Result<super::types::NetworkSetUserAgentOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_user_agent_override(
+        #[serde(rename = "userAgent")] user_agent: String,
+        #[serde(rename = "acceptLanguage")] #[serde(default, skip_serializing_if = "Option::is_none")] accept_language: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] platform: Option<String>,
+        #[serde(rename = "userAgentMetadata")] #[serde(default, skip_serializing_if = "Option::is_none")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
+    ) -> Result<super::types::NetworkSetUserAgentOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, user_agent, accept_language, platform, user_agent_metadata,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserAgentOverride"))
     }
     /// Enables streaming of the response for the given requestId.
     /// If enabled, the dataReceived event contains the data that was received during streaming.
     #[name("streamResourceContent")]
-    async fn stream_resource_content(#[params] params: super::types::NetworkStreamResourceContentParams) -> Result<super::types::NetworkStreamResourceContentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stream_resource_content(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<super::types::NetworkStreamResourceContentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "streamResourceContent"))
     }
 }

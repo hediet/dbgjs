@@ -15,14 +15,18 @@
 pub trait DeviceOrientationService {
     /// Clears the overridden Device Orientation.
     #[name("clearDeviceOrientationOverride")]
-    async fn clear_device_orientation_override(#[params] params: super::types::DeviceOrientationClearDeviceOrientationOverrideParams) -> Result<super::types::DeviceOrientationClearDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_device_orientation_override() -> Result<super::types::DeviceOrientationClearDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDeviceOrientationOverride"))
     }
     /// Overrides the Device Orientation.
     #[name("setDeviceOrientationOverride")]
-    async fn set_device_orientation_override(#[params] params: super::types::DeviceOrientationSetDeviceOrientationOverrideParams) -> Result<super::types::DeviceOrientationSetDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_device_orientation_override(
+        alpha: f64,
+        beta: f64,
+        gamma: f64,
+    ) -> Result<super::types::DeviceOrientationSetDeviceOrientationOverrideResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, alpha, beta, gamma,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceOrientationOverride"))
     }
 }

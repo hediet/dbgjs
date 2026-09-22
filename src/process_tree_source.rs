@@ -20,10 +20,8 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    TargetAttachedToTargetParams, TargetDetachedFromTargetParams, TargetGetTargetInfoParams,
-    TargetGetTargetsParams, TargetSetAutoAttachParams, TargetSetDiscoverTargetsParams,
-    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfo,
-    TargetTargetInfoChangedParams,
+    TargetAttachedToTargetParams, TargetDetachedFromTargetParams, TargetTargetCreatedParams,
+    TargetTargetDestroyedParams, TargetTargetInfo, TargetTargetInfoChangedParams,
 };
 use crate::connection_provider::ProviderEvent;
 use crate::electron_renderer_transport::{
@@ -314,9 +312,11 @@ impl ProcessTreeTargetSource {
             .insert(renderer_id.to_owned());
         if !is_new {
             if let Some(endpoint) = self.attachments.lock().await.get(renderer_id).cloned() {
-                let mut params = TargetSetAutoAttachParams::new(true, false);
-                params.flatten = Some(true);
-                let _ = endpoint.client().target().set_auto_attach(params).await;
+                let _ = endpoint
+                    .client()
+                    .target()
+                    .set_auto_attach(true, false, Some(true), None)
+                    .await;
             }
             return;
         }
@@ -327,10 +327,7 @@ impl ProcessTreeTargetSource {
                 .remove(renderer_id);
             return;
         };
-        let result = endpoint
-            .client()
-            .target().get_target_info(TargetGetTargetInfoParams::new())
-            .await;
+        let result = endpoint.client().target().get_target_info(None).await;
         if let Ok(result) = result {
             let native_target_id = result.target_info.target_id;
             self.native_target_aliases
@@ -359,11 +356,10 @@ impl ProcessTreeTargetSource {
                 .remove(renderer_id);
         }
         let mut notifications = endpoint.subscribe();
-        let mut auto_attach = TargetSetAutoAttachParams::new(true, false);
-        auto_attach.flatten = Some(true);
         if endpoint
             .client()
-            .target().set_auto_attach(auto_attach)
+            .target()
+            .set_auto_attach(true, false, Some(true), None)
             .await
             .is_ok()
         {
@@ -452,7 +448,8 @@ impl ProcessTreeTargetSource {
             if let Some(endpoint) = self.attachments.lock().await.get(parent_target_id).cloned() {
                 let _ = endpoint
                     .client()
-                    .target().set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+                    .target()
+                    .set_discover_targets(true, None)
                     .await;
             }
 
@@ -538,7 +535,8 @@ impl ProcessTreeTargetSource {
         }));
         if endpoint
             .client()
-            .target().set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+            .target()
+            .set_discover_targets(true, None)
             .await
             .is_err()
         {
@@ -548,11 +546,7 @@ impl ProcessTreeTargetSource {
                 .remove(parent_target_id);
             return;
         }
-        if let Ok(targets) = endpoint
-            .client()
-            .target().get_targets(TargetGetTargetsParams::new())
-            .await
-        {
+        if let Ok(targets) = endpoint.client().target().get_targets(None).await {
             for target in targets.target_infos {
                 upsert_nested_target(
                     &self.nested_targets,
@@ -740,13 +734,16 @@ impl TargetSource for ProcessTreeTargetSource {
 
         if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned() {
             if self.renderers.lock().unwrap().contains_key(target_id) {
-                let mut params = TargetSetAutoAttachParams::new(false, false);
-                params.flatten = Some(true);
-                let _ = endpoint.client().target().set_auto_attach(params).await;
+                let _ = endpoint
+                    .client()
+                    .target()
+                    .set_auto_attach(false, false, Some(true), None)
+                    .await;
             } else {
                 let _ = endpoint
                     .client()
-                    .target().set_discover_targets(TargetSetDiscoverTargetsParams::new(false))
+                    .target()
+                    .set_discover_targets(false, None)
                     .await;
             }
         }
@@ -848,7 +845,8 @@ impl TargetSource for ProcessTreeTargetSource {
             {
                 let targets = browser
                     .client()
-                    .target().get_targets(TargetGetTargetsParams::new())
+                    .target()
+                    .get_targets(None)
                     .await
                     .map_err(|error| format!("browser target discovery failed: {error:?}"))?;
                 let mappings = bridge

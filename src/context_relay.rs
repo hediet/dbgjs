@@ -19,13 +19,10 @@ use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::cdp::{
-    BrowserGetVersionParams, BrowserGetVersionResult, CdpEventsClient, TargetAttachToBrowserTargetParams,
-    TargetAttachToBrowserTargetResult, TargetAttachToTargetParams, TargetAttachToTargetResult,
-    TargetAttachedToTargetParams, TargetDetachFromTargetParams, TargetDetachFromTargetResult,
-    TargetDetachedFromTargetParams, TargetGetTargetInfoParams, TargetGetTargetInfoResult,
-    TargetGetTargetsParams, TargetGetTargetsResult, TargetSetAutoAttachParams,
-    TargetSetAutoAttachResult, TargetSetDiscoverTargetsParams, TargetSetDiscoverTargetsResult,
-    TargetTargetCreatedParams, TargetTargetDestroyedParams, TargetTargetInfoChangedParams,
+    BrowserGetVersionResult, CdpEventsClient, TargetAttachToBrowserTargetResult,
+    TargetAttachToTargetResult, TargetDetachFromTargetResult, TargetGetTargetInfoResult,
+    TargetGetTargetsResult, TargetSessionId, TargetSetAutoAttachResult,
+    TargetSetDiscoverTargetsResult, TargetTargetFilter, TargetTargetId,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
 use crate::cdp_transport::ManagedCdpTransport;
@@ -558,14 +555,9 @@ impl ContextRelayState {
         if notify_attached {
             let mut target_info = target_info_from_snapshot(snapshot);
             target_info.attached = true;
-            let params = TargetAttachedToTargetParams {
-                session_id: session_id.clone(),
-                target_info,
-                waiting_for_debugger,
-            };
             let _ = CdpEventsClient::root(self.root_channel().clone())
                 .target()
-                .attached_to_target(params)
+                .attached_to_target(session_id.clone(), target_info, waiting_for_debugger)
                 .await;
         }
         session_id
@@ -694,13 +686,9 @@ impl ContextRelayState {
         session.forward_task.abort();
         self.mux.retire_session(&session_id);
         if notify_detached {
-            let params = TargetDetachedFromTargetParams {
-                session_id: session_id.clone(),
-                target_id: Some(session.target_id),
-            };
             let _ = CdpEventsClient::root(self.root_channel().clone())
                 .target()
-                .detached_from_target(params)
+                .detached_from_target(session_id.clone(), Some(session.target_id))
                 .await;
         }
     }
@@ -720,32 +708,23 @@ impl ContextRelayState {
     }
 
     async fn notify_target_created(&self, snapshot: &TargetSnapshot) {
-        let params = TargetTargetCreatedParams {
-            target_info: target_info_from_snapshot(snapshot),
-        };
         let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
-            .target_created(params)
+            .target_created(target_info_from_snapshot(snapshot))
             .await;
     }
 
     async fn notify_target_changed(&self, snapshot: &TargetSnapshot) {
-        let params = TargetTargetInfoChangedParams {
-            target_info: target_info_from_snapshot(snapshot),
-        };
         let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
-            .target_info_changed(params)
+            .target_info_changed(target_info_from_snapshot(snapshot))
             .await;
     }
 
     async fn notify_target_destroyed(&self, target_id: &str) {
-        let params = TargetTargetDestroyedParams {
-            target_id: target_id.to_owned(),
-        };
         let _ = CdpEventsClient::root(self.root_channel().clone())
             .target()
-            .target_destroyed(params)
+            .target_destroyed(target_id.to_owned())
             .await;
     }
 }
@@ -754,11 +733,7 @@ struct ContextRelayProvider(Arc<ContextRelayState>);
 
 #[async_trait]
 impl crate::cdp::browser::BrowserService for ContextRelayProvider {
-    async fn get_version(
-        &self,
-        _ctx: &CallCtx,
-        _params: BrowserGetVersionParams,
-    ) -> Result<BrowserGetVersionResult, JsonRpcError> {
+    async fn get_version(&self, _ctx: &CallCtx) -> Result<BrowserGetVersionResult, JsonRpcError> {
         Ok(BrowserGetVersionResult {
             protocol_version: "1.3".to_owned(),
             product: format!("dbgjs-context-relay/{}", env!("CARGO_PKG_VERSION")),
@@ -774,7 +749,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn get_targets(
         &self,
         _ctx: &CallCtx,
-        _params: TargetGetTargetsParams,
+        _filter: Option<TargetTargetFilter>,
     ) -> Result<TargetGetTargetsResult, JsonRpcError> {
         let targets = self.0.targets().await?;
         Ok(TargetGetTargetsResult {
@@ -788,11 +763,10 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn get_target_info(
         &self,
         _ctx: &CallCtx,
-        params: TargetGetTargetInfoParams,
+        target_id: Option<TargetTargetId>,
     ) -> Result<TargetGetTargetInfoResult, JsonRpcError> {
-        let target_id = params
-            .target_id
-            .ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
+        let target_id =
+            target_id.ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
         let Some((_, snapshot)) = self.0.lookup_target(&target_id).await else {
             return Err(invalid_params(format!(
                 "no such target '{target_id}' in this relay's scope"
@@ -806,7 +780,6 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn attach_to_browser_target(
         &self,
         _ctx: &CallCtx,
-        _params: TargetAttachToBrowserTargetParams,
     ) -> Result<TargetAttachToBrowserTargetResult, JsonRpcError> {
         Ok(TargetAttachToBrowserTargetResult {
             session_id: self.0.open_browser_session().await?,
@@ -816,10 +789,11 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn set_discover_targets(
         &self,
         _ctx: &CallCtx,
-        params: TargetSetDiscoverTargetsParams,
+        discover: bool,
+        _filter: Option<TargetTargetFilter>,
     ) -> Result<TargetSetDiscoverTargetsResult, JsonRpcError> {
-        let was_enabled = self.0.discover.swap(params.discover, Ordering::Relaxed);
-        if params.discover && !was_enabled {
+        let was_enabled = self.0.discover.swap(discover, Ordering::Relaxed);
+        if discover && !was_enabled {
             let targets = self
                 .0
                 .known_targets
@@ -838,13 +812,13 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn set_auto_attach(
         &self,
         _ctx: &CallCtx,
-        params: TargetSetAutoAttachParams,
+        auto_attach: bool,
+        wait_for_debugger_on_start: bool,
+        _flatten: Option<bool>,
+        _filter: Option<TargetTargetFilter>,
     ) -> Result<TargetSetAutoAttachResult, JsonRpcError> {
-        let was_enabled = self
-            .0
-            .auto_attach
-            .swap(params.auto_attach, Ordering::Relaxed);
-        if params.auto_attach && !was_enabled {
+        let was_enabled = self.0.auto_attach.swap(auto_attach, Ordering::Relaxed);
+        if auto_attach && !was_enabled {
             let targets = self
                 .0
                 .known_targets
@@ -855,7 +829,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
                 .collect::<Vec<_>>();
             for (connection_id, snapshot) in &targets {
                 self.0
-                    .ensure_session(connection_id, snapshot, params.wait_for_debugger_on_start)
+                    .ensure_session(connection_id, snapshot, wait_for_debugger_on_start)
                     .await;
             }
         }
@@ -865,12 +839,14 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn attach_to_target(
         &self,
         _ctx: &CallCtx,
-        params: TargetAttachToTargetParams,
+        target_id: TargetTargetId,
+        _flatten: Option<bool>,
+        dbgjs_auto_attach: Option<bool>,
     ) -> Result<TargetAttachToTargetResult, JsonRpcError> {
-        let Some((connection_id, snapshot)) = self.0.lookup_target(&params.target_id).await else {
+        let Some((connection_id, snapshot)) = self.0.lookup_target(&target_id).await else {
             return Err(invalid_params(format!(
                 "no such target '{}' in this relay's context",
-                params.target_id
+                target_id
             )));
         };
         let (handle, created) = self
@@ -896,7 +872,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
                 &snapshot,
                 handle,
                 false,
-                params.dbgjs_auto_attach.unwrap_or(false),
+                dbgjs_auto_attach.unwrap_or(false),
             )
             .await;
         Ok(TargetAttachToTargetResult { session_id })
@@ -905,19 +881,16 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn detach_from_target(
         &self,
         _ctx: &CallCtx,
-        params: TargetDetachFromTargetParams,
+        session_id: Option<TargetSessionId>,
+        target_id: Option<TargetTargetId>,
     ) -> Result<TargetDetachFromTargetResult, JsonRpcError> {
-        if let Some(session_id) = params.session_id.as_deref()
+        if let Some(session_id) = session_id.as_deref()
             && self.0.detach_browser_session(session_id).await
         {
             return Ok(TargetDetachFromTargetResult::new());
         }
         self.0
-            .detach(
-                params.session_id.as_deref(),
-                params.target_id.as_deref(),
-                false,
-            )
+            .detach(session_id.as_deref(), target_id.as_deref(), false)
             .await;
         Ok(TargetDetachFromTargetResult::new())
     }

@@ -15,15 +15,15 @@
 pub trait HeapProfilerEventsService {
     #[name("addHeapSnapshotChunk")]
     #[notification]
-    async fn add_heap_snapshot_chunk(#[params] params: super::types::HeapProfilerAddHeapSnapshotChunkParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_heap_snapshot_chunk(chunk: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, chunk,);
         Ok(())
     }
     /// If heap objects tracking has been started then backend may send update for one or more fragments
     #[name("heapStatsUpdate")]
     #[notification]
-    async fn heap_stats_update(#[params] params: super::types::HeapProfilerHeapStatsUpdateParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn heap_stats_update(#[serde(rename = "statsUpdate")] stats_update: Vec<i64>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, stats_update,);
         Ok(())
     }
     /// If heap objects tracking has been started then backend regularly sends a current value for last
@@ -31,20 +31,27 @@ pub trait HeapProfilerEventsService {
     /// then one or more heapStatsUpdate events will be sent before a new lastSeenObjectId event.
     #[name("lastSeenObjectId")]
     #[notification]
-    async fn last_seen_object_id(#[params] params: super::types::HeapProfilerLastSeenObjectIdParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn last_seen_object_id(
+        #[serde(rename = "lastSeenObjectId")] last_seen_object_id: i64,
+        timestamp: f64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, last_seen_object_id, timestamp,);
         Ok(())
     }
     #[name("reportHeapSnapshotProgress")]
     #[notification]
-    async fn report_heap_snapshot_progress(#[params] params: super::types::HeapProfilerReportHeapSnapshotProgressParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_heap_snapshot_progress(
+        done: i64,
+        total: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")] finished: Option<bool>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, done, total, finished,);
         Ok(())
     }
     #[name("resetProfiles")]
     #[notification]
-    async fn reset_profiles(#[params] params: super::types::HeapProfilerResetProfilesParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn reset_profiles() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
 }

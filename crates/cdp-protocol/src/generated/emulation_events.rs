@@ -19,15 +19,18 @@ pub trait EmulationEventsService {
     /// emulated device orientation accordingly.
     #[name("screenOrientationLockChanged")]
     #[notification]
-    async fn screen_orientation_lock_changed(#[params] params: super::types::EmulationScreenOrientationLockChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn screen_orientation_lock_changed(
+        locked: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")] orientation: Option<super::types::EmulationScreenOrientation>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, locked, orientation,);
         Ok(())
     }
     /// Notification sent after the virtual time budget for the current VirtualTimePolicy has run out.
     #[name("virtualTimeBudgetExpired")]
     #[notification]
-    async fn virtual_time_budget_expired(#[params] params: super::types::EmulationVirtualTimeBudgetExpiredParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn virtual_time_budget_expired() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
 }

@@ -17,8 +17,11 @@ pub trait TetheringEventsService {
     /// Informs that port was successfully bound and got a specified connection id.
     #[name("accepted")]
     #[notification]
-    async fn accepted(#[params] params: super::types::TetheringAcceptedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn accepted(
+        port: i64,
+        #[serde(rename = "connectionId")] connection_id: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, port, connection_id,);
         Ok(())
     }
 }

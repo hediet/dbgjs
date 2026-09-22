@@ -18,31 +18,43 @@ pub trait WebAuthnEventsService {
     /// Triggered when a credential is added to an authenticator.
     #[name("credentialAdded")]
     #[notification]
-    async fn credential_added(#[params] params: super::types::WebAuthnCredentialAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn credential_added(
+        #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
+        credential: super::types::WebAuthnCredential,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }
     /// Triggered when a credential is used in a webauthn assertion.
     #[name("credentialAsserted")]
     #[notification]
-    async fn credential_asserted(#[params] params: super::types::WebAuthnCredentialAssertedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn credential_asserted(
+        #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
+        credential: super::types::WebAuthnCredential,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }
     /// Triggered when a credential is deleted, e.g. through
     /// PublicKeyCredential.signalUnknownCredential().
     #[name("credentialDeleted")]
     #[notification]
-    async fn credential_deleted(#[params] params: super::types::WebAuthnCredentialDeletedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn credential_deleted(
+        #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
+        #[serde(rename = "credentialId")] credential_id: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, authenticator_id, credential_id,);
         Ok(())
     }
     /// Triggered when a credential is updated, e.g. through
     /// PublicKeyCredential.signalCurrentUserDetails().
     #[name("credentialUpdated")]
     #[notification]
-    async fn credential_updated(#[params] params: super::types::WebAuthnCredentialUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn credential_updated(
+        #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
+        credential: super::types::WebAuthnCredential,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }
 }

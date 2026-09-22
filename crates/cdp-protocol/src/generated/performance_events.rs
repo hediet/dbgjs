@@ -16,8 +16,11 @@ pub trait PerformanceEventsService {
     /// Current values of the metrics.
     #[name("metrics")]
     #[notification]
-    async fn metrics(#[params] params: super::types::PerformanceMetricsParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn metrics(
+        metrics: Vec<super::types::PerformanceMetric>,
+        title: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, metrics, title,);
         Ok(())
     }
 }

@@ -16,63 +16,81 @@ pub trait HeapProfilerService {
     /// Enables console to refer to the node with given id via $x (see Command Line API for more details
     /// $x functions).
     #[name("addInspectedHeapObject")]
-    async fn add_inspected_heap_object(#[params] params: super::types::HeapProfilerAddInspectedHeapObjectParams) -> Result<super::types::HeapProfilerAddInspectedHeapObjectResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_inspected_heap_object(#[serde(rename = "heapObjectId")] heap_object_id: super::types::HeapProfilerHeapSnapshotObjectId) -> Result<super::types::HeapProfilerAddInspectedHeapObjectResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, heap_object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addInspectedHeapObject"))
     }
     #[name("collectGarbage")]
-    async fn collect_garbage(#[params] params: super::types::HeapProfilerCollectGarbageParams) -> Result<super::types::HeapProfilerCollectGarbageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn collect_garbage() -> Result<super::types::HeapProfilerCollectGarbageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "collectGarbage"))
     }
     #[name("disable")]
-    async fn disable(#[params] params: super::types::HeapProfilerDisableParams) -> Result<super::types::HeapProfilerDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::HeapProfilerDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("enable")]
-    async fn enable(#[params] params: super::types::HeapProfilerEnableParams) -> Result<super::types::HeapProfilerEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::HeapProfilerEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     #[name("getHeapObjectId")]
-    async fn get_heap_object_id(#[params] params: super::types::HeapProfilerGetHeapObjectIdParams) -> Result<super::types::HeapProfilerGetHeapObjectIdResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_heap_object_id(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::HeapProfilerGetHeapObjectIdResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHeapObjectId"))
     }
     #[name("getObjectByHeapObjectId")]
-    async fn get_object_by_heap_object_id(#[params] params: super::types::HeapProfilerGetObjectByHeapObjectIdParams) -> Result<super::types::HeapProfilerGetObjectByHeapObjectIdResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_object_by_heap_object_id(
+        #[serde(rename = "objectId")] object_id: super::types::HeapProfilerHeapSnapshotObjectId,
+        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+    ) -> Result<super::types::HeapProfilerGetObjectByHeapObjectIdResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, object_id, object_group,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getObjectByHeapObjectId"))
     }
     #[name("getSamplingProfile")]
-    async fn get_sampling_profile(#[params] params: super::types::HeapProfilerGetSamplingProfileParams) -> Result<super::types::HeapProfilerGetSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_sampling_profile() -> Result<super::types::HeapProfilerGetSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSamplingProfile"))
     }
     #[name("startSampling")]
-    async fn start_sampling(#[params] params: super::types::HeapProfilerStartSamplingParams) -> Result<super::types::HeapProfilerStartSamplingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_sampling(
+        #[serde(rename = "samplingInterval")] #[serde(default, skip_serializing_if = "Option::is_none")] sampling_interval: Option<f64>,
+        #[serde(rename = "stackDepth")] #[serde(default, skip_serializing_if = "Option::is_none")] stack_depth: Option<f64>,
+        #[serde(rename = "includeObjectsCollectedByMajorGC")] #[serde(default, skip_serializing_if = "Option::is_none")] include_objects_collected_by_major_gc: Option<bool>,
+        #[serde(rename = "includeObjectsCollectedByMinorGC")] #[serde(default, skip_serializing_if = "Option::is_none")] include_objects_collected_by_minor_gc: Option<bool>,
+    ) -> Result<super::types::HeapProfilerStartSamplingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sampling_interval, stack_depth, include_objects_collected_by_major_gc, include_objects_collected_by_minor_gc,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startSampling"))
     }
     #[name("startTrackingHeapObjects")]
-    async fn start_tracking_heap_objects(#[params] params: super::types::HeapProfilerStartTrackingHeapObjectsParams) -> Result<super::types::HeapProfilerStartTrackingHeapObjectsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_tracking_heap_objects(#[serde(rename = "trackAllocations")] #[serde(default, skip_serializing_if = "Option::is_none")] track_allocations: Option<bool>) -> Result<super::types::HeapProfilerStartTrackingHeapObjectsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, track_allocations,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startTrackingHeapObjects"))
     }
     #[name("stopSampling")]
-    async fn stop_sampling(#[params] params: super::types::HeapProfilerStopSamplingParams) -> Result<super::types::HeapProfilerStopSamplingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_sampling() -> Result<super::types::HeapProfilerStopSamplingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopSampling"))
     }
     #[name("stopTrackingHeapObjects")]
-    async fn stop_tracking_heap_objects(#[params] params: super::types::HeapProfilerStopTrackingHeapObjectsParams) -> Result<super::types::HeapProfilerStopTrackingHeapObjectsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_tracking_heap_objects(
+        #[serde(rename = "reportProgress")] #[serde(default, skip_serializing_if = "Option::is_none")] report_progress: Option<bool>,
+        #[serde(rename = "treatGlobalObjectsAsRoots")] #[serde(default, skip_serializing_if = "Option::is_none")] treat_global_objects_as_roots: Option<bool>,
+        #[serde(rename = "captureNumericValue")] #[serde(default, skip_serializing_if = "Option::is_none")] capture_numeric_value: Option<bool>,
+        #[serde(rename = "exposeInternals")] #[serde(default, skip_serializing_if = "Option::is_none")] expose_internals: Option<bool>,
+    ) -> Result<super::types::HeapProfilerStopTrackingHeapObjectsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, report_progress, treat_global_objects_as_roots, capture_numeric_value, expose_internals,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopTrackingHeapObjects"))
     }
     #[name("takeHeapSnapshot")]
-    async fn take_heap_snapshot(#[params] params: super::types::HeapProfilerTakeHeapSnapshotParams) -> Result<super::types::HeapProfilerTakeHeapSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn take_heap_snapshot(
+        #[serde(rename = "reportProgress")] #[serde(default, skip_serializing_if = "Option::is_none")] report_progress: Option<bool>,
+        #[serde(rename = "treatGlobalObjectsAsRoots")] #[serde(default, skip_serializing_if = "Option::is_none")] treat_global_objects_as_roots: Option<bool>,
+        #[serde(rename = "captureNumericValue")] #[serde(default, skip_serializing_if = "Option::is_none")] capture_numeric_value: Option<bool>,
+        #[serde(rename = "exposeInternals")] #[serde(default, skip_serializing_if = "Option::is_none")] expose_internals: Option<bool>,
+    ) -> Result<super::types::HeapProfilerTakeHeapSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, report_progress, treat_global_objects_as_roots, capture_numeric_value, expose_internals,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeHeapSnapshot"))
     }
 }

@@ -16,26 +16,38 @@
 pub trait DOMStorageEventsService {
     #[name("domStorageItemAdded")]
     #[notification]
-    async fn dom_storage_item_added(#[params] params: super::types::DomstorageDomStorageItemAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dom_storage_item_added(
+        #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
+        key: String,
+        #[serde(rename = "newValue")] new_value: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_id, key, new_value,);
         Ok(())
     }
     #[name("domStorageItemRemoved")]
     #[notification]
-    async fn dom_storage_item_removed(#[params] params: super::types::DomstorageDomStorageItemRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dom_storage_item_removed(
+        #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
+        key: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_id, key,);
         Ok(())
     }
     #[name("domStorageItemUpdated")]
     #[notification]
-    async fn dom_storage_item_updated(#[params] params: super::types::DomstorageDomStorageItemUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dom_storage_item_updated(
+        #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
+        key: String,
+        #[serde(rename = "oldValue")] old_value: String,
+        #[serde(rename = "newValue")] new_value: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_id, key, old_value, new_value,);
         Ok(())
     }
     #[name("domStorageItemsCleared")]
     #[notification]
-    async fn dom_storage_items_cleared(#[params] params: super::types::DomstorageDomStorageItemsClearedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dom_storage_items_cleared(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, storage_id,);
         Ok(())
     }
 }

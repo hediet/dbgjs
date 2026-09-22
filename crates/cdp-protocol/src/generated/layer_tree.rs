@@ -15,55 +15,65 @@
 pub trait LayerTreeService {
     /// Provides the reasons why the given layer was composited.
     #[name("compositingReasons")]
-    async fn compositing_reasons(#[params] params: super::types::LayerTreeCompositingReasonsParams) -> Result<super::types::LayerTreeCompositingReasonsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn compositing_reasons(#[serde(rename = "layerId")] layer_id: super::types::LayerTreeLayerId) -> Result<super::types::LayerTreeCompositingReasonsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, layer_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "compositingReasons"))
     }
     /// Disables compositing tree inspection.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::LayerTreeDisableParams) -> Result<super::types::LayerTreeDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::LayerTreeDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables compositing tree inspection.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::LayerTreeEnableParams) -> Result<super::types::LayerTreeEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::LayerTreeEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Returns the snapshot identifier.
     #[name("loadSnapshot")]
-    async fn load_snapshot(#[params] params: super::types::LayerTreeLoadSnapshotParams) -> Result<super::types::LayerTreeLoadSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn load_snapshot(tiles: Vec<super::types::LayerTreePictureTile>) -> Result<super::types::LayerTreeLoadSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, tiles,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "loadSnapshot"))
     }
     /// Returns the layer snapshot identifier.
     #[name("makeSnapshot")]
-    async fn make_snapshot(#[params] params: super::types::LayerTreeMakeSnapshotParams) -> Result<super::types::LayerTreeMakeSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn make_snapshot(#[serde(rename = "layerId")] layer_id: super::types::LayerTreeLayerId) -> Result<super::types::LayerTreeMakeSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, layer_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "makeSnapshot"))
     }
     #[name("profileSnapshot")]
-    async fn profile_snapshot(#[params] params: super::types::LayerTreeProfileSnapshotParams) -> Result<super::types::LayerTreeProfileSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn profile_snapshot(
+        #[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId,
+        #[serde(rename = "minRepeatCount")] #[serde(default, skip_serializing_if = "Option::is_none")] min_repeat_count: Option<i64>,
+        #[serde(rename = "minDuration")] #[serde(default, skip_serializing_if = "Option::is_none")] min_duration: Option<f64>,
+        #[serde(rename = "clipRect")] #[serde(default, skip_serializing_if = "Option::is_none")] clip_rect: Option<super::types::DomRect>,
+    ) -> Result<super::types::LayerTreeProfileSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, snapshot_id, min_repeat_count, min_duration, clip_rect,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "profileSnapshot"))
     }
     /// Releases layer snapshot captured by the back-end.
     #[name("releaseSnapshot")]
-    async fn release_snapshot(#[params] params: super::types::LayerTreeReleaseSnapshotParams) -> Result<super::types::LayerTreeReleaseSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn release_snapshot(#[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId) -> Result<super::types::LayerTreeReleaseSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, snapshot_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseSnapshot"))
     }
     /// Replays the layer snapshot and returns the resulting bitmap.
     #[name("replaySnapshot")]
-    async fn replay_snapshot(#[params] params: super::types::LayerTreeReplaySnapshotParams) -> Result<super::types::LayerTreeReplaySnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn replay_snapshot(
+        #[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId,
+        #[serde(rename = "fromStep")] #[serde(default, skip_serializing_if = "Option::is_none")] from_step: Option<i64>,
+        #[serde(rename = "toStep")] #[serde(default, skip_serializing_if = "Option::is_none")] to_step: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] scale: Option<f64>,
+    ) -> Result<super::types::LayerTreeReplaySnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, snapshot_id, from_step, to_step, scale,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "replaySnapshot"))
     }
     /// Replays the layer snapshot and returns canvas log.
     #[name("snapshotCommandLog")]
-    async fn snapshot_command_log(#[params] params: super::types::LayerTreeSnapshotCommandLogParams) -> Result<super::types::LayerTreeSnapshotCommandLogResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn snapshot_command_log(#[serde(rename = "snapshotId")] snapshot_id: super::types::LayerTreeSnapshotId) -> Result<super::types::LayerTreeSnapshotCommandLogResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, snapshot_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "snapshotCommandLog"))
     }
 }

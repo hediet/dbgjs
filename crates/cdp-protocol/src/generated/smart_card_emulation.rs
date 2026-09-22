@@ -15,14 +15,14 @@
 pub trait SmartCardEmulationService {
     /// Disables the |SmartCardEmulation| domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::SmartCardEmulationDisableParams) -> Result<super::types::SmartCardEmulationDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::SmartCardEmulationDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables the |SmartCardEmulation| domain.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::SmartCardEmulationEnableParams) -> Result<super::types::SmartCardEmulationEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::SmartCardEmulationEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Reports the result of a |SCardBeginTransaction| call.
@@ -32,8 +32,11 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gaddb835dce01a0da1d6ca02d33ee7d861
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardbegintransaction
     #[name("reportBeginTransactionResult")]
-    async fn report_begin_transaction_result(#[params] params: super::types::SmartCardEmulationReportBeginTransactionResultParams) -> Result<super::types::SmartCardEmulationReportBeginTransactionResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_begin_transaction_result(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+    ) -> Result<super::types::SmartCardEmulationReportBeginTransactionResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportBeginTransactionResult"))
     }
     /// Reports the successful result of a |SCardConnect| call.
@@ -42,8 +45,12 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#ga4e515829752e0a8dbc4d630696a8d6a5
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardconnecta
     #[name("reportConnectResult")]
-    async fn report_connect_result(#[params] params: super::types::SmartCardEmulationReportConnectResultParams) -> Result<super::types::SmartCardEmulationReportConnectResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_connect_result(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        #[serde(rename = "activeProtocol")] #[serde(default, skip_serializing_if = "Option::is_none")] active_protocol: Option<super::types::SmartCardEmulationProtocol>,
+    ) -> Result<super::types::SmartCardEmulationReportConnectResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, active_protocol,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportConnectResult"))
     }
     /// Reports the successful result of a call that sends back data on success.
@@ -62,14 +69,20 @@ pub trait SmartCardEmulationService {
     ///    PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gaacfec51917255b7a25b94c5104961602
     ///    Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardgetattrib
     #[name("reportDataResult")]
-    async fn report_data_result(#[params] params: super::types::SmartCardEmulationReportDataResultParams) -> Result<super::types::SmartCardEmulationReportDataResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_data_result(
+        #[serde(rename = "requestId")] request_id: String,
+        data: String,
+    ) -> Result<super::types::SmartCardEmulationReportDataResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportDataResult"))
     }
     /// Reports an error result for the given request.
     #[name("reportError")]
-    async fn report_error(#[params] params: super::types::SmartCardEmulationReportErrorParams) -> Result<super::types::SmartCardEmulationReportErrorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_error(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "resultCode")] result_code: super::types::SmartCardEmulationResultCode,
+    ) -> Result<super::types::SmartCardEmulationReportErrorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, result_code,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportError"))
     }
     /// Reports the successful result of a |SCardEstablishContext| call.
@@ -78,8 +91,11 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gaa1b8970169fd4883a6dc4a8f43f19b67
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardestablishcontext
     #[name("reportEstablishContextResult")]
-    async fn report_establish_context_result(#[params] params: super::types::SmartCardEmulationReportEstablishContextResultParams) -> Result<super::types::SmartCardEmulationReportEstablishContextResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_establish_context_result(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+    ) -> Result<super::types::SmartCardEmulationReportEstablishContextResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportEstablishContextResult"))
     }
     /// Reports the successful result of a |SCardGetStatusChange| call.
@@ -88,8 +104,11 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#ga33247d5d1257d59e55647c3bb717db24
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardgetstatuschangea
     #[name("reportGetStatusChangeResult")]
-    async fn report_get_status_change_result(#[params] params: super::types::SmartCardEmulationReportGetStatusChangeResultParams) -> Result<super::types::SmartCardEmulationReportGetStatusChangeResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_get_status_change_result(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "readerStates")] reader_states: Vec<super::types::SmartCardEmulationReaderStateOut>,
+    ) -> Result<super::types::SmartCardEmulationReportGetStatusChangeResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, reader_states,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportGetStatusChangeResult"))
     }
     /// Reports the successful result of a |SCardListReaders| call.
@@ -98,8 +117,11 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#ga93b07815789b3cf2629d439ecf20f0d9
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardlistreadersa
     #[name("reportListReadersResult")]
-    async fn report_list_readers_result(#[params] params: super::types::SmartCardEmulationReportListReadersResultParams) -> Result<super::types::SmartCardEmulationReportListReadersResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_list_readers_result(
+        #[serde(rename = "requestId")] request_id: String,
+        readers: Vec<String>,
+    ) -> Result<super::types::SmartCardEmulationReportListReadersResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, readers,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportListReadersResult"))
     }
     /// Reports the successful result of a call that returns only a result code.
@@ -122,8 +144,8 @@ pub trait SmartCardEmulationService {
     ///    PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gae8742473b404363e5c587f570d7e2f3b
     ///    Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardendtransaction
     #[name("reportPlainResult")]
-    async fn report_plain_result(#[params] params: super::types::SmartCardEmulationReportPlainResultParams) -> Result<super::types::SmartCardEmulationReportPlainResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_plain_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportPlainResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportPlainResult"))
     }
     /// Reports the successful result of a |SCardReleaseContext| call.
@@ -132,8 +154,8 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#ga6aabcba7744c5c9419fdd6404f73a934
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardreleasecontext
     #[name("reportReleaseContextResult")]
-    async fn report_release_context_result(#[params] params: super::types::SmartCardEmulationReportReleaseContextResultParams) -> Result<super::types::SmartCardEmulationReportReleaseContextResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_release_context_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportReleaseContextResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportReleaseContextResult"))
     }
     /// Reports the successful result of a |SCardStatus| call.
@@ -142,8 +164,14 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gae49c3c894ad7ac12a5b896bde70d0382
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardstatusa
     #[name("reportStatusResult")]
-    async fn report_status_result(#[params] params: super::types::SmartCardEmulationReportStatusResultParams) -> Result<super::types::SmartCardEmulationReportStatusResultResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn report_status_result(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "readerName")] reader_name: String,
+        state: super::types::SmartCardEmulationConnectionState,
+        atr: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
+    ) -> Result<super::types::SmartCardEmulationReportStatusResultResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, reader_name, state, atr, protocol,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportStatusResult"))
     }
 }

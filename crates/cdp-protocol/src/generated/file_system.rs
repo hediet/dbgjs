@@ -14,8 +14,8 @@
 )]
 pub trait FileSystemService {
     #[name("getDirectory")]
-    async fn get_directory(#[params] params: super::types::FileSystemGetDirectoryParams) -> Result<super::types::FileSystemGetDirectoryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_directory(#[serde(rename = "bucketFileSystemLocator")] bucket_file_system_locator: super::types::FileSystemBucketFileSystemLocator) -> Result<super::types::FileSystemGetDirectoryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, bucket_file_system_locator,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDirectory"))
     }
 }

@@ -18,15 +18,18 @@ pub trait BackgroundServiceEventsService {
     /// events afterwards if enabled and recording.
     #[name("backgroundServiceEventReceived")]
     #[notification]
-    async fn background_service_event_received(#[params] params: super::types::BackgroundServiceBackgroundServiceEventReceivedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn background_service_event_received(#[serde(rename = "backgroundServiceEvent")] background_service_event: super::types::BackgroundServiceBackgroundServiceEvent) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, background_service_event,);
         Ok(())
     }
     /// Called when the recording state for the service has been updated.
     #[name("recordingStateChanged")]
     #[notification]
-    async fn recording_state_changed(#[params] params: super::types::BackgroundServiceRecordingStateChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn recording_state_changed(
+        #[serde(rename = "isRecording")] is_recording: bool,
+        service: super::types::BackgroundServiceServiceName,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, is_recording, service,);
         Ok(())
     }
 }

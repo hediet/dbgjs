@@ -18,8 +18,8 @@ pub trait PerformanceTimelineService {
     /// Previously buffered events would be reported before method returns.
     /// See also: timelineEventAdded
     #[name("enable")]
-    async fn enable(#[params] params: super::types::PerformanceTimelineEnableParams) -> Result<super::types::PerformanceTimelineEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(#[serde(rename = "eventTypes")] event_types: Vec<String>) -> Result<super::types::PerformanceTimelineEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event_types,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
 }

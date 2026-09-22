@@ -19,20 +19,26 @@ pub trait DOMSnapshotService {
     /// white-listed computed style information for the nodes. Shadow DOM in the returned DOM tree is
     /// flattened.
     #[name("captureSnapshot")]
-    async fn capture_snapshot(#[params] params: super::types::DomsnapshotCaptureSnapshotParams) -> Result<super::types::DomsnapshotCaptureSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn capture_snapshot(
+        #[serde(rename = "computedStyles")] computed_styles: Vec<String>,
+        #[serde(rename = "includePaintOrder")] #[serde(default, skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
+        #[serde(rename = "includeDOMRects")] #[serde(default, skip_serializing_if = "Option::is_none")] include_domrects: Option<bool>,
+        #[serde(rename = "includeBlendedBackgroundColors")] #[serde(default, skip_serializing_if = "Option::is_none")] include_blended_background_colors: Option<bool>,
+        #[serde(rename = "includeTextColorOpacities")] #[serde(default, skip_serializing_if = "Option::is_none")] include_text_color_opacities: Option<bool>,
+    ) -> Result<super::types::DomsnapshotCaptureSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, computed_styles, include_paint_order, include_domrects, include_blended_background_colors, include_text_color_opacities,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureSnapshot"))
     }
     /// Disables DOM snapshot agent for the given page.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::DomsnapshotDisableParams) -> Result<super::types::DomsnapshotDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::DomsnapshotDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables DOM snapshot agent for the given page.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::DomsnapshotEnableParams) -> Result<super::types::DomsnapshotEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::DomsnapshotEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Returns a document snapshot, including the full DOM tree of the root node (including iframes,
@@ -40,8 +46,13 @@ pub trait DOMSnapshotService {
     /// white-listed computed style information for the nodes. Shadow DOM in the returned DOM tree is
     /// flattened.
     #[name("getSnapshot")]
-    async fn get_snapshot(#[params] params: super::types::DomsnapshotGetSnapshotParams) -> Result<super::types::DomsnapshotGetSnapshotResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_snapshot(
+        #[serde(rename = "computedStyleWhitelist")] computed_style_whitelist: Vec<String>,
+        #[serde(rename = "includeEventListeners")] #[serde(default, skip_serializing_if = "Option::is_none")] include_event_listeners: Option<bool>,
+        #[serde(rename = "includePaintOrder")] #[serde(default, skip_serializing_if = "Option::is_none")] include_paint_order: Option<bool>,
+        #[serde(rename = "includeUserAgentShadowTree")] #[serde(default, skip_serializing_if = "Option::is_none")] include_user_agent_shadow_tree: Option<bool>,
+    ) -> Result<super::types::DomsnapshotGetSnapshotResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, computed_style_whitelist, include_event_listeners, include_paint_order, include_user_agent_shadow_tree,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSnapshot"))
     }
 }

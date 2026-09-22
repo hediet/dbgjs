@@ -22,77 +22,91 @@ pub trait CSSService {
     /// Inserts a new rule with the given `ruleText` in a stylesheet with given `styleSheetId`, at the
     /// position specified by `location`.
     #[name("addRule")]
-    async fn add_rule(#[params] params: super::types::CssAddRuleParams) -> Result<super::types::CssAddRuleResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_rule(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        #[serde(rename = "ruleText")] rule_text: String,
+        location: super::types::CssSourceRange,
+        #[serde(rename = "nodeForPropertySyntaxValidation")] #[serde(default, skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
+    ) -> Result<super::types::CssAddRuleResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, rule_text, location, node_for_property_syntax_validation,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addRule"))
     }
     /// Returns all class names from specified stylesheet.
     #[name("collectClassNames")]
-    async fn collect_class_names(#[params] params: super::types::CssCollectClassNamesParams) -> Result<super::types::CssCollectClassNamesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn collect_class_names(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<super::types::CssCollectClassNamesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "collectClassNames"))
     }
     /// Creates a new special "via-inspector" stylesheet in the frame with given `frameId`.
     #[name("createStyleSheet")]
-    async fn create_style_sheet(#[params] params: super::types::CssCreateStyleSheetParams) -> Result<super::types::CssCreateStyleSheetResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn create_style_sheet(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        #[serde(default, skip_serializing_if = "Option::is_none")] force: Option<bool>,
+    ) -> Result<super::types::CssCreateStyleSheetResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, force,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createStyleSheet"))
     }
     /// Disables the CSS agent for the given page.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::CssDisableParams) -> Result<super::types::CssDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::CssDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables the CSS agent for the given page. Clients should not assume that the CSS agent has been
     /// enabled until the result of this command is received.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::CssEnableParams) -> Result<super::types::CssEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::CssEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Ensures that the given node will have specified pseudo-classes whenever its style is computed by
     /// the browser.
     #[name("forcePseudoState")]
-    async fn force_pseudo_state(#[params] params: super::types::CssForcePseudoStateParams) -> Result<super::types::CssForcePseudoStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn force_pseudo_state(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "forcedPseudoClasses")] forced_pseudo_classes: Vec<String>,
+    ) -> Result<super::types::CssForcePseudoStateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, forced_pseudo_classes,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forcePseudoState"))
     }
     /// Ensures that the given node is in its starting-style state.
     #[name("forceStartingStyle")]
-    async fn force_starting_style(#[params] params: super::types::CssForceStartingStyleParams) -> Result<super::types::CssForceStartingStyleResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn force_starting_style(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        forced: bool,
+    ) -> Result<super::types::CssForceStartingStyleResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, forced,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceStartingStyle"))
     }
     /// Returns the styles coming from animations & transitions
     /// including the animation & transition styles coming from inheritance chain.
     #[name("getAnimatedStylesForNode")]
-    async fn get_animated_styles_for_node(#[params] params: super::types::CssGetAnimatedStylesForNodeParams) -> Result<super::types::CssGetAnimatedStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_animated_styles_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetAnimatedStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnimatedStylesForNode"))
     }
     #[name("getBackgroundColors")]
-    async fn get_background_colors(#[params] params: super::types::CssGetBackgroundColorsParams) -> Result<super::types::CssGetBackgroundColorsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_background_colors(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetBackgroundColorsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBackgroundColors"))
     }
     /// Returns the computed style for a DOM node identified by `nodeId`.
     #[name("getComputedStyleForNode")]
-    async fn get_computed_style_for_node(#[params] params: super::types::CssGetComputedStyleForNodeParams) -> Result<super::types::CssGetComputedStyleForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_computed_style_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetComputedStyleForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getComputedStyleForNode"))
     }
     /// Returns the values of the default UA-defined environment variables used in env()
     #[name("getEnvironmentVariables")]
-    async fn get_environment_variables(#[params] params: super::types::CssGetEnvironmentVariablesParams) -> Result<super::types::CssGetEnvironmentVariablesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_environment_variables() -> Result<super::types::CssGetEnvironmentVariablesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEnvironmentVariables"))
     }
     /// Returns the styles defined inline (explicitly in the "style" attribute and implicitly, using DOM
     /// attributes) for a DOM node identified by `nodeId`.
     #[name("getInlineStylesForNode")]
-    async fn get_inline_styles_for_node(#[params] params: super::types::CssGetInlineStylesForNodeParams) -> Result<super::types::CssGetInlineStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_inline_styles_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetInlineStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getInlineStylesForNode"))
     }
     /// Returns all layers parsed by the rendering engine for the tree scope of a node.
@@ -100,45 +114,51 @@ pub trait CSSService {
     /// layer for the nearest ancestor document or shadow root. The layer root contains
     /// the full layer tree for the tree scope and their ordering.
     #[name("getLayersForNode")]
-    async fn get_layers_for_node(#[params] params: super::types::CssGetLayersForNodeParams) -> Result<super::types::CssGetLayersForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_layers_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetLayersForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getLayersForNode"))
     }
     /// Given a CSS selector text and a style sheet ID, getLocationForSelector
     /// returns an array of locations of the CSS selector in the style sheet.
     #[name("getLocationForSelector")]
-    async fn get_location_for_selector(#[params] params: super::types::CssGetLocationForSelectorParams) -> Result<super::types::CssGetLocationForSelectorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_location_for_selector(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        #[serde(rename = "selectorText")] selector_text: String,
+    ) -> Result<super::types::CssGetLocationForSelectorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, selector_text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getLocationForSelector"))
     }
     #[name("getLonghandProperties")]
-    async fn get_longhand_properties(#[params] params: super::types::CssGetLonghandPropertiesParams) -> Result<super::types::CssGetLonghandPropertiesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_longhand_properties(
+        #[serde(rename = "shorthandName")] shorthand_name: String,
+        value: String,
+    ) -> Result<super::types::CssGetLonghandPropertiesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, shorthand_name, value,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getLonghandProperties"))
     }
     /// Returns requested styles for a DOM node identified by `nodeId`.
     #[name("getMatchedStylesForNode")]
-    async fn get_matched_styles_for_node(#[params] params: super::types::CssGetMatchedStylesForNodeParams) -> Result<super::types::CssGetMatchedStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_matched_styles_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetMatchedStylesForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMatchedStylesForNode"))
     }
     /// Returns all media queries parsed by the rendering engine.
     #[name("getMediaQueries")]
-    async fn get_media_queries(#[params] params: super::types::CssGetMediaQueriesParams) -> Result<super::types::CssGetMediaQueriesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_media_queries() -> Result<super::types::CssGetMediaQueriesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMediaQueries"))
     }
     /// Requests information about platform fonts which we used to render child TextNodes in the given
     /// node.
     #[name("getPlatformFontsForNode")]
-    async fn get_platform_fonts_for_node(#[params] params: super::types::CssGetPlatformFontsForNodeParams) -> Result<super::types::CssGetPlatformFontsForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_platform_fonts_for_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::CssGetPlatformFontsForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPlatformFontsForNode"))
     }
     /// Returns the current textual content for a stylesheet.
     #[name("getStyleSheetText")]
-    async fn get_style_sheet_text(#[params] params: super::types::CssGetStyleSheetTextParams) -> Result<super::types::CssGetStyleSheetTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_style_sheet_text(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<super::types::CssGetStyleSheetTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStyleSheetText"))
     }
     /// Resolve the specified values in the context of the provided element.
@@ -153,113 +173,165 @@ pub trait CSSService {
     /// Note: this function currently does not resolve CSS random() function,
     /// it returns unmodified random() function parts.`
     #[name("resolveValues")]
-    async fn resolve_values(#[params] params: super::types::CssResolveValuesParams) -> Result<super::types::CssResolveValuesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn resolve_values(
+        values: Vec<String>,
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "propertyName")] #[serde(default, skip_serializing_if = "Option::is_none")] property_name: Option<String>,
+        #[serde(rename = "pseudoType")] #[serde(default, skip_serializing_if = "Option::is_none")] pseudo_type: Option<super::types::DomPseudoType>,
+        #[serde(rename = "pseudoIdentifier")] #[serde(default, skip_serializing_if = "Option::is_none")] pseudo_identifier: Option<String>,
+    ) -> Result<super::types::CssResolveValuesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, values, node_id, property_name, pseudo_type, pseudo_identifier,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveValues"))
     }
     #[name("setContainerQueryConditionText")]
-    async fn set_container_query_condition_text(#[params] params: super::types::CssSetContainerQueryConditionTextParams) -> Result<super::types::CssSetContainerQueryConditionTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_container_query_condition_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetContainerQueryConditionTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setContainerQueryConditionText"))
     }
     /// Modifies the expression of a container query.
     /// Deprecated. Use setContainerQueryConditionText instead.
     #[name("setContainerQueryText")]
-    async fn set_container_query_text(#[params] params: super::types::CssSetContainerQueryTextParams) -> Result<super::types::CssSetContainerQueryTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_container_query_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetContainerQueryTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setContainerQueryText"))
     }
     /// Find a rule with the given active property for the given node and set the new value for this
     /// property
     #[name("setEffectivePropertyValueForNode")]
-    async fn set_effective_property_value_for_node(#[params] params: super::types::CssSetEffectivePropertyValueForNodeParams) -> Result<super::types::CssSetEffectivePropertyValueForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_effective_property_value_for_node(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "propertyName")] property_name: String,
+        value: String,
+    ) -> Result<super::types::CssSetEffectivePropertyValueForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, property_name, value,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEffectivePropertyValueForNode"))
     }
     /// Modifies the keyframe rule key text.
     #[name("setKeyframeKey")]
-    async fn set_keyframe_key(#[params] params: super::types::CssSetKeyframeKeyParams) -> Result<super::types::CssSetKeyframeKeyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_keyframe_key(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        #[serde(rename = "keyText")] key_text: String,
+    ) -> Result<super::types::CssSetKeyframeKeyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, key_text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setKeyframeKey"))
     }
     /// Enables/disables rendering of local CSS fonts (enabled by default).
     #[name("setLocalFontsEnabled")]
-    async fn set_local_fonts_enabled(#[params] params: super::types::CssSetLocalFontsEnabledParams) -> Result<super::types::CssSetLocalFontsEnabledResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_local_fonts_enabled(enabled: bool) -> Result<super::types::CssSetLocalFontsEnabledResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, enabled,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setLocalFontsEnabled"))
     }
     /// Modifies the rule selector.
     #[name("setMediaText")]
-    async fn set_media_text(#[params] params: super::types::CssSetMediaTextParams) -> Result<super::types::CssSetMediaTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_media_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetMediaTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setMediaText"))
     }
     /// Modifies the expression of a navigation at-rule.
     #[name("setNavigationText")]
-    async fn set_navigation_text(#[params] params: super::types::CssSetNavigationTextParams) -> Result<super::types::CssSetNavigationTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_navigation_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetNavigationTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNavigationText"))
     }
     /// Modifies the property rule property name.
     #[name("setPropertyRulePropertyName")]
-    async fn set_property_rule_property_name(#[params] params: super::types::CssSetPropertyRulePropertyNameParams) -> Result<super::types::CssSetPropertyRulePropertyNameResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_property_rule_property_name(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        #[serde(rename = "propertyName")] property_name: String,
+    ) -> Result<super::types::CssSetPropertyRulePropertyNameResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, property_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPropertyRulePropertyName"))
     }
     /// Modifies the rule selector.
     #[name("setRuleSelector")]
-    async fn set_rule_selector(#[params] params: super::types::CssSetRuleSelectorParams) -> Result<super::types::CssSetRuleSelectorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_rule_selector(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        selector: String,
+    ) -> Result<super::types::CssSetRuleSelectorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, selector,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRuleSelector"))
     }
     /// Modifies the expression of a scope at-rule.
     #[name("setScopeText")]
-    async fn set_scope_text(#[params] params: super::types::CssSetScopeTextParams) -> Result<super::types::CssSetScopeTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_scope_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetScopeTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScopeText"))
     }
     /// Sets the new stylesheet text.
     #[name("setStyleSheetText")]
-    async fn set_style_sheet_text(#[params] params: super::types::CssSetStyleSheetTextParams) -> Result<super::types::CssSetStyleSheetTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_style_sheet_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        text: String,
+    ) -> Result<super::types::CssSetStyleSheetTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStyleSheetText"))
     }
     /// Applies specified style edits one after another in the given order.
     #[name("setStyleTexts")]
-    async fn set_style_texts(#[params] params: super::types::CssSetStyleTextsParams) -> Result<super::types::CssSetStyleTextsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_style_texts(
+        edits: Vec<super::types::CssStyleDeclarationEdit>,
+        #[serde(rename = "nodeForPropertySyntaxValidation")] #[serde(default, skip_serializing_if = "Option::is_none")] node_for_property_syntax_validation: Option<super::types::DomNodeId>,
+    ) -> Result<super::types::CssSetStyleTextsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, edits, node_for_property_syntax_validation,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStyleTexts"))
     }
     /// Modifies the expression of a supports at-rule.
     #[name("setSupportsText")]
-    async fn set_supports_text(#[params] params: super::types::CssSetSupportsTextParams) -> Result<super::types::CssSetSupportsTextResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_supports_text(
+        #[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId,
+        range: super::types::CssSourceRange,
+        text: String,
+    ) -> Result<super::types::CssSetSupportsTextResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id, range, text,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSupportsText"))
     }
     /// Enables the selector recording.
     #[name("startRuleUsageTracking")]
-    async fn start_rule_usage_tracking(#[params] params: super::types::CssStartRuleUsageTrackingParams) -> Result<super::types::CssStartRuleUsageTrackingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_rule_usage_tracking() -> Result<super::types::CssStartRuleUsageTrackingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startRuleUsageTracking"))
     }
     /// Stop tracking rule usage and return the list of rules that were used since last call to
     /// `takeCoverageDelta` (or since start of coverage instrumentation).
     #[name("stopRuleUsageTracking")]
-    async fn stop_rule_usage_tracking(#[params] params: super::types::CssStopRuleUsageTrackingParams) -> Result<super::types::CssStopRuleUsageTrackingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_rule_usage_tracking() -> Result<super::types::CssStopRuleUsageTrackingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopRuleUsageTracking"))
     }
     /// Polls the next batch of computed style updates.
     #[name("takeComputedStyleUpdates")]
-    async fn take_computed_style_updates(#[params] params: super::types::CssTakeComputedStyleUpdatesParams) -> Result<super::types::CssTakeComputedStyleUpdatesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn take_computed_style_updates() -> Result<super::types::CssTakeComputedStyleUpdatesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeComputedStyleUpdates"))
     }
     /// Obtain list of rules that became used since last call to this method (or since start of coverage
     /// instrumentation).
     #[name("takeCoverageDelta")]
-    async fn take_coverage_delta(#[params] params: super::types::CssTakeCoverageDeltaParams) -> Result<super::types::CssTakeCoverageDeltaResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn take_coverage_delta() -> Result<super::types::CssTakeCoverageDeltaResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeCoverageDelta"))
     }
     /// Starts tracking the given computed styles for updates. The specified array of properties
@@ -269,8 +341,8 @@ pub trait CSSService {
     /// by the DOM agent. If no changes to the tracked properties occur after the node has been pushed
     /// to the front-end, no updates will be issued for the node.
     #[name("trackComputedStyleUpdates")]
-    async fn track_computed_style_updates(#[params] params: super::types::CssTrackComputedStyleUpdatesParams) -> Result<super::types::CssTrackComputedStyleUpdatesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_computed_style_updates(#[serde(rename = "propertiesToTrack")] properties_to_track: Vec<super::types::CssCsscomputedStyleProperty>) -> Result<super::types::CssTrackComputedStyleUpdatesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, properties_to_track,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackComputedStyleUpdates"))
     }
     /// Starts tracking the given node for the computed style updates
@@ -280,8 +352,8 @@ pub trait CSSService {
     /// so passing a new node id removes tracking from the previous node.
     /// Pass `undefined` to disable tracking.
     #[name("trackComputedStyleUpdatesForNode")]
-    async fn track_computed_style_updates_for_node(#[params] params: super::types::CssTrackComputedStyleUpdatesForNodeParams) -> Result<super::types::CssTrackComputedStyleUpdatesForNodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn track_computed_style_updates_for_node(#[serde(rename = "nodeId")] #[serde(default, skip_serializing_if = "Option::is_none")] node_id: Option<super::types::DomNodeId>) -> Result<super::types::CssTrackComputedStyleUpdatesForNodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trackComputedStyleUpdatesForNode"))
     }
 }

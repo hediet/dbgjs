@@ -9,16 +9,11 @@ use rayon::prelude::*;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::cdp::{
-    DebuggerEvaluateOnCallFrameParams, DomGetBoxModelParams, DomGetDocumentParams,
-    DomQuerySelectorParams, HeapProfilerTakeHeapSnapshotParams, InputDispatchMouseEventParams,
-    InputDispatchMouseEventParamsType, InputInsertTextParams, InputMouseButton,
-    PageCaptureScreenshotParams, PageCaptureScreenshotParamsFormat, ProfilerEnableParams,
-    ProfilerProfile, ProfilerScriptCoverage, ProfilerSetSamplingIntervalParams,
-    ProfilerStartParams, ProfilerStartPreciseCoverageParams, ProfilerStopParams,
-    ProfilerStopPreciseCoverageParams, ProfilerTakePreciseCoverageParams,
-    RuntimeCallFunctionOnParams, RuntimeExceptionDetails, RuntimeGetPropertiesParams,
-    RuntimeInternalPropertyDescriptor, RuntimePropertyDescriptor, RuntimeReleaseObjectGroupParams,
-    RuntimeReleaseObjectParams, RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
+    DebuggerEvaluateOnCallFrameParams, InputDispatchMouseEventParams,
+    InputDispatchMouseEventParamsType, InputMouseButton, PageCaptureScreenshotParams,
+    PageCaptureScreenshotParamsFormat, ProfilerProfile, ProfilerScriptCoverage,
+    RuntimeCallFunctionOnParams, RuntimeExceptionDetails, RuntimeInternalPropertyDescriptor,
+    RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectSubtype,
     RuntimeRemoteObjectType,
 };
 use crate::cdp_runtime::CdpDebuggerSession;
@@ -1583,7 +1578,7 @@ async fn run_target(
                     let release = driver
                         .client()
                         .runtime()
-                        .release_object_group(RuntimeReleaseObjectGroupParams { object_group })
+                        .release_object_group(object_group)
                         .await
                         .map_err(|error| {
                             TargetDebuggerError::Properties(format!(
@@ -1825,12 +1820,10 @@ async fn run_target(
                             capture_id,
                         ));
                     }
-                    let stopped = driver
-                        .client()
-                        .profiler()
-                        .stop(ProfilerStopParams::new())
-                        .await
-                        .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
+                    let stopped =
+                        driver.client().profiler().stop().await.map_err(|error| {
+                            TargetDebuggerError::CpuProfile(format!("{error:?}"))
+                        })?;
                     cpu_profile = None;
                     let snapshot = cpu_profile_snapshot(
                         capture_id.clone(),
@@ -1900,13 +1893,14 @@ async fn run_target(
                         .begin_heap_snapshot(PathBuf::from(&path))
                         .await
                         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
-                    let mut params = HeapProfilerTakeHeapSnapshotParams::new();
-                    params.report_progress = Some(true);
-                    params.capture_numeric_value = capture_numeric_value.then_some(true);
-                    params.expose_internals = expose_internals.then_some(true);
                     let mut progress_updates = driver.heap_snapshot_progress();
                     let heap_profiler = driver.client().heap_profiler();
-                    let snapshot = heap_profiler.take_heap_snapshot(params);
+                    let snapshot = heap_profiler.take_heap_snapshot(
+                        Some(true),
+                        None,
+                        capture_numeric_value.then_some(true),
+                        expose_internals.then_some(true),
+                    );
                     tokio::pin!(snapshot);
                     if let Err(error) = forward_heap_snapshot_progress(
                         &mut progress_updates,
@@ -2858,9 +2852,7 @@ async fn enrich_heap_live_source(
     if let Err(error) = driver
         .client()
         .runtime()
-        .release_object_group(RuntimeReleaseObjectGroupParams {
-            object_group: "dbgjs-heap-location".into(),
-        })
+        .release_object_group("dbgjs-heap-location".into())
         .await
     {
         node.source.diagnostics.push(format!(
@@ -2987,13 +2979,14 @@ async fn take_heap_snapshot(
         .begin_heap_snapshot(path)
         .await
         .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
-    let mut params = HeapProfilerTakeHeapSnapshotParams::new();
-    params.report_progress = Some(true);
-    params.capture_numeric_value = capture_numeric_value.then_some(true);
-    params.expose_internals = expose_internals.then_some(true);
     let mut progress_updates = driver.heap_snapshot_progress();
     let heap_profiler = driver.client().heap_profiler();
-    let snapshot = heap_profiler.take_heap_snapshot(params);
+    let snapshot = heap_profiler.take_heap_snapshot(
+        Some(true),
+        None,
+        capture_numeric_value.then_some(true),
+        expose_internals.then_some(true),
+    );
     tokio::pin!(snapshot);
     if let Err(error) =
         forward_heap_snapshot_progress(&mut progress_updates, progress, &mut snapshot).await
@@ -3521,28 +3514,23 @@ async fn begin_click(
     let document = driver
         .client()
         .dom()
-        .get_document(DomGetDocumentParams::new())
+        .get_document(None, None)
         .await
         .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
     let node = driver
         .client()
         .dom()
-        .query_selector(DomQuerySelectorParams::new(
-            document.root.node_id,
-            selector.clone(),
-        ))
+        .query_selector(document.root.node_id, selector.clone())
         .await
         .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?;
     if node.node_id == 0 {
         return Err(TargetDebuggerError::SelectorNotFound(selector));
     }
 
-    let mut box_params = DomGetBoxModelParams::new();
-    box_params.node_id = Some(node.node_id);
     let model = driver
         .client()
         .dom()
-        .get_box_model(box_params)
+        .get_box_model(Some(node.node_id), None, None)
         .await
         .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))?
         .model;
@@ -3577,7 +3565,7 @@ fn begin_type_text(
     tokio::spawn(async move {
         client
             .input()
-            .insert_text(InputInsertTextParams::new(text))
+            .insert_text(text)
             .await
             .map(|_| ())
             .map_err(|error| TargetDebuggerError::Interaction(format!("{error:?}")))
@@ -3619,7 +3607,7 @@ async fn finish_coverage_recording(
     driver
         .client()
         .profiler()
-        .stop_precise_coverage(ProfilerStopPreciseCoverageParams::new())
+        .stop_precise_coverage()
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     let completed = recording
@@ -3652,16 +3640,13 @@ async fn start_coverage(
     driver
         .client()
         .profiler()
-        .enable(ProfilerEnableParams::new())
+        .enable()
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
-    let mut params = ProfilerStartPreciseCoverageParams::new();
-    params.call_count = Some(true);
-    params.detailed = Some(true);
     driver
         .client()
         .profiler()
-        .start_precise_coverage(params)
+        .start_precise_coverage(Some(true), Some(true), None)
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     Ok(())
@@ -3682,7 +3667,7 @@ async fn update_coverage(
     let coverage = driver
         .client()
         .profiler()
-        .take_precise_coverage(ProfilerTakePreciseCoverageParams::new())
+        .take_precise_coverage()
         .await
         .map_err(|error| TargetDebuggerError::Coverage(format!("{error:?}")))?;
     recording.timestamp_micros = (coverage.timestamp * 1_000_000.0).max(0.0) as u64;
@@ -4080,21 +4065,21 @@ async fn start_cpu_profile(
     driver
         .client()
         .profiler()
-        .enable(ProfilerEnableParams::new())
+        .enable()
         .await
         .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
     if let Some(interval) = sampling_interval_micros {
         driver
             .client()
             .profiler()
-            .set_sampling_interval(ProfilerSetSamplingIntervalParams::new(interval as i64))
+            .set_sampling_interval(interval as i64)
             .await
             .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))?;
     }
     driver
         .client()
         .profiler()
-        .start(ProfilerStartParams::new())
+        .start()
         .await
         .map(|_| ())
         .map_err(|error| TargetDebuggerError::CpuProfile(format!("{error:?}")))
@@ -4859,9 +4844,7 @@ async fn evaluate(
     let release = driver
         .client()
         .runtime()
-        .release_object_group(RuntimeReleaseObjectGroupParams {
-            object_group: OBJECT_GROUP.to_owned(),
-        })
+        .release_object_group(OBJECT_GROUP.to_owned())
         .await
         .map_err(|error| {
             TargetDebuggerError::Properties(format!(
@@ -4907,7 +4890,18 @@ async fn evaluate_remote(
         let evaluated = driver
             .client()
             .debugger()
-            .evaluate_on_call_frame(params)
+            .evaluate_on_call_frame(
+                params.call_frame_id,
+                params.expression,
+                params.object_group,
+                params.include_command_line_api,
+                params.silent,
+                params.return_by_value,
+                params.generate_preview,
+                params.throw_on_side_effect,
+                params.timeout,
+                params.scope_number,
+            )
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
@@ -4925,7 +4919,24 @@ async fn evaluate_remote(
         let evaluated = driver
             .client()
             .runtime()
-            .evaluate(params)
+            .evaluate(
+                params.expression,
+                params.object_group,
+                params.include_command_line_api,
+                params.silent,
+                params.context_id,
+                params.return_by_value,
+                params.generate_preview,
+                params.user_gesture,
+                params.await_promise,
+                params.throw_on_side_effect,
+                params.timeout,
+                params.disable_breaks,
+                params.repl_mode,
+                params.allow_unsafe_eval_blocked_by_csp,
+                params.unique_context_id,
+                params.serialization_options,
+            )
             .await
             .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
         if let Some(exception) = evaluated.exception_details {
@@ -4947,7 +4958,21 @@ async fn evaluate_remote(
     let projected = driver
         .client()
         .runtime()
-        .call_function_on(projection_params)
+        .call_function_on(
+            projection_params.function_declaration,
+            projection_params.object_id,
+            projection_params.arguments,
+            projection_params.silent,
+            projection_params.return_by_value,
+            projection_params.generate_preview,
+            projection_params.user_gesture,
+            projection_params.await_promise,
+            projection_params.execution_context_id,
+            projection_params.object_group,
+            projection_params.throw_on_side_effect,
+            projection_params.unique_context_id,
+            projection_params.serialization_options,
+        )
         .await
         .map_err(|error| TargetDebuggerError::Evaluation(format!("{error:?}")))?;
     if let Some(exception) = projected.exception_details {
@@ -5059,7 +5084,7 @@ async fn release_evaluation_objects(
         driver
             .client()
             .runtime()
-            .release_object(RuntimeReleaseObjectParams::new(object_id))
+            .release_object(object_id)
             .await
             .map_err(|error| {
                 TargetDebuggerError::Properties(format!(
@@ -5212,13 +5237,10 @@ async fn get_object_property_descriptors(
     if let Some(pause_epoch) = pause_epoch {
         require_pause(driver, session_key, pause_epoch)?;
     }
-    let mut params = RuntimeGetPropertiesParams::new(object_id);
-    params.own_properties = Some(true);
-    params.generate_preview = Some(true);
     let result = driver
         .client()
         .runtime()
-        .get_properties(params)
+        .get_properties(object_id, Some(true), None, Some(true), None)
         .await
         .map_err(|error| TargetDebuggerError::Properties(format!("{error:?}")))?;
     if let Some(exception) = result.exception_details {
@@ -6370,10 +6392,7 @@ mod tests {
         window_highlighted_line,
     };
     use super::{project_heap_classes, supply_heap_source_map};
-    use crate::cdp::{
-        RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType,
-        TargetAttachToTargetParams, TargetCloseTargetParams, TargetCreateTargetParams,
-    };
+    use crate::cdp::{RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType};
     use crate::cdp_runtime::CdpConnection;
     use crate::content_store::ContentStore;
     use crate::context_source_model::ContextSourceModel;
@@ -7053,14 +7072,26 @@ mod tests {
             let root = connection.root();
             let created = root
                 .target()
-                .create_target(TargetCreateTargetParams::new("about:blank".into()))
+                .create_target(
+                    "about:blank".into(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .expect("create target");
-            let mut attach = TargetAttachToTargetParams::new(created.target_id.clone());
-            attach.flatten = Some(true);
             let attached = root
                 .target()
-                .attach_to_target(attach)
+                .attach_to_target(created.target_id.clone(), Some(true), None)
                 .await
                 .expect("attach target");
             let session_key = SessionKey {
@@ -7364,7 +7395,7 @@ mod tests {
                 include_str!("../tests/transcripts/bounded-evaluation.txt")
             );
             root.target()
-                .close_target(TargetCloseTargetParams::new(created.target_id))
+                .close_target(created.target_id)
                 .await
                 .expect("close target");
         })

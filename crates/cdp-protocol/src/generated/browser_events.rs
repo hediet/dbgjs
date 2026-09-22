@@ -18,14 +18,19 @@ pub trait BrowserEventsService {
     #[name("downloadProgress")]
     #[notification]
     async fn download_progress(#[params] params: super::types::BrowserDownloadProgressParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Ok(())
     }
     /// Fired when page is about to start a download.
     #[name("downloadWillBegin")]
     #[notification]
-    async fn download_will_begin(#[params] params: super::types::BrowserDownloadWillBeginParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn download_will_begin(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        guid: String,
+        url: String,
+        #[serde(rename = "suggestedFilename")] suggested_filename: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, guid, url, suggested_filename,);
         Ok(())
     }
 }

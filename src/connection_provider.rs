@@ -18,7 +18,7 @@ use crate::capability::{
     Capability, CapabilityError, CapabilityKind, CapabilitySummary, DebugCapability,
     DebugOpenRequest, DebugSessionHandle, PauseFutureChildrenCapability,
 };
-use crate::cdp::{CdpClient, TargetAttachToTargetParams, TargetDetachFromTargetParams};
+use crate::cdp::CdpClient;
 use crate::cdp_runtime::{CdpConnection, CdpDebuggerSession, CdpRuntimeError, RootCdpEvent};
 use crate::debugger_engine::SessionKey;
 use crate::discovery::{
@@ -700,10 +700,9 @@ impl ConnectionRuntime {
             return Ok(());
         }
         self.retire_session(session_id);
-        let mut detach = TargetDetachFromTargetParams::new();
-        detach.session_id = Some(session_id.to_owned());
         self.root()
-            .target().detach_from_target(detach)
+            .target()
+            .detach_from_target(Some(session_id.to_owned()), None)
             .await
             .map_err(|error| {
                 CdpRuntimeError::Transport(format!("Target.detachFromTarget failed: {error:?}"))
@@ -779,11 +778,8 @@ impl ConnectionRuntime {
         let attached = self
             .cdp
             .root()
-            .target().attach_to_target(TargetAttachToTargetParams {
-                target_id: target_id.to_owned(),
-                flatten: Some(true),
-                dbgjs_auto_attach: None,
-            })
+            .target()
+            .attach_to_target(target_id.to_owned(), Some(true), None)
             .await
             .map_err(|error| {
                 CdpRuntimeError::Transport(format!("Target.attachToTarget failed: {error:?}"))

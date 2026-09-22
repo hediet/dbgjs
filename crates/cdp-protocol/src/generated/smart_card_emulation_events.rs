@@ -20,8 +20,11 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardbegintransaction
     #[name("beginTransactionRequested")]
     #[notification]
-    async fn begin_transaction_requested(#[params] params: super::types::SmartCardEmulationBeginTransactionRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn begin_transaction_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle,);
         Ok(())
     }
     /// Fired when |SCardCancel| is called.
@@ -31,8 +34,11 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardcancel
     #[name("cancelRequested")]
     #[notification]
-    async fn cancel_requested(#[params] params: super::types::SmartCardEmulationCancelRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn cancel_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id,);
         Ok(())
     }
     /// Fired when |SCardConnect| is called.
@@ -42,8 +48,14 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardconnecta
     #[name("connectRequested")]
     #[notification]
-    async fn connect_requested(#[params] params: super::types::SmartCardEmulationConnectRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn connect_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+        reader: String,
+        #[serde(rename = "shareMode")] share_mode: super::types::SmartCardEmulationShareMode,
+        #[serde(rename = "preferredProtocols")] preferred_protocols: super::types::SmartCardEmulationProtocolSet,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id, reader, share_mode, preferred_protocols,);
         Ok(())
     }
     /// Fired when |SCardControl| is called.
@@ -53,8 +65,13 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardcontrol
     #[name("controlRequested")]
     #[notification]
-    async fn control_requested(#[params] params: super::types::SmartCardEmulationControlRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn control_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        #[serde(rename = "controlCode")] control_code: i64,
+        data: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, control_code, data,);
         Ok(())
     }
     /// Fired when |SCardDisconnect| is called.
@@ -64,8 +81,12 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scarddisconnect
     #[name("disconnectRequested")]
     #[notification]
-    async fn disconnect_requested(#[params] params: super::types::SmartCardEmulationDisconnectRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disconnect_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        disposition: super::types::SmartCardEmulationDisposition,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, disposition,);
         Ok(())
     }
     /// Fired when |SCardEndTransaction| is called.
@@ -75,8 +96,12 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardendtransaction
     #[name("endTransactionRequested")]
     #[notification]
-    async fn end_transaction_requested(#[params] params: super::types::SmartCardEmulationEndTransactionRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn end_transaction_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        disposition: super::types::SmartCardEmulationDisposition,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, disposition,);
         Ok(())
     }
     /// Fired when |SCardEstablishContext| is called.
@@ -86,8 +111,8 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardestablishcontext
     #[name("establishContextRequested")]
     #[notification]
-    async fn establish_context_requested(#[params] params: super::types::SmartCardEmulationEstablishContextRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn establish_context_requested(#[serde(rename = "requestId")] request_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Ok(())
     }
     /// Fired when |SCardGetAttrib| is called.
@@ -97,8 +122,12 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardgetattrib
     #[name("getAttribRequested")]
     #[notification]
-    async fn get_attrib_requested(#[params] params: super::types::SmartCardEmulationGetAttribRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_attrib_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        #[serde(rename = "attribId")] attrib_id: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, attrib_id,);
         Ok(())
     }
     /// Fired when |SCardGetStatusChange| is called. Timeout is specified in milliseconds.
@@ -108,8 +137,13 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardgetstatuschangea
     #[name("getStatusChangeRequested")]
     #[notification]
-    async fn get_status_change_requested(#[params] params: super::types::SmartCardEmulationGetStatusChangeRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_status_change_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+        #[serde(rename = "readerStates")] reader_states: Vec<super::types::SmartCardEmulationReaderStateIn>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] timeout: Option<i64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id, reader_states, timeout,);
         Ok(())
     }
     /// Fired when |SCardListReaders| is called.
@@ -119,8 +153,11 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardlistreadersa
     #[name("listReadersRequested")]
     #[notification]
-    async fn list_readers_requested(#[params] params: super::types::SmartCardEmulationListReadersRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn list_readers_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id,);
         Ok(())
     }
     /// Fired when |SCardReleaseContext| is called.
@@ -130,8 +167,11 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardreleasecontext
     #[name("releaseContextRequested")]
     #[notification]
-    async fn release_context_requested(#[params] params: super::types::SmartCardEmulationReleaseContextRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn release_context_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        #[serde(rename = "contextId")] context_id: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, context_id,);
         Ok(())
     }
     /// Fired when |SCardSetAttrib| is called.
@@ -141,8 +181,13 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardsetattrib
     #[name("setAttribRequested")]
     #[notification]
-    async fn set_attrib_requested(#[params] params: super::types::SmartCardEmulationSetAttribRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_attrib_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        #[serde(rename = "attribId")] attrib_id: i64,
+        data: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, attrib_id, data,);
         Ok(())
     }
     /// Fired when |SCardStatus| is called.
@@ -152,8 +197,11 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardstatusa
     #[name("statusRequested")]
     #[notification]
-    async fn status_requested(#[params] params: super::types::SmartCardEmulationStatusRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn status_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle,);
         Ok(())
     }
     /// Fired when |SCardTransmit| is called.
@@ -163,8 +211,13 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardtransmit
     #[name("transmitRequested")]
     #[notification]
-    async fn transmit_requested(#[params] params: super::types::SmartCardEmulationTransmitRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn transmit_requested(
+        #[serde(rename = "requestId")] request_id: String,
+        handle: i64,
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] protocol: Option<super::types::SmartCardEmulationProtocol>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, handle, data, protocol,);
         Ok(())
     }
 }

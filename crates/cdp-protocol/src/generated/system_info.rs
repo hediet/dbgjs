@@ -16,20 +16,20 @@
 pub trait SystemInfoService {
     /// Returns information about the feature state.
     #[name("getFeatureState")]
-    async fn get_feature_state(#[params] params: super::types::SystemInfoGetFeatureStateParams) -> Result<super::types::SystemInfoGetFeatureStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_feature_state(#[serde(rename = "featureState")] feature_state: String) -> Result<super::types::SystemInfoGetFeatureStateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, feature_state,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFeatureState"))
     }
     /// Returns information about the system.
     #[name("getInfo")]
-    async fn get_info(#[params] params: super::types::SystemInfoGetInfoParams) -> Result<super::types::SystemInfoGetInfoResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_info() -> Result<super::types::SystemInfoGetInfoResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getInfo"))
     }
     /// Returns information about all running processes.
     #[name("getProcessInfo")]
-    async fn get_process_info(#[params] params: super::types::SystemInfoGetProcessInfoParams) -> Result<super::types::SystemInfoGetProcessInfoResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_process_info() -> Result<super::types::SystemInfoGetProcessInfoResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getProcessInfo"))
     }
 }

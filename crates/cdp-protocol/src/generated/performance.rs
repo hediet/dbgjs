@@ -15,20 +15,20 @@
 pub trait PerformanceService {
     /// Disable collecting and reporting metrics.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::PerformanceDisableParams) -> Result<super::types::PerformanceDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::PerformanceDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enable collecting and reporting metrics.
     #[name("enable")]
     async fn enable(#[params] params: super::types::PerformanceEnableParams) -> Result<super::types::PerformanceEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Retrieve current values of run-time metrics.
     #[name("getMetrics")]
-    async fn get_metrics(#[params] params: super::types::PerformanceGetMetricsParams) -> Result<super::types::PerformanceGetMetricsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_metrics() -> Result<super::types::PerformanceGetMetricsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMetrics"))
     }
     /// Sets time domain to use for collecting and reporting duration metrics.
@@ -36,7 +36,7 @@ pub trait PerformanceService {
     /// this method while metrics collection is enabled returns an error.
     #[name("setTimeDomain")]
     async fn set_time_domain(#[params] params: super::types::PerformanceSetTimeDomainParams) -> Result<super::types::PerformanceSetTimeDomainResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTimeDomain"))
     }
 }

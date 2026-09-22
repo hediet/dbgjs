@@ -16,8 +16,8 @@
 pub trait AdsService {
     /// Retrieves ad metrics for the current page.
     #[name("getAdMetrics")]
-    async fn get_ad_metrics(#[params] params: super::types::AdsGetAdMetricsParams) -> Result<super::types::AdsGetAdMetricsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_ad_metrics() -> Result<super::types::AdsGetAdMetricsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAdMetrics"))
     }
 }

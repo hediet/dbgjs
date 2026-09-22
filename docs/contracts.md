@@ -141,6 +141,24 @@ and register `runtime_events::RuntimeEventsServer` on their receive router.
 `Runtime.consoleAPICalled`; event methods do not use `#[server_notification]`.
 The shared payload types retain their existing names.
 
+The Rust generator uses its default inline-parameter mode. Methods take their
+typed fields directly, including native `#[serde(...)]` renames and optional
+field omission; methods with empty parameter objects take no arguments:
+
+```rust,ignore
+client.runtime().enable().await?;
+client.target().attach_to_target(target_id, Some(true), None).await?;
+client.debugger().enable(None).await?;
+```
+
+Use the generated signature for argument order. Command providers and event
+receivers implement the same inline fields after `&self` and `&CallCtx`.
+Shared `*Params` types remain useful for stored/forwarded payloads. Methods that
+cannot safely inline their fields, such as `Runtime.consoleAPICalled`, retain
+one `#[params]` payload argument. Do not disable inlining to avoid migrating
+consumers. This changes Rust call ergonomics, not CDP wire objects, interface
+identities, or the command/event split.
+
 `command_interfaces()` is the endpoint's command catalog; `event_interfaces()`
 is the consumer's notification catalog. Register only the relevant direction on
 each router: the two contracts intentionally share a bare prefix and must not
@@ -231,16 +249,22 @@ Interface definitions are generated once; typed bindings reuse them. A diagnosti
 `ls --dump` is a different artifact: it contains discovery topology, progress,
 and failures, and is not the input to code generation.
 
-## Registry dependencies and local LinkRPC development
+## Pinned dependencies and local LinkRPC development
 
-Ordinary installs and CI resolve LinkRPC from the public npm and Cargo
-registries. The checked-in manifests and lockfiles must contain only registry
-dependencies; CI does not check out a sibling repository, use relative
-`file:`/`path` links, or vendor LinkRPC sources. Required LinkRPC releases must
-be published before their versions are selected in this repository.
+The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
+dependencies intentionally use the immutable Git revision
+`94791aeb87894e0d6059cb2bbc332b747c23375f` from
+`https://github.com/hediet/linkrpc.git`: the inline-parameter generator release
+has not been published yet. The root `[workspace.dependencies]` pins
+`linkrpc` and `linkrpc-tokio`; the runtime, protocol crate, and generator inherit
+these sources. `Cargo.lock` also pins the transitive macro crate to that revision.
+Cargo fetches the public repository in ordinary installs and CI; no sibling
+checkout, local path patch, vendored sources, or unpublished local package is
+needed. Keep the exact revision until adopting a published release.
 
 The locked LinkRPC versions provide shared component generation, typed endpoint
-bindings, schema-preserving macro-backed CDP clients, and heap-progress streams.
+bindings, schema-preserving macro-backed CDP clients with inline parameters, and
+heap-progress streams.
 The Rust generator emits a trait annotated with
 `#[link_rpc_interface(schema_json = "...")]`; the same macro used by the daemon
 trait generates the CDP client and provider infrastructure. The imported CDP
@@ -254,7 +278,7 @@ sibling checkout by temporarily overriding the relevant npm and Cargo
 dependencies in their working tree. Build any required LinkRPC package outputs
 in that checkout before installing this repository. Keep those local manifest
 overrides and any resulting lockfile changes uncommitted and out of staging,
-then restore the registry manifests and lockfiles before running the ordinary
+then restore the pinned manifests and lockfiles before running the ordinary
 install and contract drift check. Never commit local `file:`/`path` links or
 copy package sources or tarballs into this repository.
 
@@ -262,20 +286,10 @@ To validate an explicitly built CLI without changing existing npm links, pass
 `npm run generate:contracts -- --cli /absolute/path/to/linkrpc.js` (or the same
 option to `check:contracts`). CI always uses the pinned installed CLI.
 
-For the isolated sibling development layout, an **uncommitted**
-`.cargo/config.toml` can contain:
-
-```toml
-[patch.crates-io]
-linkrpc = { path = "../linkrpc/rust/crates/linkrpc" }
-linkrpc-macros = { path = "../linkrpc/rust/crates/linkrpc-macros" }
-linkrpc-tokio = { path = "../linkrpc/rust/crates/linkrpc-tokio" }
-```
-
-Resolve the local patch once without `--locked`, then run the locked build,
-generation, and tests. Remove this config and restore the registry lockfile
-before committing. Ordinary builds, contract generation, and CI use only the
-published registry dependencies.
+Any opt-in Cargo override must target the configured Git source, not
+`crates-io`. Remove local overrides and restore the pinned lockfile before
+committing. Ordinary builds, contract generation, and CI use the same
+portable sources.
 
 ## Typed heap-progress streams
 

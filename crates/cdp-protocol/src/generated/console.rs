@@ -16,21 +16,21 @@
 pub trait ConsoleService {
     /// Does nothing.
     #[name("clearMessages")]
-    async fn clear_messages(#[params] params: super::types::ConsoleClearMessagesParams) -> Result<super::types::ConsoleClearMessagesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_messages() -> Result<super::types::ConsoleClearMessagesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearMessages"))
     }
     /// Disables console domain, prevents further console messages from being reported to the client.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::ConsoleDisableParams) -> Result<super::types::ConsoleDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::ConsoleDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables console domain, sends the messages collected so far to the client by means of the
     /// `messageAdded` notification.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::ConsoleEnableParams) -> Result<super::types::ConsoleEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::ConsoleEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
 }

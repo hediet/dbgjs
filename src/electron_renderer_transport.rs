@@ -16,10 +16,7 @@ use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time::timeout;
 
 use crate::cdp::CdpClient;
-use crate::cdp::{
-    RuntimeCallArgument, RuntimeCallFunctionOnParams, RuntimeEvaluateParams,
-    RuntimeReleaseObjectGroupParams,
-};
+use crate::cdp::{RuntimeCallArgument, RuntimeCallFunctionOnParams, RuntimeEvaluateParams};
 use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::session_transport::CdpEnvelope;
 
@@ -90,9 +87,30 @@ impl ElectronRendererBridge {
         params.generate_preview = Some(false);
         params.user_gesture = Some(false);
         params.await_promise = Some(true);
-        let response = client.runtime().evaluate(params).await.map_err(|error| {
-            transport_error(format!("failed to install renderer bridge: {error:?}"))
-        })?;
+        let response = client
+            .runtime()
+            .evaluate(
+                params.expression,
+                params.object_group,
+                params.include_command_line_api,
+                params.silent,
+                params.context_id,
+                params.return_by_value,
+                params.generate_preview,
+                params.user_gesture,
+                params.await_promise,
+                params.throw_on_side_effect,
+                params.timeout,
+                params.disable_breaks,
+                params.repl_mode,
+                params.allow_unsafe_eval_blocked_by_csp,
+                params.unique_context_id,
+                params.serialization_options,
+            )
+            .await
+            .map_err(|error| {
+                transport_error(format!("failed to install renderer bridge: {error:?}"))
+            })?;
         if let Some(exception) = response.exception_details {
             return Err(transport_error(format!(
                 "failed to install renderer bridge: {}",
@@ -119,9 +137,8 @@ impl ElectronRendererBridge {
             Ok(control) => control,
             Err(error) => {
                 let _ = client
-                    .runtime().release_object_group(RuntimeReleaseObjectGroupParams {
-                        object_group: BRIDGE_OBJECT_GROUP.to_owned(),
-                    })
+                    .runtime()
+                    .release_object_group(BRIDGE_OBJECT_GROUP.to_owned())
                     .await;
                 return Err(error);
             }
@@ -218,9 +235,8 @@ impl ElectronRendererBridge {
         self.control.dispose().await;
         let _ = self
             .client
-            .runtime().release_object_group(RuntimeReleaseObjectGroupParams {
-                object_group: BRIDGE_OBJECT_GROUP.to_owned(),
-            })
+            .runtime()
+            .release_object_group(BRIDGE_OBJECT_GROUP.to_owned())
             .await;
     }
 
@@ -256,7 +272,22 @@ async fn call_bridge_object<T: DeserializeOwned>(
     params.user_gesture = Some(false);
     params.await_promise = Some(true);
     let response = client
-        .runtime().call_function_on(params)
+        .runtime()
+        .call_function_on(
+            params.function_declaration,
+            params.object_id,
+            params.arguments,
+            params.silent,
+            params.return_by_value,
+            params.generate_preview,
+            params.user_gesture,
+            params.await_promise,
+            params.execution_context_id,
+            params.object_group,
+            params.throw_on_side_effect,
+            params.unique_context_id,
+            params.serialization_options,
+        )
         .await
         .map_err(|error| transport_error(format!("renderer bridge call failed: {error:?}")))?;
     if let Some(exception) = response.exception_details {

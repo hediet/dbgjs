@@ -16,42 +16,66 @@ pub trait PreloadEventsService {
     /// Fired when a prefetch attempt is updated.
     #[name("prefetchStatusUpdated")]
     #[notification]
-    async fn prefetch_status_updated(#[params] params: super::types::PreloadPrefetchStatusUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn prefetch_status_updated(
+        key: super::types::PreloadPreloadingAttemptKey,
+        #[serde(rename = "pipelineId")] pipeline_id: super::types::PreloadPreloadPipelineId,
+        #[serde(rename = "initiatingFrameId")] initiating_frame_id: super::types::PageFrameId,
+        #[serde(rename = "prefetchUrl")] prefetch_url: String,
+        status: super::types::PreloadPreloadingStatus,
+        #[serde(rename = "prefetchStatus")] prefetch_status: super::types::PreloadPrefetchStatus,
+        #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, key, pipeline_id, initiating_frame_id, prefetch_url, status, prefetch_status, request_id,);
         Ok(())
     }
     /// Fired when a preload enabled state is updated.
     #[name("preloadEnabledStateUpdated")]
     #[notification]
-    async fn preload_enabled_state_updated(#[params] params: super::types::PreloadPreloadEnabledStateUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn preload_enabled_state_updated(
+        #[serde(rename = "disabledByPreference")] disabled_by_preference: bool,
+        #[serde(rename = "disabledByDataSaver")] disabled_by_data_saver: bool,
+        #[serde(rename = "disabledByBatterySaver")] disabled_by_battery_saver: bool,
+        #[serde(rename = "disabledByHoldbackPrefetchSpeculationRules")] disabled_by_holdback_prefetch_speculation_rules: bool,
+        #[serde(rename = "disabledByHoldbackPrerenderSpeculationRules")] disabled_by_holdback_prerender_speculation_rules: bool,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, disabled_by_preference, disabled_by_data_saver, disabled_by_battery_saver, disabled_by_holdback_prefetch_speculation_rules, disabled_by_holdback_prerender_speculation_rules,);
         Ok(())
     }
     /// Send a list of sources for all preloading attempts in a document.
     #[name("preloadingAttemptSourcesUpdated")]
     #[notification]
-    async fn preloading_attempt_sources_updated(#[params] params: super::types::PreloadPreloadingAttemptSourcesUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn preloading_attempt_sources_updated(
+        #[serde(rename = "loaderId")] loader_id: super::types::NetworkLoaderId,
+        #[serde(rename = "preloadingAttemptSources")] preloading_attempt_sources: Vec<super::types::PreloadPreloadingAttemptSource>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, loader_id, preloading_attempt_sources,);
         Ok(())
     }
     /// Fired when a prerender attempt is updated.
     #[name("prerenderStatusUpdated")]
     #[notification]
-    async fn prerender_status_updated(#[params] params: super::types::PreloadPrerenderStatusUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn prerender_status_updated(
+        key: super::types::PreloadPreloadingAttemptKey,
+        #[serde(rename = "pipelineId")] pipeline_id: super::types::PreloadPreloadPipelineId,
+        status: super::types::PreloadPreloadingStatus,
+        #[serde(rename = "prerenderStatus")] #[serde(default, skip_serializing_if = "Option::is_none")] prerender_status: Option<super::types::PreloadPrerenderFinalStatus>,
+        #[serde(rename = "disallowedMojoInterface")] #[serde(default, skip_serializing_if = "Option::is_none")] disallowed_mojo_interface: Option<String>,
+        #[serde(rename = "mismatchedHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] mismatched_headers: Option<Vec<super::types::PreloadPrerenderMismatchedHeaders>>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, key, pipeline_id, status, prerender_status, disallowed_mojo_interface, mismatched_headers,);
         Ok(())
     }
     #[name("ruleSetRemoved")]
     #[notification]
-    async fn rule_set_removed(#[params] params: super::types::PreloadRuleSetRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn rule_set_removed(id: super::types::PreloadRuleSetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id,);
         Ok(())
     }
     /// Upsert. Currently, it is only emitted when a rule set added.
     #[name("ruleSetUpdated")]
     #[notification]
-    async fn rule_set_updated(#[params] params: super::types::PreloadRuleSetUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn rule_set_updated(#[serde(rename = "ruleSet")] rule_set: super::types::PreloadRuleSet) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, rule_set,);
         Ok(())
     }
 }

@@ -17,20 +17,20 @@
 pub trait WebAudioService {
     /// Disables the WebAudio domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::WebAudioDisableParams) -> Result<super::types::WebAudioDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::WebAudioDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables the WebAudio domain and starts sending context lifetime events.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::WebAudioEnableParams) -> Result<super::types::WebAudioEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::WebAudioEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Fetch the realtime data from the registered contexts.
     #[name("getRealtimeData")]
-    async fn get_realtime_data(#[params] params: super::types::WebAudioGetRealtimeDataParams) -> Result<super::types::WebAudioGetRealtimeDataResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_realtime_data(#[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId) -> Result<super::types::WebAudioGetRealtimeDataResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRealtimeData"))
     }
 }

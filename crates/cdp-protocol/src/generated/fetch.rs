@@ -16,47 +16,76 @@
 pub trait FetchService {
     /// Continues the request, optionally modifying some of its parameters.
     #[name("continueRequest")]
-    async fn continue_request(#[params] params: super::types::FetchContinueRequestParams) -> Result<super::types::FetchContinueRequestResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn continue_request(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] method: Option<String>,
+        #[serde(rename = "postData")] #[serde(default, skip_serializing_if = "Option::is_none")] post_data: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "interceptResponse")] #[serde(default, skip_serializing_if = "Option::is_none")] intercept_response: Option<bool>,
+    ) -> Result<super::types::FetchContinueRequestResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, url, method, post_data, headers, intercept_response,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueRequest"))
     }
     /// Continues loading of the paused response, optionally modifying the
     /// response headers. If either responseCode or headers are modified, all of them
     /// must be present.
     #[name("continueResponse")]
-    async fn continue_response(#[params] params: super::types::FetchContinueResponseParams) -> Result<super::types::FetchContinueResponseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn continue_response(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        #[serde(rename = "responseCode")] #[serde(default, skip_serializing_if = "Option::is_none")] response_code: Option<i64>,
+        #[serde(rename = "responsePhrase")] #[serde(default, skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
+        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "binaryResponseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
+    ) -> Result<super::types::FetchContinueResponseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, response_code, response_phrase, response_headers, binary_response_headers,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueResponse"))
     }
     /// Continues a request supplying authChallengeResponse following authRequired event.
     #[name("continueWithAuth")]
-    async fn continue_with_auth(#[params] params: super::types::FetchContinueWithAuthParams) -> Result<super::types::FetchContinueWithAuthResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn continue_with_auth(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        #[serde(rename = "authChallengeResponse")] auth_challenge_response: super::types::FetchAuthChallengeResponse,
+    ) -> Result<super::types::FetchContinueWithAuthResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, auth_challenge_response,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueWithAuth"))
     }
     /// Disables the fetch domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::FetchDisableParams) -> Result<super::types::FetchDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::FetchDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables issuing of requestPaused events. A request will be paused until client
     /// calls one of failRequest, fulfillRequest or continueRequest/continueWithAuth.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::FetchEnableParams) -> Result<super::types::FetchEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(
+        #[serde(default, skip_serializing_if = "Option::is_none")] patterns: Option<Vec<super::types::FetchRequestPattern>>,
+        #[serde(rename = "handleAuthRequests")] #[serde(default, skip_serializing_if = "Option::is_none")] handle_auth_requests: Option<bool>,
+    ) -> Result<super::types::FetchEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, patterns, handle_auth_requests,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Causes the request to fail with specified reason.
     #[name("failRequest")]
-    async fn fail_request(#[params] params: super::types::FetchFailRequestParams) -> Result<super::types::FetchFailRequestResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn fail_request(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        #[serde(rename = "errorReason")] error_reason: super::types::NetworkErrorReason,
+    ) -> Result<super::types::FetchFailRequestResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, error_reason,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "failRequest"))
     }
     /// Provides response to the request.
     #[name("fulfillRequest")]
-    async fn fulfill_request(#[params] params: super::types::FetchFulfillRequestParams) -> Result<super::types::FetchFulfillRequestResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn fulfill_request(
+        #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
+        #[serde(rename = "responseCode")] response_code: i64,
+        #[serde(rename = "responseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
+        #[serde(rename = "binaryResponseHeaders")] #[serde(default, skip_serializing_if = "Option::is_none")] binary_response_headers: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] body: Option<String>,
+        #[serde(rename = "responsePhrase")] #[serde(default, skip_serializing_if = "Option::is_none")] response_phrase: Option<String>,
+    ) -> Result<super::types::FetchFulfillRequestResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id, response_code, response_headers, binary_response_headers, body, response_phrase,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fulfillRequest"))
     }
     /// Causes the body of the response to be received from the server and
@@ -70,8 +99,8 @@ pub trait FetchService {
     /// `responseCode` and presence of `location` response header, see
     /// comments to `requestPaused` for details.
     #[name("getResponseBody")]
-    async fn get_response_body(#[params] params: super::types::FetchGetResponseBodyParams) -> Result<super::types::FetchGetResponseBodyResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_response_body(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchGetResponseBodyResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResponseBody"))
     }
     /// Returns a handle to the stream representing the response body.
@@ -85,8 +114,8 @@ pub trait FetchService {
     /// Calling other methods that affect the request or disabling fetch
     /// domain before body is received results in an undefined behavior.
     #[name("takeResponseBodyAsStream")]
-    async fn take_response_body_as_stream(#[params] params: super::types::FetchTakeResponseBodyAsStreamParams) -> Result<super::types::FetchTakeResponseBodyAsStreamResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn take_response_body_as_stream(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchTakeResponseBodyAsStreamResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, request_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeResponseBodyAsStream"))
     }
 }

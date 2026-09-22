@@ -16,14 +16,14 @@
 pub trait MediaService {
     /// Disables the Media domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::MediaDisableParams) -> Result<super::types::MediaDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::MediaDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables the Media domain
     #[name("enable")]
-    async fn enable(#[params] params: super::types::MediaEnableParams) -> Result<super::types::MediaEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::MediaEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
 }

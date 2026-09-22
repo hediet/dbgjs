@@ -14,63 +14,76 @@
 )]
 pub trait ServiceWorkerService {
     #[name("deliverPushMessage")]
-    async fn deliver_push_message(#[params] params: super::types::ServiceWorkerDeliverPushMessageParams) -> Result<super::types::ServiceWorkerDeliverPushMessageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn deliver_push_message(
+        origin: String,
+        #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
+        data: String,
+    ) -> Result<super::types::ServiceWorkerDeliverPushMessageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, registration_id, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deliverPushMessage"))
     }
     #[name("disable")]
-    async fn disable(#[params] params: super::types::ServiceWorkerDisableParams) -> Result<super::types::ServiceWorkerDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::ServiceWorkerDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("dispatchPeriodicSyncEvent")]
-    async fn dispatch_periodic_sync_event(#[params] params: super::types::ServiceWorkerDispatchPeriodicSyncEventParams) -> Result<super::types::ServiceWorkerDispatchPeriodicSyncEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dispatch_periodic_sync_event(
+        origin: String,
+        #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
+        tag: String,
+    ) -> Result<super::types::ServiceWorkerDispatchPeriodicSyncEventResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, registration_id, tag,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchPeriodicSyncEvent"))
     }
     #[name("dispatchSyncEvent")]
-    async fn dispatch_sync_event(#[params] params: super::types::ServiceWorkerDispatchSyncEventParams) -> Result<super::types::ServiceWorkerDispatchSyncEventResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dispatch_sync_event(
+        origin: String,
+        #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
+        tag: String,
+        #[serde(rename = "lastChance")] last_chance: bool,
+    ) -> Result<super::types::ServiceWorkerDispatchSyncEventResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, origin, registration_id, tag, last_chance,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchSyncEvent"))
     }
     #[name("enable")]
-    async fn enable(#[params] params: super::types::ServiceWorkerEnableParams) -> Result<super::types::ServiceWorkerEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::ServiceWorkerEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     #[name("setForceUpdateOnPageLoad")]
-    async fn set_force_update_on_page_load(#[params] params: super::types::ServiceWorkerSetForceUpdateOnPageLoadParams) -> Result<super::types::ServiceWorkerSetForceUpdateOnPageLoadResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_force_update_on_page_load(#[serde(rename = "forceUpdateOnPageLoad")] force_update_on_page_load: bool) -> Result<super::types::ServiceWorkerSetForceUpdateOnPageLoadResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, force_update_on_page_load,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setForceUpdateOnPageLoad"))
     }
     #[name("skipWaiting")]
-    async fn skip_waiting(#[params] params: super::types::ServiceWorkerSkipWaitingParams) -> Result<super::types::ServiceWorkerSkipWaitingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn skip_waiting(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerSkipWaitingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scope_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "skipWaiting"))
     }
     #[name("startWorker")]
-    async fn start_worker(#[params] params: super::types::ServiceWorkerStartWorkerParams) -> Result<super::types::ServiceWorkerStartWorkerResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_worker(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerStartWorkerResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scope_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startWorker"))
     }
     #[name("stopAllWorkers")]
-    async fn stop_all_workers(#[params] params: super::types::ServiceWorkerStopAllWorkersParams) -> Result<super::types::ServiceWorkerStopAllWorkersResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_all_workers() -> Result<super::types::ServiceWorkerStopAllWorkersResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopAllWorkers"))
     }
     #[name("stopWorker")]
-    async fn stop_worker(#[params] params: super::types::ServiceWorkerStopWorkerParams) -> Result<super::types::ServiceWorkerStopWorkerResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_worker(#[serde(rename = "versionId")] version_id: String) -> Result<super::types::ServiceWorkerStopWorkerResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, version_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopWorker"))
     }
     #[name("unregister")]
-    async fn unregister(#[params] params: super::types::ServiceWorkerUnregisterParams) -> Result<super::types::ServiceWorkerUnregisterResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn unregister(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUnregisterResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scope_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unregister"))
     }
     #[name("updateRegistration")]
-    async fn update_registration(#[params] params: super::types::ServiceWorkerUpdateRegistrationParams) -> Result<super::types::ServiceWorkerUpdateRegistrationResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn update_registration(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUpdateRegistrationResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scope_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateRegistration"))
     }
 }

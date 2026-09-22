@@ -15,27 +15,31 @@
 pub trait WebMCPService {
     /// Cancels a pending tool invocation.
     #[name("cancelInvocation")]
-    async fn cancel_invocation(#[params] params: super::types::WebMcpCancelInvocationParams) -> Result<super::types::WebMcpCancelInvocationResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn cancel_invocation(#[serde(rename = "invocationId")] invocation_id: String) -> Result<super::types::WebMcpCancelInvocationResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, invocation_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelInvocation"))
     }
     /// Disables the WebMCP domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::WebMcpDisableParams) -> Result<super::types::WebMcpDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::WebMcpDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables the WebMCP domain, allowing events to be sent. Enabling the domain will trigger a toolsAdded event for
     /// all currently registered tools.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::WebMcpEnableParams) -> Result<super::types::WebMcpEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::WebMcpEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Invokes a registered tool.
     #[name("invokeTool")]
-    async fn invoke_tool(#[params] params: super::types::WebMcpInvokeToolParams) -> Result<super::types::WebMcpInvokeToolResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn invoke_tool(
+        #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
+        #[serde(rename = "toolName")] tool_name: String,
+        input: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<super::types::WebMcpInvokeToolResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_id, tool_name, input,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "invokeTool"))
     }
 }

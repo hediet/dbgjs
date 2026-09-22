@@ -16,14 +16,14 @@
 pub trait TetheringService {
     /// Request browser port binding.
     #[name("bind")]
-    async fn bind(#[params] params: super::types::TetheringBindParams) -> Result<super::types::TetheringBindResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn bind(port: i64) -> Result<super::types::TetheringBindResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, port,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "bind"))
     }
     /// Request browser port unbinding.
     #[name("unbind")]
-    async fn unbind(#[params] params: super::types::TetheringUnbindParams) -> Result<super::types::TetheringUnbindResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn unbind(port: i64) -> Result<super::types::TetheringUnbindResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, port,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unbind"))
     }
 }

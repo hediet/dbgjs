@@ -16,20 +16,24 @@
 pub trait IOService {
     /// Close the stream, discard any temporary backing storage.
     #[name("close")]
-    async fn close(#[params] params: super::types::IoCloseParams) -> Result<super::types::IoCloseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn close(handle: super::types::IoStreamHandle) -> Result<super::types::IoCloseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, handle,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close"))
     }
     /// Read a chunk of the stream
     #[name("read")]
-    async fn read(#[params] params: super::types::IoReadParams) -> Result<super::types::IoReadResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn read(
+        handle: super::types::IoStreamHandle,
+        #[serde(default, skip_serializing_if = "Option::is_none")] offset: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] size: Option<i64>,
+    ) -> Result<super::types::IoReadResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, handle, offset, size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "read"))
     }
     /// Return UUID of Blob object specified by a remote object id.
     #[name("resolveBlob")]
-    async fn resolve_blob(#[params] params: super::types::IoResolveBlobParams) -> Result<super::types::IoResolveBlobResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn resolve_blob(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::IoResolveBlobResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, object_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveBlob"))
     }
 }

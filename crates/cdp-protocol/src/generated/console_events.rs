@@ -17,8 +17,8 @@ pub trait ConsoleEventsService {
     /// Issued when new console message is added.
     #[name("messageAdded")]
     #[notification]
-    async fn message_added(#[params] params: super::types::ConsoleMessageAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn message_added(message: super::types::ConsoleConsoleMessage) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, message,);
         Ok(())
     }
 }

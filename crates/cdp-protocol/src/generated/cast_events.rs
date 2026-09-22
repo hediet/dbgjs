@@ -19,16 +19,16 @@ pub trait CastEventsService {
     /// |issueMessage| is empty if there is no issue.
     #[name("issueUpdated")]
     #[notification]
-    async fn issue_updated(#[params] params: super::types::CastIssueUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn issue_updated(#[serde(rename = "issueMessage")] issue_message: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, issue_message,);
         Ok(())
     }
     /// This is fired whenever the list of available sinks changes. A sink is a
     /// device or a software surface that you can cast to.
     #[name("sinksUpdated")]
     #[notification]
-    async fn sinks_updated(#[params] params: super::types::CastSinksUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn sinks_updated(sinks: Vec<super::types::CastSink>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sinks,);
         Ok(())
     }
 }

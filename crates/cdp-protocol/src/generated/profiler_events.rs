@@ -15,15 +15,24 @@
 pub trait ProfilerEventsService {
     #[name("consoleProfileFinished")]
     #[notification]
-    async fn console_profile_finished(#[params] params: super::types::ProfilerConsoleProfileFinishedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn console_profile_finished(
+        id: String,
+        location: super::types::DebuggerLocation,
+        profile: super::types::ProfilerProfile,
+        #[serde(default, skip_serializing_if = "Option::is_none")] title: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id, location, profile, title,);
         Ok(())
     }
     /// Sent when new profile recording is started using console.profile() call.
     #[name("consoleProfileStarted")]
     #[notification]
-    async fn console_profile_started(#[params] params: super::types::ProfilerConsoleProfileStartedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn console_profile_started(
+        id: String,
+        location: super::types::DebuggerLocation,
+        #[serde(default, skip_serializing_if = "Option::is_none")] title: Option<String>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id, location, title,);
         Ok(())
     }
     /// Reports coverage delta since the last poll (either from an event like this, or from
@@ -32,8 +41,12 @@ pub trait ProfilerEventsService {
     /// trigger collection of coverage data immediately at a certain point in time.
     #[name("preciseCoverageDeltaUpdate")]
     #[notification]
-    async fn precise_coverage_delta_update(#[params] params: super::types::ProfilerPreciseCoverageDeltaUpdateParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn precise_coverage_delta_update(
+        timestamp: f64,
+        occasion: String,
+        result: Vec<super::types::ProfilerScriptCoverage>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, timestamp, occasion, result,);
         Ok(())
     }
 }

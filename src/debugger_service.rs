@@ -35,10 +35,6 @@ use tokio::time::{Instant, timeout_at};
 use crate::capability::{
     CapabilityKind, CapabilityObject, DebugCapability, DebugOpenRequest, DebugSessionHandle,
 };
-use crate::cdp::{
-    BrowserGetVersionParams, TargetDetachFromTargetParams, TargetGetTargetsParams,
-    TargetSetDiscoverTargetsParams,
-};
 use crate::connection_provider::{ConnectionRuntime, validate_configuration};
 use crate::context_engine::{
     BreakpointState, ConnectionAttempt, ConnectionState, ContextEffect, ContextInput, ContextState,
@@ -2975,9 +2971,11 @@ async fn detach_session(runtime: &ConnectionRuntime, session_id: &str) {
         return;
     }
     runtime.retire_session(session_id);
-    let mut detach = TargetDetachFromTargetParams::new();
-    detach.session_id = Some(session_id.to_owned());
-    let _ = runtime.root().target().detach_from_target(detach).await;
+    let _ = runtime
+        .root()
+        .target()
+        .detach_from_target(Some(session_id.to_owned()), None)
+        .await;
 }
 
 fn canonicalize_synthetic_target_id(target_id: &str, connection_id: &str) -> String {
@@ -4040,12 +4038,7 @@ async fn connect_runtime(
             }],
         ));
     }
-    let version = match connection
-        .root()
-        .browser()
-        .get_version(BrowserGetVersionParams::new())
-        .await
-    {
+    let version = match connection.root().browser().get_version().await {
         Ok(version) => version,
         Err(error) => {
             connection.close().await;
@@ -4055,18 +4048,13 @@ async fn connect_runtime(
     if let Err(error) = connection
         .root()
         .target()
-        .set_discover_targets(TargetSetDiscoverTargetsParams::new(true))
+        .set_discover_targets(true, None)
         .await
     {
         connection.close().await;
         return Err(format!("Target.setDiscoverTargets failed: {error:?}"));
     }
-    let targets = match connection
-        .root()
-        .target()
-        .get_targets(TargetGetTargetsParams::new())
-        .await
-    {
+    let targets = match connection.root().target().get_targets(None).await {
         Ok(targets) => targets.target_infos,
         Err(error) => {
             connection.close().await;

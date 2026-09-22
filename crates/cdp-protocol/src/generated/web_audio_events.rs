@@ -18,92 +18,124 @@ pub trait WebAudioEventsService {
     /// Notifies that the construction of an AudioListener has finished.
     #[name("audioListenerCreated")]
     #[notification]
-    async fn audio_listener_created(#[params] params: super::types::WebAudioAudioListenerCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_listener_created(listener: super::types::WebAudioAudioListener) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, listener,);
         Ok(())
     }
     /// Notifies that a new AudioListener has been created.
     #[name("audioListenerWillBeDestroyed")]
     #[notification]
-    async fn audio_listener_will_be_destroyed(#[params] params: super::types::WebAudioAudioListenerWillBeDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_listener_will_be_destroyed(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "listenerId")] listener_id: super::types::WebAudioGraphObjectId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, listener_id,);
         Ok(())
     }
     /// Notifies that a new AudioNode has been created.
     #[name("audioNodeCreated")]
     #[notification]
-    async fn audio_node_created(#[params] params: super::types::WebAudioAudioNodeCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_node_created(node: super::types::WebAudioAudioNode) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node,);
         Ok(())
     }
     /// Notifies that an existing AudioNode has been destroyed.
     #[name("audioNodeWillBeDestroyed")]
     #[notification]
-    async fn audio_node_will_be_destroyed(#[params] params: super::types::WebAudioAudioNodeWillBeDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_node_will_be_destroyed(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "nodeId")] node_id: super::types::WebAudioGraphObjectId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, node_id,);
         Ok(())
     }
     /// Notifies that a new AudioParam has been created.
     #[name("audioParamCreated")]
     #[notification]
-    async fn audio_param_created(#[params] params: super::types::WebAudioAudioParamCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_param_created(param: super::types::WebAudioAudioParam) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, param,);
         Ok(())
     }
     /// Notifies that an existing AudioParam has been destroyed.
     #[name("audioParamWillBeDestroyed")]
     #[notification]
-    async fn audio_param_will_be_destroyed(#[params] params: super::types::WebAudioAudioParamWillBeDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn audio_param_will_be_destroyed(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "nodeId")] node_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "paramId")] param_id: super::types::WebAudioGraphObjectId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, node_id, param_id,);
         Ok(())
     }
     /// Notifies that existing BaseAudioContext has changed some properties (id stays the same)..
     #[name("contextChanged")]
     #[notification]
-    async fn context_changed(#[params] params: super::types::WebAudioContextChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn context_changed(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context,);
         Ok(())
     }
     /// Notifies that a new BaseAudioContext has been created.
     #[name("contextCreated")]
     #[notification]
-    async fn context_created(#[params] params: super::types::WebAudioContextCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn context_created(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context,);
         Ok(())
     }
     /// Notifies that an existing BaseAudioContext will be destroyed.
     #[name("contextWillBeDestroyed")]
     #[notification]
-    async fn context_will_be_destroyed(#[params] params: super::types::WebAudioContextWillBeDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn context_will_be_destroyed(#[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id,);
         Ok(())
     }
     /// Notifies that an AudioNode is connected to an AudioParam.
     #[name("nodeParamConnected")]
     #[notification]
-    async fn node_param_connected(#[params] params: super::types::WebAudioNodeParamConnectedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn node_param_connected(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
     }
     /// Notifies that an AudioNode is disconnected to an AudioParam.
     #[name("nodeParamDisconnected")]
     #[notification]
-    async fn node_param_disconnected(#[params] params: super::types::WebAudioNodeParamDisconnectedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn node_param_disconnected(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
     }
     /// Notifies that two AudioNodes are connected.
     #[name("nodesConnected")]
     #[notification]
-    async fn nodes_connected(#[params] params: super::types::WebAudioNodesConnectedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn nodes_connected(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "destinationInputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())
     }
     /// Notifies that AudioNodes are disconnected. The destination can be null, and it means all the outgoing connections from the source are disconnected.
     #[name("nodesDisconnected")]
     #[notification]
-    async fn nodes_disconnected(#[params] params: super::types::WebAudioNodesDisconnectedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn nodes_disconnected(
+        #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
+        #[serde(rename = "sourceOutputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] source_output_index: Option<f64>,
+        #[serde(rename = "destinationInputIndex")] #[serde(default, skip_serializing_if = "Option::is_none")] destination_input_index: Option<f64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())
     }
 }

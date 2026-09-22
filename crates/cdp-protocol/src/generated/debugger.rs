@@ -18,56 +18,71 @@ pub trait DebuggerService {
     /// Continues execution until specific location is reached.
     #[name("continueToLocation")]
     async fn continue_to_location(#[params] params: super::types::DebuggerContinueToLocationParams) -> Result<super::types::DebuggerContinueToLocationResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueToLocation"))
     }
     /// Disables debugger for given page.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::DebuggerDisableParams) -> Result<super::types::DebuggerDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::DebuggerDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("disassembleWasmModule")]
-    async fn disassemble_wasm_module(#[params] params: super::types::DebuggerDisassembleWasmModuleParams) -> Result<super::types::DebuggerDisassembleWasmModuleResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disassemble_wasm_module(#[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId) -> Result<super::types::DebuggerDisassembleWasmModuleResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disassembleWasmModule"))
     }
     /// Enables debugger for the given page. Clients should not assume that the debugging has been
     /// enabled until the result for this command is received.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::DebuggerEnableParams) -> Result<super::types::DebuggerEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(#[serde(rename = "maxScriptsCacheSize")] #[serde(default, skip_serializing_if = "Option::is_none")] max_scripts_cache_size: Option<f64>) -> Result<super::types::DebuggerEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, max_scripts_cache_size,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Evaluates expression on a given call frame.
     #[name("evaluateOnCallFrame")]
-    async fn evaluate_on_call_frame(#[params] params: super::types::DebuggerEvaluateOnCallFrameParams) -> Result<super::types::DebuggerEvaluateOnCallFrameResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn evaluate_on_call_frame(
+        #[serde(rename = "callFrameId")] call_frame_id: super::types::DebuggerCallFrameId,
+        expression: String,
+        #[serde(rename = "objectGroup")] #[serde(default, skip_serializing_if = "Option::is_none")] object_group: Option<String>,
+        #[serde(rename = "includeCommandLineAPI")] #[serde(default, skip_serializing_if = "Option::is_none")] include_command_line_api: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] silent: Option<bool>,
+        #[serde(rename = "returnByValue")] #[serde(default, skip_serializing_if = "Option::is_none")] return_by_value: Option<bool>,
+        #[serde(rename = "generatePreview")] #[serde(default, skip_serializing_if = "Option::is_none")] generate_preview: Option<bool>,
+        #[serde(rename = "throwOnSideEffect")] #[serde(default, skip_serializing_if = "Option::is_none")] throw_on_side_effect: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] timeout: Option<super::types::RuntimeTimeDelta>,
+        #[serde(rename = "scopeNumber")] #[serde(default, skip_serializing_if = "Option::is_none")] scope_number: Option<i64>,
+    ) -> Result<super::types::DebuggerEvaluateOnCallFrameResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, call_frame_id, expression, object_group, include_command_line_api, silent, return_by_value, generate_preview, throw_on_side_effect, timeout, scope_number,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluateOnCallFrame"))
     }
     /// Returns possible locations for breakpoint. scriptId in start and end range locations should be
     /// the same.
     #[name("getPossibleBreakpoints")]
-    async fn get_possible_breakpoints(#[params] params: super::types::DebuggerGetPossibleBreakpointsParams) -> Result<super::types::DebuggerGetPossibleBreakpointsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_possible_breakpoints(
+        start: super::types::DebuggerLocation,
+        #[serde(default, skip_serializing_if = "Option::is_none")] end: Option<super::types::DebuggerLocation>,
+        #[serde(rename = "restrictToFunction")] #[serde(default, skip_serializing_if = "Option::is_none")] restrict_to_function: Option<bool>,
+    ) -> Result<super::types::DebuggerGetPossibleBreakpointsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, start, end, restrict_to_function,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getPossibleBreakpoints"))
     }
     /// Returns source for the script with given id.
     #[name("getScriptSource")]
-    async fn get_script_source(#[params] params: super::types::DebuggerGetScriptSourceParams) -> Result<super::types::DebuggerGetScriptSourceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_script_source(#[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId) -> Result<super::types::DebuggerGetScriptSourceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getScriptSource"))
     }
     /// Returns stack trace with given `stackTraceId`.
     #[name("getStackTrace")]
-    async fn get_stack_trace(#[params] params: super::types::DebuggerGetStackTraceParams) -> Result<super::types::DebuggerGetStackTraceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_stack_trace(#[serde(rename = "stackTraceId")] stack_trace_id: super::types::RuntimeStackTraceId) -> Result<super::types::DebuggerGetStackTraceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, stack_trace_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStackTrace"))
     }
     /// This command is deprecated. Use getScriptSource instead.
     #[name("getWasmBytecode")]
-    async fn get_wasm_bytecode(#[params] params: super::types::DebuggerGetWasmBytecodeParams) -> Result<super::types::DebuggerGetWasmBytecodeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_wasm_bytecode(#[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId) -> Result<super::types::DebuggerGetWasmBytecodeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWasmBytecode"))
     }
     /// Disassemble the next chunk of lines for the module corresponding to the
@@ -75,25 +90,25 @@ pub trait DebuggerService {
     /// and return an empty chunk. Any subsequent calls for the now invalid stream
     /// will return errors.
     #[name("nextWasmDisassemblyChunk")]
-    async fn next_wasm_disassembly_chunk(#[params] params: super::types::DebuggerNextWasmDisassemblyChunkParams) -> Result<super::types::DebuggerNextWasmDisassemblyChunkResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn next_wasm_disassembly_chunk(#[serde(rename = "streamId")] stream_id: String) -> Result<super::types::DebuggerNextWasmDisassemblyChunkResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, stream_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "nextWasmDisassemblyChunk"))
     }
     /// Stops on the next JavaScript statement.
     #[name("pause")]
-    async fn pause(#[params] params: super::types::DebuggerPauseParams) -> Result<super::types::DebuggerPauseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn pause() -> Result<super::types::DebuggerPauseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pause"))
     }
     #[name("pauseOnAsyncCall")]
-    async fn pause_on_async_call(#[params] params: super::types::DebuggerPauseOnAsyncCallParams) -> Result<super::types::DebuggerPauseOnAsyncCallResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn pause_on_async_call(#[serde(rename = "parentStackTraceId")] parent_stack_trace_id: super::types::RuntimeStackTraceId) -> Result<super::types::DebuggerPauseOnAsyncCallResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_stack_trace_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pauseOnAsyncCall"))
     }
     /// Removes JavaScript breakpoint.
     #[name("removeBreakpoint")]
-    async fn remove_breakpoint(#[params] params: super::types::DebuggerRemoveBreakpointParams) -> Result<super::types::DebuggerRemoveBreakpointResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_breakpoint(#[serde(rename = "breakpointId")] breakpoint_id: super::types::DebuggerBreakpointId) -> Result<super::types::DebuggerRemoveBreakpointResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, breakpoint_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeBreakpoint"))
     }
     /// Restarts particular call frame from the beginning. The old, deprecated
@@ -111,41 +126,49 @@ pub trait DebuggerService {
     /// once V8 pauses at the beginning of the restarted function.
     #[name("restartFrame")]
     async fn restart_frame(#[params] params: super::types::DebuggerRestartFrameParams) -> Result<super::types::DebuggerRestartFrameResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "restartFrame"))
     }
     /// Resumes JavaScript execution.
     #[name("resume")]
-    async fn resume(#[params] params: super::types::DebuggerResumeParams) -> Result<super::types::DebuggerResumeResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn resume(#[serde(rename = "terminateOnResume")] #[serde(default, skip_serializing_if = "Option::is_none")] terminate_on_resume: Option<bool>) -> Result<super::types::DebuggerResumeResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, terminate_on_resume,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resume"))
     }
     /// Searches for given string in script content.
     #[name("searchInContent")]
-    async fn search_in_content(#[params] params: super::types::DebuggerSearchInContentParams) -> Result<super::types::DebuggerSearchInContentResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn search_in_content(
+        #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
+        query: String,
+        #[serde(rename = "caseSensitive")] #[serde(default, skip_serializing_if = "Option::is_none")] case_sensitive: Option<bool>,
+        #[serde(rename = "isRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] is_regex: Option<bool>,
+    ) -> Result<super::types::DebuggerSearchInContentResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id, query, case_sensitive, is_regex,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "searchInContent"))
     }
     /// Enables or disables async call stacks tracking.
     #[name("setAsyncCallStackDepth")]
-    async fn set_async_call_stack_depth(#[params] params: super::types::DebuggerSetAsyncCallStackDepthParams) -> Result<super::types::DebuggerSetAsyncCallStackDepthResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_async_call_stack_depth(#[serde(rename = "maxDepth")] max_depth: i64) -> Result<super::types::DebuggerSetAsyncCallStackDepthResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, max_depth,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAsyncCallStackDepth"))
     }
     /// Replace previous blackbox execution contexts with passed ones. Forces backend to skip
     /// stepping/pausing in scripts in these execution contexts. VM will try to leave blackboxed script by
     /// performing 'step in' several times, finally resorting to 'step out' if unsuccessful.
     #[name("setBlackboxExecutionContexts")]
-    async fn set_blackbox_execution_contexts(#[params] params: super::types::DebuggerSetBlackboxExecutionContextsParams) -> Result<super::types::DebuggerSetBlackboxExecutionContextsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_blackbox_execution_contexts(#[serde(rename = "uniqueIds")] unique_ids: Vec<String>) -> Result<super::types::DebuggerSetBlackboxExecutionContextsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, unique_ids,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlackboxExecutionContexts"))
     }
     /// Replace previous blackbox patterns with passed ones. Forces backend to skip stepping/pausing in
     /// scripts with url matching one of the patterns. VM will try to leave blackboxed script by
     /// performing 'step in' several times, finally resorting to 'step out' if unsuccessful.
     #[name("setBlackboxPatterns")]
-    async fn set_blackbox_patterns(#[params] params: super::types::DebuggerSetBlackboxPatternsParams) -> Result<super::types::DebuggerSetBlackboxPatternsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_blackbox_patterns(
+        patterns: Vec<String>,
+        #[serde(rename = "skipAnonymous")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_anonymous: Option<bool>,
+    ) -> Result<super::types::DebuggerSetBlackboxPatternsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, patterns, skip_anonymous,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlackboxPatterns"))
     }
     /// Makes backend skip steps in the script in blackboxed ranges. VM will try leave blacklisted
@@ -153,14 +176,20 @@ pub trait DebuggerService {
     /// Positions array contains positions where blackbox state is changed. First interval isn't
     /// blackboxed. Array should be sorted.
     #[name("setBlackboxedRanges")]
-    async fn set_blackboxed_ranges(#[params] params: super::types::DebuggerSetBlackboxedRangesParams) -> Result<super::types::DebuggerSetBlackboxedRangesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_blackboxed_ranges(
+        #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
+        positions: Vec<super::types::DebuggerScriptPosition>,
+    ) -> Result<super::types::DebuggerSetBlackboxedRangesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id, positions,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBlackboxedRanges"))
     }
     /// Sets JavaScript breakpoint at a given location.
     #[name("setBreakpoint")]
-    async fn set_breakpoint(#[params] params: super::types::DebuggerSetBreakpointParams) -> Result<super::types::DebuggerSetBreakpointResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_breakpoint(
+        location: super::types::DebuggerLocation,
+        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+    ) -> Result<super::types::DebuggerSetBreakpointResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, location, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpoint"))
     }
     /// Sets JavaScript breakpoint at given location specified either by URL or URL regex. Once this
@@ -168,78 +197,101 @@ pub trait DebuggerService {
     /// `locations` property. Further matching script parsing will result in subsequent
     /// `breakpointResolved` events issued. This logical breakpoint will survive page reloads.
     #[name("setBreakpointByUrl")]
-    async fn set_breakpoint_by_url(#[params] params: super::types::DebuggerSetBreakpointByUrlParams) -> Result<super::types::DebuggerSetBreakpointByUrlResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_breakpoint_by_url(
+        #[serde(rename = "lineNumber")] line_number: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")] url: Option<String>,
+        #[serde(rename = "urlRegex")] #[serde(default, skip_serializing_if = "Option::is_none")] url_regex: Option<String>,
+        #[serde(rename = "scriptHash")] #[serde(default, skip_serializing_if = "Option::is_none")] script_hash: Option<String>,
+        #[serde(rename = "columnNumber")] #[serde(default, skip_serializing_if = "Option::is_none")] column_number: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+    ) -> Result<super::types::DebuggerSetBreakpointByUrlResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, line_number, url, url_regex, script_hash, column_number, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpointByUrl"))
     }
     /// Sets JavaScript breakpoint before each call to the given function.
     /// If another function was created from the same source as a given one,
     /// calling it will also trigger the breakpoint.
     #[name("setBreakpointOnFunctionCall")]
-    async fn set_breakpoint_on_function_call(#[params] params: super::types::DebuggerSetBreakpointOnFunctionCallParams) -> Result<super::types::DebuggerSetBreakpointOnFunctionCallResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_breakpoint_on_function_call(
+        #[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId,
+        #[serde(default, skip_serializing_if = "Option::is_none")] condition: Option<String>,
+    ) -> Result<super::types::DebuggerSetBreakpointOnFunctionCallResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, object_id, condition,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpointOnFunctionCall"))
     }
     /// Activates / deactivates all breakpoints on the page.
     #[name("setBreakpointsActive")]
-    async fn set_breakpoints_active(#[params] params: super::types::DebuggerSetBreakpointsActiveParams) -> Result<super::types::DebuggerSetBreakpointsActiveResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_breakpoints_active(active: bool) -> Result<super::types::DebuggerSetBreakpointsActiveResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, active,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakpointsActive"))
     }
     /// Sets instrumentation breakpoint.
     #[name("setInstrumentationBreakpoint")]
     async fn set_instrumentation_breakpoint(#[params] params: super::types::DebuggerSetInstrumentationBreakpointParams) -> Result<super::types::DebuggerSetInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInstrumentationBreakpoint"))
     }
     /// Defines pause on exceptions state. Can be set to stop on all exceptions, uncaught exceptions,
     /// or caught exceptions, no exceptions. Initial pause on exceptions state is `none`.
     #[name("setPauseOnExceptions")]
     async fn set_pause_on_exceptions(#[params] params: super::types::DebuggerSetPauseOnExceptionsParams) -> Result<super::types::DebuggerSetPauseOnExceptionsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPauseOnExceptions"))
     }
     /// Changes return value in top frame. Available only at return break position.
     #[name("setReturnValue")]
-    async fn set_return_value(#[params] params: super::types::DebuggerSetReturnValueParams) -> Result<super::types::DebuggerSetReturnValueResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_return_value(#[serde(rename = "newValue")] new_value: super::types::RuntimeCallArgument) -> Result<super::types::DebuggerSetReturnValueResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, new_value,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setReturnValue"))
     }
     /// Live edit is no longer supported and this command always fails with a "no longer available" error.
     #[name("setScriptSource")]
-    async fn set_script_source(#[params] params: super::types::DebuggerSetScriptSourceParams) -> Result<super::types::DebuggerSetScriptSourceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_script_source(
+        #[serde(rename = "scriptId")] script_id: super::types::RuntimeScriptId,
+        #[serde(rename = "scriptSource")] script_source: String,
+        #[serde(rename = "dryRun")] #[serde(default, skip_serializing_if = "Option::is_none")] dry_run: Option<bool>,
+        #[serde(rename = "allowTopFrameEditing")] #[serde(default, skip_serializing_if = "Option::is_none")] allow_top_frame_editing: Option<bool>,
+    ) -> Result<super::types::DebuggerSetScriptSourceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, script_id, script_source, dry_run, allow_top_frame_editing,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScriptSource"))
     }
     /// Makes page not interrupt on any pauses (breakpoint, exception, dom exception etc).
     #[name("setSkipAllPauses")]
-    async fn set_skip_all_pauses(#[params] params: super::types::DebuggerSetSkipAllPausesParams) -> Result<super::types::DebuggerSetSkipAllPausesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_skip_all_pauses(skip: bool) -> Result<super::types::DebuggerSetSkipAllPausesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, skip,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSkipAllPauses"))
     }
     /// Changes value of variable in a callframe. Object-based scopes are not supported and must be
     /// mutated manually.
     #[name("setVariableValue")]
-    async fn set_variable_value(#[params] params: super::types::DebuggerSetVariableValueParams) -> Result<super::types::DebuggerSetVariableValueResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_variable_value(
+        #[serde(rename = "scopeNumber")] scope_number: i64,
+        #[serde(rename = "variableName")] variable_name: String,
+        #[serde(rename = "newValue")] new_value: super::types::RuntimeCallArgument,
+        #[serde(rename = "callFrameId")] call_frame_id: super::types::DebuggerCallFrameId,
+    ) -> Result<super::types::DebuggerSetVariableValueResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, scope_number, variable_name, new_value, call_frame_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVariableValue"))
     }
     /// Steps into the function call.
     #[name("stepInto")]
-    async fn step_into(#[params] params: super::types::DebuggerStepIntoParams) -> Result<super::types::DebuggerStepIntoResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn step_into(
+        #[serde(rename = "breakOnAsyncCall")] #[serde(default, skip_serializing_if = "Option::is_none")] break_on_async_call: Option<bool>,
+        #[serde(rename = "skipList")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>,
+    ) -> Result<super::types::DebuggerStepIntoResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, break_on_async_call, skip_list,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stepInto"))
     }
     /// Steps out of the function call.
     #[name("stepOut")]
-    async fn step_out(#[params] params: super::types::DebuggerStepOutParams) -> Result<super::types::DebuggerStepOutResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn step_out() -> Result<super::types::DebuggerStepOutResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stepOut"))
     }
     /// Steps over the statement.
     #[name("stepOver")]
-    async fn step_over(#[params] params: super::types::DebuggerStepOverParams) -> Result<super::types::DebuggerStepOverResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn step_over(#[serde(rename = "skipList")] #[serde(default, skip_serializing_if = "Option::is_none")] skip_list: Option<Vec<super::types::DebuggerLocationRange>>) -> Result<super::types::DebuggerStepOverResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, skip_list,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stepOver"))
     }
 }

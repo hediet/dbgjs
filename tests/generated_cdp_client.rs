@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use dbgjs::cdp::{
     CdpClient, CdpEventsClient, DebuggerPausedParams, DebuggerScriptParsedParams,
-    DebuggerSetBreakpointByUrlParams, RuntimeEvaluateParams, RuntimeRemoteObjectType,
-    TargetAttachToTargetParams,
+    RuntimeRemoteObjectType, TargetAttachToTargetParams,
 };
 use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
 use linkrpc::connection::channel::{Channel, RejectingHandler};
@@ -66,16 +65,41 @@ fn generated_cdp_provider_trait_can_use_default_methods() {
 #[derive(Default)]
 struct RuntimeEventReceiver {
     contexts: std::sync::Mutex<Vec<i64>>,
+    bindings: std::sync::Mutex<Vec<(String, String, i64)>>,
+    clears: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
 impl dbgjs::cdp::runtime_events::RuntimeEventsService for RuntimeEventReceiver {
+    async fn binding_called(
+        &self,
+        _ctx: &CallCtx,
+        name: String,
+        payload: String,
+        execution_context_id: dbgjs::cdp::RuntimeExecutionContextId,
+    ) -> Result<(), JsonRpcError> {
+        self.bindings
+            .lock()
+            .unwrap()
+            .push((name, payload, execution_context_id));
+        Ok(())
+    }
+
+    async fn execution_contexts_cleared(&self, _ctx: &CallCtx) -> Result<(), JsonRpcError> {
+        self.clears
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
     async fn console_apicalled(
         &self,
         _ctx: &CallCtx,
         params: dbgjs::cdp::RuntimeConsoleApicalledParams,
     ) -> Result<(), JsonRpcError> {
-        self.contexts.lock().unwrap().push(params.execution_context_id);
+        self.contexts
+            .lock()
+            .unwrap()
+            .push(params.execution_context_id);
         Ok(())
     }
 }
@@ -107,31 +131,112 @@ async fn generated_event_contract_sends_and_receives_flat_root_and_session_notif
             "executionContextId": context,
             "timestamp": 42.0,
         });
-        CdpEventsClient::root(channel)
-            .runtime()
+        let events = CdpEventsClient::root(channel).runtime();
+        events
             .console_apicalled(serde_json::from_value(params.clone()).unwrap())
             .await
             .unwrap();
-        let envelope = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            receiver_raw.recv(),
-        )
-        .await
-        .expect("notification arrives")
-        .unwrap();
-        assert_eq!(envelope.session_id.as_deref(), session_id);
-        let JsonRpcMessage::Notification(notification) = envelope.message else {
-            panic!("expected a notification without a request id");
-        };
-        assert_eq!(notification.method, "Runtime.consoleAPICalled");
-        let received_params = notification.params.expect("event has parameters");
-        assert_eq!(received_params, params);
-        event_router
-            .dispatch_notification(&notification.method, received_params)
+        events
+            .binding_called("bridge".into(), "payload".into(), context)
             .await
             .unwrap();
+        events.execution_contexts_cleared().await.unwrap();
+        for (method, params) in [
+            ("Runtime.consoleAPICalled", params),
+            (
+                "Runtime.bindingCalled",
+                json!({
+                    "name": "bridge", "payload": "payload", "executionContextId": context,
+                }),
+            ),
+            ("Runtime.executionContextsCleared", json!({})),
+        ] {
+            let envelope =
+                tokio::time::timeout(std::time::Duration::from_secs(5), receiver_raw.recv())
+                    .await
+                    .expect("notification arrives")
+                    .unwrap();
+            assert_eq!(envelope.session_id.as_deref(), session_id);
+            let JsonRpcMessage::Notification(notification) = envelope.message else {
+                panic!("expected a notification without a request id");
+            };
+            assert_eq!(notification.method, method);
+            let received_params = notification.params.expect("event has parameters");
+            assert_eq!(received_params, params);
+            event_router
+                .dispatch_notification(&notification.method, received_params)
+                .await
+                .unwrap();
+        }
     }
     assert_eq!(*receiver.contexts.lock().unwrap(), vec![1, 2]);
+    assert_eq!(
+        *receiver.bindings.lock().unwrap(),
+        vec![
+            ("bridge".into(), "payload".into(), 1),
+            ("bridge".into(), "payload".into(), 2),
+        ]
+    );
+    assert_eq!(receiver.clears.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[derive(Default)]
+struct TargetCommandReceiver {
+    attachments: std::sync::Mutex<Vec<(String, Option<bool>, Option<bool>)>>,
+}
+
+#[async_trait::async_trait]
+impl dbgjs::cdp::target::TargetService for TargetCommandReceiver {
+    async fn attach_to_target(
+        &self,
+        _ctx: &CallCtx,
+        target_id: dbgjs::cdp::TargetTargetId,
+        flatten: Option<bool>,
+        dbgjs_auto_attach: Option<bool>,
+    ) -> Result<dbgjs::cdp::TargetAttachToTargetResult, JsonRpcError> {
+        self.attachments
+            .lock()
+            .unwrap()
+            .push((target_id, flatten, dbgjs_auto_attach));
+        Ok(dbgjs::cdp::TargetAttachToTargetResult {
+            session_id: "session".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn inline_command_receiver_preserves_renames_and_optional_defaults() {
+    let receiver = Arc::new(TargetCommandReceiver::default());
+    let router = linkrpc::binding::InterfaceRouter::new();
+    dbgjs::cdp::target::DOMAIN
+        .register(
+            &router,
+            Arc::new(dbgjs::cdp::target::TargetServer::new(receiver.clone())),
+        )
+        .unwrap();
+    for params in [
+        json!({ "targetId": "target-1", "flatten": true, "__dbgjsAutoAttach": false }),
+        json!({ "targetId": "target-2" }),
+    ] {
+        assert_eq!(
+            InterfaceHandler::handle_request(
+                &router,
+                "Target.attachToTarget",
+                params,
+                CallCtx::default(),
+            )
+            .await
+            .unwrap(),
+            json!({ "sessionId": "session" }),
+        );
+    }
+    assert_eq!(
+        *receiver.attachments.lock().unwrap(),
+        vec![
+            ("target-1".into(), Some(true), Some(false)),
+            ("target-2".into(), None, None),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -149,9 +254,9 @@ async fn command_and_event_implementations_register_on_separate_routers() {
     dbgjs::cdp::runtime_events::DOMAIN
         .register(
             &event_router,
-            Arc::new(dbgjs::cdp::runtime_events::RuntimeEventsServer::new(Arc::new(
-                RuntimeEventReceiver::default(),
-            ))),
+            Arc::new(dbgjs::cdp::runtime_events::RuntimeEventsServer::new(
+                Arc::new(RuntimeEventReceiver::default()),
+            )),
         )
         .unwrap();
     for (router, method) in [
@@ -183,6 +288,8 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
         let mut observed = Vec::new();
         for result in [
             json!({ "sessionId": "child-session" }),
+            json!({}),
+            json!({}),
             json!({ "result": { "type": "number", "value": 42 } }),
             (json!({ "breakpointId": "breakpoint-1", "locations": [] })),
         ] {
@@ -190,7 +297,7 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
             let JsonRpcMessage::Request(request) = envelope.message else {
                 panic!("expected CDP request");
             };
-            observed.push((envelope.session_id.clone(), request.method));
+            observed.push((envelope.session_id.clone(), request.method, request.params));
             browser_raw
                 .send(CdpEnvelope {
                     session_id: envelope.session_id,
@@ -205,10 +312,9 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
         observed
     });
 
-    let target_params: TargetAttachToTargetParams =
-        serde_json::from_value(json!({ "targetId": "target-1", "flatten": true })).unwrap();
     let target = client
-        .target().attach_to_target(target_params)
+        .target()
+        .attach_to_target("target-1".into(), Some(true), Some(false))
         .await
         .expect("target attaches");
     assert_eq!(target.session_id, "child-session");
@@ -223,19 +329,37 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     let child_client = CdpClient::root(child_channel.clone());
     tokio::spawn(async move { child_channel.run().await });
 
-    let runtime_params: RuntimeEvaluateParams =
-        serde_json::from_value(json!({ "expression": "6 * 7", "returnByValue": true })).unwrap();
+    child_client.runtime().enable().await.unwrap();
+    child_client.runtime().disable().await.unwrap();
+
     let runtime = child_client
-        .runtime().evaluate(runtime_params)
+        .runtime()
+        .evaluate(
+            "6 * 7".into(),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .expect("runtime evaluates");
     assert_eq!(runtime.result.r#type, RuntimeRemoteObjectType::Number);
     assert_eq!(runtime.result.value, Some(json!(42)));
 
-    let breakpoint_params: DebuggerSetBreakpointByUrlParams =
-        serde_json::from_value(json!({ "lineNumber": 0, "url": "file:///app.js" })).unwrap();
     let breakpoint = child_client
-        .debugger().set_breakpoint_by_url(breakpoint_params)
+        .debugger()
+        .set_breakpoint_by_url(0, Some("file:///app.js".into()), None, None, None, None)
         .await
         .expect("breakpoint installs");
     assert_eq!(breakpoint.breakpoint_id, "breakpoint-1");
@@ -245,11 +369,34 @@ async fn generated_target_runtime_and_debugger_clients_use_the_flat_cdp_channel(
     assert_eq!(
         observed,
         vec![
-            (None, "Target.attachToTarget".into()),
-            (Some("child-session".into()), "Runtime.evaluate".into()),
+            (
+                None,
+                "Target.attachToTarget".into(),
+                Some(json!({
+                    "targetId": "target-1", "flatten": true, "__dbgjsAutoAttach": false,
+                }))
+            ),
             (
                 Some("child-session".into()),
-                "Debugger.setBreakpointByUrl".into()
+                "Runtime.enable".into(),
+                Some(json!({}))
+            ),
+            (
+                Some("child-session".into()),
+                "Runtime.disable".into(),
+                Some(json!({}))
+            ),
+            (
+                Some("child-session".into()),
+                "Runtime.evaluate".into(),
+                Some(json!({
+                    "expression": "6 * 7", "returnByValue": true,
+                }))
+            ),
+            (
+                Some("child-session".into()),
+                "Debugger.setBreakpointByUrl".into(),
+                Some(json!({ "lineNumber": 0, "url": "file:///app.js" })),
             ),
         ]
     );

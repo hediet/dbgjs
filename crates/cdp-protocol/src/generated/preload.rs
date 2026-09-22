@@ -14,13 +14,13 @@
 )]
 pub trait PreloadService {
     #[name("disable")]
-    async fn disable(#[params] params: super::types::PreloadDisableParams) -> Result<super::types::PreloadDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::PreloadDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("enable")]
-    async fn enable(#[params] params: super::types::PreloadEnableParams) -> Result<super::types::PreloadEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::PreloadEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
 }

@@ -15,24 +15,33 @@
 pub trait TracingEventsService {
     #[name("bufferUsage")]
     #[notification]
-    async fn buffer_usage(#[params] params: super::types::TracingBufferUsageParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn buffer_usage(
+        #[serde(rename = "percentFull")] #[serde(default, skip_serializing_if = "Option::is_none")] percent_full: Option<f64>,
+        #[serde(rename = "eventCount")] #[serde(default, skip_serializing_if = "Option::is_none")] event_count: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] value: Option<f64>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, percent_full, event_count, value,);
         Ok(())
     }
     /// Contains a bucket of collected trace events. When tracing is stopped collected events will be
     /// sent as a sequence of dataCollected events followed by tracingComplete event.
     #[name("dataCollected")]
     #[notification]
-    async fn data_collected(#[params] params: super::types::TracingDataCollectedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn data_collected(value: Vec<std::collections::HashMap<String, serde_json::Value>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, value,);
         Ok(())
     }
     /// Signals that tracing is stopped and there is no trace buffers pending flush, all data were
     /// delivered via dataCollected events.
     #[name("tracingComplete")]
     #[notification]
-    async fn tracing_complete(#[params] params: super::types::TracingTracingCompleteParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn tracing_complete(
+        #[serde(rename = "dataLossOccurred")] data_loss_occurred: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")] stream: Option<super::types::IoStreamHandle>,
+        #[serde(rename = "traceFormat")] #[serde(default, skip_serializing_if = "Option::is_none")] trace_format: Option<super::types::TracingStreamFormat>,
+        #[serde(rename = "streamCompression")] #[serde(default, skip_serializing_if = "Option::is_none")] stream_compression: Option<super::types::TracingStreamCompression>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, data_loss_occurred, stream, trace_format, stream_compression,);
         Ok(())
     }
 }

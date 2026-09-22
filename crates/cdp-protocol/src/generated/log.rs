@@ -16,33 +16,33 @@
 pub trait LogService {
     /// Clears the log.
     #[name("clear")]
-    async fn clear(#[params] params: super::types::LogClearParams) -> Result<super::types::LogClearResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear() -> Result<super::types::LogClearResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clear"))
     }
     /// Disables log domain, prevents further log entries from being reported to the client.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::LogDisableParams) -> Result<super::types::LogDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::LogDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables log domain, sends the entries collected so far to the client by means of the
     /// `entryAdded` notification.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::LogEnableParams) -> Result<super::types::LogEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::LogEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// start violation reporting.
     #[name("startViolationsReport")]
-    async fn start_violations_report(#[params] params: super::types::LogStartViolationsReportParams) -> Result<super::types::LogStartViolationsReportResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_violations_report(config: Vec<super::types::LogViolationSetting>) -> Result<super::types::LogStartViolationsReportResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, config,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startViolationsReport"))
     }
     /// Stop violation reporting.
     #[name("stopViolationsReport")]
-    async fn stop_violations_report(#[params] params: super::types::LogStopViolationsReportParams) -> Result<super::types::LogStopViolationsReportResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_violations_report() -> Result<super::types::LogStopViolationsReportResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopViolationsReport"))
     }
 }

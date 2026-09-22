@@ -21,45 +21,45 @@
 pub trait CSSEventsService {
     #[name("computedStyleUpdated")]
     #[notification]
-    async fn computed_style_updated(#[params] params: super::types::CssComputedStyleUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn computed_style_updated(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id,);
         Ok(())
     }
     /// Fires whenever a web font is updated.  A non-empty font parameter indicates a successfully loaded
     /// web font.
     #[name("fontsUpdated")]
     #[notification]
-    async fn fonts_updated(#[params] params: super::types::CssFontsUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn fonts_updated(#[serde(default, skip_serializing_if = "Option::is_none")] font: Option<super::types::CssFontFace>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, font,);
         Ok(())
     }
     /// Fires whenever a MediaQuery result changes (for example, after a browser window has been
     /// resized.) The current implementation considers only viewport-dependent media features.
     #[name("mediaQueryResultChanged")]
     #[notification]
-    async fn media_query_result_changed(#[params] params: super::types::CssMediaQueryResultChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn media_query_result_changed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired whenever an active document stylesheet is added.
     #[name("styleSheetAdded")]
     #[notification]
-    async fn style_sheet_added(#[params] params: super::types::CssStyleSheetAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn style_sheet_added(header: super::types::CssCssstyleSheetHeader) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, header,);
         Ok(())
     }
     /// Fired whenever a stylesheet is changed as a result of the client operation.
     #[name("styleSheetChanged")]
     #[notification]
-    async fn style_sheet_changed(#[params] params: super::types::CssStyleSheetChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn style_sheet_changed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id,);
         Ok(())
     }
     /// Fired whenever an active document stylesheet is removed.
     #[name("styleSheetRemoved")]
     #[notification]
-    async fn style_sheet_removed(#[params] params: super::types::CssStyleSheetRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn style_sheet_removed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, style_sheet_id,);
         Ok(())
     }
 }

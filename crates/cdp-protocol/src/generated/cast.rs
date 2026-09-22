@@ -17,8 +17,8 @@
 pub trait CastService {
     /// Stops observing for sinks and issues.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::CastDisableParams) -> Result<super::types::CastDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::CastDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Starts observing for sinks that can be used for tab mirroring, and if set,
@@ -27,33 +27,33 @@ pub trait CastService {
     /// Also starts observing for issue messages. When an issue is added or removed,
     /// an |issueUpdated| event is fired.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::CastEnableParams) -> Result<super::types::CastEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(#[serde(rename = "presentationUrl")] #[serde(default, skip_serializing_if = "Option::is_none")] presentation_url: Option<String>) -> Result<super::types::CastEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, presentation_url,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Sets a sink to be used when the web page requests the browser to choose a
     /// sink via Presentation API, Remote Playback API, or Cast SDK.
     #[name("setSinkToUse")]
-    async fn set_sink_to_use(#[params] params: super::types::CastSetSinkToUseParams) -> Result<super::types::CastSetSinkToUseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_sink_to_use(#[serde(rename = "sinkName")] sink_name: String) -> Result<super::types::CastSetSinkToUseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sink_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSinkToUse"))
     }
     /// Starts mirroring the desktop to the sink.
     #[name("startDesktopMirroring")]
-    async fn start_desktop_mirroring(#[params] params: super::types::CastStartDesktopMirroringParams) -> Result<super::types::CastStartDesktopMirroringResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_desktop_mirroring(#[serde(rename = "sinkName")] sink_name: String) -> Result<super::types::CastStartDesktopMirroringResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sink_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startDesktopMirroring"))
     }
     /// Starts mirroring the tab to the sink.
     #[name("startTabMirroring")]
-    async fn start_tab_mirroring(#[params] params: super::types::CastStartTabMirroringParams) -> Result<super::types::CastStartTabMirroringResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_tab_mirroring(#[serde(rename = "sinkName")] sink_name: String) -> Result<super::types::CastStartTabMirroringResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sink_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startTabMirroring"))
     }
     /// Stops the active Cast session on the sink.
     #[name("stopCasting")]
-    async fn stop_casting(#[params] params: super::types::CastStopCastingParams) -> Result<super::types::CastStopCastingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_casting(#[serde(rename = "sinkName")] sink_name: String) -> Result<super::types::CastStopCastingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sink_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopCasting"))
     }
 }

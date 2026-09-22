@@ -15,72 +15,75 @@
 pub trait MemoryService {
     /// Simulate OomIntervention by purging V8 memory.
     #[name("forciblyPurgeJavaScriptMemory")]
-    async fn forcibly_purge_java_script_memory(#[params] params: super::types::MemoryForciblyPurgeJavaScriptMemoryParams) -> Result<super::types::MemoryForciblyPurgeJavaScriptMemoryResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn forcibly_purge_java_script_memory() -> Result<super::types::MemoryForciblyPurgeJavaScriptMemoryResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forciblyPurgeJavaScriptMemory"))
     }
     /// Retrieve native memory allocations profile
     /// collected since renderer process startup.
     #[name("getAllTimeSamplingProfile")]
-    async fn get_all_time_sampling_profile(#[params] params: super::types::MemoryGetAllTimeSamplingProfileParams) -> Result<super::types::MemoryGetAllTimeSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_all_time_sampling_profile() -> Result<super::types::MemoryGetAllTimeSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAllTimeSamplingProfile"))
     }
     /// Retrieve native memory allocations profile
     /// collected since browser process startup.
     #[name("getBrowserSamplingProfile")]
-    async fn get_browser_sampling_profile(#[params] params: super::types::MemoryGetBrowserSamplingProfileParams) -> Result<super::types::MemoryGetBrowserSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_browser_sampling_profile() -> Result<super::types::MemoryGetBrowserSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBrowserSamplingProfile"))
     }
     /// Retruns current DOM object counters.
     #[name("getDOMCounters")]
-    async fn get_domcounters(#[params] params: super::types::MemoryGetDomcountersParams) -> Result<super::types::MemoryGetDomcountersResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_domcounters() -> Result<super::types::MemoryGetDomcountersResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDOMCounters"))
     }
     /// Retruns DOM object counters after preparing renderer for leak detection.
     #[name("getDOMCountersForLeakDetection")]
-    async fn get_domcounters_for_leak_detection(#[params] params: super::types::MemoryGetDomcountersForLeakDetectionParams) -> Result<super::types::MemoryGetDomcountersForLeakDetectionResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_domcounters_for_leak_detection() -> Result<super::types::MemoryGetDomcountersForLeakDetectionResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDOMCountersForLeakDetection"))
     }
     /// Retrieve native memory allocations profile collected since last
     /// `startSampling` call.
     #[name("getSamplingProfile")]
-    async fn get_sampling_profile(#[params] params: super::types::MemoryGetSamplingProfileParams) -> Result<super::types::MemoryGetSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_sampling_profile() -> Result<super::types::MemoryGetSamplingProfileResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSamplingProfile"))
     }
     /// Prepares for leak detection by terminating workers, stopping spellcheckers,
     /// dropping non-essential internal caches, running garbage collections, etc.
     #[name("prepareForLeakDetection")]
-    async fn prepare_for_leak_detection(#[params] params: super::types::MemoryPrepareForLeakDetectionParams) -> Result<super::types::MemoryPrepareForLeakDetectionResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn prepare_for_leak_detection() -> Result<super::types::MemoryPrepareForLeakDetectionResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "prepareForLeakDetection"))
     }
     /// Enable/disable suppressing memory pressure notifications in all processes.
     #[name("setPressureNotificationsSuppressed")]
-    async fn set_pressure_notifications_suppressed(#[params] params: super::types::MemorySetPressureNotificationsSuppressedParams) -> Result<super::types::MemorySetPressureNotificationsSuppressedResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_pressure_notifications_suppressed(suppressed: bool) -> Result<super::types::MemorySetPressureNotificationsSuppressedResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, suppressed,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureNotificationsSuppressed"))
     }
     /// Simulate a memory pressure notification in all processes.
     #[name("simulatePressureNotification")]
-    async fn simulate_pressure_notification(#[params] params: super::types::MemorySimulatePressureNotificationParams) -> Result<super::types::MemorySimulatePressureNotificationResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_pressure_notification(level: super::types::MemoryPressureLevel) -> Result<super::types::MemorySimulatePressureNotificationResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, level,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulatePressureNotification"))
     }
     /// Start collecting native memory profile.
     #[name("startSampling")]
-    async fn start_sampling(#[params] params: super::types::MemoryStartSamplingParams) -> Result<super::types::MemoryStartSamplingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_sampling(
+        #[serde(rename = "samplingInterval")] #[serde(default, skip_serializing_if = "Option::is_none")] sampling_interval: Option<i64>,
+        #[serde(rename = "suppressRandomness")] #[serde(default, skip_serializing_if = "Option::is_none")] suppress_randomness: Option<bool>,
+    ) -> Result<super::types::MemoryStartSamplingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, sampling_interval, suppress_randomness,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startSampling"))
     }
     /// Stop collecting native memory profile.
     #[name("stopSampling")]
-    async fn stop_sampling(#[params] params: super::types::MemoryStopSamplingParams) -> Result<super::types::MemoryStopSamplingResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_sampling() -> Result<super::types::MemoryStopSamplingResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopSampling"))
     }
 }

@@ -15,40 +15,53 @@
 /// This domain allows interacting with the FedCM dialog.
 pub trait FedCmService {
     #[name("clickDialogButton")]
-    async fn click_dialog_button(#[params] params: super::types::FedCmClickDialogButtonParams) -> Result<super::types::FedCmClickDialogButtonResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn click_dialog_button(
+        #[serde(rename = "dialogId")] dialog_id: String,
+        #[serde(rename = "dialogButton")] dialog_button: super::types::FedCmDialogButton,
+    ) -> Result<super::types::FedCmClickDialogButtonResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id, dialog_button,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clickDialogButton"))
     }
     #[name("disable")]
-    async fn disable(#[params] params: super::types::FedCmDisableParams) -> Result<super::types::FedCmDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::FedCmDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("dismissDialog")]
-    async fn dismiss_dialog(#[params] params: super::types::FedCmDismissDialogParams) -> Result<super::types::FedCmDismissDialogResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn dismiss_dialog(
+        #[serde(rename = "dialogId")] dialog_id: String,
+        #[serde(rename = "triggerCooldown")] #[serde(default, skip_serializing_if = "Option::is_none")] trigger_cooldown: Option<bool>,
+    ) -> Result<super::types::FedCmDismissDialogResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id, trigger_cooldown,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dismissDialog"))
     }
     #[name("enable")]
-    async fn enable(#[params] params: super::types::FedCmEnableParams) -> Result<super::types::FedCmEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(#[serde(rename = "disableRejectionDelay")] #[serde(default, skip_serializing_if = "Option::is_none")] disable_rejection_delay: Option<bool>) -> Result<super::types::FedCmEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, disable_rejection_delay,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     #[name("openUrl")]
-    async fn open_url(#[params] params: super::types::FedCmOpenUrlParams) -> Result<super::types::FedCmOpenUrlResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn open_url(
+        #[serde(rename = "dialogId")] dialog_id: String,
+        #[serde(rename = "accountIndex")] account_index: i64,
+        #[serde(rename = "accountUrlType")] account_url_type: super::types::FedCmAccountUrlType,
+    ) -> Result<super::types::FedCmOpenUrlResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id, account_index, account_url_type,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openUrl"))
     }
     /// Resets the cooldown time, if any, to allow the next FedCM call to show
     /// a dialog even if one was recently dismissed by the user.
     #[name("resetCooldown")]
-    async fn reset_cooldown(#[params] params: super::types::FedCmResetCooldownParams) -> Result<super::types::FedCmResetCooldownResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn reset_cooldown() -> Result<super::types::FedCmResetCooldownResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetCooldown"))
     }
     #[name("selectAccount")]
-    async fn select_account(#[params] params: super::types::FedCmSelectAccountParams) -> Result<super::types::FedCmSelectAccountResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn select_account(
+        #[serde(rename = "dialogId")] dialog_id: String,
+        #[serde(rename = "accountIndex")] account_index: i64,
+    ) -> Result<super::types::FedCmSelectAccountResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, dialog_id, account_index,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "selectAccount"))
     }
 }

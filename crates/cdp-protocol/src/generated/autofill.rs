@@ -16,27 +16,32 @@
 pub trait AutofillService {
     /// Disables autofill domain notifications.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::AutofillDisableParams) -> Result<super::types::AutofillDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::AutofillDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables autofill domain notifications.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::AutofillEnableParams) -> Result<super::types::AutofillEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::AutofillEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Set addresses so that developers can verify their forms implementation.
     #[name("setAddresses")]
-    async fn set_addresses(#[params] params: super::types::AutofillSetAddressesParams) -> Result<super::types::AutofillSetAddressesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_addresses(addresses: Vec<super::types::AutofillAddress>) -> Result<super::types::AutofillSetAddressesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, addresses,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAddresses"))
     }
     /// Trigger autofill on a form identified by the fieldId.
     /// If the field and related form cannot be autofilled, returns an error.
     #[name("trigger")]
-    async fn trigger(#[params] params: super::types::AutofillTriggerParams) -> Result<super::types::AutofillTriggerResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn trigger(
+        #[serde(rename = "fieldId")] field_id: super::types::DomBackendNodeId,
+        #[serde(rename = "frameId")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_id: Option<super::types::PageFrameId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] card: Option<super::types::AutofillCreditCard>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] address: Option<super::types::AutofillAddress>,
+    ) -> Result<super::types::AutofillTriggerResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, field_id, frame_id, card, address,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trigger"))
     }
 }

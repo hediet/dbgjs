@@ -15,20 +15,20 @@
 pub trait ServiceWorkerEventsService {
     #[name("workerErrorReported")]
     #[notification]
-    async fn worker_error_reported(#[params] params: super::types::ServiceWorkerWorkerErrorReportedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn worker_error_reported(#[serde(rename = "errorMessage")] error_message: super::types::ServiceWorkerServiceWorkerErrorMessage) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, error_message,);
         Ok(())
     }
     #[name("workerRegistrationUpdated")]
     #[notification]
-    async fn worker_registration_updated(#[params] params: super::types::ServiceWorkerWorkerRegistrationUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn worker_registration_updated(registrations: Vec<super::types::ServiceWorkerServiceWorkerRegistration>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, registrations,);
         Ok(())
     }
     #[name("workerVersionUpdated")]
     #[notification]
-    async fn worker_version_updated(#[params] params: super::types::ServiceWorkerWorkerVersionUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn worker_version_updated(versions: Vec<super::types::ServiceWorkerServiceWorkerVersion>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, versions,);
         Ok(())
     }
 }

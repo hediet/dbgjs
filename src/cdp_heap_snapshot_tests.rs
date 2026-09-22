@@ -1,5 +1,4 @@
 use super::*;
-use crate::cdp::HeapProfilerTakeHeapSnapshotParams;
 use linkrpc::prelude::JsonRpcMessage;
 use linkrpc::protocol::jsonrpc::{JsonRpcNotification, JsonRpcResponse, ResponsePayload};
 use linkrpc::transport::memory::{MemoryTransport, transport_pair_of};
@@ -75,8 +74,7 @@ async fn heap_snapshot_response_cannot_overtake_blocked_chunks() {
         .unwrap();
     let mut raw_events = session.raw_events.subscribe();
     let heap_profiler = session.client.heap_profiler();
-    let mut request =
-        Box::pin(heap_profiler.take_heap_snapshot(HeapProfilerTakeHeapSnapshotParams::new()));
+    let mut request = Box::pin(heap_profiler.take_heap_snapshot(None, None, None, None));
     assert!(futures_util::poll!(request.as_mut()).is_pending());
     let JsonRpcMessage::Request(sent) = browser.recv().await.unwrap() else {
         panic!("expected takeHeapSnapshot request");
@@ -172,8 +170,7 @@ async fn heap_snapshot_chunk_errors_prevent_publication_after_successful_respons
         .temporary
         .clone();
     let heap_profiler = session.client.heap_profiler();
-    let mut request =
-        Box::pin(heap_profiler.take_heap_snapshot(HeapProfilerTakeHeapSnapshotParams::new()));
+    let mut request = Box::pin(heap_profiler.take_heap_snapshot(None, None, None, None));
     assert!(futures_util::poll!(request.as_mut()).is_pending());
     let JsonRpcMessage::Request(sent) = browser.recv().await.unwrap() else {
         panic!("expected takeHeapSnapshot request");

@@ -19,20 +19,25 @@ pub trait HeadlessExperimentalService {
     /// BeginFrameControl. Designed for use with --run-all-compositor-stages-before-draw, see also
     /// https://goo.gle/chrome-headless-rendering for more background.
     #[name("beginFrame")]
-    async fn begin_frame(#[params] params: super::types::HeadlessExperimentalBeginFrameParams) -> Result<super::types::HeadlessExperimentalBeginFrameResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn begin_frame(
+        #[serde(rename = "frameTimeTicks")] #[serde(default, skip_serializing_if = "Option::is_none")] frame_time_ticks: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] interval: Option<f64>,
+        #[serde(rename = "noDisplayUpdates")] #[serde(default, skip_serializing_if = "Option::is_none")] no_display_updates: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] screenshot: Option<super::types::HeadlessExperimentalScreenshotParams>,
+    ) -> Result<super::types::HeadlessExperimentalBeginFrameResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, frame_time_ticks, interval, no_display_updates, screenshot,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "beginFrame"))
     }
     /// Disables headless events for the target.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::HeadlessExperimentalDisableParams) -> Result<super::types::HeadlessExperimentalDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::HeadlessExperimentalDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables headless events for the target.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::HeadlessExperimentalEnableParams) -> Result<super::types::HeadlessExperimentalEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::HeadlessExperimentalEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
 }

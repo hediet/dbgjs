@@ -15,56 +15,99 @@
 pub trait IndexedDBService {
     /// Clears all entries from an object store.
     #[name("clearObjectStore")]
-    async fn clear_object_store(#[params] params: super::types::IndexedDbClearObjectStoreParams) -> Result<super::types::IndexedDbClearObjectStoreResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn clear_object_store(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+        #[serde(rename = "objectStoreName")] object_store_name: String,
+    ) -> Result<super::types::IndexedDbClearObjectStoreResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearObjectStore"))
     }
     /// Deletes a database.
     #[name("deleteDatabase")]
-    async fn delete_database(#[params] params: super::types::IndexedDbDeleteDatabaseParams) -> Result<super::types::IndexedDbDeleteDatabaseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_database(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+    ) -> Result<super::types::IndexedDbDeleteDatabaseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteDatabase"))
     }
     /// Delete a range of entries from an object store
     #[name("deleteObjectStoreEntries")]
-    async fn delete_object_store_entries(#[params] params: super::types::IndexedDbDeleteObjectStoreEntriesParams) -> Result<super::types::IndexedDbDeleteObjectStoreEntriesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn delete_object_store_entries(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+        #[serde(rename = "objectStoreName")] object_store_name: String,
+        #[serde(rename = "keyRange")] key_range: super::types::IndexedDbKeyRange,
+    ) -> Result<super::types::IndexedDbDeleteObjectStoreEntriesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name, key_range,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteObjectStoreEntries"))
     }
     /// Disables events from backend.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::IndexedDbDisableParams) -> Result<super::types::IndexedDbDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::IndexedDbDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables events from backend.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::IndexedDbEnableParams) -> Result<super::types::IndexedDbEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::IndexedDbEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Gets metadata of an object store.
     #[name("getMetadata")]
-    async fn get_metadata(#[params] params: super::types::IndexedDbGetMetadataParams) -> Result<super::types::IndexedDbGetMetadataResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_metadata(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+        #[serde(rename = "objectStoreName")] object_store_name: String,
+    ) -> Result<super::types::IndexedDbGetMetadataResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMetadata"))
     }
     /// Requests data from object store or index.
     #[name("requestData")]
-    async fn request_data(#[params] params: super::types::IndexedDbRequestDataParams) -> Result<super::types::IndexedDbRequestDataResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn request_data(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+        #[serde(rename = "objectStoreName")] object_store_name: String,
+        #[serde(rename = "indexName")] #[serde(default, skip_serializing_if = "Option::is_none")] index_name: Option<String>,
+        #[serde(rename = "skipCount")] skip_count: i64,
+        #[serde(rename = "pageSize")] page_size: i64,
+        #[serde(rename = "keyRange")] #[serde(default, skip_serializing_if = "Option::is_none")] key_range: Option<super::types::IndexedDbKeyRange>,
+    ) -> Result<super::types::IndexedDbRequestDataResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name, index_name, skip_count, page_size, key_range,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestData"))
     }
     /// Requests database with given name in given frame.
     #[name("requestDatabase")]
-    async fn request_database(#[params] params: super::types::IndexedDbRequestDatabaseParams) -> Result<super::types::IndexedDbRequestDatabaseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn request_database(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+        #[serde(rename = "databaseName")] database_name: String,
+    ) -> Result<super::types::IndexedDbRequestDatabaseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket, database_name,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabase"))
     }
     /// Requests database names for given security origin.
     #[name("requestDatabaseNames")]
-    async fn request_database_names(#[params] params: super::types::IndexedDbRequestDatabaseNamesParams) -> Result<super::types::IndexedDbRequestDatabaseNamesResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn request_database_names(
+        #[serde(rename = "securityOrigin")] #[serde(default, skip_serializing_if = "Option::is_none")] security_origin: Option<String>,
+        #[serde(rename = "storageKey")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_key: Option<String>,
+        #[serde(rename = "storageBucket")] #[serde(default, skip_serializing_if = "Option::is_none")] storage_bucket: Option<super::types::StorageStorageBucket>,
+    ) -> Result<super::types::IndexedDbRequestDatabaseNamesResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, security_origin, storage_key, storage_bucket,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabaseNames"))
     }
 }

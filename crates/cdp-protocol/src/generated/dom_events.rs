@@ -23,135 +23,185 @@ pub trait DOMEventsService {
     /// Fired when a node's ad related state changes.
     #[name("adRelatedStateUpdated")]
     #[notification]
-    async fn ad_related_state_updated(#[params] params: super::types::DomAdRelatedStateUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn ad_related_state_updated(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "adProvenance")] #[serde(default, skip_serializing_if = "Option::is_none")] ad_provenance: Option<super::types::NetworkAdProvenance>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, ad_provenance,);
         Ok(())
     }
     /// Fired when `Element`'s adoptedStyleSheets are modified.
     #[name("adoptedStyleSheetsModified")]
     #[notification]
-    async fn adopted_style_sheets_modified(#[params] params: super::types::DomAdoptedStyleSheetsModifiedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn adopted_style_sheets_modified(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "adoptedStyleSheets")] adopted_style_sheets: Vec<super::types::DomStyleSheetId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, adopted_style_sheets,);
         Ok(())
     }
     /// Fired when a node's starting styles changes.
     #[name("affectedByStartingStylesFlagUpdated")]
     #[notification]
-    async fn affected_by_starting_styles_flag_updated(#[params] params: super::types::DomAffectedByStartingStylesFlagUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn affected_by_starting_styles_flag_updated(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "affectedByStartingStyles")] affected_by_starting_styles: bool,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, affected_by_starting_styles,);
         Ok(())
     }
     /// Fired when `Element`'s attribute is modified.
     #[name("attributeModified")]
     #[notification]
-    async fn attribute_modified(#[params] params: super::types::DomAttributeModifiedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn attribute_modified(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        name: String,
+        value: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, name, value,);
         Ok(())
     }
     /// Fired when `Element`'s attribute is removed.
     #[name("attributeRemoved")]
     #[notification]
-    async fn attribute_removed(#[params] params: super::types::DomAttributeRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn attribute_removed(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        name: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, name,);
         Ok(())
     }
     /// Mirrors `DOMCharacterDataModified` event.
     #[name("characterDataModified")]
     #[notification]
-    async fn character_data_modified(#[params] params: super::types::DomCharacterDataModifiedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn character_data_modified(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "characterData")] character_data: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, character_data,);
         Ok(())
     }
     /// Fired when `Container`'s child node count has changed.
     #[name("childNodeCountUpdated")]
     #[notification]
-    async fn child_node_count_updated(#[params] params: super::types::DomChildNodeCountUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn child_node_count_updated(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "childNodeCount")] child_node_count: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, child_node_count,);
         Ok(())
     }
     /// Mirrors `DOMNodeInserted` event.
     #[name("childNodeInserted")]
     #[notification]
-    async fn child_node_inserted(#[params] params: super::types::DomChildNodeInsertedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn child_node_inserted(
+        #[serde(rename = "parentNodeId")] parent_node_id: super::types::DomNodeId,
+        #[serde(rename = "previousNodeId")] previous_node_id: super::types::DomNodeId,
+        node: super::types::DomNode,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_node_id, previous_node_id, node,);
         Ok(())
     }
     /// Mirrors `DOMNodeRemoved` event.
     #[name("childNodeRemoved")]
     #[notification]
-    async fn child_node_removed(#[params] params: super::types::DomChildNodeRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn child_node_removed(
+        #[serde(rename = "parentNodeId")] parent_node_id: super::types::DomNodeId,
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_node_id, node_id,);
         Ok(())
     }
     /// Called when distribution is changed.
     #[name("distributedNodesUpdated")]
     #[notification]
-    async fn distributed_nodes_updated(#[params] params: super::types::DomDistributedNodesUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn distributed_nodes_updated(
+        #[serde(rename = "insertionPointId")] insertion_point_id: super::types::DomNodeId,
+        #[serde(rename = "distributedNodes")] distributed_nodes: Vec<super::types::DomBackendNode>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, insertion_point_id, distributed_nodes,);
         Ok(())
     }
     /// Fired when `Document` has been totally updated. Node ids are no longer valid.
     #[name("documentUpdated")]
     #[notification]
-    async fn document_updated(#[params] params: super::types::DomDocumentUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn document_updated() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Fired when `Element`'s inline style is modified via a CSS property modification.
     #[name("inlineStyleInvalidated")]
     #[notification]
-    async fn inline_style_invalidated(#[params] params: super::types::DomInlineStyleInvalidatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inline_style_invalidated(#[serde(rename = "nodeIds")] node_ids: Vec<super::types::DomNodeId>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_ids,);
         Ok(())
     }
     /// Called when a pseudo element is added to an element.
     #[name("pseudoElementAdded")]
     #[notification]
-    async fn pseudo_element_added(#[params] params: super::types::DomPseudoElementAddedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn pseudo_element_added(
+        #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
+        #[serde(rename = "pseudoElement")] pseudo_element: super::types::DomNode,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_id, pseudo_element,);
         Ok(())
     }
     /// Called when a pseudo element is removed from an element.
     #[name("pseudoElementRemoved")]
     #[notification]
-    async fn pseudo_element_removed(#[params] params: super::types::DomPseudoElementRemovedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn pseudo_element_removed(
+        #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
+        #[serde(rename = "pseudoElementId")] pseudo_element_id: super::types::DomNodeId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_id, pseudo_element_id,);
         Ok(())
     }
     /// Fired when a node's scrollability state changes.
     #[name("scrollableFlagUpdated")]
     #[notification]
-    async fn scrollable_flag_updated(#[params] params: super::types::DomScrollableFlagUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn scrollable_flag_updated(
+        #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
+        #[serde(rename = "isScrollable")] is_scrollable: bool,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node_id, is_scrollable,);
         Ok(())
     }
     /// Fired when backend wants to provide client with the missing DOM structure. This happens upon
     /// most of the calls requesting node ids.
     #[name("setChildNodes")]
     #[notification]
-    async fn set_child_nodes(#[params] params: super::types::DomSetChildNodesParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_child_nodes(
+        #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
+        nodes: Vec<super::types::DomNode>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, parent_id, nodes,);
         Ok(())
     }
     /// Called when shadow root is popped from the element.
     #[name("shadowRootPopped")]
     #[notification]
-    async fn shadow_root_popped(#[params] params: super::types::DomShadowRootPoppedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn shadow_root_popped(
+        #[serde(rename = "hostId")] host_id: super::types::DomNodeId,
+        #[serde(rename = "rootId")] root_id: super::types::DomNodeId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, host_id, root_id,);
         Ok(())
     }
     /// Called when shadow root is pushed into the element.
     #[name("shadowRootPushed")]
     #[notification]
-    async fn shadow_root_pushed(#[params] params: super::types::DomShadowRootPushedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn shadow_root_pushed(
+        #[serde(rename = "hostId")] host_id: super::types::DomNodeId,
+        root: super::types::DomNode,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, host_id, root,);
         Ok(())
     }
     /// Called when top layer elements are changed.
     #[name("topLayerElementsUpdated")]
     #[notification]
-    async fn top_layer_elements_updated(#[params] params: super::types::DomTopLayerElementsUpdatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn top_layer_elements_updated() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
 }

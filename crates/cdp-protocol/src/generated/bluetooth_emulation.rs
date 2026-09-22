@@ -18,65 +18,78 @@ pub trait BluetoothEmulationService {
     /// Adds a characteristic with |characteristicUuid| and |properties| to the
     /// service represented by |serviceId|.
     #[name("addCharacteristic")]
-    async fn add_characteristic(#[params] params: super::types::BluetoothEmulationAddCharacteristicParams) -> Result<super::types::BluetoothEmulationAddCharacteristicResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_characteristic(
+        #[serde(rename = "serviceId")] service_id: String,
+        #[serde(rename = "characteristicUuid")] characteristic_uuid: String,
+        properties: super::types::BluetoothEmulationCharacteristicProperties,
+    ) -> Result<super::types::BluetoothEmulationAddCharacteristicResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, service_id, characteristic_uuid, properties,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addCharacteristic"))
     }
     /// Adds a descriptor with |descriptorUuid| to the characteristic respresented
     /// by |characteristicId|.
     #[name("addDescriptor")]
-    async fn add_descriptor(#[params] params: super::types::BluetoothEmulationAddDescriptorParams) -> Result<super::types::BluetoothEmulationAddDescriptorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_descriptor(
+        #[serde(rename = "characteristicId")] characteristic_id: String,
+        #[serde(rename = "descriptorUuid")] descriptor_uuid: String,
+    ) -> Result<super::types::BluetoothEmulationAddDescriptorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, characteristic_id, descriptor_uuid,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addDescriptor"))
     }
     /// Adds a service with |serviceUuid| to the peripheral with |address|.
     #[name("addService")]
-    async fn add_service(#[params] params: super::types::BluetoothEmulationAddServiceParams) -> Result<super::types::BluetoothEmulationAddServiceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn add_service(
+        address: String,
+        #[serde(rename = "serviceUuid")] service_uuid: String,
+    ) -> Result<super::types::BluetoothEmulationAddServiceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, address, service_uuid,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addService"))
     }
     /// Disable the BluetoothEmulation domain.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::BluetoothEmulationDisableParams) -> Result<super::types::BluetoothEmulationDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::BluetoothEmulationDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enable the BluetoothEmulation domain.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::BluetoothEmulationEnableParams) -> Result<super::types::BluetoothEmulationEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable(
+        state: super::types::BluetoothEmulationCentralState,
+        #[serde(rename = "leSupported")] le_supported: bool,
+    ) -> Result<super::types::BluetoothEmulationEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, state, le_supported,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Removes the characteristic respresented by |characteristicId| from the
     /// simulated central.
     #[name("removeCharacteristic")]
-    async fn remove_characteristic(#[params] params: super::types::BluetoothEmulationRemoveCharacteristicParams) -> Result<super::types::BluetoothEmulationRemoveCharacteristicResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_characteristic(#[serde(rename = "characteristicId")] characteristic_id: String) -> Result<super::types::BluetoothEmulationRemoveCharacteristicResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, characteristic_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeCharacteristic"))
     }
     /// Removes the descriptor with |descriptorId| from the simulated central.
     #[name("removeDescriptor")]
-    async fn remove_descriptor(#[params] params: super::types::BluetoothEmulationRemoveDescriptorParams) -> Result<super::types::BluetoothEmulationRemoveDescriptorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_descriptor(#[serde(rename = "descriptorId")] descriptor_id: String) -> Result<super::types::BluetoothEmulationRemoveDescriptorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, descriptor_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeDescriptor"))
     }
     /// Removes the service respresented by |serviceId| from the simulated central.
     #[name("removeService")]
-    async fn remove_service(#[params] params: super::types::BluetoothEmulationRemoveServiceParams) -> Result<super::types::BluetoothEmulationRemoveServiceResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn remove_service(#[serde(rename = "serviceId")] service_id: String) -> Result<super::types::BluetoothEmulationRemoveServiceResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, service_id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeService"))
     }
     /// Set the state of the simulated central.
     #[name("setSimulatedCentralState")]
-    async fn set_simulated_central_state(#[params] params: super::types::BluetoothEmulationSetSimulatedCentralStateParams) -> Result<super::types::BluetoothEmulationSetSimulatedCentralStateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_simulated_central_state(state: super::types::BluetoothEmulationCentralState) -> Result<super::types::BluetoothEmulationSetSimulatedCentralStateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, state,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSimulatedCentralState"))
     }
     /// Simulates an advertisement packet described in |entry| being received by
     /// the central.
     #[name("simulateAdvertisement")]
-    async fn simulate_advertisement(#[params] params: super::types::BluetoothEmulationSimulateAdvertisementParams) -> Result<super::types::BluetoothEmulationSimulateAdvertisementResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_advertisement(entry: super::types::BluetoothEmulationScanEntry) -> Result<super::types::BluetoothEmulationSimulateAdvertisementResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, entry,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateAdvertisement"))
     }
     /// Simulates the response from the characteristic with |characteristicId| for a
@@ -85,8 +98,13 @@ pub trait BluetoothEmulationService {
     /// The |data| is expected to exist when simulating a successful read operation
     /// response.
     #[name("simulateCharacteristicOperationResponse")]
-    async fn simulate_characteristic_operation_response(#[params] params: super::types::BluetoothEmulationSimulateCharacteristicOperationResponseParams) -> Result<super::types::BluetoothEmulationSimulateCharacteristicOperationResponseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_characteristic_operation_response(
+        #[serde(rename = "characteristicId")] characteristic_id: String,
+        r#type: super::types::BluetoothEmulationCharacteristicOperationType,
+        code: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+    ) -> Result<super::types::BluetoothEmulationSimulateCharacteristicOperationResponseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, characteristic_id, r#type, code, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateCharacteristicOperationResponse"))
     }
     /// Simulates the response from the descriptor with |descriptorId| for a
@@ -95,29 +113,43 @@ pub trait BluetoothEmulationService {
     /// The |data| is expected to exist when simulating a successful read operation
     /// response.
     #[name("simulateDescriptorOperationResponse")]
-    async fn simulate_descriptor_operation_response(#[params] params: super::types::BluetoothEmulationSimulateDescriptorOperationResponseParams) -> Result<super::types::BluetoothEmulationSimulateDescriptorOperationResponseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_descriptor_operation_response(
+        #[serde(rename = "descriptorId")] descriptor_id: String,
+        r#type: super::types::BluetoothEmulationDescriptorOperationType,
+        code: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")] data: Option<String>,
+    ) -> Result<super::types::BluetoothEmulationSimulateDescriptorOperationResponseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, descriptor_id, r#type, code, data,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateDescriptorOperationResponse"))
     }
     /// Simulates a GATT disconnection from the peripheral with |address|.
     #[name("simulateGATTDisconnection")]
-    async fn simulate_gattdisconnection(#[params] params: super::types::BluetoothEmulationSimulateGattdisconnectionParams) -> Result<super::types::BluetoothEmulationSimulateGattdisconnectionResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_gattdisconnection(address: String) -> Result<super::types::BluetoothEmulationSimulateGattdisconnectionResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, address,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateGATTDisconnection"))
     }
     /// Simulates the response code from the peripheral with |address| for a
     /// GATT operation of |type|. The |code| value follows the HCI Error Codes from
     /// Bluetooth Core Specification Vol 2 Part D 1.3 List Of Error Codes.
     #[name("simulateGATTOperationResponse")]
-    async fn simulate_gattoperation_response(#[params] params: super::types::BluetoothEmulationSimulateGattoperationResponseParams) -> Result<super::types::BluetoothEmulationSimulateGattoperationResponseResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_gattoperation_response(
+        address: String,
+        r#type: super::types::BluetoothEmulationGattoperationType,
+        code: i64,
+    ) -> Result<super::types::BluetoothEmulationSimulateGattoperationResponseResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, address, r#type, code,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulateGATTOperationResponse"))
     }
     /// Simulates a peripheral with |address|, |name| and |knownServiceUuids|
     /// that has already been connected to the system.
     #[name("simulatePreconnectedPeripheral")]
-    async fn simulate_preconnected_peripheral(#[params] params: super::types::BluetoothEmulationSimulatePreconnectedPeripheralParams) -> Result<super::types::BluetoothEmulationSimulatePreconnectedPeripheralResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn simulate_preconnected_peripheral(
+        address: String,
+        name: String,
+        #[serde(rename = "manufacturerData")] manufacturer_data: Vec<super::types::BluetoothEmulationManufacturerData>,
+        #[serde(rename = "knownServiceUuids")] known_service_uuids: Vec<String>,
+    ) -> Result<super::types::BluetoothEmulationSimulatePreconnectedPeripheralResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, address, name, manufacturer_data, known_service_uuids,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "simulatePreconnectedPeripheral"))
     }
 }

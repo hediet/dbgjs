@@ -15,33 +15,36 @@
 pub trait SecurityService {
     /// Disables tracking security state changes.
     #[name("disable")]
-    async fn disable(#[params] params: super::types::SecurityDisableParams) -> Result<super::types::SecurityDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::SecurityDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     /// Enables tracking security state changes.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::SecurityEnableParams) -> Result<super::types::SecurityEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::SecurityEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Handles a certificate error that fired a certificateError event.
     #[name("handleCertificateError")]
-    async fn handle_certificate_error(#[params] params: super::types::SecurityHandleCertificateErrorParams) -> Result<super::types::SecurityHandleCertificateErrorResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn handle_certificate_error(
+        #[serde(rename = "eventId")] event_id: i64,
+        action: super::types::SecurityCertificateErrorAction,
+    ) -> Result<super::types::SecurityHandleCertificateErrorResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, event_id, action,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "handleCertificateError"))
     }
     /// Enable/disable whether all certificate errors should be ignored.
     #[name("setIgnoreCertificateErrors")]
-    async fn set_ignore_certificate_errors(#[params] params: super::types::SecuritySetIgnoreCertificateErrorsParams) -> Result<super::types::SecuritySetIgnoreCertificateErrorsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_ignore_certificate_errors(ignore: bool) -> Result<super::types::SecuritySetIgnoreCertificateErrorsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, ignore,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setIgnoreCertificateErrors"))
     }
     /// Enable/disable overriding certificate errors. If enabled, all certificate error events need to
     /// be handled by the DevTools client and should be answered with `handleCertificateError` commands.
     #[name("setOverrideCertificateErrors")]
-    async fn set_override_certificate_errors(#[params] params: super::types::SecuritySetOverrideCertificateErrorsParams) -> Result<super::types::SecuritySetOverrideCertificateErrorsResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_override_certificate_errors(r#override: bool) -> Result<super::types::SecuritySetOverrideCertificateErrorsResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, r#override,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setOverrideCertificateErrors"))
     }
 }

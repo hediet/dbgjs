@@ -17,8 +17,8 @@ pub trait InputEventsService {
     /// restore normal drag and drop behavior.
     #[name("dragIntercepted")]
     #[notification]
-    async fn drag_intercepted(#[params] params: super::types::InputDragInterceptedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn drag_intercepted(data: super::types::InputDragData) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, data,);
         Ok(())
     }
 }

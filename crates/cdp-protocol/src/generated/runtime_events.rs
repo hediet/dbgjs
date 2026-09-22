@@ -21,58 +21,75 @@ pub trait RuntimeEventsService {
     /// Notification is issued every time when binding is called.
     #[name("bindingCalled")]
     #[notification]
-    async fn binding_called(#[params] params: super::types::RuntimeBindingCalledParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn binding_called(
+        name: String,
+        payload: String,
+        #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, name, payload, execution_context_id,);
         Ok(())
     }
     /// Issued when console API was called.
     #[name("consoleAPICalled")]
     #[notification]
     async fn console_apicalled(#[params] params: super::types::RuntimeConsoleApicalledParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Ok(())
     }
     /// Issued when unhandled exception was revoked.
     #[name("exceptionRevoked")]
     #[notification]
-    async fn exception_revoked(#[params] params: super::types::RuntimeExceptionRevokedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn exception_revoked(
+        reason: String,
+        #[serde(rename = "exceptionId")] exception_id: i64,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, reason, exception_id,);
         Ok(())
     }
     /// Issued when exception was thrown and unhandled.
     #[name("exceptionThrown")]
     #[notification]
-    async fn exception_thrown(#[params] params: super::types::RuntimeExceptionThrownParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn exception_thrown(
+        timestamp: super::types::RuntimeTimestamp,
+        #[serde(rename = "exceptionDetails")] exception_details: super::types::RuntimeExceptionDetails,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, timestamp, exception_details,);
         Ok(())
     }
     /// Issued when new execution context is created.
     #[name("executionContextCreated")]
     #[notification]
-    async fn execution_context_created(#[params] params: super::types::RuntimeExecutionContextCreatedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn execution_context_created(context: super::types::RuntimeExecutionContextDescription) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, context,);
         Ok(())
     }
     /// Issued when execution context is destroyed.
     #[name("executionContextDestroyed")]
     #[notification]
-    async fn execution_context_destroyed(#[params] params: super::types::RuntimeExecutionContextDestroyedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn execution_context_destroyed(
+        #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
+        #[serde(rename = "executionContextUniqueId")] execution_context_unique_id: String,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, execution_context_id, execution_context_unique_id,);
         Ok(())
     }
     /// Issued when all executionContexts were cleared in browser
     #[name("executionContextsCleared")]
     #[notification]
-    async fn execution_contexts_cleared(#[params] params: super::types::RuntimeExecutionContextsClearedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn execution_contexts_cleared() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Issued when object should be inspected (for example, as a result of inspect() command line API
     /// call).
     #[name("inspectRequested")]
     #[notification]
-    async fn inspect_requested(#[params] params: super::types::RuntimeInspectRequestedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn inspect_requested(
+        object: super::types::RuntimeRemoteObject,
+        hints: std::collections::HashMap<String, serde_json::Value>,
+        #[serde(rename = "executionContextId")] #[serde(default, skip_serializing_if = "Option::is_none")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, object, hints, execution_context_id,);
         Ok(())
     }
 }

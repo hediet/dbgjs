@@ -14,58 +14,62 @@
 )]
 pub trait ProfilerService {
     #[name("disable")]
-    async fn disable(#[params] params: super::types::ProfilerDisableParams) -> Result<super::types::ProfilerDisableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn disable() -> Result<super::types::ProfilerDisableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
     }
     #[name("enable")]
-    async fn enable(#[params] params: super::types::ProfilerEnableParams) -> Result<super::types::ProfilerEnableResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn enable() -> Result<super::types::ProfilerEnableResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
     }
     /// Collect coverage data for the current isolate. The coverage data may be incomplete due to
     /// garbage collection.
     #[name("getBestEffortCoverage")]
-    async fn get_best_effort_coverage(#[params] params: super::types::ProfilerGetBestEffortCoverageParams) -> Result<super::types::ProfilerGetBestEffortCoverageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn get_best_effort_coverage() -> Result<super::types::ProfilerGetBestEffortCoverageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBestEffortCoverage"))
     }
     /// Changes CPU profiler sampling interval. Must be called before CPU profiles recording started.
     #[name("setSamplingInterval")]
-    async fn set_sampling_interval(#[params] params: super::types::ProfilerSetSamplingIntervalParams) -> Result<super::types::ProfilerSetSamplingIntervalResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn set_sampling_interval(interval: i64) -> Result<super::types::ProfilerSetSamplingIntervalResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, interval,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSamplingInterval"))
     }
     #[name("start")]
-    async fn start(#[params] params: super::types::ProfilerStartParams) -> Result<super::types::ProfilerStartResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start() -> Result<super::types::ProfilerStartResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "start"))
     }
     /// Enable precise code coverage. Coverage data for JavaScript executed before enabling precise code
     /// coverage may be incomplete. Enabling prevents running optimized code and resets execution
     /// counters.
     #[name("startPreciseCoverage")]
-    async fn start_precise_coverage(#[params] params: super::types::ProfilerStartPreciseCoverageParams) -> Result<super::types::ProfilerStartPreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn start_precise_coverage(
+        #[serde(rename = "callCount")] #[serde(default, skip_serializing_if = "Option::is_none")] call_count: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] detailed: Option<bool>,
+        #[serde(rename = "allowTriggeredUpdates")] #[serde(default, skip_serializing_if = "Option::is_none")] allow_triggered_updates: Option<bool>,
+    ) -> Result<super::types::ProfilerStartPreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, call_count, detailed, allow_triggered_updates,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startPreciseCoverage"))
     }
     #[name("stop")]
-    async fn stop(#[params] params: super::types::ProfilerStopParams) -> Result<super::types::ProfilerStopResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop() -> Result<super::types::ProfilerStopResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stop"))
     }
     /// Disable precise code coverage. Disabling releases unnecessary execution count records and allows
     /// executing optimized code.
     #[name("stopPreciseCoverage")]
-    async fn stop_precise_coverage(#[params] params: super::types::ProfilerStopPreciseCoverageParams) -> Result<super::types::ProfilerStopPreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn stop_precise_coverage() -> Result<super::types::ProfilerStopPreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopPreciseCoverage"))
     }
     /// Collect coverage data for the current isolate, and resets execution counters. Precise code
     /// coverage needs to have started.
     #[name("takePreciseCoverage")]
-    async fn take_precise_coverage(#[params] params: super::types::ProfilerTakePreciseCoverageParams) -> Result<super::types::ProfilerTakePreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    async fn take_precise_coverage() -> Result<super::types::ProfilerTakePreciseCoverageResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takePreciseCoverage"))
     }
 }
