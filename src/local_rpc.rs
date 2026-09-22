@@ -591,22 +591,116 @@ fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io:
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
-    match command.spawn() {
-        Ok(child) => Ok(child),
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS);
-            match command.spawn() {
-                Ok(child) => Ok(child),
-                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                    command.creation_flags(CREATE_NO_WINDOW);
-                    command.spawn()
+    let mut inheritance = StandardHandleInheritanceGuard::acquire()?;
+    let result = {
+        command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
+        match command.spawn() {
+            Ok(child) => Ok(child),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS);
+                match command.spawn() {
+                    Ok(child) => Ok(child),
+                    Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                        command.creation_flags(CREATE_NO_WINDOW);
+                        command.spawn()
+                    }
+                    Err(error) => Err(error),
                 }
-                Err(error) => Err(error),
             }
+            Err(error) => Err(error),
         }
-        Err(error) => Err(error),
+    };
+    inheritance.restore()?;
+    result
+}
+
+#[cfg(windows)]
+struct StandardHandleInheritanceGuard {
+    handles: Vec<(*mut std::ffi::c_void, u32)>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(windows)]
+impl StandardHandleInheritanceGuard {
+    fn acquire() -> Result<Self, std::io::Error> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        const STANDARD_HANDLES: [u32; 3] = [-10_i32 as u32, -11_i32 as u32, -12_i32 as u32];
+        const HANDLE_FLAG_INHERIT: u32 = 1;
+        const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = -1_isize as *mut std::ffi::c_void;
+
+        let lock = LOCK
+            .lock()
+            .map_err(|_| std::io::Error::other("standard handle inheritance lock poisoned"))?;
+        let mut guard = Self {
+            handles: Vec::new(),
+            _lock: lock,
+        };
+        for standard_handle in STANDARD_HANDLES {
+            let handle = unsafe { GetStdHandle(standard_handle) };
+            if handle.is_null() {
+                continue;
+            }
+            if handle == INVALID_HANDLE_VALUE {
+                let error = std::io::Error::last_os_error();
+                return Err(guard.acquisition_error(error));
+            }
+            let mut flags = 0;
+            if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+                return Err(guard.acquisition_error(std::io::Error::last_os_error()));
+            }
+            if flags & HANDLE_FLAG_INHERIT == 0 {
+                continue;
+            }
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+                return Err(guard.acquisition_error(std::io::Error::last_os_error()));
+            }
+            guard.handles.push((handle, flags));
+        }
+        Ok(guard)
     }
+
+    fn acquisition_error(&mut self, error: std::io::Error) -> std::io::Error {
+        match self.restore() {
+            Ok(()) => error,
+            Err(restore) => std::io::Error::other(format!(
+                "failed to update standard handle inheritance: {error}; restoring prior flags also failed: {restore}"
+            )),
+        }
+    }
+
+    fn restore(&mut self) -> Result<(), std::io::Error> {
+        const HANDLE_FLAG_INHERIT: u32 = 1;
+        let mut first_error = None;
+        self.handles.retain(|(handle, flags)| {
+            if unsafe { SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags) } != 0 {
+                false
+            } else {
+                first_error.get_or_insert_with(std::io::Error::last_os_error);
+                true
+            }
+        });
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StandardHandleInheritanceGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.restore() {
+            eprintln!("failed to restore standard handle inheritance: {error}");
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetStdHandle(standard_handle: u32) -> *mut std::ffi::c_void;
+    fn GetHandleInformation(handle: *mut std::ffi::c_void, flags: *mut u32) -> i32;
+    fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
 }
 
 #[cfg(not(windows))]
