@@ -1341,7 +1341,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "linkrpc"
 version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=94791aeb87894e0d6059cb2bbc332b747c23375f#94791aeb87894e0d6059cb2bbc332b747c23375f"
+source = "git+https://github.com/hediet/linkrpc.git?rev=54f7629cb838423738d6e026677a65221dc4ef67#54f7629cb838423738d6e026677a65221dc4ef67"
 dependencies = [
  "async-trait",
  "futures",
@@ -1360,7 +1360,7 @@ dependencies = [
 [[package]]
 name = "linkrpc-macros"
 version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=94791aeb87894e0d6059cb2bbc332b747c23375f#94791aeb87894e0d6059cb2bbc332b747c23375f"
+source = "git+https://github.com/hediet/linkrpc.git?rev=54f7629cb838423738d6e026677a65221dc4ef67#54f7629cb838423738d6e026677a65221dc4ef67"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1371,7 +1371,7 @@ dependencies = [
 [[package]]
 name = "linkrpc-tokio"
 version = "0.3.0"
-source = "git+https://github.com/hediet/linkrpc.git?rev=94791aeb87894e0d6059cb2bbc332b747c23375f#94791aeb87894e0d6059cb2bbc332b747c23375f"
+source = "git+https://github.com/hediet/linkrpc.git?rev=54f7629cb838423738d6e026677a65221dc4ef67#54f7629cb838423738d6e026677a65221dc4ef67"
 dependencies = [
  "async-trait",
  "futures-util",

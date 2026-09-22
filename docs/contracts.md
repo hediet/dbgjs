@@ -253,7 +253,7 @@ and failures, and is not the input to code generation.
 
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
 dependencies intentionally use the immutable Git revision
-`94791aeb87894e0d6059cb2bbc332b747c23375f` from
+`54f7629cb838423738d6e026677a65221dc4ef67` from
 `https://github.com/hediet/linkrpc.git`: the inline-parameter generator release
 has not been published yet. The root `[workspace.dependencies]` pins
 `linkrpc` and `linkrpc-tokio`; the runtime, protocol crate, and generator inherit
