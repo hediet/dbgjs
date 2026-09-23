@@ -17,9 +17,9 @@
 pub trait IOService {
     /// Close the stream, discard any temporary backing storage.
     #[name("close")]
-    async fn close(handle: super::types::IoStreamHandle) -> Result<super::types::IoCloseResult, linkrpc::prelude::JsonRpcError> {
+    async fn close(handle: super::types::IoStreamHandle) -> Result<super::types::IoCloseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, handle,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close")))
     }
     /// Read a chunk of the stream
     #[name("read")]
@@ -27,15 +27,15 @@ pub trait IOService {
         handle: super::types::IoStreamHandle,
         offset: Option<i64>,
         size: Option<i64>,
-    ) -> Result<super::types::IoReadResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IoReadResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, handle, offset, size,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "read"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "read")))
     }
     /// Return UUID of Blob object specified by a remote object id.
     #[name("resolveBlob")]
-    async fn resolve_blob(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::IoResolveBlobResult, linkrpc::prelude::JsonRpcError> {
+    async fn resolve_blob(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::IoResolveBlobResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveBlob"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveBlob")))
     }
 }
 

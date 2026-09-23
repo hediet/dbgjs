@@ -25,7 +25,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "dataLength")] data_length: i64,
         #[serde(rename = "encodedDataLength")] encoded_data_length: i64,
         data: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, data_length, encoded_data_length, data,);
         Ok(())
     }
@@ -41,14 +41,14 @@ pub trait NetworkEventsService {
         #[serde(rename = "refreshEventDetails")] refresh_event_details: Option<super::types::NetworkRefreshEventDetails>,
         #[serde(rename = "terminationEventDetails")] termination_event_details: Option<super::types::NetworkTerminationEventDetails>,
         #[serde(rename = "challengeEventDetails")] challenge_event_details: Option<super::types::NetworkChallengeEventDetails>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_id, site, succeeded, session_id, creation_event_details, refresh_event_details, termination_event_details, challenge_event_details,);
         Ok(())
     }
     /// Triggered when the initial set of device bound sessions is added.
     #[name("deviceBoundSessionsAdded")]
     #[notification]
-    async fn device_bound_sessions_added(sessions: Vec<super::types::NetworkDeviceBoundSession>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn device_bound_sessions_added(sessions: Vec<super::types::NetworkDeviceBoundSession>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, sessions,);
         Ok(())
     }
@@ -59,7 +59,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         #[serde(rename = "errorMessage")] error_message: super::types::NetworkErrorReason,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, error_message, timestamp,);
         Ok(())
     }
@@ -70,7 +70,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         data: String,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, data, timestamp,);
         Ok(())
     }
@@ -81,7 +81,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         data: String,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, data, timestamp,);
         Ok(())
     }
@@ -91,7 +91,7 @@ pub trait NetworkEventsService {
     async fn direct_tcpsocket_closed(
         identifier: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, timestamp,);
         Ok(())
     }
@@ -105,7 +105,7 @@ pub trait NetworkEventsService {
         options: super::types::NetworkDirectTcpsocketOptions,
         timestamp: super::types::NetworkMonotonicTime,
         initiator: Option<super::types::NetworkInitiator>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, remote_addr, remote_port, options, timestamp, initiator,);
         Ok(())
     }
@@ -119,7 +119,7 @@ pub trait NetworkEventsService {
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "localAddr")] local_addr: Option<String>,
         #[serde(rename = "localPort")] local_port: Option<i64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, remote_addr, remote_port, timestamp, local_addr, local_port,);
         Ok(())
     }
@@ -130,7 +130,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         #[serde(rename = "errorMessage")] error_message: super::types::NetworkErrorReason,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, error_message, timestamp,);
         Ok(())
     }
@@ -141,7 +141,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         message: super::types::NetworkDirectUdpmessage,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, message, timestamp,);
         Ok(())
     }
@@ -152,7 +152,7 @@ pub trait NetworkEventsService {
         identifier: super::types::NetworkRequestId,
         message: super::types::NetworkDirectUdpmessage,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, message, timestamp,);
         Ok(())
     }
@@ -162,7 +162,7 @@ pub trait NetworkEventsService {
     async fn direct_udpsocket_closed(
         identifier: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, timestamp,);
         Ok(())
     }
@@ -174,7 +174,7 @@ pub trait NetworkEventsService {
         options: super::types::NetworkDirectUdpsocketOptions,
         timestamp: super::types::NetworkMonotonicTime,
         initiator: Option<super::types::NetworkInitiator>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, options, timestamp, initiator,);
         Ok(())
     }
@@ -183,7 +183,7 @@ pub trait NetworkEventsService {
     async fn direct_udpsocket_joined_multicast_group(
         identifier: super::types::NetworkRequestId,
         #[serde(rename = "IPAddress")] ipaddress: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, ipaddress,);
         Ok(())
     }
@@ -192,7 +192,7 @@ pub trait NetworkEventsService {
     async fn direct_udpsocket_left_multicast_group(
         identifier: super::types::NetworkRequestId,
         #[serde(rename = "IPAddress")] ipaddress: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, ipaddress,);
         Ok(())
     }
@@ -206,7 +206,7 @@ pub trait NetworkEventsService {
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "remoteAddr")] remote_addr: Option<String>,
         #[serde(rename = "remotePort")] remote_port: Option<i64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, identifier, local_addr, local_port, timestamp, remote_addr, remote_port,);
         Ok(())
     }
@@ -219,7 +219,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "eventName")] event_name: String,
         #[serde(rename = "eventId")] event_id: String,
         data: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, event_name, event_id, data,);
         Ok(())
     }
@@ -234,7 +234,7 @@ pub trait NetworkEventsService {
         canceled: Option<bool>,
         #[serde(rename = "blockedReason")] blocked_reason: Option<super::types::NetworkBlockedReason>,
         #[serde(rename = "corsErrorStatus")] cors_error_status: Option<super::types::NetworkCorsErrorStatus>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, r#type, error_text, canceled, blocked_reason, cors_error_status,);
         Ok(())
     }
@@ -245,14 +245,14 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "encodedDataLength")] encoded_data_length: f64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, encoded_data_length,);
         Ok(())
     }
     /// Fired once security policy has been updated.
     #[name("policyUpdated")]
     #[notification]
-    async fn policy_updated() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn policy_updated() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -261,7 +261,7 @@ pub trait NetworkEventsService {
     async fn reporting_api_endpoints_changed_for_origin(
         origin: String,
         endpoints: Vec<super::types::NetworkReportingApiEndpoint>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, endpoints,);
         Ok(())
     }
@@ -269,20 +269,20 @@ pub trait NetworkEventsService {
     /// And after 'enableReportingApi' for all existing reports.
     #[name("reportingApiReportAdded")]
     #[notification]
-    async fn reporting_api_report_added(report: super::types::NetworkReportingApiReport) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn reporting_api_report_added(report: super::types::NetworkReportingApiReport) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, report,);
         Ok(())
     }
     #[name("reportingApiReportUpdated")]
     #[notification]
-    async fn reporting_api_report_updated(report: super::types::NetworkReportingApiReport) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn reporting_api_report_updated(report: super::types::NetworkReportingApiReport) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, report,);
         Ok(())
     }
     /// Fired if request ended up loading from cache.
     #[name("requestServedFromCache")]
     #[notification]
-    async fn request_served_from_cache(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn request_served_from_cache(#[serde(rename = "requestId")] request_id: super::types::NetworkRequestId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
         Ok(())
     }
@@ -303,7 +303,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "frameId")] frame_id: Option<super::types::PageFrameId>,
         #[serde(rename = "hasUserGesture")] has_user_gesture: Option<bool>,
         #[serde(rename = "renderBlockingBehavior")] render_blocking_behavior: Option<super::types::NetworkRenderBlockingBehavior>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, loader_id, document_url, request, timestamp, wall_time, initiator, redirect_has_extra_info, redirect_response, r#type, frame_id, has_user_gesture, render_blocking_behavior,);
         Ok(())
     }
@@ -322,7 +322,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "clientSecurityState")] client_security_state: Option<super::types::NetworkClientSecurityState>,
         #[serde(rename = "siteHasCookieInOtherPartition")] site_has_cookie_in_other_partition: Option<bool>,
         #[serde(rename = "appliedNetworkConditionsId")] applied_network_conditions_id: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, associated_cookies, headers, connect_timing, device_bound_session_usages, client_security_state, site_has_cookie_in_other_partition, applied_network_conditions_id,);
         Ok(())
     }
@@ -333,7 +333,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         #[serde(rename = "newPriority")] new_priority: super::types::NetworkResourcePriority,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, new_priority, timestamp,);
         Ok(())
     }
@@ -348,7 +348,7 @@ pub trait NetworkEventsService {
         response: super::types::NetworkResponse,
         #[serde(rename = "hasExtraInfo")] has_extra_info: bool,
         #[serde(rename = "frameId")] frame_id: Option<super::types::PageFrameId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, loader_id, timestamp, r#type, response, has_extra_info, frame_id,);
         Ok(())
     }
@@ -360,7 +360,7 @@ pub trait NetworkEventsService {
     async fn response_received_early_hints(
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         headers: super::types::NetworkHeaders,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, headers,);
         Ok(())
     }
@@ -379,7 +379,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "cookiePartitionKey")] cookie_partition_key: Option<super::types::NetworkCookiePartitionKey>,
         #[serde(rename = "cookiePartitionKeyOpaque")] cookie_partition_key_opaque: Option<bool>,
         #[serde(rename = "exemptedCookies")] exempted_cookies: Option<Vec<super::types::NetworkExemptedSetCookieWithReason>>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, blocked_cookies, headers, resource_ipaddress_space, status_code, headers_text, cookie_partition_key, cookie_partition_key_opaque, exempted_cookies,);
         Ok(())
     }
@@ -389,7 +389,7 @@ pub trait NetworkEventsService {
     async fn signed_exchange_received(
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         info: super::types::NetworkSignedExchangeInfo,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, info,);
         Ok(())
     }
@@ -399,7 +399,7 @@ pub trait NetworkEventsService {
     /// or after the response was received.
     #[name("trustTokenOperationDone")]
     #[notification]
-    async fn trust_token_operation_done(#[params] params: super::types::NetworkTrustTokenOperationDoneParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn trust_token_operation_done(#[params] params: super::types::NetworkTrustTokenOperationDoneParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -409,7 +409,7 @@ pub trait NetworkEventsService {
     async fn web_socket_closed(
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp,);
         Ok(())
     }
@@ -420,7 +420,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         url: String,
         initiator: Option<super::types::NetworkInitiator>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, url, initiator,);
         Ok(())
     }
@@ -431,7 +431,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "errorMessage")] error_message: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, error_message,);
         Ok(())
     }
@@ -442,7 +442,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
         response: super::types::NetworkWebSocketFrame,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, response,);
         Ok(())
     }
@@ -453,7 +453,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
         response: super::types::NetworkWebSocketFrame,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, response,);
         Ok(())
     }
@@ -464,7 +464,7 @@ pub trait NetworkEventsService {
         #[serde(rename = "requestId")] request_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
         response: super::types::NetworkWebSocketResponse,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, response,);
         Ok(())
     }
@@ -476,7 +476,7 @@ pub trait NetworkEventsService {
         timestamp: super::types::NetworkMonotonicTime,
         #[serde(rename = "wallTime")] wall_time: super::types::NetworkTimeSinceEpoch,
         request: super::types::NetworkWebSocketRequest,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, timestamp, wall_time, request,);
         Ok(())
     }
@@ -486,7 +486,7 @@ pub trait NetworkEventsService {
     async fn web_transport_closed(
         #[serde(rename = "transportId")] transport_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, transport_id, timestamp,);
         Ok(())
     }
@@ -496,7 +496,7 @@ pub trait NetworkEventsService {
     async fn web_transport_connection_established(
         #[serde(rename = "transportId")] transport_id: super::types::NetworkRequestId,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, transport_id, timestamp,);
         Ok(())
     }
@@ -508,7 +508,7 @@ pub trait NetworkEventsService {
         url: String,
         timestamp: super::types::NetworkMonotonicTime,
         initiator: Option<super::types::NetworkInitiator>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, transport_id, url, timestamp, initiator,);
         Ok(())
     }

@@ -17,15 +17,15 @@
 pub trait TargetService {
     /// Activates (focuses) the target.
     #[name("activateTarget")]
-    async fn activate_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetActivateTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn activate_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetActivateTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "activateTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "activateTarget")))
     }
     /// Attaches to the browser target, only uses flat sessionId mode.
     #[name("attachToBrowserTarget")]
-    async fn attach_to_browser_target() -> Result<super::types::TargetAttachToBrowserTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn attach_to_browser_target() -> Result<super::types::TargetAttachToBrowserTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "attachToBrowserTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "attachToBrowserTarget")))
     }
     /// Attaches to the target with given id.
     #[name("attachToTarget")]
@@ -33,9 +33,9 @@ pub trait TargetService {
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         flatten: Option<bool>,
         #[serde(rename = "__dbgjsAutoAttach")] dbgjs_auto_attach: Option<bool>,
-    ) -> Result<super::types::TargetAttachToTargetResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetAttachToTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id, flatten, dbgjs_auto_attach,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "attachToTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "attachToTarget")))
     }
     /// Adds the specified target to the list of targets that will be monitored for any related target
     /// creation (such as child frames, child workers and new versions of service worker) and reported
@@ -47,15 +47,15 @@ pub trait TargetService {
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         #[serde(rename = "waitForDebuggerOnStart")] wait_for_debugger_on_start: bool,
         filter: Option<super::types::TargetTargetFilter>,
-    ) -> Result<super::types::TargetAutoAttachRelatedResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetAutoAttachRelatedResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id, wait_for_debugger_on_start, filter,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "autoAttachRelated"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "autoAttachRelated")))
     }
     /// Closes the target. If the target is a page that gets closed too.
     #[name("closeTarget")]
-    async fn close_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetCloseTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn close_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetCloseTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "closeTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "closeTarget")))
     }
     /// Creates a new empty BrowserContext. Similar to an incognito profile but you can have more than
     /// one.
@@ -65,9 +65,9 @@ pub trait TargetService {
         #[serde(rename = "proxyServer")] proxy_server: Option<String>,
         #[serde(rename = "proxyBypassList")] proxy_bypass_list: Option<String>,
         #[serde(rename = "originsWithUniversalNetworkAccess")] origins_with_universal_network_access: Option<Vec<String>>,
-    ) -> Result<super::types::TargetCreateBrowserContextResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetCreateBrowserContextResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, dispose_on_detach, proxy_server, proxy_bypass_list, origins_with_universal_network_access,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createBrowserContext"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createBrowserContext")))
     }
     /// Creates a new page.
     #[name("createTarget")]
@@ -85,25 +85,25 @@ pub trait TargetService {
         #[serde(rename = "forTab")] for_tab: Option<bool>,
         hidden: Option<bool>,
         focus: Option<bool>,
-    ) -> Result<super::types::TargetCreateTargetResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetCreateTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url, left, top, width, height, window_state, browser_context_id, enable_begin_frame_control, new_window, background, for_tab, hidden, focus,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "createTarget")))
     }
     /// Detaches session with given id.
     #[name("detachFromTarget")]
     async fn detach_from_target(
         #[serde(rename = "sessionId")] session_id: Option<super::types::TargetSessionId>,
         #[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>,
-    ) -> Result<super::types::TargetDetachFromTargetResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetDetachFromTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, session_id, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "detachFromTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "detachFromTarget")))
     }
     /// Deletes a BrowserContext. All the belonging pages will be closed without calling their
     /// beforeunload hooks.
     #[name("disposeBrowserContext")]
-    async fn dispose_browser_context(#[serde(rename = "browserContextId")] browser_context_id: super::types::BrowserBrowserContextId) -> Result<super::types::TargetDisposeBrowserContextResult, linkrpc::prelude::JsonRpcError> {
+    async fn dispose_browser_context(#[serde(rename = "browserContextId")] browser_context_id: super::types::BrowserBrowserContextId) -> Result<super::types::TargetDisposeBrowserContextResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, browser_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disposeBrowserContext"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disposeBrowserContext")))
     }
     /// Inject object to the target's main frame that provides a communication
     /// channel with browser target.
@@ -118,43 +118,43 @@ pub trait TargetService {
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         #[serde(rename = "bindingName")] binding_name: Option<String>,
         #[serde(rename = "inheritPermissions")] inherit_permissions: Option<bool>,
-    ) -> Result<super::types::TargetExposeDevToolsProtocolResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetExposeDevToolsProtocolResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id, binding_name, inherit_permissions,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "exposeDevToolsProtocol"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "exposeDevToolsProtocol")))
     }
     /// Returns all browser contexts created with `Target.createBrowserContext` method.
     #[name("getBrowserContexts")]
-    async fn get_browser_contexts() -> Result<super::types::TargetGetBrowserContextsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_browser_contexts() -> Result<super::types::TargetGetBrowserContextsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBrowserContexts"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBrowserContexts")))
     }
     /// Gets the targetId of the DevTools page target opened for the given target
     /// (if any).
     #[name("getDevToolsTarget")]
-    async fn get_dev_tools_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetGetDevToolsTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_dev_tools_target(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<super::types::TargetGetDevToolsTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDevToolsTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDevToolsTarget")))
     }
     /// Returns information about a target.
     #[name("getTargetInfo")]
-    async fn get_target_info(#[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::TargetGetTargetInfoResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_target_info(#[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::TargetGetTargetInfoResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargetInfo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargetInfo")))
     }
     /// Retrieves a list of available targets.
     #[name("getTargets")]
-    async fn get_targets(filter: Option<super::types::TargetTargetFilter>) -> Result<super::types::TargetGetTargetsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_targets(filter: Option<super::types::TargetTargetFilter>) -> Result<super::types::TargetGetTargetsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, filter,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargets"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTargets")))
     }
     /// Opens a DevTools window for the target.
     #[name("openDevTools")]
     async fn open_dev_tools(
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         #[serde(rename = "panelId")] panel_id: Option<String>,
-    ) -> Result<super::types::TargetOpenDevToolsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetOpenDevToolsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id, panel_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openDevTools"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openDevTools")))
     }
     /// Sends protocol message over session with given id.
     /// Consider using flat mode instead; see commands attachToTarget, setAutoAttach,
@@ -164,9 +164,9 @@ pub trait TargetService {
         message: String,
         #[serde(rename = "sessionId")] session_id: Option<super::types::TargetSessionId>,
         #[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>,
-    ) -> Result<super::types::TargetSendMessageToTargetResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetSendMessageToTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, message, session_id, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "sendMessageToTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "sendMessageToTarget")))
     }
     /// Controls whether to automatically attach to new targets which are considered
     /// to be directly related to this one (for example, iframes or workers).
@@ -182,9 +182,9 @@ pub trait TargetService {
         #[serde(rename = "waitForDebuggerOnStart")] wait_for_debugger_on_start: bool,
         flatten: Option<bool>,
         filter: Option<super::types::TargetTargetFilter>,
-    ) -> Result<super::types::TargetSetAutoAttachResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetSetAutoAttachResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, auto_attach, wait_for_debugger_on_start, flatten, filter,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoAttach"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoAttach")))
     }
     /// Controls whether to discover available targets and notify via
     /// `targetCreated/targetInfoChanged/targetDestroyed` events.
@@ -192,16 +192,16 @@ pub trait TargetService {
     async fn set_discover_targets(
         discover: bool,
         filter: Option<super::types::TargetTargetFilter>,
-    ) -> Result<super::types::TargetSetDiscoverTargetsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TargetSetDiscoverTargetsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, discover, filter,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDiscoverTargets"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDiscoverTargets")))
     }
     /// Enables target discovery for the specified locations, when `setDiscoverTargets` was set to
     /// `true`.
     #[name("setRemoteLocations")]
-    async fn set_remote_locations(locations: Vec<super::types::TargetRemoteLocation>) -> Result<super::types::TargetSetRemoteLocationsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_remote_locations(locations: Vec<super::types::TargetRemoteLocation>) -> Result<super::types::TargetSetRemoteLocationsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, locations,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRemoteLocations"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRemoteLocations")))
     }
 }
 

@@ -17,28 +17,28 @@ pub trait AnimationEventsService {
     /// Event for when an animation has been cancelled.
     #[name("animationCanceled")]
     #[notification]
-    async fn animation_canceled(id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn animation_canceled(id: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id,);
         Ok(())
     }
     /// Event for each animation that has been created.
     #[name("animationCreated")]
     #[notification]
-    async fn animation_created(id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn animation_created(id: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id,);
         Ok(())
     }
     /// Event for animation that has been started.
     #[name("animationStarted")]
     #[notification]
-    async fn animation_started(animation: super::types::AnimationAnimation) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn animation_started(animation: super::types::AnimationAnimation) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, animation,);
         Ok(())
     }
     /// Event for animation that has been updated.
     #[name("animationUpdated")]
     #[notification]
-    async fn animation_updated(animation: super::types::AnimationAnimation) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn animation_updated(animation: super::types::AnimationAnimation) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, animation,);
         Ok(())
     }

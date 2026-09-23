@@ -21,7 +21,7 @@ pub trait ProfilerEventsService {
         location: super::types::DebuggerLocation,
         profile: super::types::ProfilerProfile,
         title: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, location, profile, title,);
         Ok(())
     }
@@ -32,7 +32,7 @@ pub trait ProfilerEventsService {
         id: String,
         location: super::types::DebuggerLocation,
         title: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, location, title,);
         Ok(())
     }
@@ -46,7 +46,7 @@ pub trait ProfilerEventsService {
         timestamp: f64,
         occasion: String,
         result: Vec<super::types::ProfilerScriptCoverage>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, timestamp, occasion, result,);
         Ok(())
     }

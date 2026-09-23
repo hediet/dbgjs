@@ -23,14 +23,14 @@ pub trait EmulationEventsService {
     async fn screen_orientation_lock_changed(
         locked: bool,
         orientation: Option<super::types::EmulationScreenOrientation>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, locked, orientation,);
         Ok(())
     }
     /// Notification sent after the virtual time budget for the current VirtualTimePolicy has run out.
     #[name("virtualTimeBudgetExpired")]
     #[notification]
-    async fn virtual_time_budget_expired() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn virtual_time_budget_expired() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }

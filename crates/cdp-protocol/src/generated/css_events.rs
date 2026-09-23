@@ -22,7 +22,7 @@
 pub trait CSSEventsService {
     #[name("computedStyleUpdated")]
     #[notification]
-    async fn computed_style_updated(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn computed_style_updated(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
         Ok(())
     }
@@ -30,7 +30,7 @@ pub trait CSSEventsService {
     /// web font.
     #[name("fontsUpdated")]
     #[notification]
-    async fn fonts_updated(font: Option<super::types::CssFontFace>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn fonts_updated(font: Option<super::types::CssFontFace>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, font,);
         Ok(())
     }
@@ -38,28 +38,28 @@ pub trait CSSEventsService {
     /// resized.) The current implementation considers only viewport-dependent media features.
     #[name("mediaQueryResultChanged")]
     #[notification]
-    async fn media_query_result_changed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn media_query_result_changed() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
     /// Fired whenever an active document stylesheet is added.
     #[name("styleSheetAdded")]
     #[notification]
-    async fn style_sheet_added(header: super::types::CssCssstyleSheetHeader) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn style_sheet_added(header: super::types::CssCssstyleSheetHeader) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, header,);
         Ok(())
     }
     /// Fired whenever a stylesheet is changed as a result of the client operation.
     #[name("styleSheetChanged")]
     #[notification]
-    async fn style_sheet_changed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn style_sheet_changed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, style_sheet_id,);
         Ok(())
     }
     /// Fired whenever an active document stylesheet is removed.
     #[name("styleSheetRemoved")]
     #[notification]
-    async fn style_sheet_removed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn style_sheet_removed(#[serde(rename = "styleSheetId")] style_sheet_id: super::types::DomStyleSheetId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, style_sheet_id,);
         Ok(())
     }

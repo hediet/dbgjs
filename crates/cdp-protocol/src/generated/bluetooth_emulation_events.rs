@@ -26,7 +26,7 @@ pub trait BluetoothEmulationEventsService {
         r#type: super::types::BluetoothEmulationCharacteristicOperationType,
         data: Option<String>,
         #[serde(rename = "writeType")] write_type: Option<super::types::BluetoothEmulationCharacteristicWriteType>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, characteristic_id, r#type, data, write_type,);
         Ok(())
     }
@@ -39,7 +39,7 @@ pub trait BluetoothEmulationEventsService {
         #[serde(rename = "descriptorId")] descriptor_id: String,
         r#type: super::types::BluetoothEmulationDescriptorOperationType,
         data: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, descriptor_id, r#type, data,);
         Ok(())
     }
@@ -50,7 +50,7 @@ pub trait BluetoothEmulationEventsService {
     async fn gatt_operation_received(
         address: String,
         r#type: super::types::BluetoothEmulationGattoperationType,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, address, r#type,);
         Ok(())
     }

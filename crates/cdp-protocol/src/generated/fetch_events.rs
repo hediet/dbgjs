@@ -25,7 +25,7 @@ pub trait FetchEventsService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "resourceType")] resource_type: super::types::NetworkResourceType,
         #[serde(rename = "authChallenge")] auth_challenge: super::types::FetchAuthChallenge,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, request, frame_id, resource_type, auth_challenge,);
         Ok(())
     }
@@ -53,7 +53,7 @@ pub trait FetchEventsService {
         #[serde(rename = "responseHeaders")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
         #[serde(rename = "networkId")] network_id: Option<super::types::NetworkRequestId>,
         #[serde(rename = "redirectedRequestId")] redirected_request_id: Option<super::types::FetchRequestId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, request, frame_id, resource_type, response_error_reason, response_status_code, response_status_text, response_headers, network_id, redirected_request_id,);
         Ok(())
     }

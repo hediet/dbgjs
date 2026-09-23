@@ -13,7 +13,10 @@ import {
 	TargetDebuggerApi, TargetDebuggerApiRoot,
 } from "./generated/interfaces.js";
 
-/** Typed facets sharing a caller-owned connection and its lifetime. */
+/**
+ * Typed facets sharing a caller-owned connection and its lifetime.
+ * Declared application failures remain RpcFailure values for callers to narrow.
+ */
 export class DbgServiceClient {
 	public readonly service: InterfaceClient<typeof ServiceApi>;
 	public readonly contexts: InterfaceClient<typeof ContextApi>;

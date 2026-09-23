@@ -21,7 +21,7 @@ pub trait AutofillEventsService {
     async fn address_form_filled(
         #[serde(rename = "filledFields")] filled_fields: Vec<super::types::AutofillFilledField>,
         #[serde(rename = "addressUi")] address_ui: super::types::AutofillAddressUi,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, filled_fields, address_ui,);
         Ok(())
     }

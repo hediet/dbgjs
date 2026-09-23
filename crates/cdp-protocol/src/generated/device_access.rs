@@ -16,30 +16,30 @@
 pub trait DeviceAccessService {
     /// Cancel a prompt in response to a DeviceAccess.deviceRequestPrompted event.
     #[name("cancelPrompt")]
-    async fn cancel_prompt(id: super::types::DeviceAccessRequestId) -> Result<super::types::DeviceAccessCancelPromptResult, linkrpc::prelude::JsonRpcError> {
+    async fn cancel_prompt(id: super::types::DeviceAccessRequestId) -> Result<super::types::DeviceAccessCancelPromptResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelPrompt"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelPrompt")))
     }
     /// Disable events in this domain.
     #[name("disable")]
-    async fn disable() -> Result<super::types::DeviceAccessDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::DeviceAccessDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enable events in this domain.
     #[name("enable")]
-    async fn enable() -> Result<super::types::DeviceAccessEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::DeviceAccessEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Select a device in response to a DeviceAccess.deviceRequestPrompted event.
     #[name("selectPrompt")]
     async fn select_prompt(
         id: super::types::DeviceAccessRequestId,
         #[serde(rename = "deviceId")] device_id: super::types::DeviceAccessDeviceId,
-    ) -> Result<super::types::DeviceAccessSelectPromptResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DeviceAccessSelectPromptResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, device_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "selectPrompt"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "selectPrompt")))
     }
 }
 

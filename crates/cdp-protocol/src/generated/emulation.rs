@@ -28,170 +28,170 @@ pub trait EmulationService {
         #[serde(rename = "colorDepth")] color_depth: Option<i64>,
         label: Option<String>,
         #[serde(rename = "isInternal")] is_internal: Option<bool>,
-    ) -> Result<super::types::EmulationAddScreenResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationAddScreenResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, left, top, width, height, work_area_insets, device_pixel_ratio, rotation, color_depth, label, is_internal,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScreen"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addScreen")))
     }
     /// Tells whether emulation is supported.
     #[name("canEmulate")]
-    async fn can_emulate() -> Result<super::types::EmulationCanEmulateResult, linkrpc::prelude::JsonRpcError> {
+    async fn can_emulate() -> Result<super::types::EmulationCanEmulateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "canEmulate"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "canEmulate")))
     }
     /// Clears the overridden device metrics.
     #[name("clearDeviceMetricsOverride")]
-    async fn clear_device_metrics_override() -> Result<super::types::EmulationClearDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_device_metrics_override() -> Result<super::types::EmulationClearDeviceMetricsOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDeviceMetricsOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDeviceMetricsOverride")))
     }
     /// Clears a device posture override set with either setDeviceMetricsOverride()
     /// or setDevicePostureOverride() and starts using posture information from the
     /// platform again.
     /// Does nothing if no override is set.
     #[name("clearDevicePostureOverride")]
-    async fn clear_device_posture_override() -> Result<super::types::EmulationClearDevicePostureOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_device_posture_override() -> Result<super::types::EmulationClearDevicePostureOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDevicePostureOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDevicePostureOverride")))
     }
     /// Clears the display features override set with either setDeviceMetricsOverride()
     /// or setDisplayFeaturesOverride() and starts using display features from the
     /// platform again.
     /// Does nothing if no override is set.
     #[name("clearDisplayFeaturesOverride")]
-    async fn clear_display_features_override() -> Result<super::types::EmulationClearDisplayFeaturesOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_display_features_override() -> Result<super::types::EmulationClearDisplayFeaturesOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDisplayFeaturesOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearDisplayFeaturesOverride")))
     }
     /// Clears the overridden Geolocation Position and Error.
     #[name("clearGeolocationOverride")]
-    async fn clear_geolocation_override() -> Result<super::types::EmulationClearGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_geolocation_override() -> Result<super::types::EmulationClearGeolocationOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearGeolocationOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearGeolocationOverride")))
     }
     /// Clears Idle state overrides.
     #[name("clearIdleOverride")]
-    async fn clear_idle_override() -> Result<super::types::EmulationClearIdleOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_idle_override() -> Result<super::types::EmulationClearIdleOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearIdleOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearIdleOverride")))
     }
     #[name("getOverriddenSensorInformation")]
-    async fn get_overridden_sensor_information(r#type: super::types::EmulationSensorType) -> Result<super::types::EmulationGetOverriddenSensorInformationResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_overridden_sensor_information(r#type: super::types::EmulationSensorType) -> Result<super::types::EmulationGetOverriddenSensorInformationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, r#type,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOverriddenSensorInformation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOverriddenSensorInformation")))
     }
     /// Returns device's screen configuration. In headful mode, the physical screens configuration is returned,
     /// whereas in headless mode, a virtual headless screen configuration is provided instead.
     #[name("getScreenInfos")]
-    async fn get_screen_infos() -> Result<super::types::EmulationGetScreenInfosResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_screen_infos() -> Result<super::types::EmulationGetScreenInfosResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getScreenInfos"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getScreenInfos")))
     }
     /// Remove screen from the device. Only supported in headless mode.
     #[name("removeScreen")]
-    async fn remove_screen(#[serde(rename = "screenId")] screen_id: super::types::EmulationScreenId) -> Result<super::types::EmulationRemoveScreenResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_screen(#[serde(rename = "screenId")] screen_id: super::types::EmulationScreenId) -> Result<super::types::EmulationRemoveScreenResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, screen_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeScreen"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeScreen")))
     }
     /// Requests that page scale factor is reset to initial values.
     #[name("resetPageScaleFactor")]
-    async fn reset_page_scale_factor() -> Result<super::types::EmulationResetPageScaleFactorResult, linkrpc::prelude::JsonRpcError> {
+    async fn reset_page_scale_factor() -> Result<super::types::EmulationResetPageScaleFactorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetPageScaleFactor"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetPageScaleFactor")))
     }
     /// Automatically render all web contents using a dark theme.
     #[name("setAutoDarkModeOverride")]
-    async fn set_auto_dark_mode_override(enabled: Option<bool>) -> Result<super::types::EmulationSetAutoDarkModeOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_auto_dark_mode_override(enabled: Option<bool>) -> Result<super::types::EmulationSetAutoDarkModeOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoDarkModeOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutoDarkModeOverride")))
     }
     /// Allows overriding the automation flag.
     #[name("setAutomationOverride")]
-    async fn set_automation_override(enabled: bool) -> Result<super::types::EmulationSetAutomationOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_automation_override(enabled: bool) -> Result<super::types::EmulationSetAutomationOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutomationOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutomationOverride")))
     }
     /// Enables CPU throttling to emulate slow CPUs.
     #[name("setCPUThrottlingRate")]
-    async fn set_cputhrottling_rate(rate: f64) -> Result<super::types::EmulationSetCputhrottlingRateResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_cputhrottling_rate(rate: f64) -> Result<super::types::EmulationSetCputhrottlingRateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, rate,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCPUThrottlingRate"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCPUThrottlingRate")))
     }
     /// Override the value of navigator.connection.saveData
     #[name("setDataSaverOverride")]
-    async fn set_data_saver_override(#[serde(rename = "dataSaverEnabled")] data_saver_enabled: Option<bool>) -> Result<super::types::EmulationSetDataSaverOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_data_saver_override(#[serde(rename = "dataSaverEnabled")] data_saver_enabled: Option<bool>) -> Result<super::types::EmulationSetDataSaverOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, data_saver_enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDataSaverOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDataSaverOverride")))
     }
     /// Sets or clears an override of the default background color of the frame. This override is used
     /// if the content does not specify one.
     #[name("setDefaultBackgroundColorOverride")]
-    async fn set_default_background_color_override(color: Option<super::types::DomRgba>) -> Result<super::types::EmulationSetDefaultBackgroundColorOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_default_background_color_override(color: Option<super::types::DomRgba>) -> Result<super::types::EmulationSetDefaultBackgroundColorOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, color,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDefaultBackgroundColorOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDefaultBackgroundColorOverride")))
     }
     /// Overrides the values of device screen dimensions (window.screen.width, window.screen.height,
     /// window.innerWidth, window.innerHeight, and "device-width"/"device-height"-related CSS media
     /// query results).
     #[name("setDeviceMetricsOverride")]
-    async fn set_device_metrics_override(#[params] params: super::types::EmulationSetDeviceMetricsOverrideParams) -> Result<super::types::EmulationSetDeviceMetricsOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_device_metrics_override(#[params] params: super::types::EmulationSetDeviceMetricsOverrideParams) -> Result<super::types::EmulationSetDeviceMetricsOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceMetricsOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDeviceMetricsOverride")))
     }
     /// Start reporting the given posture value to the Device Posture API.
     /// This override can also be set in setDeviceMetricsOverride().
     #[name("setDevicePostureOverride")]
-    async fn set_device_posture_override(posture: super::types::EmulationDevicePosture) -> Result<super::types::EmulationSetDevicePostureOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_device_posture_override(posture: super::types::EmulationDevicePosture) -> Result<super::types::EmulationSetDevicePostureOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, posture,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDevicePostureOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDevicePostureOverride")))
     }
     #[name("setDisabledImageTypes")]
-    async fn set_disabled_image_types(#[serde(rename = "imageTypes")] image_types: Vec<super::types::EmulationDisabledImageType>) -> Result<super::types::EmulationSetDisabledImageTypesResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_disabled_image_types(#[serde(rename = "imageTypes")] image_types: Vec<super::types::EmulationDisabledImageType>) -> Result<super::types::EmulationSetDisabledImageTypesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, image_types,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDisabledImageTypes"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDisabledImageTypes")))
     }
     /// Start using the given display features to pupulate the Viewport Segments API.
     /// This override can also be set in setDeviceMetricsOverride().
     #[name("setDisplayFeaturesOverride")]
-    async fn set_display_features_override(features: Vec<super::types::EmulationDisplayFeature>) -> Result<super::types::EmulationSetDisplayFeaturesOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_display_features_override(features: Vec<super::types::EmulationDisplayFeature>) -> Result<super::types::EmulationSetDisplayFeaturesOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, features,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDisplayFeaturesOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDisplayFeaturesOverride")))
     }
     #[name("setDocumentCookieDisabled")]
-    async fn set_document_cookie_disabled(disabled: bool) -> Result<super::types::EmulationSetDocumentCookieDisabledResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_document_cookie_disabled(disabled: bool) -> Result<super::types::EmulationSetDocumentCookieDisabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, disabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDocumentCookieDisabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDocumentCookieDisabled")))
     }
     #[name("setEmitTouchEventsForMouse")]
-    async fn set_emit_touch_events_for_mouse(#[params] params: super::types::EmulationSetEmitTouchEventsForMouseParams) -> Result<super::types::EmulationSetEmitTouchEventsForMouseResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_emit_touch_events_for_mouse(#[params] params: super::types::EmulationSetEmitTouchEventsForMouseParams) -> Result<super::types::EmulationSetEmitTouchEventsForMouseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmitTouchEventsForMouse"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmitTouchEventsForMouse")))
     }
     /// Emulates the given media type or media feature for CSS media queries.
     #[name("setEmulatedMedia")]
     async fn set_emulated_media(
         media: Option<String>,
         features: Option<Vec<super::types::EmulationMediaFeature>>,
-    ) -> Result<super::types::EmulationSetEmulatedMediaResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetEmulatedMediaResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, media, features,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedMedia"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedMedia")))
     }
     /// Emulates the given OS text scale.
     #[name("setEmulatedOSTextScale")]
-    async fn set_emulated_ostext_scale(scale: Option<f64>) -> Result<super::types::EmulationSetEmulatedOstextScaleResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_emulated_ostext_scale(scale: Option<f64>) -> Result<super::types::EmulationSetEmulatedOstextScaleResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scale,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedOSTextScale"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedOSTextScale")))
     }
     /// Emulates the given vision deficiency.
     #[name("setEmulatedVisionDeficiency")]
-    async fn set_emulated_vision_deficiency(#[params] params: super::types::EmulationSetEmulatedVisionDeficiencyParams) -> Result<super::types::EmulationSetEmulatedVisionDeficiencyResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_emulated_vision_deficiency(#[params] params: super::types::EmulationSetEmulatedVisionDeficiencyParams) -> Result<super::types::EmulationSetEmulatedVisionDeficiencyResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedVisionDeficiency"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEmulatedVisionDeficiency")))
     }
     /// Enables or disables simulating a focused and active page.
     #[name("setFocusEmulationEnabled")]
-    async fn set_focus_emulation_enabled(enabled: bool) -> Result<super::types::EmulationSetFocusEmulationEnabledResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_focus_emulation_enabled(enabled: bool) -> Result<super::types::EmulationSetFocusEmulationEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFocusEmulationEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFocusEmulationEnabled")))
     }
     /// Overrides the Geolocation Position or Error. Omitting latitude, longitude or
     /// accuracy emulates position unavailable.
@@ -204,41 +204,41 @@ pub trait EmulationService {
         #[serde(rename = "altitudeAccuracy")] altitude_accuracy: Option<f64>,
         heading: Option<f64>,
         speed: Option<f64>,
-    ) -> Result<super::types::EmulationSetGeolocationOverrideResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetGeolocationOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, latitude, longitude, accuracy, altitude, altitude_accuracy, heading, speed,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setGeolocationOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setGeolocationOverride")))
     }
     #[name("setHardwareConcurrencyOverride")]
-    async fn set_hardware_concurrency_override(#[serde(rename = "hardwareConcurrency")] hardware_concurrency: i64) -> Result<super::types::EmulationSetHardwareConcurrencyOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_hardware_concurrency_override(#[serde(rename = "hardwareConcurrency")] hardware_concurrency: i64) -> Result<super::types::EmulationSetHardwareConcurrencyOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, hardware_concurrency,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setHardwareConcurrencyOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setHardwareConcurrencyOverride")))
     }
     /// Overrides the Idle state.
     #[name("setIdleOverride")]
     async fn set_idle_override(
         #[serde(rename = "isUserActive")] is_user_active: bool,
         #[serde(rename = "isScreenUnlocked")] is_screen_unlocked: bool,
-    ) -> Result<super::types::EmulationSetIdleOverrideResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetIdleOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, is_user_active, is_screen_unlocked,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setIdleOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setIdleOverride")))
     }
     /// Overrides default host system locale with the specified one.
     #[name("setLocaleOverride")]
-    async fn set_locale_override(locale: Option<String>) -> Result<super::types::EmulationSetLocaleOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_locale_override(locale: Option<String>) -> Result<super::types::EmulationSetLocaleOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, locale,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setLocaleOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setLocaleOverride")))
     }
     /// Overrides value returned by the javascript navigator object.
     #[name("setNavigatorOverrides")]
-    async fn set_navigator_overrides(platform: String) -> Result<super::types::EmulationSetNavigatorOverridesResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_navigator_overrides(platform: String) -> Result<super::types::EmulationSetNavigatorOverridesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, platform,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNavigatorOverrides"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNavigatorOverrides")))
     }
     /// Sets a specified page scale factor.
     #[name("setPageScaleFactor")]
-    async fn set_page_scale_factor(#[serde(rename = "pageScaleFactor")] page_scale_factor: f64) -> Result<super::types::EmulationSetPageScaleFactorResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_page_scale_factor(#[serde(rename = "pageScaleFactor")] page_scale_factor: f64) -> Result<super::types::EmulationSetPageScaleFactorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, page_scale_factor,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPageScaleFactor"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPageScaleFactor")))
     }
     /// Overrides a pressure source of a given type, as used by the Compute
     /// Pressure API, so that updates to PressureObserver.observe() are provided
@@ -249,9 +249,9 @@ pub trait EmulationService {
         enabled: bool,
         source: super::types::EmulationPressureSource,
         metadata: Option<super::types::EmulationPressureMetadata>,
-    ) -> Result<super::types::EmulationSetPressureSourceOverrideEnabledResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetPressureSourceOverrideEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled, source, metadata,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureSourceOverrideEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureSourceOverrideEnabled")))
     }
     /// Provides a given pressure state that will be processed and eventually be
     /// delivered to PressureObserver users. |source| must have been previously
@@ -260,36 +260,36 @@ pub trait EmulationService {
     async fn set_pressure_state_override(
         source: super::types::EmulationPressureSource,
         state: super::types::EmulationPressureState,
-    ) -> Result<super::types::EmulationSetPressureStateOverrideResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetPressureStateOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, source, state,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureStateOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPressureStateOverride")))
     }
     /// Set primary screen. Only supported in headless mode.
     /// Note that this changes the coordinate system origin to the top-left
     /// of the new primary screen, updating the bounds and work areas
     /// of all existing screens accordingly.
     #[name("setPrimaryScreen")]
-    async fn set_primary_screen(#[serde(rename = "screenId")] screen_id: super::types::EmulationScreenId) -> Result<super::types::EmulationSetPrimaryScreenResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_primary_screen(#[serde(rename = "screenId")] screen_id: super::types::EmulationScreenId) -> Result<super::types::EmulationSetPrimaryScreenResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, screen_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPrimaryScreen"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPrimaryScreen")))
     }
     /// Overrides the values for env(safe-area-inset-*) and env(safe-area-max-inset-*). Unset values will cause the
     /// respective variables to be undefined, even if previously overridden.
     #[name("setSafeAreaInsetsOverride")]
-    async fn set_safe_area_insets_override(insets: super::types::EmulationSafeAreaInsets) -> Result<super::types::EmulationSetSafeAreaInsetsOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_safe_area_insets_override(insets: super::types::EmulationSafeAreaInsets) -> Result<super::types::EmulationSetSafeAreaInsetsOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, insets,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSafeAreaInsetsOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSafeAreaInsetsOverride")))
     }
     /// Switches script execution in the page.
     #[name("setScriptExecutionDisabled")]
-    async fn set_script_execution_disabled(value: bool) -> Result<super::types::EmulationSetScriptExecutionDisabledResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_script_execution_disabled(value: bool) -> Result<super::types::EmulationSetScriptExecutionDisabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, value,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScriptExecutionDisabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScriptExecutionDisabled")))
     }
     #[name("setScrollbarsHidden")]
-    async fn set_scrollbars_hidden(hidden: bool) -> Result<super::types::EmulationSetScrollbarsHiddenResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_scrollbars_hidden(hidden: bool) -> Result<super::types::EmulationSetScrollbarsHiddenResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, hidden,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScrollbarsHidden"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setScrollbarsHidden")))
     }
     /// Overrides a platform sensor of a given type. If |enabled| is true, calls to
     /// Sensor.start() will use a virtual sensor as backend rather than fetching
@@ -301,9 +301,9 @@ pub trait EmulationService {
         enabled: bool,
         r#type: super::types::EmulationSensorType,
         metadata: Option<super::types::EmulationSensorMetadata>,
-    ) -> Result<super::types::EmulationSetSensorOverrideEnabledResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetSensorOverrideEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled, r#type, metadata,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSensorOverrideEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSensorOverrideEnabled")))
     }
     /// Updates the sensor readings reported by a sensor type previously overridden
     /// by setSensorOverrideEnabled.
@@ -311,31 +311,31 @@ pub trait EmulationService {
     async fn set_sensor_override_readings(
         r#type: super::types::EmulationSensorType,
         reading: super::types::EmulationSensorReading,
-    ) -> Result<super::types::EmulationSetSensorOverrideReadingsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetSensorOverrideReadingsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, r#type, reading,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSensorOverrideReadings"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSensorOverrideReadings")))
     }
     /// Allows overriding the difference between the small and large viewport sizes, which determine the
     /// value of the `svh` and `lvh` unit, respectively. Only supported for top-level frames.
     #[name("setSmallViewportHeightDifferenceOverride")]
-    async fn set_small_viewport_height_difference_override(difference: i64) -> Result<super::types::EmulationSetSmallViewportHeightDifferenceOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_small_viewport_height_difference_override(difference: i64) -> Result<super::types::EmulationSetSmallViewportHeightDifferenceOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, difference,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSmallViewportHeightDifferenceOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setSmallViewportHeightDifferenceOverride")))
     }
     /// Overrides default host system timezone with the specified one.
     #[name("setTimezoneOverride")]
-    async fn set_timezone_override(#[serde(rename = "timezoneId")] timezone_id: String) -> Result<super::types::EmulationSetTimezoneOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_timezone_override(#[serde(rename = "timezoneId")] timezone_id: String) -> Result<super::types::EmulationSetTimezoneOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, timezone_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTimezoneOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTimezoneOverride")))
     }
     /// Enables touch on platforms which do not support them.
     #[name("setTouchEmulationEnabled")]
     async fn set_touch_emulation_enabled(
         enabled: bool,
         #[serde(rename = "maxTouchPoints")] max_touch_points: Option<i64>,
-    ) -> Result<super::types::EmulationSetTouchEmulationEnabledResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetTouchEmulationEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled, max_touch_points,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTouchEmulationEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setTouchEmulationEnabled")))
     }
     /// Allows overriding user agent with the given string.
     /// `userAgentMetadata` must be set for Client Hint headers to be sent.
@@ -345,9 +345,9 @@ pub trait EmulationService {
         #[serde(rename = "acceptLanguage")] accept_language: Option<String>,
         platform: Option<String>,
         #[serde(rename = "userAgentMetadata")] user_agent_metadata: Option<super::types::EmulationUserAgentMetadata>,
-    ) -> Result<super::types::EmulationSetUserAgentOverrideResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetUserAgentOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, user_agent, accept_language, platform, user_agent_metadata,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserAgentOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserAgentOverride")))
     }
     /// Overrides virtual keyboard geometry in CSS pixels, relative to the top-level viewport. The
     /// provided rect is used for navigator.virtualKeyboard.boundingRect, geometrychange events, and
@@ -356,9 +356,9 @@ pub trait EmulationService {
     /// mutating page state. Values are rounded to the nearest CSS pixel. Omitting the rect clears the
     /// override.
     #[name("setVirtualKeyboardGeometryOverride")]
-    async fn set_virtual_keyboard_geometry_override(#[serde(rename = "keyboardRect")] keyboard_rect: Option<super::types::DomRect>) -> Result<super::types::EmulationSetVirtualKeyboardGeometryOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_virtual_keyboard_geometry_override(#[serde(rename = "keyboardRect")] keyboard_rect: Option<super::types::DomRect>) -> Result<super::types::EmulationSetVirtualKeyboardGeometryOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, keyboard_rect,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualKeyboardGeometryOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualKeyboardGeometryOverride")))
     }
     /// Turns on virtual time for all frames (replacing real-time with a synthetic time source) and sets
     /// the current virtual time policy.  Note this supersedes any previous time budget.
@@ -368,9 +368,9 @@ pub trait EmulationService {
         budget: Option<f64>,
         #[serde(rename = "maxVirtualTimeTaskStarvationCount")] max_virtual_time_task_starvation_count: Option<i64>,
         #[serde(rename = "initialVirtualTime")] initial_virtual_time: Option<super::types::NetworkTimeSinceEpoch>,
-    ) -> Result<super::types::EmulationSetVirtualTimePolicyResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetVirtualTimePolicyResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, policy, budget, max_virtual_time_task_starvation_count, initial_virtual_time,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualTimePolicy"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualTimePolicy")))
     }
     /// Resizes the frame/viewport of the page. Note that this does not affect the frame's container
     /// (e.g. browser window). Can be used to produce screenshots of the specified size. Not supported
@@ -379,9 +379,9 @@ pub trait EmulationService {
     async fn set_visible_size(
         width: i64,
         height: i64,
-    ) -> Result<super::types::EmulationSetVisibleSizeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationSetVisibleSizeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, width, height,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVisibleSize"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVisibleSize")))
     }
     /// Updates specified screen parameters. Only supported in headless mode.
     #[name("updateScreen")]
@@ -397,9 +397,9 @@ pub trait EmulationService {
         #[serde(rename = "colorDepth")] color_depth: Option<i64>,
         label: Option<String>,
         #[serde(rename = "isInternal")] is_internal: Option<bool>,
-    ) -> Result<super::types::EmulationUpdateScreenResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::EmulationUpdateScreenResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, screen_id, left, top, width, height, work_area_insets, device_pixel_ratio, rotation, color_depth, label, is_internal,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateScreen"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateScreen")))
     }
 }
 

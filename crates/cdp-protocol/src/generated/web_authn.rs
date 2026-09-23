@@ -21,34 +21,34 @@ pub trait WebAuthnService {
     async fn add_credential(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         credential: super::types::WebAuthnCredential,
-    ) -> Result<super::types::WebAuthnAddCredentialResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnAddCredentialResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addCredential"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addCredential")))
     }
     /// Creates and adds a virtual authenticator.
     #[name("addVirtualAuthenticator")]
-    async fn add_virtual_authenticator(options: super::types::WebAuthnVirtualAuthenticatorOptions) -> Result<super::types::WebAuthnAddVirtualAuthenticatorResult, linkrpc::prelude::JsonRpcError> {
+    async fn add_virtual_authenticator(options: super::types::WebAuthnVirtualAuthenticatorOptions) -> Result<super::types::WebAuthnAddVirtualAuthenticatorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, options,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addVirtualAuthenticator"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addVirtualAuthenticator")))
     }
     /// Clears all the credentials from the specified device.
     #[name("clearCredentials")]
-    async fn clear_credentials(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnClearCredentialsResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_credentials(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnClearCredentialsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearCredentials"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearCredentials")))
     }
     /// Disable the WebAuthn domain.
     #[name("disable")]
-    async fn disable() -> Result<super::types::WebAuthnDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::WebAuthnDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enable the WebAuthn domain and start intercepting credential storage and
     /// retrieval with a virtual authenticator.
     #[name("enable")]
-    async fn enable(#[serde(rename = "enableUI")] enable_ui: Option<bool>) -> Result<super::types::WebAuthnEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[serde(rename = "enableUI")] enable_ui: Option<bool>) -> Result<super::types::WebAuthnEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enable_ui,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Returns a single credential stored in the given virtual authenticator that
     /// matches the credential ID.
@@ -56,30 +56,30 @@ pub trait WebAuthnService {
     async fn get_credential(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         #[serde(rename = "credentialId")] credential_id: String,
-    ) -> Result<super::types::WebAuthnGetCredentialResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnGetCredentialResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCredential"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCredential")))
     }
     /// Returns all the credentials stored in the given virtual authenticator.
     #[name("getCredentials")]
-    async fn get_credentials(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnGetCredentialsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_credentials(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnGetCredentialsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCredentials"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCredentials")))
     }
     /// Removes a credential from the authenticator.
     #[name("removeCredential")]
     async fn remove_credential(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         #[serde(rename = "credentialId")] credential_id: String,
-    ) -> Result<super::types::WebAuthnRemoveCredentialResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnRemoveCredentialResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeCredential"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeCredential")))
     }
     /// Removes the given authenticator.
     #[name("removeVirtualAuthenticator")]
-    async fn remove_virtual_authenticator(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnRemoveVirtualAuthenticatorResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_virtual_authenticator(#[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId) -> Result<super::types::WebAuthnRemoveVirtualAuthenticatorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeVirtualAuthenticator"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeVirtualAuthenticator")))
     }
     /// Sets whether tests of user presence will succeed immediately (if true) or fail to resolve (if false) for an authenticator.
     /// The default is true.
@@ -87,9 +87,9 @@ pub trait WebAuthnService {
     async fn set_automatic_presence_simulation(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         enabled: bool,
-    ) -> Result<super::types::WebAuthnSetAutomaticPresenceSimulationResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnSetAutomaticPresenceSimulationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutomaticPresenceSimulation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAutomaticPresenceSimulation")))
     }
     /// Allows setting credential properties.
     /// https://w3c.github.io/webauthn/#sctn-automation-set-credential-properties
@@ -102,9 +102,9 @@ pub trait WebAuthnService {
         #[serde(rename = "activeCmtgKeyIndex")] active_cmtg_key_index: Option<i64>,
         #[serde(rename = "generateCmtgKeyOnNextOperation")] generate_cmtg_key_on_next_operation: Option<bool>,
         #[serde(rename = "signCount")] sign_count: Option<i64>,
-    ) -> Result<super::types::WebAuthnSetCredentialPropertiesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnSetCredentialPropertiesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential_id, backup_eligibility, backup_state, active_cmtg_key_index, generate_cmtg_key_on_next_operation, sign_count,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCredentialProperties"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCredentialProperties")))
     }
     /// Resets parameters isBogusSignature, isBadUV, isBadUP to false if they are not present.
     #[name("setResponseOverrideBits")]
@@ -113,9 +113,9 @@ pub trait WebAuthnService {
         #[serde(rename = "isBogusSignature")] is_bogus_signature: Option<bool>,
         #[serde(rename = "isBadUV")] is_bad_uv: Option<bool>,
         #[serde(rename = "isBadUP")] is_bad_up: Option<bool>,
-    ) -> Result<super::types::WebAuthnSetResponseOverrideBitsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnSetResponseOverrideBitsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, is_bogus_signature, is_bad_uv, is_bad_up,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setResponseOverrideBits"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setResponseOverrideBits")))
     }
     /// Sets whether User Verification succeeds or fails for an authenticator.
     /// The default is true.
@@ -123,9 +123,9 @@ pub trait WebAuthnService {
     async fn set_user_verified(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         #[serde(rename = "isUserVerified")] is_user_verified: bool,
-    ) -> Result<super::types::WebAuthnSetUserVerifiedResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebAuthnSetUserVerifiedResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, is_user_verified,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserVerified"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setUserVerified")))
     }
 }
 

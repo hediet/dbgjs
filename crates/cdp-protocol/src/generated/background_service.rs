@@ -17,30 +17,30 @@
 pub trait BackgroundServiceService {
     /// Clears all stored data for the service.
     #[name("clearEvents")]
-    async fn clear_events(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceClearEventsResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear_events(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceClearEventsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, service,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearEvents"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearEvents")))
     }
     /// Set the recording state for the service.
     #[name("setRecording")]
     async fn set_recording(
         #[serde(rename = "shouldRecord")] should_record: bool,
         service: super::types::BackgroundServiceServiceName,
-    ) -> Result<super::types::BackgroundServiceSetRecordingResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BackgroundServiceSetRecordingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, should_record, service,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRecording"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setRecording")))
     }
     /// Enables event updates for the service.
     #[name("startObserving")]
-    async fn start_observing(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceStartObservingResult, linkrpc::prelude::JsonRpcError> {
+    async fn start_observing(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceStartObservingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, service,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startObserving"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startObserving")))
     }
     /// Disables event updates for the service.
     #[name("stopObserving")]
-    async fn stop_observing(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceStopObservingResult, linkrpc::prelude::JsonRpcError> {
+    async fn stop_observing(service: super::types::BackgroundServiceServiceName) -> Result<super::types::BackgroundServiceStopObservingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, service,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopObserving"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopObserving")))
     }
 }
 

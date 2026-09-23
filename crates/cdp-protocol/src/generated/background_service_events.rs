@@ -19,7 +19,7 @@ pub trait BackgroundServiceEventsService {
     /// events afterwards if enabled and recording.
     #[name("backgroundServiceEventReceived")]
     #[notification]
-    async fn background_service_event_received(#[serde(rename = "backgroundServiceEvent")] background_service_event: super::types::BackgroundServiceBackgroundServiceEvent) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn background_service_event_received(#[serde(rename = "backgroundServiceEvent")] background_service_event: super::types::BackgroundServiceBackgroundServiceEvent) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, background_service_event,);
         Ok(())
     }
@@ -29,7 +29,7 @@ pub trait BackgroundServiceEventsService {
     async fn recording_state_changed(
         #[serde(rename = "isRecording")] is_recording: bool,
         service: super::types::BackgroundServiceServiceName,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, is_recording, service,);
         Ok(())
     }

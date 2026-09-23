@@ -1,3 +1,4 @@
+import type { RpcFailure } from "@hediet/linkrpc";
 import type { DbgServiceClient } from "./dbgServiceClient.js";
 
 type ContextClient = DbgServiceClient["contexts"];
@@ -5,7 +6,7 @@ type SourceClient = DbgServiceClient["sources"];
 type TargetClient = DbgServiceClient["targets"];
 
 type MethodResult<TMethod extends (...args: never[]) => unknown> =
-	Awaited<ReturnType<TMethod>>;
+	Exclude<Awaited<ReturnType<TMethod>>, RpcFailure<unknown>>;
 
 export type ContextSummary = MethodResult<ContextClient["list_contexts"]>[number];
 export type ContextSnapshot = MethodResult<ContextClient["get_context"]>;

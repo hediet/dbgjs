@@ -16,22 +16,22 @@
 pub trait WebMCPService {
     /// Cancels a pending tool invocation.
     #[name("cancelInvocation")]
-    async fn cancel_invocation(#[serde(rename = "invocationId")] invocation_id: String) -> Result<super::types::WebMcpCancelInvocationResult, linkrpc::prelude::JsonRpcError> {
+    async fn cancel_invocation(#[serde(rename = "invocationId")] invocation_id: String) -> Result<super::types::WebMcpCancelInvocationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, invocation_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelInvocation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelInvocation")))
     }
     /// Disables the WebMCP domain.
     #[name("disable")]
-    async fn disable() -> Result<super::types::WebMcpDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::WebMcpDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables the WebMCP domain, allowing events to be sent. Enabling the domain will trigger a toolsAdded event for
     /// all currently registered tools.
     #[name("enable")]
-    async fn enable() -> Result<super::types::WebMcpEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::WebMcpEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Invokes a registered tool.
     #[name("invokeTool")]
@@ -39,9 +39,9 @@ pub trait WebMCPService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "toolName")] tool_name: String,
         input: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<super::types::WebMcpInvokeToolResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::WebMcpInvokeToolResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, tool_name, input,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "invokeTool"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "invokeTool")))
     }
 }
 

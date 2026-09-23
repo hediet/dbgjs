@@ -932,12 +932,27 @@ mod tests {
             connection: connection_ref,
             target_id: "missing".into(),
         };
-        let errors = [
+        assert!(matches!(
             client
                 .targets
                 .get_target(target_ref.clone())
                 .await
                 .unwrap_err(),
+            service_api::TargetError::TargetSelectorNotFound { selector } if selector == "missing"
+        ));
+        assert!(matches!(
+            client.coverage.start_coverage(target_ref.clone()).await.unwrap_err(),
+            service_api::CoverageError::TargetSelectorNotFound { selector } if selector == "missing"
+        ));
+        assert!(matches!(
+            client.cpu.start_cpu_profile(target_ref.clone(), None).await.unwrap_err(),
+            service_api::CpuProfilerError::TargetSelectorNotFound { selector } if selector == "missing"
+        ));
+        assert!(matches!(
+            client.heap.get_heap_snapshot_progress(target_ref.clone()).await.unwrap_err(),
+            service_api::HeapProfilerError::TargetSelectorNotFound { selector } if selector == "missing"
+        ));
+        let errors = [
             client
                 .cdp
                 .raw_cdp_request(
@@ -953,28 +968,17 @@ mod tests {
                 .click_target(target_ref.clone(), "button".into())
                 .await
                 .unwrap_err(),
-            client
-                .coverage
-                .start_coverage(target_ref.clone())
-                .await
-                .unwrap_err(),
-            client
-                .cpu
-                .start_cpu_profile(target_ref.clone(), None)
-                .await
-                .unwrap_err(),
-            client
-                .heap
-                .get_heap_snapshot_progress(target_ref)
-                .await
-                .unwrap_err(),
         ];
         for error in errors {
-            assert_eq!(error.code, linkrpc::prelude::error_codes::INVALID_PARAMS);
+            let linkrpc::prelude::RpcCallError::Remote(error) = error else {
+                panic!("expected remote error, got {error:?}");
+            };
+            assert_eq!(error.code, 1);
             assert_eq!(
                 error.message,
                 "target selector 'missing' did not match a discovered target; target discovery may be incomplete"
             );
+            assert_eq!(error.data.unwrap()["type"], "TargetSelectorNotFound");
         }
 
         assert!(client.service.shutdown().await.unwrap());

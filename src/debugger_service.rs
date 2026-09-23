@@ -9,10 +9,12 @@ mod relay;
 mod service;
 mod source;
 mod target_debugger;
+mod errors;
 
 use crate::service_api::{
     BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, CoverageApi, CpuProfilerApi,
     HeapProfilerApi, RelayApi, ServiceApi, SourceApi, TargetDebuggerApi,
+    CaptureError, CoverageError, CpuProfilerError, HeapProfilerError, TargetError,
 };
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1024,16 +1026,20 @@ fn select_stored_capture<'a>(
         let mut captures = state.captures.values().filter(matches).collect::<Vec<_>>();
         captures.sort_by_key(|capture| std::cmp::Reverse(capture.publication_order));
         captures.get(index - 1).copied().ok_or_else(|| {
-            invalid_params(format!(
-                "capture selector '{selector}' has no match in context '{context_id}' for the requested kind and target scope"
-            ))
+            CaptureError::CaptureNotFound {
+                context_id: context_id.to_owned(),
+                selector: selector.to_owned(),
+            }.into()
         })
     } else {
         state
             .captures
             .get(&(context_id.to_owned(), selector.to_owned()))
             .filter(matches)
-            .ok_or_else(|| not_found("capture in requested kind and target scope", selector))
+            .ok_or_else(|| CaptureError::CaptureNotFound {
+                context_id: context_id.to_owned(),
+                selector: selector.to_owned(),
+            }.into())
     }
 }
 
@@ -1556,14 +1562,11 @@ impl DebuggerService {
             },
         };
         let key = (context_id.to_owned(), name.clone());
-        if let Some(existing) = state.captures.get(&key) {
-            return Err(invalid_state(&format!(
-                "capture '{name}' already exists in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
-                existing.metadata.kind,
-                existing.metadata.target_id,
-                existing.metadata.connection_id,
-                existing.metadata.connection_generation,
-            )));
+        if state.captures.contains_key(&key) {
+            return Err(CaptureError::NameConflict {
+                context_id: context_id.to_owned(),
+                capture_id: name,
+            }.into());
         }
         if let Some(existing) = state.capture_reservations.get(&key) {
             if existing.deleting {
@@ -1583,13 +1586,10 @@ impl DebuggerService {
                     "capture '{name}' completed in context '{context_id}' but catalog persistence failed; retry the same capture request or delete it to discard the completed data"
                 )));
             }
-            return Err(invalid_state(&format!(
-                "capture '{name}' is already being stored in context '{context_id}' as {:?} from target '{}' (connection '{}', generation {})",
-                existing.metadata.kind,
-                existing.metadata.target_id,
-                existing.metadata.connection_id,
-                existing.metadata.connection_generation,
-            )));
+            return Err(CaptureError::CaptureBusy {
+                context_id: context_id.to_owned(),
+                capture_id: name,
+            }.into());
         }
         let connection = state
             .contexts
@@ -2227,7 +2227,7 @@ impl DebuggerService {
                 target_id.clone(),
             ))
             .cloned()
-            .ok_or_else(|| not_found("attached target", &target_id))
+            .ok_or_else(|| TargetError::TargetNotFound { target_id }.into())
     }
 
     /// Every canonical target currently known in `context_id`, paired with its owning
@@ -2754,7 +2754,7 @@ impl DebuggerService {
                 generation: target.connection_generation,
             },
         )
-        .map_err(|message| invalid_params(&message))?;
+        .map_err(errors::target_selector_rpc_error)?;
         match matches.as_slice() {
             [target] => Ok((*target).clone()),
             [] => Err(not_found("target selector", selector)),
@@ -2823,13 +2823,13 @@ impl DebuggerService {
                 generation: connection.generation,
             },
         )
-        .map_err(|message| invalid_params(&message))?
+        .map_err(errors::target_selector_rpc_error)?
         .into_iter()
         .map(|target| target.target_id.clone())
         .collect::<Vec<_>>();
         match matches.as_slice() {
             [target_id] => Ok(target_id.clone()),
-            [] => Err(not_found("target selector", selector)),
+            [] => Err(TargetError::TargetNotFound { target_id: selector.to_owned() }.into()),
             _ => Err(invalid_params(&format!(
                 "target selector '{selector}' is ambiguous across {} targets. Qualified candidates: {}",
                 matches.len(),
@@ -5340,17 +5340,17 @@ where
 async fn finish_heap_streamed_call<T>(
     ctx: &CallCtx,
     outcome: HeapStreamOutcome<T>,
-) -> Result<T, JsonRpcError> {
+) -> Result<T, HeapProfilerError> {
     if outcome.cancellation.is_some() || ctx.is_cancelled() {
         let reason = match outcome.cancellation {
             Some(reason) => reason,
             None => ctx.cancelled().await,
         };
-        return Err(cancelled_heap_call(reason));
+        return Err(cancelled_heap_call(reason).into());
     }
-    let result = outcome.result.map_err(target_debugger_rpc_error)?;
+    let result = outcome.result.map_err(HeapProfilerError::from)?;
     if let Some(error) = outcome.delivery_error {
-        return Err(error);
+        return Err(error.into());
     }
     Ok(result)
 }
@@ -6555,7 +6555,7 @@ mod tests {
             if baseline.starts_with("other-") {
                 assert!(
                     error
-                        .message
+                        .to_string()
                         .contains("same target and connection generation"),
                     "{error:?}"
                 );
@@ -7011,7 +7011,7 @@ mod tests {
         service.capture_storage.continue_remove();
         let deletion_error = deletion.await.unwrap().unwrap_err();
         assert!(
-            deletion_error.message.contains("retryable reservation"),
+            deletion_error.to_string().contains("retryable reservation"),
             "{deletion_error:?}"
         );
         {
@@ -7300,7 +7300,7 @@ mod tests {
             .unwrap_err();
         assert!(
             error
-                .message
+                .to_string()
                 .contains("failed to persist debugger context state"),
             "{error:?}"
         );
@@ -7369,7 +7369,7 @@ mod tests {
             .unwrap_err();
         assert!(
             error
-                .message
+                .to_string()
                 .contains("capture 'blocked' was removed from the catalog"),
             "{error:?}"
         );
@@ -8037,11 +8037,15 @@ mod tests {
                     TargetAttachOptions::default(),
                 )
                 .await
-                .unwrap_err(),
+                .unwrap_err().into(),
         ];
         for error in errors {
-            assert!(error.message.contains("target selector"), "{error:?}");
-            assert!(error.message.contains(selector), "{error:?}");
+            assert!(matches!(
+                error,
+                TargetError::StaleConnection {
+                    selector: actual, generation: 1, current_generation: 2, ..
+                } if actual == selector
+            ));
         }
     }
 
@@ -8626,10 +8630,10 @@ mod tests {
             .unwrap_err();
         assert!(
             guarded
-                .message
+                .to_string()
                 .contains("exclusively owned by an active relay"),
             "{}",
-            guarded.message
+            guarded
         );
 
         // `attach_target_internal` reaches the ordinary "connection is not connected" failure

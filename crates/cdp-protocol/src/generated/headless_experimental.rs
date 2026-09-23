@@ -25,21 +25,21 @@ pub trait HeadlessExperimentalService {
         interval: Option<f64>,
         #[serde(rename = "noDisplayUpdates")] no_display_updates: Option<bool>,
         screenshot: Option<super::types::HeadlessExperimentalScreenshotParams>,
-    ) -> Result<super::types::HeadlessExperimentalBeginFrameResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::HeadlessExperimentalBeginFrameResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_time_ticks, interval, no_display_updates, screenshot,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "beginFrame"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "beginFrame")))
     }
     /// Disables headless events for the target.
     #[name("disable")]
-    async fn disable() -> Result<super::types::HeadlessExperimentalDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::HeadlessExperimentalDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables headless events for the target.
     #[name("enable")]
-    async fn enable() -> Result<super::types::HeadlessExperimentalEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::HeadlessExperimentalEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
 }
 

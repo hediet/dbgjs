@@ -7,11 +7,12 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { promisify } from "node:util";
-import { ErrorCode, RpcError } from "@hediet/linkrpc";
+import { ErrorCode, isRpcFailure, RpcError } from "@hediet/linkrpc";
 import { parseEndpointFile } from "../daemonClient.js";
 import { connectDaemon, type DaemonConnection } from "../daemonTransport.js";
 import { DbgServiceClient } from "../dbgServiceClient.js";
-import { HeapProfilerApi } from "../generated/interfaces.js";
+import { CaptureApi, HeapProfilerApi, TargetDebuggerApi } from "../generated/interfaces.js";
+import { unwrapRpcResult } from "../rpcResult.js";
 
 const execute = promisify(execFile);
 type Progress = typeof HeapProfilerApi.members.capture_heap_snapshot._serverStream;
@@ -69,21 +70,55 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		await client.contexts.connect_connection({
 			connectionRef: { contextId: scope.contextId, connectionId: scope.connectionId },
 		});
-		await client.targets.attach_target({ targetRef, options: { force: false, expectedConnectionGeneration: null } });
+		unwrapRpcResult(await client.targets.attach_target({
+			targetRef, options: { force: false, expectedConnectionGeneration: null },
+		}));
+
+		const missingContext = await client.captures.list_captures({ contextId: "missing-live-context" });
+		assert.ok(isRpcFailure(missingContext));
+		const contextNotFound = CaptureApi.members.list_captures.errors.find(error => error.type === "ContextNotFound");
+		assert.ok(contextNotFound);
+		assert.ok(contextNotFound.is(missingContext));
+		assert.equal(missingContext.error.code, 1);
+		assert.equal(missingContext.error.data.context_id, "missing-live-context");
+		assert.equal(missingContext.error.message, "context 'missing-live-context' does not exist");
+
+		const stalePause = await client.targets.resume_target({ targetRef, pauseEpoch: 999 });
+		assert.ok(isRpcFailure(stalePause));
+		const stalePauseError = TargetDebuggerApi.members.resume_target.errors.find(error => error.type === "StalePause");
+		assert.ok(stalePauseError);
+		assert.ok(stalePauseError.is(stalePause));
+		assert.equal(stalePause.error.code, 1);
+		assert.equal(stalePause.error.data.pause_epoch, 999);
+		assert.equal(stalePause.error.message, "pause epoch 999 is stale");
 
 		const parameters = {
 			targetRef, captureId: "typescript", captureNumericValue: false, exposeInternals: false,
 		};
 		const messages: Progress[] = [];
 		const call = client.heap.capture_heap_snapshot(parameters, { onMessage: message => messages.push(message) });
-		const result = await call;
+		const result = unwrapRpcResult(await call);
 		assert.ok(messages.length > 1, "progress arrives before the final response");
 		assert.equal(messages[0]?.bytesWritten, 0, "a new capture does not replay stale progress");
 		assert.equal(messages.at(-1)?.finished, true);
 		assert.equal(messages.at(-1)?.bytesWritten, result.bytesWritten);
 		assert.ok(result.bytesWritten > 0);
 		assert.ok(!wire.some(message => message.includes("::get_heap_snapshot_progress")));
-		assert.deepEqual(await client.heap.get_heap_snapshot_progress({ targetRef }), messages.at(-1));
+		assert.deepEqual(unwrapRpcResult(await client.heap.get_heap_snapshot_progress({ targetRef })), messages.at(-1));
+
+		const missingTarget = { ...targetRef, targetId: "missing-live-heap-target" };
+		const failedProgress: Progress[] = [];
+		const failedCall = client.heap.capture_heap_snapshot({
+			...parameters, targetRef: missingTarget,
+		}, { onMessage: message => failedProgress.push(message) });
+		const failure = await failedCall;
+		assert.ok(isRpcFailure(failure));
+		assert.equal(failure.error.code, 1);
+		assert.ok(HeapProfilerApi.members.capture_heap_snapshot.errors.some(error => error.is(failure)));
+		assert.match(failure.error.message, /missing-live-heap-target/);
+		assert.throws(() => unwrapRpcResult(failure), error =>
+			error instanceof Error && error.message === failure.error.message && error.cause === failure);
+		assert.deepEqual(failedProgress, []);
 
 		let firstProgress!: () => void;
 		const observed = new Promise<void>(resolve => { firstProgress = resolve; });
@@ -115,10 +150,10 @@ test("generated TS streams real heap progress from the Rust daemon and CLI", { t
 		// A new command must work after cancelled/orphaned CDP operations drain their chunks.
 		for (const captureId of ["cancelled", "disconnected"]) {
 			const recovered: Progress[] = [];
-			const recovery = await client.heap.capture_heap_snapshot(
+			const recovery = unwrapRpcResult(await client.heap.capture_heap_snapshot(
 				{ ...parameters, captureId },
 				{ onMessage: message => recovered.push(message) },
-			);
+			));
 			assert.equal(recovered[0]?.bytesWritten, 0);
 			assert.equal(recovered.at(-1)?.bytesWritten, recovery.bytesWritten);
 			assert.equal(recovered.at(-1)?.finished, true);

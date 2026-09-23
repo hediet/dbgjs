@@ -16,15 +16,15 @@
 pub trait InspectorService {
     /// Disables inspector domain notifications.
     #[name("disable")]
-    async fn disable() -> Result<super::types::InspectorDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::InspectorDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables inspector domain notifications.
     #[name("enable")]
-    async fn enable() -> Result<super::types::InspectorEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::InspectorEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
 }
 

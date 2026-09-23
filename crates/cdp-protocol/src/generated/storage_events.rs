@@ -22,7 +22,7 @@ pub trait StorageEventsService {
         #[serde(rename = "storageKey")] storage_key: String,
         #[serde(rename = "bucketId")] bucket_id: String,
         #[serde(rename = "cacheName")] cache_name: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, storage_key, bucket_id, cache_name,);
         Ok(())
     }
@@ -33,7 +33,7 @@ pub trait StorageEventsService {
         origin: String,
         #[serde(rename = "storageKey")] storage_key: String,
         #[serde(rename = "bucketId")] bucket_id: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, storage_key, bucket_id,);
         Ok(())
     }
@@ -46,7 +46,7 @@ pub trait StorageEventsService {
         #[serde(rename = "bucketId")] bucket_id: String,
         #[serde(rename = "databaseName")] database_name: String,
         #[serde(rename = "objectStoreName")] object_store_name: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, storage_key, bucket_id, database_name, object_store_name,);
         Ok(())
     }
@@ -57,7 +57,7 @@ pub trait StorageEventsService {
         origin: String,
         #[serde(rename = "storageKey")] storage_key: String,
         #[serde(rename = "bucketId")] bucket_id: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, storage_key, bucket_id,);
         Ok(())
     }
@@ -73,7 +73,7 @@ pub trait StorageEventsService {
         #[serde(rename = "ownerOrigin")] owner_origin: String,
         #[serde(rename = "ownerSite")] owner_site: String,
         params: super::types::StorageSharedStorageAccessParams,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, access_time, scope, method, main_frame_id, owner_origin, owner_site, params,);
         Ok(())
     }
@@ -89,19 +89,19 @@ pub trait StorageEventsService {
         #[serde(rename = "workletTargetId")] worklet_target_id: super::types::TargetTargetId,
         #[serde(rename = "mainFrameId")] main_frame_id: super::types::PageFrameId,
         #[serde(rename = "ownerOrigin")] owner_origin: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, finished_time, execution_time, method, operation_id, worklet_target_id, main_frame_id, owner_origin,);
         Ok(())
     }
     #[name("storageBucketCreatedOrUpdated")]
     #[notification]
-    async fn storage_bucket_created_or_updated(#[serde(rename = "bucketInfo")] bucket_info: super::types::StorageStorageBucketInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn storage_bucket_created_or_updated(#[serde(rename = "bucketInfo")] bucket_info: super::types::StorageStorageBucketInfo) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, bucket_info,);
         Ok(())
     }
     #[name("storageBucketDeleted")]
     #[notification]
-    async fn storage_bucket_deleted(#[serde(rename = "bucketId")] bucket_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn storage_bucket_deleted(#[serde(rename = "bucketId")] bucket_id: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, bucket_id,);
         Ok(())
     }

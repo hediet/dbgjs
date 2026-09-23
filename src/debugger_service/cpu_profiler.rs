@@ -7,7 +7,7 @@ impl CpuProfilerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         sampling_interval_micros: Option<u64>,
-    ) -> Result<bool, JsonRpcError> {
+    ) -> Result<bool, CpuProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -20,7 +20,7 @@ impl CpuProfilerApi for DebuggerService {
             .await?
             .start_cpu_profile(sampling_interval_micros)
             .await
-            .map_err(target_debugger_rpc_error)?;
+            .map_err(CpuProfilerError::from)?;
         Ok(true)
     }
 
@@ -29,7 +29,7 @@ impl CpuProfilerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         capture_id: Option<String>,
-    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+    ) -> Result<CpuProfileSnapshot, CpuProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -52,7 +52,7 @@ impl CpuProfilerApi for DebuggerService {
             let CapturePayload::CpuProfile(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             return Ok(snapshot);
         }
@@ -87,14 +87,14 @@ impl CpuProfilerApi for DebuggerService {
             let CapturePayload::CpuProfile(snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             return Ok(snapshot);
         }
         let snapshot = match debugger
             .stop_cpu_profile(Some(name.clone()))
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(CpuProfilerError::from)
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -122,7 +122,7 @@ impl CpuProfilerApi for DebuggerService {
         source_path: Option<String>,
         no_cache: bool,
         project: bool,
-    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+    ) -> Result<CpuProfileSnapshot, CpuProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -135,6 +135,6 @@ impl CpuProfilerApi for DebuggerService {
             .await?
             .get_cpu_profile(capture_id, source_path, no_cache, project)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(CpuProfilerError::from)
     }
 }

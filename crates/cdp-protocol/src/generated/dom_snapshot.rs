@@ -26,21 +26,21 @@ pub trait DOMSnapshotService {
         #[serde(rename = "includeDOMRects")] include_domrects: Option<bool>,
         #[serde(rename = "includeBlendedBackgroundColors")] include_blended_background_colors: Option<bool>,
         #[serde(rename = "includeTextColorOpacities")] include_text_color_opacities: Option<bool>,
-    ) -> Result<super::types::DomsnapshotCaptureSnapshotResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomsnapshotCaptureSnapshotResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, computed_styles, include_paint_order, include_domrects, include_blended_background_colors, include_text_color_opacities,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureSnapshot"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "captureSnapshot")))
     }
     /// Disables DOM snapshot agent for the given page.
     #[name("disable")]
-    async fn disable() -> Result<super::types::DomsnapshotDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::DomsnapshotDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables DOM snapshot agent for the given page.
     #[name("enable")]
-    async fn enable() -> Result<super::types::DomsnapshotEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::DomsnapshotEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Returns a document snapshot, including the full DOM tree of the root node (including iframes,
     /// template contents, and imported documents) in a flattened array, as well as layout and
@@ -52,9 +52,9 @@ pub trait DOMSnapshotService {
         #[serde(rename = "includeEventListeners")] include_event_listeners: Option<bool>,
         #[serde(rename = "includePaintOrder")] include_paint_order: Option<bool>,
         #[serde(rename = "includeUserAgentShadowTree")] include_user_agent_shadow_tree: Option<bool>,
-    ) -> Result<super::types::DomsnapshotGetSnapshotResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomsnapshotGetSnapshotResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, computed_style_whitelist, include_event_listeners, include_paint_order, include_user_agent_shadow_tree,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSnapshot"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSnapshot")))
     }
 }
 

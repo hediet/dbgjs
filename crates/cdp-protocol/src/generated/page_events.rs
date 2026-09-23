@@ -26,7 +26,7 @@ pub trait PageEventsService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "notRestoredExplanations")] not_restored_explanations: Vec<super::types::PageBackForwardCacheNotRestoredExplanation>,
         #[serde(rename = "notRestoredExplanationsTree")] not_restored_explanations_tree: Option<super::types::PageBackForwardCacheNotRestoredExplanationTree>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, loader_id, frame_id, not_restored_explanations, not_restored_explanations_tree,);
         Ok(())
     }
@@ -36,20 +36,20 @@ pub trait PageEventsService {
     async fn compilation_cache_produced(
         url: String,
         data: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url, data,);
         Ok(())
     }
     /// Fired when opening document to write to.
     #[name("documentOpened")]
     #[notification]
-    async fn document_opened(frame: super::types::PageFrame) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn document_opened(frame: super::types::PageFrame) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame,);
         Ok(())
     }
     #[name("domContentEventFired")]
     #[notification]
-    async fn dom_content_event_fired(timestamp: super::types::NetworkMonotonicTime) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn dom_content_event_fired(timestamp: super::types::NetworkMonotonicTime) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, timestamp,);
         Ok(())
     }
@@ -57,7 +57,7 @@ pub trait PageEventsService {
     /// Deprecated. Use Browser.downloadProgress instead.
     #[name("downloadProgress")]
     #[notification]
-    async fn download_progress(#[params] params: super::types::PageDownloadProgressParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn download_progress(#[params] params: super::types::PageDownloadProgressParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -70,14 +70,14 @@ pub trait PageEventsService {
         guid: String,
         url: String,
         #[serde(rename = "suggestedFilename")] suggested_filename: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, guid, url, suggested_filename,);
         Ok(())
     }
     /// Emitted only when `page.interceptFileChooser` is enabled.
     #[name("fileChooserOpened")]
     #[notification]
-    async fn file_chooser_opened(#[params] params: super::types::PageFileChooserOpenedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn file_chooser_opened(#[params] params: super::types::PageFileChooserOpenedParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -88,21 +88,21 @@ pub trait PageEventsService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "parentFrameId")] parent_frame_id: super::types::PageFrameId,
         stack: Option<super::types::RuntimeStackTrace>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, parent_frame_id, stack,);
         Ok(())
     }
     /// Fired when frame no longer has a scheduled navigation.
     #[name("frameClearedScheduledNavigation")]
     #[notification]
-    async fn frame_cleared_scheduled_navigation(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_cleared_scheduled_navigation(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id,);
         Ok(())
     }
     /// Fired when frame has been detached from its parent.
     #[name("frameDetached")]
     #[notification]
-    async fn frame_detached(#[params] params: super::types::PageFrameDetachedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_detached(#[params] params: super::types::PageFrameDetachedParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -112,7 +112,7 @@ pub trait PageEventsService {
     async fn frame_navigated(
         frame: super::types::PageFrame,
         r#type: super::types::PageNavigationType,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame, r#type,);
         Ok(())
     }
@@ -125,13 +125,13 @@ pub trait PageEventsService {
         reason: super::types::PageClientNavigationReason,
         url: String,
         disposition: super::types::PageClientNavigationDisposition,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, reason, url, disposition,);
         Ok(())
     }
     #[name("frameResized")]
     #[notification]
-    async fn frame_resized() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_resized() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -143,14 +143,14 @@ pub trait PageEventsService {
         delay: f64,
         reason: super::types::PageClientNavigationReason,
         url: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, delay, reason, url,);
         Ok(())
     }
     /// Fired when frame has started loading.
     #[name("frameStartedLoading")]
     #[notification]
-    async fn frame_started_loading(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_started_loading(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id,);
         Ok(())
     }
@@ -163,14 +163,14 @@ pub trait PageEventsService {
     /// frameset).
     #[name("frameStartedNavigating")]
     #[notification]
-    async fn frame_started_navigating(#[params] params: super::types::PageFrameStartedNavigatingParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_started_navigating(#[params] params: super::types::PageFrameStartedNavigatingParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
     /// Fired when frame has stopped loading.
     #[name("frameStoppedLoading")]
     #[notification]
-    async fn frame_stopped_loading(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_stopped_loading(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id,);
         Ok(())
     }
@@ -178,21 +178,21 @@ pub trait PageEventsService {
     /// subtree is actually detached.
     #[name("frameSubtreeWillBeDetached")]
     #[notification]
-    async fn frame_subtree_will_be_detached(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn frame_subtree_will_be_detached(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id,);
         Ok(())
     }
     /// Fired when interstitial page was hidden
     #[name("interstitialHidden")]
     #[notification]
-    async fn interstitial_hidden() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn interstitial_hidden() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
     /// Fired when interstitial page was shown
     #[name("interstitialShown")]
     #[notification]
-    async fn interstitial_shown() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn interstitial_shown() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -204,7 +204,7 @@ pub trait PageEventsService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         result: bool,
         #[serde(rename = "userInput")] user_input: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, result, user_input,);
         Ok(())
     }
@@ -219,7 +219,7 @@ pub trait PageEventsService {
         r#type: super::types::PageDialogType,
         #[serde(rename = "hasBrowserHandler")] has_browser_handler: bool,
         #[serde(rename = "defaultPrompt")] default_prompt: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url, frame_id, message, r#type, has_browser_handler, default_prompt,);
         Ok(())
     }
@@ -232,20 +232,20 @@ pub trait PageEventsService {
         #[serde(rename = "loaderId")] loader_id: super::types::NetworkLoaderId,
         name: String,
         timestamp: super::types::NetworkMonotonicTime,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, loader_id, name, timestamp,);
         Ok(())
     }
     #[name("loadEventFired")]
     #[notification]
-    async fn load_event_fired(timestamp: super::types::NetworkMonotonicTime) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn load_event_fired(timestamp: super::types::NetworkMonotonicTime) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, timestamp,);
         Ok(())
     }
     /// Fired when same-document navigation happens, e.g. due to history API usage or anchor navigation.
     #[name("navigatedWithinDocument")]
     #[notification]
-    async fn navigated_within_document(#[params] params: super::types::PageNavigatedWithinDocumentParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn navigated_within_document(#[params] params: super::types::PageNavigatedWithinDocumentParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -256,14 +256,14 @@ pub trait PageEventsService {
         data: String,
         metadata: super::types::PageScreencastFrameMetadata,
         #[serde(rename = "sessionId")] session_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, data, metadata, session_id,);
         Ok(())
     }
     /// Fired when the page with currently enabled screencast was shown or hidden `.
     #[name("screencastVisibilityChanged")]
     #[notification]
-    async fn screencast_visibility_changed(visible: bool) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn screencast_visibility_changed(visible: bool) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, visible,);
         Ok(())
     }
@@ -276,7 +276,7 @@ pub trait PageEventsService {
         #[serde(rename = "windowName")] window_name: String,
         #[serde(rename = "windowFeatures")] window_features: Vec<String>,
         #[serde(rename = "userGesture")] user_gesture: bool,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url, window_name, window_features, user_gesture,);
         Ok(())
     }

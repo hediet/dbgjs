@@ -30,9 +30,9 @@ pub trait RuntimeService {
         name: String,
         #[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
         #[serde(rename = "executionContextName")] execution_context_name: Option<String>,
-    ) -> Result<super::types::RuntimeAddBindingResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeAddBindingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, name, execution_context_id, execution_context_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addBinding"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addBinding")))
     }
     /// Add handler to promise with given promise object id.
     #[name("awaitPromise")]
@@ -40,9 +40,9 @@ pub trait RuntimeService {
         #[serde(rename = "promiseObjectId")] promise_object_id: super::types::RuntimeRemoteObjectId,
         #[serde(rename = "returnByValue")] return_by_value: Option<bool>,
         #[serde(rename = "generatePreview")] generate_preview: Option<bool>,
-    ) -> Result<super::types::RuntimeAwaitPromiseResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeAwaitPromiseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, promise_object_id, return_by_value, generate_preview,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "awaitPromise"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "awaitPromise")))
     }
     /// Calls function with given declaration on the given object. Object group of the result is
     /// inherited from the target object.
@@ -61,9 +61,9 @@ pub trait RuntimeService {
         #[serde(rename = "throwOnSideEffect")] throw_on_side_effect: Option<bool>,
         #[serde(rename = "uniqueContextId")] unique_context_id: Option<String>,
         #[serde(rename = "serializationOptions")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
-    ) -> Result<super::types::RuntimeCallFunctionOnResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeCallFunctionOnResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, function_declaration, object_id, arguments, silent, return_by_value, generate_preview, user_gesture, await_promise, execution_context_id, object_group, throw_on_side_effect, unique_context_id, serialization_options,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "callFunctionOn"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "callFunctionOn")))
     }
     /// Compiles expression.
     #[name("compileScript")]
@@ -72,29 +72,29 @@ pub trait RuntimeService {
         #[serde(rename = "sourceURL")] source_url: String,
         #[serde(rename = "persistScript")] persist_script: bool,
         #[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-    ) -> Result<super::types::RuntimeCompileScriptResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeCompileScriptResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, expression, source_url, persist_script, execution_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "compileScript"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "compileScript")))
     }
     /// Disables reporting of execution contexts creation.
     #[name("disable")]
-    async fn disable() -> Result<super::types::RuntimeDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::RuntimeDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Discards collected exceptions and console API calls.
     #[name("discardConsoleEntries")]
-    async fn discard_console_entries() -> Result<super::types::RuntimeDiscardConsoleEntriesResult, linkrpc::prelude::JsonRpcError> {
+    async fn discard_console_entries() -> Result<super::types::RuntimeDiscardConsoleEntriesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "discardConsoleEntries"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "discardConsoleEntries")))
     }
     /// Enables reporting of execution contexts creation by means of `executionContextCreated` event.
     /// When the reporting gets enabled the event will be sent immediately for each existing execution
     /// context.
     #[name("enable")]
-    async fn enable() -> Result<super::types::RuntimeEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::RuntimeEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Evaluates expression on global object.
     #[name("evaluate")]
@@ -115,9 +115,9 @@ pub trait RuntimeService {
         #[serde(rename = "allowUnsafeEvalBlockedByCSP")] allow_unsafe_eval_blocked_by_csp: Option<bool>,
         #[serde(rename = "uniqueContextId")] unique_context_id: Option<String>,
         #[serde(rename = "serializationOptions")] serialization_options: Option<super::types::RuntimeSerializationOptions>,
-    ) -> Result<super::types::RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeEvaluateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, expression, object_group, include_command_line_api, silent, context_id, return_by_value, generate_preview, user_gesture, await_promise, throw_on_side_effect, timeout, disable_breaks, repl_mode, allow_unsafe_eval_blocked_by_csp, unique_context_id, serialization_options,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate")))
     }
     /// This method tries to lookup and populate exception details for a
     /// JavaScript Error object.
@@ -125,22 +125,22 @@ pub trait RuntimeService {
     /// only be populated if the Runtime domain was enabled at the time when the
     /// Error was thrown.
     #[name("getExceptionDetails")]
-    async fn get_exception_details(#[serde(rename = "errorObjectId")] error_object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::RuntimeGetExceptionDetailsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_exception_details(#[serde(rename = "errorObjectId")] error_object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::RuntimeGetExceptionDetailsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, error_object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getExceptionDetails"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getExceptionDetails")))
     }
     /// Returns the JavaScript heap usage.
     /// It is the total usage of the corresponding isolate not scoped to a particular Runtime.
     #[name("getHeapUsage")]
-    async fn get_heap_usage() -> Result<super::types::RuntimeGetHeapUsageResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_heap_usage() -> Result<super::types::RuntimeGetHeapUsageResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHeapUsage"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHeapUsage")))
     }
     /// Returns the isolate id.
     #[name("getIsolateId")]
-    async fn get_isolate_id() -> Result<super::types::RuntimeGetIsolateIdResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_isolate_id() -> Result<super::types::RuntimeGetIsolateIdResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getIsolateId"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getIsolateId")))
     }
     /// Returns properties of a given object. Object group of the result is inherited from the target
     /// object.
@@ -151,48 +151,48 @@ pub trait RuntimeService {
         #[serde(rename = "accessorPropertiesOnly")] accessor_properties_only: Option<bool>,
         #[serde(rename = "generatePreview")] generate_preview: Option<bool>,
         #[serde(rename = "nonIndexedPropertiesOnly")] non_indexed_properties_only: Option<bool>,
-    ) -> Result<super::types::RuntimeGetPropertiesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeGetPropertiesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id, own_properties, accessor_properties_only, generate_preview, non_indexed_properties_only,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getProperties"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getProperties")))
     }
     /// Returns all let, const and class variables from global scope.
     #[name("globalLexicalScopeNames")]
-    async fn global_lexical_scope_names(#[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>) -> Result<super::types::RuntimeGlobalLexicalScopeNamesResult, linkrpc::prelude::JsonRpcError> {
+    async fn global_lexical_scope_names(#[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>) -> Result<super::types::RuntimeGlobalLexicalScopeNamesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, execution_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "globalLexicalScopeNames"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "globalLexicalScopeNames")))
     }
     #[name("queryObjects")]
     async fn query_objects(
         #[serde(rename = "prototypeObjectId")] prototype_object_id: super::types::RuntimeRemoteObjectId,
         #[serde(rename = "objectGroup")] object_group: Option<String>,
-    ) -> Result<super::types::RuntimeQueryObjectsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeQueryObjectsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, prototype_object_id, object_group,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "queryObjects"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "queryObjects")))
     }
     /// Releases remote object with given id.
     #[name("releaseObject")]
-    async fn release_object(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::RuntimeReleaseObjectResult, linkrpc::prelude::JsonRpcError> {
+    async fn release_object(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::RuntimeReleaseObjectResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseObject"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseObject")))
     }
     /// Releases all remote objects that belong to a given group.
     #[name("releaseObjectGroup")]
-    async fn release_object_group(#[serde(rename = "objectGroup")] object_group: String) -> Result<super::types::RuntimeReleaseObjectGroupResult, linkrpc::prelude::JsonRpcError> {
+    async fn release_object_group(#[serde(rename = "objectGroup")] object_group: String) -> Result<super::types::RuntimeReleaseObjectGroupResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_group,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseObjectGroup"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "releaseObjectGroup")))
     }
     /// This method does not remove binding function from global object but
     /// unsubscribes current runtime agent from Runtime.bindingCalled notifications.
     #[name("removeBinding")]
-    async fn remove_binding(name: String) -> Result<super::types::RuntimeRemoveBindingResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_binding(name: String) -> Result<super::types::RuntimeRemoveBindingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeBinding"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeBinding")))
     }
     /// Tells inspected instance to run if it was waiting for debugger to attach.
     #[name("runIfWaitingForDebugger")]
-    async fn run_if_waiting_for_debugger() -> Result<super::types::RuntimeRunIfWaitingForDebuggerResult, linkrpc::prelude::JsonRpcError> {
+    async fn run_if_waiting_for_debugger() -> Result<super::types::RuntimeRunIfWaitingForDebuggerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runIfWaitingForDebugger"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runIfWaitingForDebugger")))
     }
     /// Runs script with given id in a given context.
     #[name("runScript")]
@@ -205,32 +205,32 @@ pub trait RuntimeService {
         #[serde(rename = "returnByValue")] return_by_value: Option<bool>,
         #[serde(rename = "generatePreview")] generate_preview: Option<bool>,
         #[serde(rename = "awaitPromise")] await_promise: Option<bool>,
-    ) -> Result<super::types::RuntimeRunScriptResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::RuntimeRunScriptResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, script_id, execution_context_id, object_group, silent, include_command_line_api, return_by_value, generate_preview, await_promise,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runScript"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "runScript")))
     }
     /// Enables or disables async call stacks tracking.
     #[name("setAsyncCallStackDepth")]
-    async fn set_async_call_stack_depth(#[serde(rename = "maxDepth")] max_depth: i64) -> Result<super::types::RuntimeSetAsyncCallStackDepthResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_async_call_stack_depth(#[serde(rename = "maxDepth")] max_depth: i64) -> Result<super::types::RuntimeSetAsyncCallStackDepthResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, max_depth,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAsyncCallStackDepth"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAsyncCallStackDepth")))
     }
     #[name("setCustomObjectFormatterEnabled")]
-    async fn set_custom_object_formatter_enabled(enabled: bool) -> Result<super::types::RuntimeSetCustomObjectFormatterEnabledResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_custom_object_formatter_enabled(enabled: bool) -> Result<super::types::RuntimeSetCustomObjectFormatterEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enabled,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCustomObjectFormatterEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setCustomObjectFormatterEnabled")))
     }
     #[name("setMaxCallStackSizeToCapture")]
-    async fn set_max_call_stack_size_to_capture(size: i64) -> Result<super::types::RuntimeSetMaxCallStackSizeToCaptureResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_max_call_stack_size_to_capture(size: i64) -> Result<super::types::RuntimeSetMaxCallStackSizeToCaptureResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, size,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setMaxCallStackSizeToCapture"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setMaxCallStackSizeToCapture")))
     }
     /// Terminate current or next JavaScript execution.
     /// Will cancel the termination when the outer-most script execution ends.
     #[name("terminateExecution")]
-    async fn terminate_execution() -> Result<super::types::RuntimeTerminateExecutionResult, linkrpc::prelude::JsonRpcError> {
+    async fn terminate_execution() -> Result<super::types::RuntimeTerminateExecutionResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "terminateExecution"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "terminateExecution")))
     }
 }
 

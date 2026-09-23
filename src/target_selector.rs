@@ -13,12 +13,25 @@ pub struct TargetSelectorCandidate<'a> {
     pub generation: u64,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TargetSelectorError {
+    #[error("target selector '{selector}' did not match a discovered target; target discovery may be incomplete")]
+    NotFound { selector: String },
+    #[error("target selector '{selector}' has stale connection generation {generation}; connection '{connection_id}' is at generation {current_generation}")]
+    StaleGeneration {
+        selector: String,
+        connection_id: String,
+        generation: u64,
+        current_generation: u64,
+    },
+}
+
 pub fn select_target_matches<'a, T>(
     targets: &'a [T],
     connections: impl IntoIterator<Item = (&'a str, u64)>,
     selector: Option<&str>,
     candidate: impl Fn(&'a T) -> TargetSelectorCandidate<'a>,
-) -> Result<Vec<&'a T>, String> {
+) -> Result<Vec<&'a T>, TargetSelectorError> {
     let Some(selector) = selector else {
         return Ok(targets.iter().collect());
     };
@@ -59,9 +72,12 @@ pub fn select_target_matches<'a, T>(
             && let Ok(generation) = generation.parse::<u64>()
             && generation != current_generation
         {
-            return Err(format!(
-                "target selector '{selector}' has stale connection generation {generation}; connection '{connection_id}' is at generation {current_generation}",
-            ));
+            return Err(TargetSelectorError::StaleGeneration {
+                selector: selector.to_owned(),
+                connection_id: connection_id.to_owned(),
+                generation,
+                current_generation,
+            });
         }
         return Err(target_selector_not_found(selector));
     }
@@ -75,10 +91,8 @@ pub fn select_target_matches<'a, T>(
     Ok(ranked.into_iter().map(|(_, item)| item).collect())
 }
 
-fn target_selector_not_found(selector: &str) -> String {
-    format!(
-        "target selector '{selector}' did not match a discovered target; target discovery may be incomplete"
-    )
+fn target_selector_not_found(selector: &str) -> TargetSelectorError {
+    TargetSelectorError::NotFound { selector: selector.to_owned() }
 }
 
 pub fn qualified_target_selector(connection_id: &str, target_id: &str, generation: u64) -> String {

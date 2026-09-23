@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use linkrpc::connection::channel::{Channel, RequestHandler};
 use linkrpc::prelude::{
-    CallCtx, InterfaceHandler, JsonRpcError, MessageTransport, TransportError, error_codes,
+    CallCtx, InterfaceHandler, JsonRpcError, MessageTransport, RpcCallError, TransportError, error_codes,
 };
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
@@ -768,7 +768,7 @@ impl VirtualRootState {
 
 #[async_trait]
 impl crate::cdp::browser::BrowserService for VirtualRootState {
-    async fn get_version(&self, _ctx: &CallCtx) -> Result<BrowserGetVersionResult, JsonRpcError> {
+    async fn get_version(&self, _ctx: &CallCtx) -> Result<BrowserGetVersionResult, RpcCallError> {
         Ok(BrowserGetVersionResult {
             protocol_version: "1.3".to_owned(),
             product: self.source.product(),
@@ -785,7 +785,7 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         &self,
         _ctx: &CallCtx,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetGetTargetsResult, JsonRpcError> {
+    ) -> Result<TargetGetTargetsResult, RpcCallError> {
         let targets = self.refresh_known().await;
         Ok(TargetGetTargetsResult {
             target_infos: targets
@@ -800,7 +800,7 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         _ctx: &CallCtx,
         discover: bool,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetSetDiscoverTargetsResult, JsonRpcError> {
+    ) -> Result<TargetSetDiscoverTargetsResult, RpcCallError> {
         let was_enabled = self.discover.swap(discover, Ordering::Relaxed);
         self.sync_discovery_demand().await;
         if discover && !was_enabled {
@@ -822,7 +822,7 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         wait_for_debugger_on_start: bool,
         _flatten: Option<bool>,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetSetAutoAttachResult, JsonRpcError> {
+    ) -> Result<TargetSetAutoAttachResult, RpcCallError> {
         let was_enabled = self.auto_attach.swap(auto_attach, Ordering::Relaxed);
         self.sync_discovery_demand().await;
         self.source
@@ -844,8 +844,11 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         target_id: TargetTargetId,
         _flatten: Option<bool>,
         _dbgjs_auto_attach: Option<bool>,
-    ) -> Result<TargetAttachToTargetResult, JsonRpcError> {
-        let attached = self.attach_target(&target_id, false).await?;
+    ) -> Result<TargetAttachToTargetResult, RpcCallError> {
+        let attached = self
+            .attach_target(&target_id, false)
+            .await
+            .map_err(RpcCallError::Local)?;
         Ok(TargetAttachToTargetResult {
             session_id: attached.session_id,
         })
@@ -856,7 +859,7 @@ impl crate::cdp::target::TargetService for VirtualRootState {
         _ctx: &CallCtx,
         session_id: Option<TargetSessionId>,
         target_id: Option<TargetTargetId>,
-    ) -> Result<TargetDetachFromTargetResult, JsonRpcError> {
+    ) -> Result<TargetDetachFromTargetResult, RpcCallError> {
         self.detach(session_id.as_deref(), target_id.as_deref())
             .await;
         Ok(TargetDetachFromTargetResult::new())

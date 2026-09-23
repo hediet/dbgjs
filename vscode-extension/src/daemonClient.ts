@@ -19,6 +19,7 @@ import {
 } from "./apiTypes.js";
 import { connectDaemon, type DaemonConnection } from "./daemonTransport.js";
 import { DbgServiceClient } from "./dbgServiceClient.js";
+import { unwrapRpcResult } from "./rpcResult.js";
 
 export class DaemonClient {
 	private constructor(
@@ -125,9 +126,9 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.targets.get_target({
+		return unwrapRpcResult(await this._service.targets.get_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
-		});
+		}));
 	}
 
 	public async attachTarget(
@@ -136,13 +137,13 @@ export class DaemonClient {
 		targetId: string,
 		expectedConnectionGeneration: number,
 	): Promise<TargetDebuggerSnapshot> {
-		const result = await this._service.targets.attach_target({
+		const result = unwrapRpcResult(await this._service.targets.attach_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			options: {
 				force: false,
 				expectedConnectionGeneration,
 			},
-		});
+		}));
 		return result.target;
 	}
 
@@ -153,11 +154,11 @@ export class DaemonClient {
 		predicate: TargetWaitPredicate,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.targets.wait_target({
+		return unwrapRpcResult(await this._service.targets.wait_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			predicate,
 			timeoutMs,
-		});
+		}));
 	}
 
 	public async observeTarget(
@@ -167,11 +168,11 @@ export class DaemonClient {
 		afterRevision: number,
 		timeoutMs: number,
 	): Promise<TargetDebuggerSnapshot | undefined> {
-		const result = await this._service.targets.observe_target({
+		const result = unwrapRpcResult(await this._service.targets.observe_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			afterRevision,
 			timeoutMs,
-		});
+		}));
 		return result ?? undefined;
 	}
 
@@ -180,9 +181,9 @@ export class DaemonClient {
 		connectionId: string,
 		targetId: string,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.targets.release_target({
+		return unwrapRpcResult(await this._service.targets.release_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
-		});
+		}));
 	}
 
 	public async resumeTarget(
@@ -191,10 +192,10 @@ export class DaemonClient {
 		targetId: string,
 		pauseEpoch: number,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.targets.resume_target({
+		return unwrapRpcResult(await this._service.targets.resume_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
-		});
+		}));
 	}
 
 	public async stepTarget(
@@ -204,11 +205,11 @@ export class DaemonClient {
 		pauseEpoch: number,
 		kind: StepKind,
 	): Promise<TargetDebuggerSnapshot> {
-		return this._service.targets.step_target({
+		return unwrapRpcResult(await this._service.targets.step_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
 			kind,
-		});
+		}));
 	}
 
 	public async evaluateTarget(
@@ -219,12 +220,12 @@ export class DaemonClient {
 		frameIndex: number,
 		expression: string,
 	): Promise<EvaluationSnapshot> {
-		return this._service.targets.evaluate_target({
+		return unwrapRpcResult(await this._service.targets.evaluate_target({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch: pauseEpoch ?? null,
 			frameIndex,
 			expression,
-		});
+		}));
 	}
 
 	public async getScopeVariables(
@@ -235,12 +236,12 @@ export class DaemonClient {
 		frameIndex: number,
 		scopeIndex: number,
 	): Promise<readonly VariableSnapshot[]> {
-		return this._service.targets.get_scope_variables({
+		return unwrapRpcResult(await this._service.targets.get_scope_variables({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch,
 			frameIndex,
 			scopeIndex,
-		});
+		}));
 	}
 
 	public async getObjectProperties(
@@ -250,11 +251,11 @@ export class DaemonClient {
 		pauseEpoch: number | undefined,
 		objectId: string,
 	): Promise<readonly VariableSnapshot[]> {
-		return this._service.targets.get_object_properties({
+		return unwrapRpcResult(await this._service.targets.get_object_properties({
 			targetRef: { connection: { contextId, connectionId }, targetId },
 			pauseEpoch: pauseEpoch ?? null,
 			objectId,
-		});
+		}));
 	}
 
 	public async putBreakpoint(

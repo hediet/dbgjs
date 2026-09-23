@@ -20,7 +20,7 @@ pub trait PerformanceEventsService {
     async fn metrics(
         metrics: Vec<super::types::PerformanceMetric>,
         title: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, metrics, title,);
         Ok(())
     }

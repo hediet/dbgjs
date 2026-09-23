@@ -8,7 +8,7 @@ pub trait HeapProfilerApi {
         path: String,
         capture_numeric_value: bool,
         expose_internals: bool,
-    ) -> Result<HeapSnapshotResult, JsonRpcError>;
+    ) -> Result<HeapSnapshotResult, HeapProfilerError>;
 
     #[output_stream(HeapSnapshotProgress)]
     async fn capture_heap_snapshot(
@@ -16,14 +16,14 @@ pub trait HeapProfilerApi {
         capture_id: Option<String>,
         capture_numeric_value: bool,
         expose_internals: bool,
-    ) -> Result<HeapCaptureResult, JsonRpcError>;
+    ) -> Result<HeapCaptureResult, HeapProfilerError>;
 
     async fn get_heap_classes(
         target_ref: TargetRef,
         capture_id: String,
         filter: Option<String>,
         no_cache: bool,
-    ) -> Result<HeapClassSnapshot, JsonRpcError>;
+    ) -> Result<HeapClassSnapshot, HeapProfilerError>;
 
     async fn select_promises(
         target_ref: TargetRef,
@@ -31,7 +31,7 @@ pub trait HeapProfilerApi {
         state: Option<PromiseState>,
         limit: u32,
         max_preview_length: u32,
-    ) -> Result<PromiseSelectionSnapshot, JsonRpcError>;
+    ) -> Result<PromiseSelectionSnapshot, HeapProfilerError>;
 
     async fn select_heap_nodes(
         target_ref: TargetRef,
@@ -39,7 +39,7 @@ pub trait HeapProfilerApi {
         selector: HeapNodeSelector,
         max_string_length: Option<u32>,
         include_dominators: bool,
-    ) -> Result<HeapNodeSelectionSnapshot, JsonRpcError>;
+    ) -> Result<HeapNodeSelectionSnapshot, HeapProfilerError>;
 
     async fn get_heap_references(
         target_ref: TargetRef,
@@ -48,7 +48,7 @@ pub trait HeapProfilerApi {
         edge_policy: HeapEdgePolicy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapReferencesSnapshot, JsonRpcError>;
+    ) -> Result<HeapReferencesSnapshot, HeapProfilerError>;
 
     async fn get_heap_path(
         target_ref: TargetRef,
@@ -56,13 +56,13 @@ pub trait HeapProfilerApi {
         to: String,
         options: HeapPathOptions,
         max_string_length: Option<u32>,
-    ) -> Result<Option<HeapPathSnapshot>, JsonRpcError>;
+    ) -> Result<Option<HeapPathSnapshot>, HeapProfilerError>;
 
     async fn get_heap_dominator_chain(
         target_ref: TargetRef,
         reference: String,
         max_string_length: Option<u32>,
-    ) -> Result<HeapDominatorSnapshot, JsonRpcError>;
+    ) -> Result<HeapDominatorSnapshot, HeapProfilerError>;
 
     async fn aggregate_heap_snapshot(
         target_ref: TargetRef,
@@ -70,7 +70,7 @@ pub trait HeapProfilerApi {
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapAggregateSnapshot, JsonRpcError>;
+    ) -> Result<HeapAggregateSnapshot, HeapProfilerError>;
 
     async fn diff_heap_snapshots(
         target_ref: TargetRef,
@@ -79,9 +79,9 @@ pub trait HeapProfilerApi {
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapDiffSnapshot, JsonRpcError>;
+    ) -> Result<HeapDiffSnapshot, HeapProfilerError>;
 
     async fn get_heap_snapshot_progress(
         target_ref: TargetRef,
-    ) -> Result<Option<HeapSnapshotProgress>, JsonRpcError>;
+    ) -> Result<Option<HeapSnapshotProgress>, HeapProfilerError>;
 }

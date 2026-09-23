@@ -19,23 +19,23 @@ pub trait ServiceWorkerService {
         origin: String,
         #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
         data: String,
-    ) -> Result<super::types::ServiceWorkerDeliverPushMessageResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ServiceWorkerDeliverPushMessageResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, registration_id, data,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deliverPushMessage"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deliverPushMessage")))
     }
     #[name("disable")]
-    async fn disable() -> Result<super::types::ServiceWorkerDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::ServiceWorkerDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     #[name("dispatchPeriodicSyncEvent")]
     async fn dispatch_periodic_sync_event(
         origin: String,
         #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
         tag: String,
-    ) -> Result<super::types::ServiceWorkerDispatchPeriodicSyncEventResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ServiceWorkerDispatchPeriodicSyncEventResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, registration_id, tag,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchPeriodicSyncEvent"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchPeriodicSyncEvent")))
     }
     #[name("dispatchSyncEvent")]
     async fn dispatch_sync_event(
@@ -43,49 +43,49 @@ pub trait ServiceWorkerService {
         #[serde(rename = "registrationId")] registration_id: super::types::ServiceWorkerRegistrationId,
         tag: String,
         #[serde(rename = "lastChance")] last_chance: bool,
-    ) -> Result<super::types::ServiceWorkerDispatchSyncEventResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ServiceWorkerDispatchSyncEventResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, origin, registration_id, tag, last_chance,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchSyncEvent"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "dispatchSyncEvent")))
     }
     #[name("enable")]
-    async fn enable() -> Result<super::types::ServiceWorkerEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::ServiceWorkerEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     #[name("setForceUpdateOnPageLoad")]
-    async fn set_force_update_on_page_load(#[serde(rename = "forceUpdateOnPageLoad")] force_update_on_page_load: bool) -> Result<super::types::ServiceWorkerSetForceUpdateOnPageLoadResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_force_update_on_page_load(#[serde(rename = "forceUpdateOnPageLoad")] force_update_on_page_load: bool) -> Result<super::types::ServiceWorkerSetForceUpdateOnPageLoadResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, force_update_on_page_load,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setForceUpdateOnPageLoad"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setForceUpdateOnPageLoad")))
     }
     #[name("skipWaiting")]
-    async fn skip_waiting(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerSkipWaitingResult, linkrpc::prelude::JsonRpcError> {
+    async fn skip_waiting(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerSkipWaitingResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scope_url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "skipWaiting"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "skipWaiting")))
     }
     #[name("startWorker")]
-    async fn start_worker(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerStartWorkerResult, linkrpc::prelude::JsonRpcError> {
+    async fn start_worker(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerStartWorkerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scope_url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startWorker"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "startWorker")))
     }
     #[name("stopAllWorkers")]
-    async fn stop_all_workers() -> Result<super::types::ServiceWorkerStopAllWorkersResult, linkrpc::prelude::JsonRpcError> {
+    async fn stop_all_workers() -> Result<super::types::ServiceWorkerStopAllWorkersResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopAllWorkers"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopAllWorkers")))
     }
     #[name("stopWorker")]
-    async fn stop_worker(#[serde(rename = "versionId")] version_id: String) -> Result<super::types::ServiceWorkerStopWorkerResult, linkrpc::prelude::JsonRpcError> {
+    async fn stop_worker(#[serde(rename = "versionId")] version_id: String) -> Result<super::types::ServiceWorkerStopWorkerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, version_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopWorker"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "stopWorker")))
     }
     #[name("unregister")]
-    async fn unregister(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUnregisterResult, linkrpc::prelude::JsonRpcError> {
+    async fn unregister(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUnregisterResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scope_url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unregister"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unregister")))
     }
     #[name("updateRegistration")]
-    async fn update_registration(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUpdateRegistrationResult, linkrpc::prelude::JsonRpcError> {
+    async fn update_registration(#[serde(rename = "scopeURL")] scope_url: String) -> Result<super::types::ServiceWorkerUpdateRegistrationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scope_url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateRegistration"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "updateRegistration")))
     }
 }
 

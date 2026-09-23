@@ -20,7 +20,7 @@ pub trait MediaEventsService {
     /// event for each active player.
     #[name("playerCreated")]
     #[notification]
-    async fn player_created(player: super::types::MediaPlayer) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn player_created(player: super::types::MediaPlayer) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, player,);
         Ok(())
     }
@@ -30,7 +30,7 @@ pub trait MediaEventsService {
     async fn player_errors_raised(
         #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
         errors: Vec<super::types::MediaPlayerError>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, player_id, errors,);
         Ok(())
     }
@@ -41,7 +41,7 @@ pub trait MediaEventsService {
     async fn player_events_added(
         #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
         events: Vec<super::types::MediaPlayerEvent>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, player_id, events,);
         Ok(())
     }
@@ -51,7 +51,7 @@ pub trait MediaEventsService {
     async fn player_messages_logged(
         #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
         messages: Vec<super::types::MediaPlayerMessage>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, player_id, messages,);
         Ok(())
     }
@@ -62,7 +62,7 @@ pub trait MediaEventsService {
     async fn player_properties_changed(
         #[serde(rename = "playerId")] player_id: super::types::MediaPlayerId,
         properties: Vec<super::types::MediaPlayerProperty>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, player_id, properties,);
         Ok(())
     }

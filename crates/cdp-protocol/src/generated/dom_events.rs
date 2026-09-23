@@ -27,7 +27,7 @@ pub trait DOMEventsService {
     async fn ad_related_state_updated(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "adProvenance")] ad_provenance: Option<super::types::NetworkAdProvenance>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, ad_provenance,);
         Ok(())
     }
@@ -37,7 +37,7 @@ pub trait DOMEventsService {
     async fn adopted_style_sheets_modified(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "adoptedStyleSheets")] adopted_style_sheets: Vec<super::types::DomStyleSheetId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, adopted_style_sheets,);
         Ok(())
     }
@@ -47,7 +47,7 @@ pub trait DOMEventsService {
     async fn affected_by_starting_styles_flag_updated(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "affectedByStartingStyles")] affected_by_starting_styles: bool,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, affected_by_starting_styles,);
         Ok(())
     }
@@ -58,7 +58,7 @@ pub trait DOMEventsService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         name: String,
         value: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, name, value,);
         Ok(())
     }
@@ -68,7 +68,7 @@ pub trait DOMEventsService {
     async fn attribute_removed(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         name: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, name,);
         Ok(())
     }
@@ -78,7 +78,7 @@ pub trait DOMEventsService {
     async fn character_data_modified(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "characterData")] character_data: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, character_data,);
         Ok(())
     }
@@ -88,7 +88,7 @@ pub trait DOMEventsService {
     async fn child_node_count_updated(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "childNodeCount")] child_node_count: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, child_node_count,);
         Ok(())
     }
@@ -99,7 +99,7 @@ pub trait DOMEventsService {
         #[serde(rename = "parentNodeId")] parent_node_id: super::types::DomNodeId,
         #[serde(rename = "previousNodeId")] previous_node_id: super::types::DomNodeId,
         node: super::types::DomNode,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, parent_node_id, previous_node_id, node,);
         Ok(())
     }
@@ -109,7 +109,7 @@ pub trait DOMEventsService {
     async fn child_node_removed(
         #[serde(rename = "parentNodeId")] parent_node_id: super::types::DomNodeId,
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, parent_node_id, node_id,);
         Ok(())
     }
@@ -119,21 +119,21 @@ pub trait DOMEventsService {
     async fn distributed_nodes_updated(
         #[serde(rename = "insertionPointId")] insertion_point_id: super::types::DomNodeId,
         #[serde(rename = "distributedNodes")] distributed_nodes: Vec<super::types::DomBackendNode>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, insertion_point_id, distributed_nodes,);
         Ok(())
     }
     /// Fired when `Document` has been totally updated. Node ids are no longer valid.
     #[name("documentUpdated")]
     #[notification]
-    async fn document_updated() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn document_updated() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
     /// Fired when `Element`'s inline style is modified via a CSS property modification.
     #[name("inlineStyleInvalidated")]
     #[notification]
-    async fn inline_style_invalidated(#[serde(rename = "nodeIds")] node_ids: Vec<super::types::DomNodeId>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn inline_style_invalidated(#[serde(rename = "nodeIds")] node_ids: Vec<super::types::DomNodeId>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_ids,);
         Ok(())
     }
@@ -143,7 +143,7 @@ pub trait DOMEventsService {
     async fn pseudo_element_added(
         #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
         #[serde(rename = "pseudoElement")] pseudo_element: super::types::DomNode,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, parent_id, pseudo_element,);
         Ok(())
     }
@@ -153,7 +153,7 @@ pub trait DOMEventsService {
     async fn pseudo_element_removed(
         #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
         #[serde(rename = "pseudoElementId")] pseudo_element_id: super::types::DomNodeId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, parent_id, pseudo_element_id,);
         Ok(())
     }
@@ -163,7 +163,7 @@ pub trait DOMEventsService {
     async fn scrollable_flag_updated(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "isScrollable")] is_scrollable: bool,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, is_scrollable,);
         Ok(())
     }
@@ -174,7 +174,7 @@ pub trait DOMEventsService {
     async fn set_child_nodes(
         #[serde(rename = "parentId")] parent_id: super::types::DomNodeId,
         nodes: Vec<super::types::DomNode>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, parent_id, nodes,);
         Ok(())
     }
@@ -184,7 +184,7 @@ pub trait DOMEventsService {
     async fn shadow_root_popped(
         #[serde(rename = "hostId")] host_id: super::types::DomNodeId,
         #[serde(rename = "rootId")] root_id: super::types::DomNodeId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, host_id, root_id,);
         Ok(())
     }
@@ -194,14 +194,14 @@ pub trait DOMEventsService {
     async fn shadow_root_pushed(
         #[serde(rename = "hostId")] host_id: super::types::DomNodeId,
         root: super::types::DomNode,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, host_id, root,);
         Ok(())
     }
     /// Called when top layer elements are changed.
     #[name("topLayerElementsUpdated")]
     #[notification]
-    async fn top_layer_elements_updated() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn top_layer_elements_updated() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }

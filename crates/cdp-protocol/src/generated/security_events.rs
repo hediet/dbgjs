@@ -24,7 +24,7 @@ pub trait SecurityEventsService {
         #[serde(rename = "eventId")] event_id: i64,
         #[serde(rename = "errorType")] error_type: String,
         #[serde(rename = "requestURL")] request_url: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_id, error_type, request_url,);
         Ok(())
     }
@@ -37,14 +37,14 @@ pub trait SecurityEventsService {
         explanations: Vec<super::types::SecuritySecurityStateExplanation>,
         #[serde(rename = "insecureContentStatus")] insecure_content_status: super::types::SecurityInsecureContentStatus,
         summary: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_state, scheme_is_cryptographic, explanations, insecure_content_status, summary,);
         Ok(())
     }
     /// The security state of the page changed.
     #[name("visibleSecurityStateChanged")]
     #[notification]
-    async fn visible_security_state_changed(#[serde(rename = "visibleSecurityState")] visible_security_state: super::types::SecurityVisibleSecurityState) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn visible_security_state_changed(#[serde(rename = "visibleSecurityState")] visible_security_state: super::types::SecurityVisibleSecurityState) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, visible_security_state,);
         Ok(())
     }

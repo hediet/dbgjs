@@ -16,18 +16,18 @@
 pub trait CacheStorageService {
     /// Deletes a cache.
     #[name("deleteCache")]
-    async fn delete_cache(#[serde(rename = "cacheId")] cache_id: super::types::CacheStorageCacheId) -> Result<super::types::CacheStorageDeleteCacheResult, linkrpc::prelude::JsonRpcError> {
+    async fn delete_cache(#[serde(rename = "cacheId")] cache_id: super::types::CacheStorageCacheId) -> Result<super::types::CacheStorageDeleteCacheResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, cache_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteCache"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteCache")))
     }
     /// Deletes a cache entry.
     #[name("deleteEntry")]
     async fn delete_entry(
         #[serde(rename = "cacheId")] cache_id: super::types::CacheStorageCacheId,
         request: String,
-    ) -> Result<super::types::CacheStorageDeleteEntryResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::CacheStorageDeleteEntryResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, cache_id, request,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteEntry"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteEntry")))
     }
     /// Requests cache names.
     #[name("requestCacheNames")]
@@ -35,9 +35,9 @@ pub trait CacheStorageService {
         #[serde(rename = "securityOrigin")] security_origin: Option<String>,
         #[serde(rename = "storageKey")] storage_key: Option<String>,
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
-    ) -> Result<super::types::CacheStorageRequestCacheNamesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::CacheStorageRequestCacheNamesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestCacheNames"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestCacheNames")))
     }
     /// Fetches cache entry.
     #[name("requestCachedResponse")]
@@ -45,9 +45,9 @@ pub trait CacheStorageService {
         #[serde(rename = "cacheId")] cache_id: super::types::CacheStorageCacheId,
         #[serde(rename = "requestURL")] request_url: String,
         #[serde(rename = "requestHeaders")] request_headers: Vec<super::types::CacheStorageHeader>,
-    ) -> Result<super::types::CacheStorageRequestCachedResponseResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::CacheStorageRequestCachedResponseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, cache_id, request_url, request_headers,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestCachedResponse"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestCachedResponse")))
     }
     /// Requests data from cache.
     #[name("requestEntries")]
@@ -56,9 +56,9 @@ pub trait CacheStorageService {
         #[serde(rename = "skipCount")] skip_count: Option<i64>,
         #[serde(rename = "pageSize")] page_size: Option<i64>,
         #[serde(rename = "pathFilter")] path_filter: Option<String>,
-    ) -> Result<super::types::CacheStorageRequestEntriesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::CacheStorageRequestEntriesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, cache_id, skip_count, page_size, path_filter,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestEntries"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestEntries")))
     }
 }
 

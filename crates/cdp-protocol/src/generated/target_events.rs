@@ -22,7 +22,7 @@ pub trait TargetEventsService {
         #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
         #[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo,
         #[serde(rename = "waitingForDebugger")] waiting_for_debugger: bool,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, session_id, target_info, waiting_for_debugger,);
         Ok(())
     }
@@ -33,7 +33,7 @@ pub trait TargetEventsService {
     async fn detached_from_target(
         #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
         #[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, session_id, target_id,);
         Ok(())
     }
@@ -45,7 +45,7 @@ pub trait TargetEventsService {
         #[serde(rename = "sessionId")] session_id: super::types::TargetSessionId,
         message: String,
         #[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, session_id, message, target_id,);
         Ok(())
     }
@@ -56,21 +56,21 @@ pub trait TargetEventsService {
         #[serde(rename = "targetId")] target_id: super::types::TargetTargetId,
         status: String,
         #[serde(rename = "errorCode")] error_code: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id, status, error_code,);
         Ok(())
     }
     /// Issued when a possible inspection target is created.
     #[name("targetCreated")]
     #[notification]
-    async fn target_created(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn target_created(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_info,);
         Ok(())
     }
     /// Issued when a target is destroyed.
     #[name("targetDestroyed")]
     #[notification]
-    async fn target_destroyed(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn target_destroyed(#[serde(rename = "targetId")] target_id: super::types::TargetTargetId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
         Ok(())
     }
@@ -78,7 +78,7 @@ pub trait TargetEventsService {
     /// `targetCreated` and `targetDestroyed`.
     #[name("targetInfoChanged")]
     #[notification]
-    async fn target_info_changed(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn target_info_changed(#[serde(rename = "targetInfo")] target_info: super::types::TargetTargetInfo) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_info,);
         Ok(())
     }

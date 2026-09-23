@@ -22,9 +22,9 @@ pub trait IndexedDBService {
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
         #[serde(rename = "databaseName")] database_name: String,
         #[serde(rename = "objectStoreName")] object_store_name: String,
-    ) -> Result<super::types::IndexedDbClearObjectStoreResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbClearObjectStoreResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearObjectStore"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearObjectStore")))
     }
     /// Deletes a database.
     #[name("deleteDatabase")]
@@ -33,9 +33,9 @@ pub trait IndexedDBService {
         #[serde(rename = "storageKey")] storage_key: Option<String>,
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
         #[serde(rename = "databaseName")] database_name: String,
-    ) -> Result<super::types::IndexedDbDeleteDatabaseResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbDeleteDatabaseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteDatabase"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteDatabase")))
     }
     /// Delete a range of entries from an object store
     #[name("deleteObjectStoreEntries")]
@@ -46,21 +46,21 @@ pub trait IndexedDBService {
         #[serde(rename = "databaseName")] database_name: String,
         #[serde(rename = "objectStoreName")] object_store_name: String,
         #[serde(rename = "keyRange")] key_range: super::types::IndexedDbKeyRange,
-    ) -> Result<super::types::IndexedDbDeleteObjectStoreEntriesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbDeleteObjectStoreEntriesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name, key_range,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteObjectStoreEntries"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "deleteObjectStoreEntries")))
     }
     /// Disables events from backend.
     #[name("disable")]
-    async fn disable() -> Result<super::types::IndexedDbDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::IndexedDbDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables events from backend.
     #[name("enable")]
-    async fn enable() -> Result<super::types::IndexedDbEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::IndexedDbEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Gets metadata of an object store.
     #[name("getMetadata")]
@@ -70,9 +70,9 @@ pub trait IndexedDBService {
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
         #[serde(rename = "databaseName")] database_name: String,
         #[serde(rename = "objectStoreName")] object_store_name: String,
-    ) -> Result<super::types::IndexedDbGetMetadataResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbGetMetadataResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMetadata"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getMetadata")))
     }
     /// Requests data from object store or index.
     #[name("requestData")]
@@ -86,9 +86,9 @@ pub trait IndexedDBService {
         #[serde(rename = "skipCount")] skip_count: i64,
         #[serde(rename = "pageSize")] page_size: i64,
         #[serde(rename = "keyRange")] key_range: Option<super::types::IndexedDbKeyRange>,
-    ) -> Result<super::types::IndexedDbRequestDataResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbRequestDataResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name, object_store_name, index_name, skip_count, page_size, key_range,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestData"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestData")))
     }
     /// Requests database with given name in given frame.
     #[name("requestDatabase")]
@@ -97,9 +97,9 @@ pub trait IndexedDBService {
         #[serde(rename = "storageKey")] storage_key: Option<String>,
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
         #[serde(rename = "databaseName")] database_name: String,
-    ) -> Result<super::types::IndexedDbRequestDatabaseResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbRequestDatabaseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket, database_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabase"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabase")))
     }
     /// Requests database names for given security origin.
     #[name("requestDatabaseNames")]
@@ -107,9 +107,9 @@ pub trait IndexedDBService {
         #[serde(rename = "securityOrigin")] security_origin: Option<String>,
         #[serde(rename = "storageKey")] storage_key: Option<String>,
         #[serde(rename = "storageBucket")] storage_bucket: Option<super::types::StorageStorageBucket>,
-    ) -> Result<super::types::IndexedDbRequestDatabaseNamesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::IndexedDbRequestDatabaseNamesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, security_origin, storage_key, storage_bucket,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabaseNames"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestDatabaseNames")))
     }
 }
 

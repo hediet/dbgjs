@@ -18,7 +18,7 @@ pub trait LogEventsService {
     /// Issued when new message was logged.
     #[name("entryAdded")]
     #[notification]
-    async fn entry_added(entry: super::types::LogLogEntry) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn entry_added(entry: super::types::LogLogEntry) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, entry,);
         Ok(())
     }

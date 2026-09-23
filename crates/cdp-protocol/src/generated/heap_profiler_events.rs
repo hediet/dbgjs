@@ -16,14 +16,14 @@
 pub trait HeapProfilerEventsService {
     #[name("addHeapSnapshotChunk")]
     #[notification]
-    async fn add_heap_snapshot_chunk(chunk: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn add_heap_snapshot_chunk(chunk: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, chunk,);
         Ok(())
     }
     /// If heap objects tracking has been started then backend may send update for one or more fragments
     #[name("heapStatsUpdate")]
     #[notification]
-    async fn heap_stats_update(#[serde(rename = "statsUpdate")] stats_update: Vec<i64>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn heap_stats_update(#[serde(rename = "statsUpdate")] stats_update: Vec<i64>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, stats_update,);
         Ok(())
     }
@@ -35,7 +35,7 @@ pub trait HeapProfilerEventsService {
     async fn last_seen_object_id(
         #[serde(rename = "lastSeenObjectId")] last_seen_object_id: i64,
         timestamp: f64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, last_seen_object_id, timestamp,);
         Ok(())
     }
@@ -45,13 +45,13 @@ pub trait HeapProfilerEventsService {
         done: i64,
         total: i64,
         finished: Option<bool>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, done, total, finished,);
         Ok(())
     }
     #[name("resetProfiles")]
     #[notification]
-    async fn reset_profiles() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn reset_profiles() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }

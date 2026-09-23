@@ -6,7 +6,9 @@ use dbgjs::cdp::{
 };
 use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
 use linkrpc::connection::channel::{Channel, RejectingHandler};
-use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, JsonRpcMessage, MessageTransport};
+use linkrpc::prelude::{
+    CallCtx, InterfaceHandler, JsonRpcError, JsonRpcMessage, MessageTransport, RpcCallError,
+};
 use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
 use linkrpc::transport::memory::transport_pair_of;
 use serde_json::json;
@@ -62,6 +64,57 @@ fn generated_cdp_provider_trait_can_use_default_methods() {
     assert_provider::<DefaultRuntimeService>();
 }
 
+#[tokio::test]
+async fn generated_cdp_provider_default_errors_are_local() {
+    let error = dbgjs::cdp::runtime::RuntimeService::enable(
+        &DefaultRuntimeService,
+        &CallCtx::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error,
+        RpcCallError::Local(JsonRpcError::new(-32601, "enable")),
+    );
+}
+
+#[tokio::test]
+async fn generated_cdp_client_preserves_remote_error_origin_and_data() {
+    let (client_raw, browser_raw) = transport_pair_of::<JsonRpcMessage>();
+    let channel = Channel::new(Box::new(client_raw), Box::new(RejectingHandler));
+    let client = CdpClient::root(channel.clone());
+    let channel_loop = tokio::spawn(async move { channel.run().await });
+    let wire_error = JsonRpcError {
+        code: -32000,
+        message: "Runtime.enable failed".into(),
+        data: Some(json!({ "targetId": "target-1" })),
+    };
+    let expected_error = wire_error.clone();
+    let browser = tokio::spawn(async move {
+        let JsonRpcMessage::Request(request) = browser_raw.recv().await.unwrap() else {
+            panic!("expected CDP request");
+        };
+        assert_eq!(request.method, "Runtime.enable");
+        browser_raw
+            .send(JsonRpcMessage::Response(JsonRpcResponse {
+                id: Some(request.id),
+                payload: ResponsePayload::Error(wire_error),
+            }))
+            .await
+            .unwrap();
+    });
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.runtime().enable(),
+    )
+    .await
+    .expect("remote error arrives")
+    .unwrap_err();
+    assert_eq!(error, RpcCallError::Remote(expected_error));
+    browser.await.unwrap();
+    channel_loop.abort();
+}
+
 #[derive(Default)]
 struct RuntimeEventReceiver {
     contexts: std::sync::Mutex<Vec<i64>>,
@@ -77,7 +130,7 @@ impl dbgjs::cdp::runtime_events::RuntimeEventsService for RuntimeEventReceiver {
         name: String,
         payload: String,
         execution_context_id: dbgjs::cdp::RuntimeExecutionContextId,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         self.bindings
             .lock()
             .unwrap()
@@ -85,7 +138,7 @@ impl dbgjs::cdp::runtime_events::RuntimeEventsService for RuntimeEventReceiver {
         Ok(())
     }
 
-    async fn execution_contexts_cleared(&self, _ctx: &CallCtx) -> Result<(), JsonRpcError> {
+    async fn execution_contexts_cleared(&self, _ctx: &CallCtx) -> Result<(), RpcCallError> {
         self.clears
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
@@ -95,7 +148,7 @@ impl dbgjs::cdp::runtime_events::RuntimeEventsService for RuntimeEventReceiver {
         &self,
         _ctx: &CallCtx,
         params: dbgjs::cdp::RuntimeConsoleApicalledParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         self.contexts
             .lock()
             .unwrap()
@@ -193,7 +246,7 @@ impl dbgjs::cdp::target::TargetService for TargetCommandReceiver {
         target_id: dbgjs::cdp::TargetTargetId,
         flatten: Option<bool>,
         dbgjs_auto_attach: Option<bool>,
-    ) -> Result<dbgjs::cdp::TargetAttachToTargetResult, JsonRpcError> {
+    ) -> Result<dbgjs::cdp::TargetAttachToTargetResult, RpcCallError> {
         self.attachments
             .lock()
             .unwrap()

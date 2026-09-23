@@ -17,15 +17,15 @@
 pub trait TetheringService {
     /// Request browser port binding.
     #[name("bind")]
-    async fn bind(port: i64) -> Result<super::types::TetheringBindResult, linkrpc::prelude::JsonRpcError> {
+    async fn bind(port: i64) -> Result<super::types::TetheringBindResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, port,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "bind"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "bind")))
     }
     /// Request browser port unbinding.
     #[name("unbind")]
-    async fn unbind(port: i64) -> Result<super::types::TetheringUnbindResult, linkrpc::prelude::JsonRpcError> {
+    async fn unbind(port: i64) -> Result<super::types::TetheringUnbindResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, port,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unbind"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unbind")))
     }
 }
 

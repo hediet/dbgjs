@@ -19,7 +19,7 @@ pub trait FedCmEventsService {
     /// or a command below.
     #[name("dialogClosed")]
     #[notification]
-    async fn dialog_closed(#[serde(rename = "dialogId")] dialog_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn dialog_closed(#[serde(rename = "dialogId")] dialog_id: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, dialog_id,);
         Ok(())
     }
@@ -31,7 +31,7 @@ pub trait FedCmEventsService {
         accounts: Vec<super::types::FedCmAccount>,
         title: String,
         subtitle: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, dialog_id, dialog_type, accounts, title, subtitle,);
         Ok(())
     }

@@ -17,21 +17,21 @@
 pub trait AutofillService {
     /// Disables autofill domain notifications.
     #[name("disable")]
-    async fn disable() -> Result<super::types::AutofillDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::AutofillDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables autofill domain notifications.
     #[name("enable")]
-    async fn enable() -> Result<super::types::AutofillEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::AutofillEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Set addresses so that developers can verify their forms implementation.
     #[name("setAddresses")]
-    async fn set_addresses(addresses: Vec<super::types::AutofillAddress>) -> Result<super::types::AutofillSetAddressesResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_addresses(addresses: Vec<super::types::AutofillAddress>) -> Result<super::types::AutofillSetAddressesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, addresses,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAddresses"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAddresses")))
     }
     /// Trigger autofill on a form identified by the fieldId.
     /// If the field and related form cannot be autofilled, returns an error.
@@ -41,9 +41,9 @@ pub trait AutofillService {
         #[serde(rename = "frameId")] frame_id: Option<super::types::PageFrameId>,
         card: Option<super::types::AutofillCreditCard>,
         address: Option<super::types::AutofillAddress>,
-    ) -> Result<super::types::AutofillTriggerResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::AutofillTriggerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, field_id, frame_id, card, address,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trigger"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "trigger")))
     }
 }
 

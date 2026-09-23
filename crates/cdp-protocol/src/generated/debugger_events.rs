@@ -23,7 +23,7 @@ pub trait DebuggerEventsService {
     async fn breakpoint_resolved(
         #[serde(rename = "breakpointId")] breakpoint_id: super::types::DebuggerBreakpointId,
         location: super::types::DebuggerLocation,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, breakpoint_id, location,);
         Ok(())
     }
@@ -38,14 +38,14 @@ pub trait DebuggerEventsService {
         #[serde(rename = "asyncStackTrace")] async_stack_trace: Option<super::types::RuntimeStackTrace>,
         #[serde(rename = "asyncStackTraceId")] async_stack_trace_id: Option<super::types::RuntimeStackTraceId>,
         #[serde(rename = "asyncCallStackTraceId")] async_call_stack_trace_id: Option<super::types::RuntimeStackTraceId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, call_frames, reason, data, hit_breakpoints, async_stack_trace, async_stack_trace_id, async_call_stack_trace_id,);
         Ok(())
     }
     /// Fired when the virtual machine resumed execution.
     #[name("resumed")]
     #[notification]
-    async fn resumed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn resumed() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -71,7 +71,7 @@ pub trait DebuggerEventsService {
         #[serde(rename = "codeOffset")] code_offset: Option<i64>,
         #[serde(rename = "scriptLanguage")] script_language: Option<super::types::DebuggerScriptLanguage>,
         #[serde(rename = "embedderName")] embedder_name: Option<String>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, script_id, url, start_line, start_column, end_line, end_column, execution_context_id, hash, build_id, execution_context_aux_data, source_map_url, has_source_url, is_module, length, stack_trace, code_offset, script_language, embedder_name,);
         Ok(())
     }
@@ -101,7 +101,7 @@ pub trait DebuggerEventsService {
         #[serde(rename = "debugSymbols")] debug_symbols: Option<Vec<super::types::DebuggerDebugSymbols>>,
         #[serde(rename = "embedderName")] embedder_name: Option<String>,
         #[serde(rename = "resolvedBreakpoints")] resolved_breakpoints: Option<Vec<super::types::DebuggerResolvedBreakpoint>>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, script_id, url, start_line, start_column, end_line, end_column, execution_context_id, hash, build_id, execution_context_aux_data, is_live_edit, source_map_url, has_source_url, is_module, length, stack_trace, code_offset, script_language, debug_symbols, embedder_name, resolved_breakpoints,);
         Ok(())
     }

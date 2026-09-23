@@ -16,19 +16,19 @@
 pub trait ServiceWorkerEventsService {
     #[name("workerErrorReported")]
     #[notification]
-    async fn worker_error_reported(#[serde(rename = "errorMessage")] error_message: super::types::ServiceWorkerServiceWorkerErrorMessage) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn worker_error_reported(#[serde(rename = "errorMessage")] error_message: super::types::ServiceWorkerServiceWorkerErrorMessage) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, error_message,);
         Ok(())
     }
     #[name("workerRegistrationUpdated")]
     #[notification]
-    async fn worker_registration_updated(registrations: Vec<super::types::ServiceWorkerServiceWorkerRegistration>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn worker_registration_updated(registrations: Vec<super::types::ServiceWorkerServiceWorkerRegistration>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, registrations,);
         Ok(())
     }
     #[name("workerVersionUpdated")]
     #[notification]
-    async fn worker_version_updated(versions: Vec<super::types::ServiceWorkerServiceWorkerVersion>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn worker_version_updated(versions: Vec<super::types::ServiceWorkerServiceWorkerVersion>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, versions,);
         Ok(())
     }

@@ -24,9 +24,9 @@ pub trait FetchService {
         #[serde(rename = "postData")] post_data: Option<String>,
         headers: Option<Vec<super::types::FetchHeaderEntry>>,
         #[serde(rename = "interceptResponse")] intercept_response: Option<bool>,
-    ) -> Result<super::types::FetchContinueRequestResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchContinueRequestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, url, method, post_data, headers, intercept_response,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueRequest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueRequest")))
     }
     /// Continues loading of the paused response, optionally modifying the
     /// response headers. If either responseCode or headers are modified, all of them
@@ -38,24 +38,24 @@ pub trait FetchService {
         #[serde(rename = "responsePhrase")] response_phrase: Option<String>,
         #[serde(rename = "responseHeaders")] response_headers: Option<Vec<super::types::FetchHeaderEntry>>,
         #[serde(rename = "binaryResponseHeaders")] binary_response_headers: Option<String>,
-    ) -> Result<super::types::FetchContinueResponseResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchContinueResponseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, response_code, response_phrase, response_headers, binary_response_headers,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueResponse"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueResponse")))
     }
     /// Continues a request supplying authChallengeResponse following authRequired event.
     #[name("continueWithAuth")]
     async fn continue_with_auth(
         #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
         #[serde(rename = "authChallengeResponse")] auth_challenge_response: super::types::FetchAuthChallengeResponse,
-    ) -> Result<super::types::FetchContinueWithAuthResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchContinueWithAuthResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, auth_challenge_response,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueWithAuth"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "continueWithAuth")))
     }
     /// Disables the fetch domain.
     #[name("disable")]
-    async fn disable() -> Result<super::types::FetchDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::FetchDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables issuing of requestPaused events. A request will be paused until client
     /// calls one of failRequest, fulfillRequest or continueRequest/continueWithAuth.
@@ -63,18 +63,18 @@ pub trait FetchService {
     async fn enable(
         patterns: Option<Vec<super::types::FetchRequestPattern>>,
         #[serde(rename = "handleAuthRequests")] handle_auth_requests: Option<bool>,
-    ) -> Result<super::types::FetchEnableResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, patterns, handle_auth_requests,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Causes the request to fail with specified reason.
     #[name("failRequest")]
     async fn fail_request(
         #[serde(rename = "requestId")] request_id: super::types::FetchRequestId,
         #[serde(rename = "errorReason")] error_reason: super::types::NetworkErrorReason,
-    ) -> Result<super::types::FetchFailRequestResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchFailRequestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, error_reason,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "failRequest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "failRequest")))
     }
     /// Provides response to the request.
     #[name("fulfillRequest")]
@@ -85,9 +85,9 @@ pub trait FetchService {
         #[serde(rename = "binaryResponseHeaders")] binary_response_headers: Option<String>,
         body: Option<String>,
         #[serde(rename = "responsePhrase")] response_phrase: Option<String>,
-    ) -> Result<super::types::FetchFulfillRequestResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::FetchFulfillRequestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, response_code, response_headers, binary_response_headers, body, response_phrase,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fulfillRequest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fulfillRequest")))
     }
     /// Causes the body of the response to be received from the server and
     /// returned as a single string. May only be issued for a request that
@@ -100,9 +100,9 @@ pub trait FetchService {
     /// `responseCode` and presence of `location` response header, see
     /// comments to `requestPaused` for details.
     #[name("getResponseBody")]
-    async fn get_response_body(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchGetResponseBodyResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_response_body(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchGetResponseBodyResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResponseBody"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getResponseBody")))
     }
     /// Returns a handle to the stream representing the response body.
     /// The request must be paused in the HeadersReceived stage.
@@ -115,9 +115,9 @@ pub trait FetchService {
     /// Calling other methods that affect the request or disabling fetch
     /// domain before body is received results in an undefined behavior.
     #[name("takeResponseBodyAsStream")]
-    async fn take_response_body_as_stream(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchTakeResponseBodyAsStreamResult, linkrpc::prelude::JsonRpcError> {
+    async fn take_response_body_as_stream(#[serde(rename = "requestId")] request_id: super::types::FetchRequestId) -> Result<super::types::FetchTakeResponseBodyAsStreamResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeResponseBodyAsStream"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "takeResponseBodyAsStream")))
     }
 }
 

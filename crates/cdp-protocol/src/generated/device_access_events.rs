@@ -21,7 +21,7 @@ pub trait DeviceAccessEventsService {
     async fn device_request_prompted(
         id: super::types::DeviceAccessRequestId,
         devices: Vec<super::types::DeviceAccessPromptDevice>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, devices,);
         Ok(())
     }

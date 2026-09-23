@@ -22,75 +22,75 @@ pub trait DOMDebuggerService {
         #[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId,
         depth: Option<i64>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomdebuggerGetEventListenersResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomdebuggerGetEventListenersResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id, depth, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEventListeners"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEventListeners")))
     }
     /// Removes DOM breakpoint that was set using `setDOMBreakpoint`.
     #[name("removeDOMBreakpoint")]
     async fn remove_dombreakpoint(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         r#type: super::types::DomdebuggerDombreakpointType,
-    ) -> Result<super::types::DomdebuggerRemoveDombreakpointResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomdebuggerRemoveDombreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, r#type,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeDOMBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeDOMBreakpoint")))
     }
     /// Removes breakpoint on particular DOM event.
     #[name("removeEventListenerBreakpoint")]
     async fn remove_event_listener_breakpoint(
         #[serde(rename = "eventName")] event_name: String,
         #[serde(rename = "targetName")] target_name: Option<String>,
-    ) -> Result<super::types::DomdebuggerRemoveEventListenerBreakpointResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomdebuggerRemoveEventListenerBreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_name, target_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeEventListenerBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeEventListenerBreakpoint")))
     }
     /// Removes breakpoint on particular native event.
     #[name("removeInstrumentationBreakpoint")]
-    async fn remove_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::DomdebuggerRemoveInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::DomdebuggerRemoveInstrumentationBreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeInstrumentationBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeInstrumentationBreakpoint")))
     }
     /// Removes breakpoint from XMLHttpRequest.
     #[name("removeXHRBreakpoint")]
-    async fn remove_xhrbreakpoint(url: String) -> Result<super::types::DomdebuggerRemoveXhrbreakpointResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_xhrbreakpoint(url: String) -> Result<super::types::DomdebuggerRemoveXhrbreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeXHRBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeXHRBreakpoint")))
     }
     /// Sets breakpoint on particular CSP violations.
     #[name("setBreakOnCSPViolation")]
-    async fn set_break_on_cspviolation(#[serde(rename = "violationTypes")] violation_types: Vec<super::types::DomdebuggerCspviolationType>) -> Result<super::types::DomdebuggerSetBreakOnCspviolationResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_break_on_cspviolation(#[serde(rename = "violationTypes")] violation_types: Vec<super::types::DomdebuggerCspviolationType>) -> Result<super::types::DomdebuggerSetBreakOnCspviolationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, violation_types,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakOnCSPViolation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setBreakOnCSPViolation")))
     }
     /// Sets breakpoint on particular operation with DOM.
     #[name("setDOMBreakpoint")]
     async fn set_dombreakpoint(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         r#type: super::types::DomdebuggerDombreakpointType,
-    ) -> Result<super::types::DomdebuggerSetDombreakpointResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomdebuggerSetDombreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, r#type,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDOMBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDOMBreakpoint")))
     }
     /// Sets breakpoint on particular DOM event.
     #[name("setEventListenerBreakpoint")]
     async fn set_event_listener_breakpoint(
         #[serde(rename = "eventName")] event_name: String,
         #[serde(rename = "targetName")] target_name: Option<String>,
-    ) -> Result<super::types::DomdebuggerSetEventListenerBreakpointResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomdebuggerSetEventListenerBreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_name, target_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEventListenerBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setEventListenerBreakpoint")))
     }
     /// Sets breakpoint on particular native event.
     #[name("setInstrumentationBreakpoint")]
-    async fn set_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::DomdebuggerSetInstrumentationBreakpointResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_instrumentation_breakpoint(#[serde(rename = "eventName")] event_name: String) -> Result<super::types::DomdebuggerSetInstrumentationBreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, event_name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInstrumentationBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInstrumentationBreakpoint")))
     }
     /// Sets breakpoint on XMLHttpRequest.
     #[name("setXHRBreakpoint")]
-    async fn set_xhrbreakpoint(url: String) -> Result<super::types::DomdebuggerSetXhrbreakpointResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_xhrbreakpoint(url: String) -> Result<super::types::DomdebuggerSetXhrbreakpointResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setXHRBreakpoint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setXHRBreakpoint")))
     }
 }
 

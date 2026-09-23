@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use linkrpc::connection::channel::{Channel, RequestHandler};
-use linkrpc::prelude::{JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, TransportError};
+use linkrpc::prelude::{JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, RpcCallError, TransportError};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -270,7 +270,7 @@ impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         target_info: crate::cdp::TargetTargetInfo,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let params = TargetTargetCreatedParams { target_info };
         let _ = self.sender.send(Ok(RootCdpEvent::TargetCreated(params)));
         Ok(())
@@ -280,7 +280,7 @@ impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         target_info: crate::cdp::TargetTargetInfo,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let params = TargetTargetInfoChangedParams { target_info };
         let _ = self.sender.send(Ok(RootCdpEvent::TargetChanged(params)));
         Ok(())
@@ -290,7 +290,7 @@ impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         target_id: crate::cdp::TargetTargetId,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let params = TargetTargetDestroyedParams { target_id };
         let _ = self.sender.send(Ok(RootCdpEvent::TargetDestroyed(params)));
         Ok(())
@@ -850,7 +850,7 @@ impl CdpDebuggerSession {
         })?
         .map_err(|error| CdpRuntimeError::SourceMapProtocol {
             url: resolved_url.to_owned(),
-            source: Box::new(CdpRuntimeError::protocol(error)),
+            source: Box::new(CdpRuntimeError::protocol(RpcCallError::Remote(error))),
         })?;
         let loaded: crate::cdp::NetworkLoadNetworkResourcePageResult =
             serde_json::from_value(loaded["resource"].clone()).map_err(|error| {
@@ -1211,7 +1211,7 @@ impl crate::cdp::debugger_events::DebuggerEventsService for CdpEventHandler {
         debug_symbols: Option<Vec<crate::cdp::DebuggerDebugSymbols>>,
         embedder_name: Option<String>,
         resolved_breakpoints: Option<Vec<crate::cdp::DebuggerResolvedBreakpoint>>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let params = DebuggerScriptParsedParams {
             script_id,
             url,
@@ -1252,7 +1252,7 @@ impl crate::cdp::debugger_events::DebuggerEventsService for CdpEventHandler {
         async_stack_trace: Option<crate::cdp::RuntimeStackTrace>,
         async_stack_trace_id: Option<crate::cdp::RuntimeStackTraceId>,
         async_call_stack_trace_id: Option<crate::cdp::RuntimeStackTraceId>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let params = DebuggerPausedParams {
             call_frames,
             reason,
@@ -1269,7 +1269,7 @@ impl crate::cdp::debugger_events::DebuggerEventsService for CdpEventHandler {
         Ok(())
     }
 
-    async fn resumed(&self, _ctx: &linkrpc::prelude::CallCtx) -> Result<(), JsonRpcError> {
+    async fn resumed(&self, _ctx: &linkrpc::prelude::CallCtx) -> Result<(), RpcCallError> {
         let _ = self.sender.send(Ok(CdpRuntimeEvent::Resumed {
             session: self.session.clone(),
         }));
@@ -1283,7 +1283,7 @@ impl crate::cdp::runtime_events::RuntimeEventsService for CdpEventHandler {
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         params: RuntimeConsoleApicalledParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let _ = self.sender.send(Ok(CdpRuntimeEvent::Console {
             session: self.session.clone(),
             params,
@@ -1298,7 +1298,7 @@ impl crate::cdp::heap_profiler_events::HeapProfilerEventsService for CdpEventHan
         &self,
         _ctx: &linkrpc::prelude::CallCtx,
         chunk: String,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let mut snapshot = self.heap_snapshot.lock().await;
         if let Some(snapshot) = snapshot.as_mut()
             && snapshot.write_error.is_none()
@@ -1327,7 +1327,7 @@ impl crate::cdp::heap_profiler_events::HeapProfilerEventsService for CdpEventHan
         done: i64,
         total: i64,
         finished: Option<bool>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let mut snapshot = self.heap_snapshot.lock().await;
         let bytes_written = snapshot
             .as_ref()
@@ -1778,6 +1778,8 @@ fn decode_source_map_cache(mut bytes: Vec<u8>) -> Option<SourceMapData> {
 #[derive(Debug, thiserror::Error)]
 pub enum CdpRuntimeError {
     #[error(transparent)]
+    Call(RpcCallError),
+    #[error(transparent)]
     WebSocket(#[from] CdpWebSocketError),
     #[error("failed to open CDP session: {0}")]
     OpenSession(MuxError),
@@ -1848,11 +1850,14 @@ impl CdpRuntimeError {
         )
     }
 
-    fn protocol(error: JsonRpcError) -> Self {
-        Self::Protocol {
-            code: error.code,
-            message: error.message,
-            data: error.data,
+    fn protocol(error: RpcCallError) -> Self {
+        match error {
+            RpcCallError::Remote(error) => Self::Protocol {
+                code: error.code,
+                message: error.message,
+                data: error.data,
+            },
+            error => Self::Call(error),
         }
     }
 }

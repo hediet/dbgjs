@@ -18,7 +18,7 @@ pub trait BrowserEventsService {
     /// Fired when download makes progress. Last call has |done| == true.
     #[name("downloadProgress")]
     #[notification]
-    async fn download_progress(#[params] params: super::types::BrowserDownloadProgressParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn download_progress(#[params] params: super::types::BrowserDownloadProgressParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -30,7 +30,7 @@ pub trait BrowserEventsService {
         guid: String,
         url: String,
         #[serde(rename = "suggestedFilename")] suggested_filename: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, guid, url, suggested_filename,);
         Ok(())
     }

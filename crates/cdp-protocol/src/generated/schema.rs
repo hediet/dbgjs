@@ -17,9 +17,9 @@
 pub trait SchemaService {
     /// Returns supported domains.
     #[name("getDomains")]
-    async fn get_domains() -> Result<super::types::SchemaGetDomainsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_domains() -> Result<super::types::SchemaGetDomainsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDomains"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDomains")))
     }
 }
 

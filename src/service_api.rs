@@ -1,5 +1,7 @@
 mod client;
 pub use client::{DbgServiceClient, interfaces, register};
+mod errors;
+pub use errors::*;
 
 mod service;
 pub use service::*;

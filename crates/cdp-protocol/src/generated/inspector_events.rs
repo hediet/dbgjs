@@ -17,28 +17,28 @@ pub trait InspectorEventsService {
     /// Fired when remote debugging connection is about to be terminated. Contains detach reason.
     #[name("detached")]
     #[notification]
-    async fn detached(reason: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn detached(reason: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, reason,);
         Ok(())
     }
     /// Fired when debugging target has crashed
     #[name("targetCrashed")]
     #[notification]
-    async fn target_crashed() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn target_crashed() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
     /// Fired when debugging target has reloaded after crash
     #[name("targetReloadedAfterCrash")]
     #[notification]
-    async fn target_reloaded_after_crash() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn target_reloaded_after_crash() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
     /// Fired on worker targets when main worker script and any imported scripts have been evaluated.
     #[name("workerScriptLoaded")]
     #[notification]
-    async fn worker_script_loaded() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn worker_script_loaded() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }

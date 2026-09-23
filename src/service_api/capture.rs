@@ -2,15 +2,15 @@ use super::*;
 
 #[link_rpc_interface(id = "dev.dbgjs.capture")]
 pub trait CaptureApi {
-    async fn list_captures(context_id: String) -> Result<Vec<CaptureSnapshot>, JsonRpcError>;
+    async fn list_captures(context_id: String) -> Result<Vec<CaptureSnapshot>, CaptureError>;
 
     async fn get_capture(
         context_id: String,
         capture_name: String,
-    ) -> Result<CaptureSnapshot, JsonRpcError>;
+    ) -> Result<CaptureSnapshot, CaptureError>;
 
     async fn delete_capture(context_id: String, capture_name: String)
-    -> Result<bool, JsonRpcError>;
+    -> Result<bool, CaptureError>;
 
     async fn get_stored_coverage(
         context_id: String,
@@ -20,7 +20,7 @@ pub trait CaptureApi {
         connection_id: Option<String>,
         path_glob: Option<String>,
         exclude_capture_id: Option<String>,
-    ) -> Result<CoverageSnapshot, JsonRpcError>;
+    ) -> Result<CoverageSnapshot, CaptureError>;
 
     async fn get_stored_cpu_profile(
         context_id: String,
@@ -28,7 +28,7 @@ pub trait CaptureApi {
         source_path: Option<String>,
         target_id: Option<String>,
         connection_id: Option<String>,
-    ) -> Result<CpuProfileSnapshot, JsonRpcError>;
+    ) -> Result<CpuProfileSnapshot, CaptureError>;
 
     async fn get_stored_heap_classes(
         context_id: String,
@@ -36,11 +36,11 @@ pub trait CaptureApi {
         filter: Option<String>,
         target_id: Option<String>,
         connection_id: Option<String>,
-    ) -> Result<HeapClassSnapshot, JsonRpcError>;
+    ) -> Result<HeapClassSnapshot, CaptureError>;
 
     async fn supply_stored_heap_source_map(
         context_id: String,
         capture_name: String,
         supply: HeapSourceMapSupply,
-    ) -> Result<(), JsonRpcError>;
+    ) -> Result<(), CaptureError>;
 }

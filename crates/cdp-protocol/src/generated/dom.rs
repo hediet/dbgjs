@@ -23,9 +23,9 @@
 pub trait DOMService {
     /// Collects class names for the node with given id and all of it's child nodes.
     #[name("collectClassNamesFromSubtree")]
-    async fn collect_class_names_from_subtree(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomCollectClassNamesFromSubtreeResult, linkrpc::prelude::JsonRpcError> {
+    async fn collect_class_names_from_subtree(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomCollectClassNamesFromSubtreeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "collectClassNamesFromSubtree"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "collectClassNamesFromSubtree")))
     }
     /// Creates a deep copy of the specified node and places it into the target container before the
     /// given anchor.
@@ -34,9 +34,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "targetNodeId")] target_node_id: super::types::DomNodeId,
         #[serde(rename = "insertBeforeNodeId")] insert_before_node_id: Option<super::types::DomNodeId>,
-    ) -> Result<super::types::DomCopyToResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomCopyToResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, target_node_id, insert_before_node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "copyTo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "copyTo")))
     }
     /// Describes node given its id, does not require domain to be enabled. Does not start tracking any
     /// objects, can be used for automation.
@@ -47,28 +47,28 @@ pub trait DOMService {
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
         depth: Option<i64>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomDescribeNodeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomDescribeNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id, depth, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "describeNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "describeNode")))
     }
     /// Disables DOM agent for the given page.
     #[name("disable")]
-    async fn disable() -> Result<super::types::DomDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::DomDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Discards search results from the session with the given id. `getSearchResults` should no longer
     /// be called for that search.
     #[name("discardSearchResults")]
-    async fn discard_search_results(#[serde(rename = "searchId")] search_id: String) -> Result<super::types::DomDiscardSearchResultsResult, linkrpc::prelude::JsonRpcError> {
+    async fn discard_search_results(#[serde(rename = "searchId")] search_id: String) -> Result<super::types::DomDiscardSearchResultsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, search_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "discardSearchResults"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "discardSearchResults")))
     }
     /// Enables DOM agent for the given page.
     #[name("enable")]
-    async fn enable(#[params] params: super::types::DomEnableParams) -> Result<super::types::DomEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable(#[params] params: super::types::DomEnableParams) -> Result<super::types::DomEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Focuses the given element.
     #[name("focus")]
@@ -76,9 +76,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: Option<super::types::DomNodeId>,
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-    ) -> Result<super::types::DomFocusResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomFocusResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "focus"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "focus")))
     }
     /// When enabling, this API forces an element to gain interest in its target,
     /// keeping interest active until disabled.
@@ -86,9 +86,9 @@ pub trait DOMService {
     async fn force_show_interest(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         enable: bool,
-    ) -> Result<super::types::DomForceShowInterestResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomForceShowInterestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, enable,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceShowInterest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceShowInterest")))
     }
     /// When enabling, this API force-opens the popover identified by nodeId
     /// and keeps it open until disabled.
@@ -97,9 +97,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         enable: bool,
         #[serde(rename = "invokerNodeId")] invoker_node_id: Option<super::types::DomBackendNodeId>,
-    ) -> Result<super::types::DomForceShowPopoverResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomForceShowPopoverResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, enable, invoker_node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceShowPopover"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "forceShowPopover")))
     }
     /// Returns the target anchor element of the given anchor query according to
     /// https://www.w3.org/TR/css-anchor-position-1/#target.
@@ -107,15 +107,15 @@ pub trait DOMService {
     async fn get_anchor_element(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "anchorSpecifier")] anchor_specifier: Option<String>,
-    ) -> Result<super::types::DomGetAnchorElementResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetAnchorElementResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, anchor_specifier,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnchorElement"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAnchorElement")))
     }
     /// Returns attributes for the specified node.
     #[name("getAttributes")]
-    async fn get_attributes(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetAttributesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_attributes(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetAttributesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAttributes"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getAttributes")))
     }
     /// Returns boxes for the given node.
     #[name("getBoxModel")]
@@ -123,9 +123,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: Option<super::types::DomNodeId>,
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-    ) -> Result<super::types::DomGetBoxModelResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetBoxModelResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBoxModel"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBoxModel")))
     }
     /// Returns the query container of the given node based on container query
     /// conditions: containerName, physical and logical axes, and whether it queries
@@ -140,9 +140,9 @@ pub trait DOMService {
         #[serde(rename = "logicalAxes")] logical_axes: Option<super::types::DomLogicalAxes>,
         #[serde(rename = "queriesScrollState")] queries_scroll_state: Option<bool>,
         #[serde(rename = "queriesAnchored")] queries_anchored: Option<bool>,
-    ) -> Result<super::types::DomGetContainerForNodeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetContainerForNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, container_name, physical_axes, logical_axes, queries_scroll_state, queries_anchored,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContainerForNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContainerForNode")))
     }
     /// Returns quads that describe node position on the page. This method
     /// might return multiple quads for inline nodes.
@@ -151,15 +151,15 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: Option<super::types::DomNodeId>,
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-    ) -> Result<super::types::DomGetContentQuadsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetContentQuadsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContentQuads"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getContentQuads")))
     }
     /// Returns list of detached nodes
     #[name("getDetachedDomNodes")]
-    async fn get_detached_dom_nodes() -> Result<super::types::DomGetDetachedDomNodesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_detached_dom_nodes() -> Result<super::types::DomGetDetachedDomNodesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDetachedDomNodes"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDetachedDomNodes")))
     }
     /// Returns the root DOM node (and optionally the subtree) to the caller.
     /// Implicitly enables the DOM domain events for the current target.
@@ -167,22 +167,22 @@ pub trait DOMService {
     async fn get_document(
         depth: Option<i64>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomGetDocumentResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetDocumentResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, depth, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDocument"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDocument")))
     }
     /// Returns the NodeId of the matched element according to certain relations.
     #[name("getElementByRelation")]
-    async fn get_element_by_relation(#[params] params: super::types::DomGetElementByRelationParams) -> Result<super::types::DomGetElementByRelationResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_element_by_relation(#[params] params: super::types::DomGetElementByRelationParams) -> Result<super::types::DomGetElementByRelationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getElementByRelation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getElementByRelation")))
     }
     /// Returns file information for the given
     /// File wrapper.
     #[name("getFileInfo")]
-    async fn get_file_info(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::DomGetFileInfoResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_file_info(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::DomGetFileInfoResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFileInfo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFileInfo")))
     }
     /// Returns the root DOM node (and optionally the subtree) to the caller.
     /// Deprecated, as it is not designed to work well with the rest of the DOM agent.
@@ -191,15 +191,15 @@ pub trait DOMService {
     async fn get_flattened_document(
         depth: Option<i64>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomGetFlattenedDocumentResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetFlattenedDocumentResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, depth, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFlattenedDocument"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFlattenedDocument")))
     }
     /// Returns iframe node that owns iframe with the given domain.
     #[name("getFrameOwner")]
-    async fn get_frame_owner(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::DomGetFrameOwnerResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_frame_owner(#[serde(rename = "frameId")] frame_id: super::types::PageFrameId) -> Result<super::types::DomGetFrameOwnerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFrameOwner"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getFrameOwner")))
     }
     /// Returns node id at given location. Depending on whether DOM domain is enabled, nodeId is
     /// either returned or not.
@@ -209,15 +209,15 @@ pub trait DOMService {
         y: i64,
         #[serde(rename = "includeUserAgentShadowDOM")] include_user_agent_shadow_dom: Option<bool>,
         #[serde(rename = "ignorePointerEventsNone")] ignore_pointer_events_none: Option<bool>,
-    ) -> Result<super::types::DomGetNodeForLocationResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetNodeForLocationResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, x, y, include_user_agent_shadow_dom, ignore_pointer_events_none,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodeForLocation"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodeForLocation")))
     }
     /// Gets stack traces associated with a Node. As of now, only provides stack trace for Node creation.
     #[name("getNodeStackTraces")]
-    async fn get_node_stack_traces(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetNodeStackTracesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_node_stack_traces(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetNodeStackTracesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodeStackTraces"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodeStackTraces")))
     }
     /// Finds nodes with a given computed style in a subtree.
     #[name("getNodesForSubtreeByStyle")]
@@ -225,9 +225,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "computedStyles")] computed_styles: Vec<super::types::DomCsscomputedStyleProperty>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomGetNodesForSubtreeByStyleResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetNodesForSubtreeByStyleResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, computed_styles, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodesForSubtreeByStyle"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getNodesForSubtreeByStyle")))
     }
     /// Returns node's HTML markup.
     #[name("getOuterHTML")]
@@ -236,22 +236,22 @@ pub trait DOMService {
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
         #[serde(rename = "includeShadowDOM")] include_shadow_dom: Option<bool>,
-    ) -> Result<super::types::DomGetOuterHtmlresult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetOuterHtmlresult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id, include_shadow_dom,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOuterHTML"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOuterHTML")))
     }
     /// Returns the descendants of a container query container that have
     /// container queries against this container.
     #[name("getQueryingDescendantsForContainer")]
-    async fn get_querying_descendants_for_container(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetQueryingDescendantsForContainerResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_querying_descendants_for_container(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetQueryingDescendantsForContainerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getQueryingDescendantsForContainer"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getQueryingDescendantsForContainer")))
     }
     /// Returns the id of the nearest ancestor that is a relayout boundary.
     #[name("getRelayoutBoundary")]
-    async fn get_relayout_boundary(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetRelayoutBoundaryResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_relayout_boundary(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomGetRelayoutBoundaryResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRelayoutBoundary"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getRelayoutBoundary")))
     }
     /// Returns search results from given `fromIndex` to given `toIndex` from the search with the given
     /// identifier.
@@ -260,41 +260,41 @@ pub trait DOMService {
         #[serde(rename = "searchId")] search_id: String,
         #[serde(rename = "fromIndex")] from_index: i64,
         #[serde(rename = "toIndex")] to_index: i64,
-    ) -> Result<super::types::DomGetSearchResultsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomGetSearchResultsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, search_id, from_index, to_index,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSearchResults"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSearchResults")))
     }
     /// Returns NodeIds of current top layer elements.
     /// Top layer is rendered closest to the user within a viewport, therefore its elements always
     /// appear on top of all other content.
     #[name("getTopLayerElements")]
-    async fn get_top_layer_elements() -> Result<super::types::DomGetTopLayerElementsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_top_layer_elements() -> Result<super::types::DomGetTopLayerElementsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTopLayerElements"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTopLayerElements")))
     }
     /// Hides any highlight.
     #[name("hideHighlight")]
-    async fn hide_highlight() -> Result<super::types::DomHideHighlightResult, linkrpc::prelude::JsonRpcError> {
+    async fn hide_highlight() -> Result<super::types::DomHideHighlightResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "hideHighlight"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "hideHighlight")))
     }
     /// Highlights DOM node.
     #[name("highlightNode")]
-    async fn highlight_node() -> Result<super::types::DomHighlightNodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn highlight_node() -> Result<super::types::DomHighlightNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightNode")))
     }
     /// Highlights given rectangle.
     #[name("highlightRect")]
-    async fn highlight_rect() -> Result<super::types::DomHighlightRectResult, linkrpc::prelude::JsonRpcError> {
+    async fn highlight_rect() -> Result<super::types::DomHighlightRectResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightRect"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightRect")))
     }
     /// Marks last undoable state.
     #[name("markUndoableState")]
-    async fn mark_undoable_state() -> Result<super::types::DomMarkUndoableStateResult, linkrpc::prelude::JsonRpcError> {
+    async fn mark_undoable_state() -> Result<super::types::DomMarkUndoableStateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "markUndoableState"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "markUndoableState")))
     }
     /// Moves node into the new container, places it before the given anchor.
     #[name("moveTo")]
@@ -302,9 +302,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "targetNodeId")] target_node_id: super::types::DomNodeId,
         #[serde(rename = "insertBeforeNodeId")] insert_before_node_id: Option<super::types::DomNodeId>,
-    ) -> Result<super::types::DomMoveToResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomMoveToResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, target_node_id, insert_before_node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "moveTo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "moveTo")))
     }
     /// Searches for a given string in the DOM tree. Use `getSearchResults` to access search results or
     /// `cancelSearch` to end this search session.
@@ -312,60 +312,60 @@ pub trait DOMService {
     async fn perform_search(
         query: String,
         #[serde(rename = "includeUserAgentShadowDOM")] include_user_agent_shadow_dom: Option<bool>,
-    ) -> Result<super::types::DomPerformSearchResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomPerformSearchResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, query, include_user_agent_shadow_dom,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "performSearch"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "performSearch")))
     }
     /// Requests that the node is sent to the caller given its path. // FIXME, use XPath
     #[name("pushNodeByPathToFrontend")]
-    async fn push_node_by_path_to_frontend(path: String) -> Result<super::types::DomPushNodeByPathToFrontendResult, linkrpc::prelude::JsonRpcError> {
+    async fn push_node_by_path_to_frontend(path: String) -> Result<super::types::DomPushNodeByPathToFrontendResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, path,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pushNodeByPathToFrontend"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pushNodeByPathToFrontend")))
     }
     /// Requests that a batch of nodes is sent to the caller given their backend node ids.
     #[name("pushNodesByBackendIdsToFrontend")]
-    async fn push_nodes_by_backend_ids_to_frontend(#[serde(rename = "backendNodeIds")] backend_node_ids: Vec<super::types::DomBackendNodeId>) -> Result<super::types::DomPushNodesByBackendIdsToFrontendResult, linkrpc::prelude::JsonRpcError> {
+    async fn push_nodes_by_backend_ids_to_frontend(#[serde(rename = "backendNodeIds")] backend_node_ids: Vec<super::types::DomBackendNodeId>) -> Result<super::types::DomPushNodesByBackendIdsToFrontendResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, backend_node_ids,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pushNodesByBackendIdsToFrontend"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "pushNodesByBackendIdsToFrontend")))
     }
     /// Executes `querySelector` on a given node.
     #[name("querySelector")]
     async fn query_selector(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         selector: String,
-    ) -> Result<super::types::DomQuerySelectorResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomQuerySelectorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, selector,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "querySelector"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "querySelector")))
     }
     /// Executes `querySelectorAll` on a given node.
     #[name("querySelectorAll")]
     async fn query_selector_all(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         selector: String,
-    ) -> Result<super::types::DomQuerySelectorAllResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomQuerySelectorAllResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, selector,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "querySelectorAll"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "querySelectorAll")))
     }
     /// Re-does the last undone action.
     #[name("redo")]
-    async fn redo() -> Result<super::types::DomRedoResult, linkrpc::prelude::JsonRpcError> {
+    async fn redo() -> Result<super::types::DomRedoResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "redo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "redo")))
     }
     /// Removes attribute with given name from an element with given id.
     #[name("removeAttribute")]
     async fn remove_attribute(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         name: String,
-    ) -> Result<super::types::DomRemoveAttributeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomRemoveAttributeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeAttribute"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeAttribute")))
     }
     /// Removes node with given id.
     #[name("removeNode")]
-    async fn remove_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomRemoveNodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn remove_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomRemoveNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeNode")))
     }
     /// Requests that children of the node with given id are returned to the caller in form of
     /// `setChildNodes` events where not only immediate children are retrieved, but all children down to
@@ -375,17 +375,17 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         depth: Option<i64>,
         pierce: Option<bool>,
-    ) -> Result<super::types::DomRequestChildNodesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomRequestChildNodesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, depth, pierce,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestChildNodes"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestChildNodes")))
     }
     /// Requests that the node is sent to the caller given the JavaScript node object reference. All
     /// nodes that form the path from the node to the root are also sent to the client as a series of
     /// `setChildNodes` notifications.
     #[name("requestNode")]
-    async fn request_node(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::DomRequestNodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn request_node(#[serde(rename = "objectId")] object_id: super::types::RuntimeRemoteObjectId) -> Result<super::types::DomRequestNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestNode")))
     }
     /// Resolves the JavaScript node object for a given NodeId or BackendNodeId.
     #[name("resolveNode")]
@@ -394,9 +394,9 @@ pub trait DOMService {
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectGroup")] object_group: Option<String>,
         #[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-    ) -> Result<super::types::DomResolveNodeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomResolveNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_group, execution_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resolveNode")))
     }
     /// Scrolls the specified rect of the given node into view if not already visible.
     /// Note: exactly one between nodeId, backendNodeId and objectId should be passed
@@ -407,9 +407,9 @@ pub trait DOMService {
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
         rect: Option<super::types::DomRect>,
-    ) -> Result<super::types::DomScrollIntoViewIfNeededResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomScrollIntoViewIfNeededResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, backend_node_id, object_id, rect,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "scrollIntoViewIfNeeded"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "scrollIntoViewIfNeeded")))
     }
     /// Sets attribute for an element with given id.
     #[name("setAttributeValue")]
@@ -417,9 +417,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         name: String,
         value: String,
-    ) -> Result<super::types::DomSetAttributeValueResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetAttributeValueResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, name, value,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttributeValue"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttributeValue")))
     }
     /// Sets attributes on element with given id. This method is useful when user edits some existing
     /// attribute value and types in several attribute name/value pairs.
@@ -428,9 +428,9 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         text: String,
         name: Option<String>,
-    ) -> Result<super::types::DomSetAttributesAsTextResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetAttributesAsTextResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, text, name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttributesAsText"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setAttributesAsText")))
     }
     /// Sets files for the given file input element.
     #[name("setFileInputFiles")]
@@ -439,55 +439,55 @@ pub trait DOMService {
         #[serde(rename = "nodeId")] node_id: Option<super::types::DomNodeId>,
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-    ) -> Result<super::types::DomSetFileInputFilesResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetFileInputFilesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, files, node_id, backend_node_id, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFileInputFiles"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setFileInputFiles")))
     }
     /// Enables console to refer to the node with given id via $x (see Command Line API for more details
     /// $x functions).
     #[name("setInspectedNode")]
-    async fn set_inspected_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomSetInspectedNodeResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_inspected_node(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::DomSetInspectedNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInspectedNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInspectedNode")))
     }
     /// Sets node name for a node with given id.
     #[name("setNodeName")]
     async fn set_node_name(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         name: String,
-    ) -> Result<super::types::DomSetNodeNameResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetNodeNameResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, name,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeName"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeName")))
     }
     /// Sets if stack traces should be captured for Nodes. See `Node.getNodeStackTraces`. Default is disabled.
     #[name("setNodeStackTracesEnabled")]
-    async fn set_node_stack_traces_enabled(enable: bool) -> Result<super::types::DomSetNodeStackTracesEnabledResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_node_stack_traces_enabled(enable: bool) -> Result<super::types::DomSetNodeStackTracesEnabledResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, enable,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeStackTracesEnabled"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeStackTracesEnabled")))
     }
     /// Sets node value for a node with given id.
     #[name("setNodeValue")]
     async fn set_node_value(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         value: String,
-    ) -> Result<super::types::DomSetNodeValueResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetNodeValueResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, value,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeValue"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setNodeValue")))
     }
     /// Sets node HTML markup, returns new node id.
     #[name("setOuterHTML")]
     async fn set_outer_html(
         #[serde(rename = "nodeId")] node_id: super::types::DomNodeId,
         #[serde(rename = "outerHTML")] outer_html: String,
-    ) -> Result<super::types::DomSetOuterHtmlresult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomSetOuterHtmlresult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, outer_html,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setOuterHTML"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setOuterHTML")))
     }
     /// Undoes the last performed action.
     #[name("undo")]
-    async fn undo() -> Result<super::types::DomUndoResult, linkrpc::prelude::JsonRpcError> {
+    async fn undo() -> Result<super::types::DomUndoResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "undo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "undo")))
     }
 }
 

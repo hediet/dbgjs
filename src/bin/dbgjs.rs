@@ -4744,7 +4744,7 @@ fn absolute_path(path: &Path) -> Result<std::path::PathBuf, io::Error> {
 
 async fn wait_for_heap_stream<T>(
     output: &OutputFormat,
-    mut result: linkrpc::prelude::CallResult<T>,
+    mut result: linkrpc::prelude::CallResult<T, dbgjs::service_api::HeapProfilerError>,
     mut progress: linkrpc::prelude::StreamReceiver<HeapSnapshotProgress>,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let mut last_progress = None::<HeapSnapshotProgress>;
@@ -6743,8 +6743,8 @@ fn parse_breakpoint_spec(
     Ok((specification, parse_mutation_options(&mutation_arguments)?))
 }
 
-fn rpc<T>(result: Result<T, linkrpc::prelude::JsonRpcError>) -> Result<T, io::Error> {
-    result.map_err(|error| io::Error::other(format!("{error:?}")))
+fn rpc<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, io::Error> {
+    result.map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn usage() -> &'static str {

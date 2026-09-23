@@ -24,7 +24,7 @@ pub trait SmartCardEmulationEventsService {
     async fn begin_transaction_requested(
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle,);
         Ok(())
     }
@@ -38,7 +38,7 @@ pub trait SmartCardEmulationEventsService {
     async fn cancel_requested(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "contextId")] context_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id,);
         Ok(())
     }
@@ -55,7 +55,7 @@ pub trait SmartCardEmulationEventsService {
         reader: String,
         #[serde(rename = "shareMode")] share_mode: super::types::SmartCardEmulationShareMode,
         #[serde(rename = "preferredProtocols")] preferred_protocols: super::types::SmartCardEmulationProtocolSet,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id, reader, share_mode, preferred_protocols,);
         Ok(())
     }
@@ -71,7 +71,7 @@ pub trait SmartCardEmulationEventsService {
         handle: i64,
         #[serde(rename = "controlCode")] control_code: i64,
         data: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, control_code, data,);
         Ok(())
     }
@@ -86,7 +86,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
         disposition: super::types::SmartCardEmulationDisposition,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, disposition,);
         Ok(())
     }
@@ -101,7 +101,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
         disposition: super::types::SmartCardEmulationDisposition,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, disposition,);
         Ok(())
     }
@@ -112,7 +112,7 @@ pub trait SmartCardEmulationEventsService {
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardestablishcontext
     #[name("establishContextRequested")]
     #[notification]
-    async fn establish_context_requested(#[serde(rename = "requestId")] request_id: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn establish_context_requested(#[serde(rename = "requestId")] request_id: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
         Ok(())
     }
@@ -127,7 +127,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
         #[serde(rename = "attribId")] attrib_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, attrib_id,);
         Ok(())
     }
@@ -143,7 +143,7 @@ pub trait SmartCardEmulationEventsService {
         #[serde(rename = "contextId")] context_id: i64,
         #[serde(rename = "readerStates")] reader_states: Vec<super::types::SmartCardEmulationReaderStateIn>,
         timeout: Option<i64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id, reader_states, timeout,);
         Ok(())
     }
@@ -157,7 +157,7 @@ pub trait SmartCardEmulationEventsService {
     async fn list_readers_requested(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "contextId")] context_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id,);
         Ok(())
     }
@@ -171,7 +171,7 @@ pub trait SmartCardEmulationEventsService {
     async fn release_context_requested(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "contextId")] context_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id,);
         Ok(())
     }
@@ -187,7 +187,7 @@ pub trait SmartCardEmulationEventsService {
         handle: i64,
         #[serde(rename = "attribId")] attrib_id: i64,
         data: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, attrib_id, data,);
         Ok(())
     }
@@ -201,7 +201,7 @@ pub trait SmartCardEmulationEventsService {
     async fn status_requested(
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle,);
         Ok(())
     }
@@ -217,7 +217,7 @@ pub trait SmartCardEmulationEventsService {
         handle: i64,
         data: String,
         protocol: Option<super::types::SmartCardEmulationProtocol>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, data, protocol,);
         Ok(())
     }

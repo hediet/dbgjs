@@ -16,42 +16,42 @@
 pub trait TracingService {
     /// Stop trace events collection.
     #[name("end")]
-    async fn end() -> Result<super::types::TracingEndResult, linkrpc::prelude::JsonRpcError> {
+    async fn end() -> Result<super::types::TracingEndResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "end"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "end")))
     }
     /// Gets supported tracing categories.
     #[name("getCategories")]
-    async fn get_categories() -> Result<super::types::TracingGetCategoriesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_categories() -> Result<super::types::TracingGetCategoriesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCategories"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getCategories")))
     }
     /// Return a descriptor for all available tracing categories.
     #[name("getTrackEventDescriptor")]
-    async fn get_track_event_descriptor() -> Result<super::types::TracingGetTrackEventDescriptorResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_track_event_descriptor() -> Result<super::types::TracingGetTrackEventDescriptorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTrackEventDescriptor"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getTrackEventDescriptor")))
     }
     /// Record a clock sync marker in the trace.
     #[name("recordClockSyncMarker")]
-    async fn record_clock_sync_marker(#[serde(rename = "syncId")] sync_id: String) -> Result<super::types::TracingRecordClockSyncMarkerResult, linkrpc::prelude::JsonRpcError> {
+    async fn record_clock_sync_marker(#[serde(rename = "syncId")] sync_id: String) -> Result<super::types::TracingRecordClockSyncMarkerResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, sync_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "recordClockSyncMarker"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "recordClockSyncMarker")))
     }
     /// Request a global memory dump.
     #[name("requestMemoryDump")]
     async fn request_memory_dump(
         deterministic: Option<bool>,
         #[serde(rename = "levelOfDetail")] level_of_detail: Option<super::types::TracingMemoryDumpLevelOfDetail>,
-    ) -> Result<super::types::TracingRequestMemoryDumpResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::TracingRequestMemoryDumpResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, deterministic, level_of_detail,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestMemoryDump"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "requestMemoryDump")))
     }
     /// Start trace events collection.
     #[name("start")]
-    async fn start(#[params] params: super::types::TracingStartParams) -> Result<super::types::TracingStartResult, linkrpc::prelude::JsonRpcError> {
+    async fn start(#[params] params: super::types::TracingStartParams) -> Result<super::types::TracingStartResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "start"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "start")))
     }
 }
 

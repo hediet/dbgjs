@@ -120,6 +120,80 @@ daemon before starting the new one. Its hash changes because the other methods
 have moved to their capability interfaces. The default interface is lifecycle
 only; clients must use the appropriate capability for other operations.
 
+## Typed application errors
+
+The target-debugger, capture, coverage, CPU-profiler, and heap-profiler
+capabilities declare their recoverable errors in
+[`service_api/errors.rs`](../src/service_api/errors.rs). Generated Rust clients
+return the capability's error enum directly, with a `Generic(RpcCallError)`
+fallback for transport, codec, undeclared remote, and non-compliant-server
+failures. There is no outer application-error wrapper to match:
+
+```rust,ignore
+use dbgjs::service_api::TargetError;
+
+match client.targets.evaluate_target(target, epoch, 3, "value".into()).await {
+    Err(TargetError::FrameNotFound { frame_index }) => {
+        eprintln!("Frame {frame_index} disappeared; refresh the paused state");
+    }
+    Err(error) => return Err(error.into()),
+    Ok(value) => { /* display the evaluation */ }
+}
+```
+
+Application errors use LinkRPC's default application code `1`; their named
+`data.type` discriminator and structured `data.data` distinguish the cases.
+Messages interpolate the actual values and agree with Rust `Display`. For example:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "error": {
+    "code": 1,
+    "message": "frame 3 does not exist in the current pause",
+    "data": {
+      "type": "FrameNotFound",
+      "data": { "frame_index": 3 }
+    }
+  }
+}
+```
+
+The generic fallback is not an application-error declaration and is excluded
+from reflection. Unexpected internal failures, cancellation, and forwarded CDP
+errors remain generic; forwarded CDP errors preserve their code, message, and
+data. Capabilities without declared application errors return `RpcCallError`
+from their generated Rust clients. Parameter decoding errors remain JSON-RPC
+invalid-params failures.
+
+The same declarations flow through reflection into generated TypeScript
+contracts. No consumer should parse error messages to identify a declared case.
+The TypeScript `DbgServiceClient` preserves declared failures as branded
+`RpcFailure` values for explicit handling:
+
+```ts
+import { isRpcFailure } from "@hediet/linkrpc";
+
+const result = await client.targets.evaluate_target({
+    targetRef, pauseEpoch, frameIndex: 3, expression: "value",
+});
+if (isRpcFailure(result)) {
+    if (result.error.type === "FrameNotFound") {
+        console.error(`Frame ${result.error.data.frame_index} disappeared`);
+    }
+} else {
+    // Display the evaluation.
+}
+```
+
+Generic failures still throw. At the extension's existing throwing UI boundary,
+`DaemonClient` unwraps final results and throws the application message with
+the original branded failure preserved as `Error.cause`. Streaming consumers
+unwrap only the final result; progress and cancellation handles remain intact.
+These declarations change the affected interface hashes, so regenerate and
+upgrade daemon and clients together.
+
 ## Bare CDP interfaces versus daemon capabilities
 
 Multiple interfaces and bare wire addressing are separate concerns. Each CDP
@@ -257,7 +331,7 @@ and failures, and is not the input to code generation.
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
 dependencies resolve from public crates.io packages. The root
 `[workspace.dependencies]` pins `linkrpc` and `linkrpc-tokio` to the exact
-published version `=0.3.0-next.20260922.2`; the runtime, protocol crate, and
+published version `=0.3.0-next.20260923.1`; the runtime, protocol crate, and
 generator inherit these dependencies. `Cargo.lock` also locks the transitive
 macro crate and registry checksums.
 Ordinary installs and CI do not need access to the private LinkRPC Git

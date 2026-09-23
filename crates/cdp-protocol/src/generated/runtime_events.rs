@@ -26,14 +26,14 @@ pub trait RuntimeEventsService {
         name: String,
         payload: String,
         #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, name, payload, execution_context_id,);
         Ok(())
     }
     /// Issued when console API was called.
     #[name("consoleAPICalled")]
     #[notification]
-    async fn console_apicalled(#[params] params: super::types::RuntimeConsoleApicalledParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn console_apicalled(#[params] params: super::types::RuntimeConsoleApicalledParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
@@ -43,7 +43,7 @@ pub trait RuntimeEventsService {
     async fn exception_revoked(
         reason: String,
         #[serde(rename = "exceptionId")] exception_id: i64,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, reason, exception_id,);
         Ok(())
     }
@@ -53,14 +53,14 @@ pub trait RuntimeEventsService {
     async fn exception_thrown(
         timestamp: super::types::RuntimeTimestamp,
         #[serde(rename = "exceptionDetails")] exception_details: super::types::RuntimeExceptionDetails,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, timestamp, exception_details,);
         Ok(())
     }
     /// Issued when new execution context is created.
     #[name("executionContextCreated")]
     #[notification]
-    async fn execution_context_created(context: super::types::RuntimeExecutionContextDescription) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn execution_context_created(context: super::types::RuntimeExecutionContextDescription) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context,);
         Ok(())
     }
@@ -70,14 +70,14 @@ pub trait RuntimeEventsService {
     async fn execution_context_destroyed(
         #[serde(rename = "executionContextId")] execution_context_id: super::types::RuntimeExecutionContextId,
         #[serde(rename = "executionContextUniqueId")] execution_context_unique_id: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, execution_context_id, execution_context_unique_id,);
         Ok(())
     }
     /// Issued when all executionContexts were cleared in browser
     #[name("executionContextsCleared")]
     #[notification]
-    async fn execution_contexts_cleared() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn execution_contexts_cleared() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -89,7 +89,7 @@ pub trait RuntimeEventsService {
         object: super::types::RuntimeRemoteObject,
         hints: std::collections::HashMap<String, serde_json::Value>,
         #[serde(rename = "executionContextId")] execution_context_id: Option<super::types::RuntimeExecutionContextId>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, object, hints, execution_context_id,);
         Ok(())
     }

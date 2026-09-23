@@ -7,6 +7,7 @@ import test from "node:test";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "zod/v4/core";
+import { isRpcFailure, RpcError } from "@hediet/linkrpc";
 import {
 	breakpointStatusKind,
 	observationSnapshot,
@@ -15,7 +16,10 @@ import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../dae
 import { resolveDaemonExecutable } from "../daemonProcess.js";
 import { connectDaemon } from "../daemonTransport.js";
 import { DbgServiceClient } from "../dbgServiceClient.js";
-import { ContextApi, TargetDebuggerApi } from "../generated/interfaces.js";
+import {
+	CaptureApi, ContextApi, CoverageApi, CpuProfilerApi, HeapProfilerApi, TargetDebuggerApi,
+} from "../generated/interfaces.js";
+import { unwrapRpcResult } from "../rpcResult.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
 import {
 	breakpointId,
@@ -345,6 +349,128 @@ test("debug service facets route through one authenticated connection", async ()
 		assert.equal(connections, 1);
 		assert.equal(preambles, 1);
 	} finally {
+		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("generated capability failures remain typed values and throwing adapters preserve diagnostics", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-typed-errors-"));
+	const endpoint = testEndpoint(directory);
+	const stateFile = join(directory, "service.json");
+	const sockets = new Set<Socket>();
+	const diagnostic = "Detailed remote diagnostic, not the descriptor's template";
+	let generic = false;
+	const server = createServer(socket => {
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		socket.on("close", () => sockets.delete(socket));
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) return;
+				const message = JSON.parse(buffer.slice(0, newline));
+				buffer = buffer.slice(newline + 1);
+				if ("hello" in message) continue;
+				if (generic) {
+					sendError(socket, message.id, diagnostic);
+					continue;
+				}
+				const capture = message.method === "dev.dbgjs.capture::list_captures";
+				socket.write(`${JSON.stringify({
+					jsonrpc: "2.0",
+					id: message.id,
+					error: {
+						code: 1,
+						message: diagnostic,
+						data: capture
+							? { type: "ContextNotFound", data: { context_id: "missing-context" } }
+							: { type: "TargetSelectorNotFound", data: { selector: "missing-target" } },
+					},
+				})}\n`);
+			}
+		});
+	});
+	await listen(server, endpoint);
+	await writeFile(stateFile, JSON.stringify({
+		transport: { kind: "test", path: endpoint }, token: "typed-token",
+	}));
+	const daemon = await connectDaemon(endpoint, "typed-token");
+	const adapter = await DaemonClient.connect(stateFile);
+	try {
+		const client = new DbgServiceClient(daemon.connection);
+		const targetRef = {
+			connection: { contextId: "missing-context", connectionId: "node" },
+			targetId: "missing-target",
+		};
+		const scope = { targetRef };
+		const coverage = { ...scope, captureId: "capture", noCache: false, sourcePath: null };
+		const cases = [
+			[CaptureApi.members.list_captures.errors,
+				() => client.captures.list_captures({ contextId: "missing-context" })],
+			[TargetDebuggerApi.members.get_target.errors, () => client.targets.get_target(scope)],
+			[CoverageApi.members.get_coverage.errors, () => client.coverage.get_coverage(coverage)],
+			[CpuProfilerApi.members.get_cpu_profile.errors,
+				() => client.cpu.get_cpu_profile({ ...coverage, project: false })],
+			[HeapProfilerApi.members.get_heap_snapshot_progress.errors,
+				() => client.heap.get_heap_snapshot_progress(scope)],
+		] as const;
+		for (const [declarations, call] of cases) {
+			const outcome = await call();
+			assert.ok(isRpcFailure(outcome));
+			assert.equal(outcome.error.code, 1);
+			assert.equal(outcome.error.message, diagnostic);
+			assert.ok(declarations.some(declaration => declaration.is(outcome)));
+			assert.throws(() => unwrapRpcResult(outcome), error =>
+				error instanceof Error && error.message === diagnostic && error.cause === outcome);
+		}
+		const targetFailure = await client.targets.get_target(scope);
+		assert.ok(isRpcFailure(targetFailure));
+		const selectorError = TargetDebuggerApi.members.get_target.errors.find(error => error.type === "TargetSelectorNotFound");
+		assert.ok(selectorError);
+		assert.ok(selectorError.is(targetFailure));
+		assert.equal(targetFailure.error.data.selector, "missing-target");
+
+		const context = "missing-context";
+		const connection = "node";
+		const target = "missing-target";
+		const adapterCalls = [
+			() => adapter.getTarget(context, connection, target),
+			() => adapter.attachTarget(context, connection, target, 1),
+			() => adapter.waitTarget(context, connection, target, { kind: "paused", afterEpoch: 0 }, 1),
+			() => adapter.observeTarget(context, connection, target, 1, 1),
+			() => adapter.releaseTarget(context, connection, target),
+			() => adapter.resumeTarget(context, connection, target, 1),
+			() => adapter.stepTarget(context, connection, target, 1, "over"),
+			() => adapter.evaluateTarget(context, connection, target, 1, 0, "1"),
+			() => adapter.getScopeVariables(context, connection, target, 1, 0, 0),
+			() => adapter.getObjectProperties(context, connection, target, 1, "object"),
+		];
+		for (const call of adapterCalls) {
+			await assert.rejects(async () => await call(), error => {
+				assert.ok(error instanceof Error);
+				assert.equal(error.message, diagnostic);
+				assert.ok(isRpcFailure(error.cause));
+				assert.ok(selectorError.is(error.cause));
+				assert.equal(error.cause.error.data.selector, "missing-target");
+				return true;
+			});
+		}
+		generic = true;
+		for (const [, call] of cases) {
+			await assert.rejects(async () => await call(), error =>
+				error instanceof RpcError && error.code === -32601 && error.message === diagnostic);
+		}
+		await assert.rejects(adapter.getTarget(context, connection, target), error =>
+			error instanceof RpcError && error.code === -32601 && error.message === diagnostic);
+		const success = { error: { code: 1, message: diagnostic } };
+		assert.equal(unwrapRpcResult(success), success, "ordinary success objects are not branded failures");
+		assert.equal(unwrapRpcResult(null), null, "empty observations remain successful");
+	} finally {
+		adapter.close();
 		daemon.close();
 		await closeServer(server, sockets);
 		await rm(directory, { recursive: true, force: true });

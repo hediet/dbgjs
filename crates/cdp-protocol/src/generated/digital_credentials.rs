@@ -23,9 +23,9 @@ pub trait DigitalCredentialsService {
         protocol: Option<String>,
         response: Option<std::collections::HashMap<String, serde_json::Value>>,
         #[serde(rename = "frameId")] frame_id: Option<super::types::PageFrameId>,
-    ) -> Result<super::types::DigitalCredentialsSetVirtualWalletBehaviorResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DigitalCredentialsSetVirtualWalletBehaviorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, action, protocol, response, frame_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualWalletBehavior"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setVirtualWalletBehavior")))
     }
 }
 

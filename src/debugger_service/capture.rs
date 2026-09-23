@@ -6,10 +6,10 @@ impl CaptureApi for DebuggerService {
         &self,
         _ctx: &CallCtx,
         context_id: String,
-    ) -> Result<Vec<CaptureSnapshot>, JsonRpcError> {
+    ) -> Result<Vec<CaptureSnapshot>, CaptureError> {
         let state = self.state.lock().await;
         if !state.contexts.contains_key(&context_id) {
-            return Err(not_found("context", &context_id));
+            return Err(CaptureError::ContextNotFound { context_id });
         }
         Ok(state
             .captures
@@ -23,7 +23,7 @@ impl CaptureApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
         capture_name: String,
-    ) -> Result<CaptureSnapshot, JsonRpcError> {
+    ) -> Result<CaptureSnapshot, CaptureError> {
         let state = self.state.lock().await;
         Ok(
             select_stored_capture(&state, &context_id, &capture_name, None, None, None)?
@@ -37,7 +37,7 @@ impl CaptureApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
         capture_name: String,
-    ) -> Result<bool, JsonRpcError> {
+    ) -> Result<bool, CaptureError> {
         let mut state = self.state.lock().await;
         let key = (context_id, capture_name.clone());
         let (capture, completed_reservation) =
@@ -45,16 +45,16 @@ impl CaptureApi for DebuggerService {
                 (capture, false)
             } else if let Some(reservation) = state.capture_reservations.get(&key) {
                 if reservation.deleting {
-                    return Err(invalid_state(&format!(
-                        "capture '{capture_name}' is currently being deleted from context '{}'",
-                        key.0
-                    )));
+                    return Err(CaptureError::CaptureDeleting {
+                        context_id: key.0.clone(),
+                        capture_id: capture_name,
+                    });
                 }
                 let Some(completed) = &reservation.completed else {
-                    return Err(invalid_state(&format!(
-                        "capture '{capture_name}' is currently being stored in context '{}'",
-                        key.0
-                    )));
+                    return Err(CaptureError::CaptureBusy {
+                        context_id: key.0.clone(),
+                        capture_id: capture_name,
+                    });
                 };
                 (
                     StoredCapture {
@@ -69,7 +69,10 @@ impl CaptureApi for DebuggerService {
                     true,
                 )
             } else {
-                return Err(not_found("capture", &capture_name));
+                return Err(CaptureError::CaptureNotFound {
+                    context_id: key.0.clone(),
+                    selector: capture_name,
+                });
             };
         let storage_id = capture.metadata.storage_id.clone();
         let debugger = state
@@ -103,7 +106,7 @@ impl CaptureApi for DebuggerService {
                 if let Some(guard) = &mut deletion_guard {
                     guard.restore().await;
                 }
-                return Err(target_debugger_rpc_error(error));
+                return Err(target_debugger_rpc_error(error).into());
             }
         }
         let payload_path = capture.payload_path();
@@ -117,12 +120,12 @@ impl CaptureApi for DebuggerService {
                 return Err(internal_error(format!(
                     "failed to discard completed capture '{capture_name}'; its payload '{}' and retryable reservation were retained: {error}",
                     payload_path.display()
-                )));
+                )).into());
             }
             return Err(internal_error(format!(
                 "capture '{capture_name}' was removed from the catalog but its payload '{}' could not be deleted and will be retried during startup cleanup: {error}",
                 payload_path.display()
-            )));
+            )).into());
         }
         if completed_reservation {
             let mut state = self.state.lock().await;
@@ -149,7 +152,7 @@ impl CaptureApi for DebuggerService {
         connection_id: Option<String>,
         path_glob: Option<String>,
         exclude_capture_id: Option<String>,
-    ) -> Result<CoverageSnapshot, JsonRpcError> {
+    ) -> Result<CoverageSnapshot, CaptureError> {
         let (payload, name, baseline_payload) = {
             let state = self.state.lock().await;
             let capture = select_stored_capture(
@@ -187,14 +190,14 @@ impl CaptureApi for DebuggerService {
         else {
             return Err(invalid_params(&format!(
                 "capture '{capture_name}' is not a coverage capture"
-            )));
+            )).into());
         };
         if let Some(payload) = baseline_payload {
             let CapturePayload::Coverage(baseline) =
                 load_capture_payload(&payload, CaptureKind::Coverage)
                     .map_err(capture_payload_rpc_error)?
             else {
-                return Err(invalid_params("baseline is not a coverage capture"));
+                return Err(invalid_params("baseline is not a coverage capture").into());
             };
             snapshot = crate::target_debugger::exclude_coverage(snapshot, &baseline);
         }
@@ -216,7 +219,7 @@ impl CaptureApi for DebuggerService {
         _source_path: Option<String>,
         target_id: Option<String>,
         connection_id: Option<String>,
-    ) -> Result<CpuProfileSnapshot, JsonRpcError> {
+    ) -> Result<CpuProfileSnapshot, CaptureError> {
         let (payload, name) = {
             let state = self.state.lock().await;
             let capture = select_stored_capture(
@@ -235,7 +238,7 @@ impl CaptureApi for DebuggerService {
         else {
             return Err(invalid_params(&format!(
                 "capture '{capture_name}' is not a CPU profile capture"
-            )));
+            )).into());
         };
         snapshot.capture_id = name;
         if snapshot.functions.is_empty() && !snapshot.nodes.is_empty() {
@@ -253,7 +256,7 @@ impl CaptureApi for DebuggerService {
         filter: Option<String>,
         target_id: Option<String>,
         connection_id: Option<String>,
-    ) -> Result<HeapClassSnapshot, JsonRpcError> {
+    ) -> Result<HeapClassSnapshot, CaptureError> {
         let (payload, mapping, capture_name) = {
             let state = self.state.lock().await;
             let capture = select_stored_capture(
@@ -276,7 +279,7 @@ impl CaptureApi for DebuggerService {
         else {
             return Err(invalid_state(
                 "stored heap payload kind does not match metadata",
-            ));
+            ).into());
         };
         let capture_for_task = capture_name.clone();
         tokio::task::spawn_blocking(move || {
@@ -290,6 +293,7 @@ impl CaptureApi for DebuggerService {
         .await
         .map_err(|error| internal_error(error.to_string()))?
         .map_err(target_debugger_rpc_error)
+        .map_err(CaptureError::from)
     }
 
     async fn supply_stored_heap_source_map(
@@ -298,7 +302,7 @@ impl CaptureApi for DebuggerService {
         context_id: String,
         capture_name: String,
         supply: crate::service_api::HeapSourceMapSupply,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), CaptureError> {
         let mut state = self.state.lock().await;
         let previous = state.clone();
         let capture_name = select_stored_capture(
@@ -317,7 +321,7 @@ impl CaptureApi for DebuggerService {
             .get_mut(&(context_id, capture_name.clone()))
             .ok_or_else(|| not_found("capture", &capture_name))?;
         if capture.metadata.kind != CaptureKind::HeapSnapshot {
-            return Err(invalid_params("capture is not a heap snapshot"));
+            return Err(invalid_params("capture is not a heap snapshot").into());
         }
         let mapping = capture.heap_mapping.as_mut().ok_or_else(|| {
             invalid_state(

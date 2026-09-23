@@ -22,28 +22,28 @@ pub trait WebMCPEventsService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "invocationId")] invocation_id: String,
         input: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, tool_name, frame_id, invocation_id, input,);
         Ok(())
     }
     /// Event fired when a tool invocation completes or fails.
     #[name("toolResponded")]
     #[notification]
-    async fn tool_responded(#[params] params: super::types::WebMcpToolRespondedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn tool_responded(#[params] params: super::types::WebMcpToolRespondedParams) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
         Ok(())
     }
     /// Event fired when new tools are added.
     #[name("toolsAdded")]
     #[notification]
-    async fn tools_added(tools: Vec<super::types::WebMcpTool>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn tools_added(tools: Vec<super::types::WebMcpTool>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, tools,);
         Ok(())
     }
     /// Event fired when tools are removed.
     #[name("toolsRemoved")]
     #[notification]
-    async fn tools_removed(tools: Vec<super::types::WebMcpRemovedTool>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn tools_removed(tools: Vec<super::types::WebMcpRemovedTool>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, tools,);
         Ok(())
     }

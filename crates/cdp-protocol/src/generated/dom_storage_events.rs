@@ -21,7 +21,7 @@ pub trait DOMStorageEventsService {
         #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
         key: String,
         #[serde(rename = "newValue")] new_value: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id, key, new_value,);
         Ok(())
     }
@@ -30,7 +30,7 @@ pub trait DOMStorageEventsService {
     async fn dom_storage_item_removed(
         #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
         key: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id, key,);
         Ok(())
     }
@@ -41,13 +41,13 @@ pub trait DOMStorageEventsService {
         key: String,
         #[serde(rename = "oldValue")] old_value: String,
         #[serde(rename = "newValue")] new_value: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id, key, old_value, new_value,);
         Ok(())
     }
     #[name("domStorageItemsCleared")]
     #[notification]
-    async fn dom_storage_items_cleared(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn dom_storage_items_cleared(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id,);
         Ok(())
     }

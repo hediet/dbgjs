@@ -16,43 +16,43 @@
 /// Query and modify DOM storage.
 pub trait DOMStorageService {
     #[name("clear")]
-    async fn clear(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<super::types::DomstorageClearResult, linkrpc::prelude::JsonRpcError> {
+    async fn clear(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<super::types::DomstorageClearResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clear"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clear")))
     }
     /// Disables storage tracking, prevents storage events from being sent to the client.
     #[name("disable")]
-    async fn disable() -> Result<super::types::DomstorageDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::DomstorageDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables storage tracking, storage events will now be delivered to the client.
     #[name("enable")]
-    async fn enable() -> Result<super::types::DomstorageEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::DomstorageEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     #[name("getDOMStorageItems")]
-    async fn get_domstorage_items(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<super::types::DomstorageGetDomstorageItemsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_domstorage_items(#[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId) -> Result<super::types::DomstorageGetDomstorageItemsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDOMStorageItems"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getDOMStorageItems")))
     }
     #[name("removeDOMStorageItem")]
     async fn remove_domstorage_item(
         #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
         key: String,
-    ) -> Result<super::types::DomstorageRemoveDomstorageItemResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomstorageRemoveDomstorageItemResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id, key,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeDOMStorageItem"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeDOMStorageItem")))
     }
     #[name("setDOMStorageItem")]
     async fn set_domstorage_item(
         #[serde(rename = "storageId")] storage_id: super::types::DomstorageStorageId,
         key: String,
         value: String,
-    ) -> Result<super::types::DomstorageSetDomstorageItemResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::DomstorageSetDomstorageItemResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, storage_id, key, value,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDOMStorageItem"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDOMStorageItem")))
     }
 }
 

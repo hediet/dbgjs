@@ -20,7 +20,7 @@ pub trait CastEventsService {
     /// |issueMessage| is empty if there is no issue.
     #[name("issueUpdated")]
     #[notification]
-    async fn issue_updated(#[serde(rename = "issueMessage")] issue_message: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn issue_updated(#[serde(rename = "issueMessage")] issue_message: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, issue_message,);
         Ok(())
     }
@@ -28,7 +28,7 @@ pub trait CastEventsService {
     /// device or a software surface that you can cast to.
     #[name("sinksUpdated")]
     #[notification]
-    async fn sinks_updated(sinks: Vec<super::types::CastSink>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn sinks_updated(sinks: Vec<super::types::CastSink>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, sinks,);
         Ok(())
     }

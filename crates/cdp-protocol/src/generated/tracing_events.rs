@@ -20,7 +20,7 @@ pub trait TracingEventsService {
         #[serde(rename = "percentFull")] percent_full: Option<f64>,
         #[serde(rename = "eventCount")] event_count: Option<f64>,
         value: Option<f64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, percent_full, event_count, value,);
         Ok(())
     }
@@ -28,7 +28,7 @@ pub trait TracingEventsService {
     /// sent as a sequence of dataCollected events followed by tracingComplete event.
     #[name("dataCollected")]
     #[notification]
-    async fn data_collected(value: Vec<std::collections::HashMap<String, serde_json::Value>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn data_collected(value: Vec<std::collections::HashMap<String, serde_json::Value>>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, value,);
         Ok(())
     }
@@ -41,7 +41,7 @@ pub trait TracingEventsService {
         stream: Option<super::types::IoStreamHandle>,
         #[serde(rename = "traceFormat")] trace_format: Option<super::types::TracingStreamFormat>,
         #[serde(rename = "streamCompression")] stream_compression: Option<super::types::TracingStreamCompression>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, data_loss_occurred, stream, trace_format, stream_compression,);
         Ok(())
     }

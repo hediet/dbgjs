@@ -21,7 +21,7 @@ pub trait TetheringEventsService {
     async fn accepted(
         port: i64,
         #[serde(rename = "connectionId")] connection_id: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, port, connection_id,);
         Ok(())
     }

@@ -16,15 +16,15 @@
 pub trait SmartCardEmulationService {
     /// Disables the |SmartCardEmulation| domain.
     #[name("disable")]
-    async fn disable() -> Result<super::types::SmartCardEmulationDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::SmartCardEmulationDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables the |SmartCardEmulation| domain.
     #[name("enable")]
-    async fn enable() -> Result<super::types::SmartCardEmulationEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::SmartCardEmulationEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Reports the result of a |SCardBeginTransaction| call.
     /// On success, this creates a new transaction object.
@@ -36,9 +36,9 @@ pub trait SmartCardEmulationService {
     async fn report_begin_transaction_result(
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
-    ) -> Result<super::types::SmartCardEmulationReportBeginTransactionResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportBeginTransactionResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportBeginTransactionResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportBeginTransactionResult")))
     }
     /// Reports the successful result of a |SCardConnect| call.
     ///
@@ -50,9 +50,9 @@ pub trait SmartCardEmulationService {
         #[serde(rename = "requestId")] request_id: String,
         handle: i64,
         #[serde(rename = "activeProtocol")] active_protocol: Option<super::types::SmartCardEmulationProtocol>,
-    ) -> Result<super::types::SmartCardEmulationReportConnectResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportConnectResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, handle, active_protocol,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportConnectResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportConnectResult")))
     }
     /// Reports the successful result of a call that sends back data on success.
     /// Used for |SCardTransmit|, |SCardControl|, and |SCardGetAttrib|.
@@ -73,18 +73,18 @@ pub trait SmartCardEmulationService {
     async fn report_data_result(
         #[serde(rename = "requestId")] request_id: String,
         data: String,
-    ) -> Result<super::types::SmartCardEmulationReportDataResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportDataResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, data,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportDataResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportDataResult")))
     }
     /// Reports an error result for the given request.
     #[name("reportError")]
     async fn report_error(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "resultCode")] result_code: super::types::SmartCardEmulationResultCode,
-    ) -> Result<super::types::SmartCardEmulationReportErrorResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportErrorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, result_code,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportError"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportError")))
     }
     /// Reports the successful result of a |SCardEstablishContext| call.
     ///
@@ -95,9 +95,9 @@ pub trait SmartCardEmulationService {
     async fn report_establish_context_result(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "contextId")] context_id: i64,
-    ) -> Result<super::types::SmartCardEmulationReportEstablishContextResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportEstablishContextResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportEstablishContextResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportEstablishContextResult")))
     }
     /// Reports the successful result of a |SCardGetStatusChange| call.
     ///
@@ -108,9 +108,9 @@ pub trait SmartCardEmulationService {
     async fn report_get_status_change_result(
         #[serde(rename = "requestId")] request_id: String,
         #[serde(rename = "readerStates")] reader_states: Vec<super::types::SmartCardEmulationReaderStateOut>,
-    ) -> Result<super::types::SmartCardEmulationReportGetStatusChangeResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportGetStatusChangeResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, reader_states,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportGetStatusChangeResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportGetStatusChangeResult")))
     }
     /// Reports the successful result of a |SCardListReaders| call.
     ///
@@ -121,9 +121,9 @@ pub trait SmartCardEmulationService {
     async fn report_list_readers_result(
         #[serde(rename = "requestId")] request_id: String,
         readers: Vec<String>,
-    ) -> Result<super::types::SmartCardEmulationReportListReadersResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportListReadersResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, readers,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportListReadersResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportListReadersResult")))
     }
     /// Reports the successful result of a call that returns only a result code.
     /// Used for: |SCardCancel|, |SCardDisconnect|, |SCardSetAttrib|, |SCardEndTransaction|.
@@ -145,9 +145,9 @@ pub trait SmartCardEmulationService {
     ///    PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#gae8742473b404363e5c587f570d7e2f3b
     ///    Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardendtransaction
     #[name("reportPlainResult")]
-    async fn report_plain_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportPlainResultResult, linkrpc::prelude::JsonRpcError> {
+    async fn report_plain_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportPlainResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportPlainResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportPlainResult")))
     }
     /// Reports the successful result of a |SCardReleaseContext| call.
     ///
@@ -155,9 +155,9 @@ pub trait SmartCardEmulationService {
     /// PC/SC Lite: https://pcsclite.apdu.fr/api/group__API.html#ga6aabcba7744c5c9419fdd6404f73a934
     /// Microsoft: https://learn.microsoft.com/en-us/windows/win32/api/winscard/nf-winscard-scardreleasecontext
     #[name("reportReleaseContextResult")]
-    async fn report_release_context_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportReleaseContextResultResult, linkrpc::prelude::JsonRpcError> {
+    async fn report_release_context_result(#[serde(rename = "requestId")] request_id: String) -> Result<super::types::SmartCardEmulationReportReleaseContextResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportReleaseContextResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportReleaseContextResult")))
     }
     /// Reports the successful result of a |SCardStatus| call.
     ///
@@ -171,9 +171,9 @@ pub trait SmartCardEmulationService {
         state: super::types::SmartCardEmulationConnectionState,
         atr: String,
         protocol: Option<super::types::SmartCardEmulationProtocol>,
-    ) -> Result<super::types::SmartCardEmulationReportStatusResultResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::SmartCardEmulationReportStatusResultResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, request_id, reader_name, state, atr, protocol,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportStatusResult"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "reportStatusResult")))
     }
 }
 

@@ -7,9 +7,9 @@ impl TargetDebuggerApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
         selector: String,
-    ) -> Result<CanonicalTargetSnapshot, JsonRpcError> {
+    ) -> Result<CanonicalTargetSnapshot, TargetError> {
         let state = self.state.lock().await;
-        Self::resolve_canonical_target(&state, &context_id, &selector)
+        Self::resolve_canonical_target(&state, &context_id, &selector).map_err(Into::into)
     }
 
     async fn attach_target(
@@ -17,7 +17,7 @@ impl TargetDebuggerApi for DebuggerService {
         ctx: &CallCtx,
         target_ref: TargetRef,
         options: TargetAttachOptions,
-    ) -> Result<TargetAttachmentResult, JsonRpcError> {
+    ) -> Result<TargetAttachmentResult, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -30,13 +30,14 @@ impl TargetDebuggerApi for DebuggerService {
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         self.attach_target_internal(ctx, context_id, connection_id, target_id, options)
             .await
+            .map_err(Into::into)
     }
 
     async fn get_target(
         &self,
         _ctx: &CallCtx,
         target_ref: TargetRef,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -55,7 +56,7 @@ impl TargetDebuggerApi for DebuggerService {
         &self,
         _ctx: &CallCtx,
         target_ref: TargetRef,
-    ) -> Result<crate::service_api::TargetLogSnapshot, JsonRpcError> {
+    ) -> Result<crate::service_api::TargetLogSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -84,7 +85,7 @@ impl TargetDebuggerApi for DebuggerService {
             connection.generation,
             &target_id,
         ) {
-            return Err(not_found("target", &target_id));
+            return Err(TargetError::TargetNotFound { target_id });
         }
         let snapshot = state
             .target_debuggers
@@ -112,7 +113,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         predicate: TargetWaitPredicate,
         timeout_ms: u64,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -125,7 +126,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .wait(predicate, Duration::from_millis(timeout_ms))
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn observe_target(
@@ -134,7 +135,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         after_revision: u64,
         timeout_ms: u64,
-    ) -> Result<Option<TargetDebuggerSnapshot>, JsonRpcError> {
+    ) -> Result<Option<TargetDebuggerSnapshot>, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -154,7 +155,7 @@ impl TargetDebuggerApi for DebuggerService {
         {
             Ok(snapshot) => Ok(Some(snapshot)),
             Err(TargetDebuggerError::WaitTimedOut) => Ok(None),
-            Err(error) => Err(target_debugger_rpc_error(error)),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -162,7 +163,7 @@ impl TargetDebuggerApi for DebuggerService {
         &self,
         _ctx: &CallCtx,
         target_ref: TargetRef,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -175,7 +176,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .release_if_waiting()
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn detach_target(
@@ -183,7 +184,7 @@ impl TargetDebuggerApi for DebuggerService {
         ctx: &CallCtx,
         target_ref: TargetRef,
         expected_connection_generation: Option<u64>,
-    ) -> Result<ContextSnapshot, JsonRpcError> {
+    ) -> Result<ContextSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -213,13 +214,13 @@ impl TargetDebuggerApi for DebuggerService {
             {
                 return Err(invalid_state(
                     "connection changed before the target could be detached",
-                ));
+                ).into());
             }
             let debugger = state
                 .target_debuggers
                 .get(&key)
                 .cloned()
-                .ok_or_else(|| not_found("attached target", &target_id))?;
+                .ok_or_else(|| TargetError::TargetNotFound { target_id: target_id.clone() })?;
             let runtime = state
                 .runtimes
                 .get(&(context_id.clone(), connection_id.clone()))
@@ -246,7 +247,7 @@ impl TargetDebuggerApi for DebuggerService {
                         connection_id: connection_id,
                     },
                 )
-                .await;
+                .await.map_err(Into::into);
         }
         let close_error = if let Some(attachment) = attachment {
             attachment
@@ -271,17 +272,17 @@ impl TargetDebuggerApi for DebuggerService {
             } else if state.target_debuggers.contains_key(&key) {
                 return Err(invalid_state(
                     "target attachment changed while detach was pending",
-                ));
+                ).into());
             }
         }
         self.publish_target_attachment_change(&key, attempt).await;
 
         if let Some(error) = close_error {
-            return Err(internal_error(error));
+            return Err(internal_error(error).into());
         }
         let state = self.state.lock().await;
         service_snapshot(&state, &self.agent_instance_id, &context_id)
-            .ok_or_else(|| not_found("context", &context_id))
+            .ok_or_else(|| not_found("context", &context_id).into())
     }
 
     async fn resume_target(
@@ -289,7 +290,7 @@ impl TargetDebuggerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         pause_epoch: u64,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -302,7 +303,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .resume(pause_epoch)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn step_target(
@@ -311,7 +312,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         pause_epoch: u64,
         kind: ApiStepKind,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -331,7 +332,7 @@ impl TargetDebuggerApi for DebuggerService {
                 },
             )
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn evaluate_target(
@@ -341,7 +342,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: Option<u64>,
         frame_index: u32,
         expression: String,
-    ) -> Result<EvaluationSnapshot, JsonRpcError> {
+    ) -> Result<EvaluationSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -354,7 +355,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .evaluate(pause_epoch, frame_index, expression)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn get_scope_variables(
@@ -364,7 +365,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: u64,
         frame_index: u32,
         scope_index: u32,
-    ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+    ) -> Result<Vec<VariableSnapshot>, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -377,7 +378,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .scope_variables(pause_epoch, frame_index, scope_index)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn get_object_properties(
@@ -386,7 +387,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         pause_epoch: Option<u64>,
         object_id: String,
-    ) -> Result<Vec<VariableSnapshot>, JsonRpcError> {
+    ) -> Result<Vec<VariableSnapshot>, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -399,7 +400,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .object_properties(pause_epoch, object_id)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn inspect_value(
@@ -409,7 +410,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: Option<u64>,
         selector: ValueSelector,
         options: ValueInspectionOptions,
-    ) -> Result<ValueSnapshot, JsonRpcError> {
+    ) -> Result<ValueSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -422,7 +423,7 @@ impl TargetDebuggerApi for DebuggerService {
             .await?
             .inspect_value(pause_epoch, selector, options)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 
     async fn set_logpoint(
@@ -434,7 +435,7 @@ impl TargetDebuggerApi for DebuggerService {
         line: u32,
         column: u32,
         expression: String,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -468,7 +469,7 @@ impl TargetDebuggerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         logpoints: Vec<LogpointSpec>,
-    ) -> Result<TargetDebuggerSnapshot, JsonRpcError> {
+    ) -> Result<TargetDebuggerSnapshot, TargetError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -478,7 +479,7 @@ impl TargetDebuggerApi for DebuggerService {
             target_id,
         } = target_ref;
         if logpoints.is_empty() {
-            return Err(invalid_params("at least one logpoint is required"));
+            return Err(invalid_params("at least one logpoint is required").into());
         }
         let breakpoints = logpoints
             .into_iter()
@@ -507,6 +508,6 @@ impl TargetDebuggerApi for DebuggerService {
         debugger
             .set_breakpoints(u64::MAX, breakpoints)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(TargetError::from)
     }
 }

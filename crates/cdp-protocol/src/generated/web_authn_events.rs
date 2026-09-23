@@ -22,7 +22,7 @@ pub trait WebAuthnEventsService {
     async fn credential_added(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         credential: super::types::WebAuthnCredential,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }
@@ -32,7 +32,7 @@ pub trait WebAuthnEventsService {
     async fn credential_asserted(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         credential: super::types::WebAuthnCredential,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }
@@ -43,7 +43,7 @@ pub trait WebAuthnEventsService {
     async fn credential_deleted(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         #[serde(rename = "credentialId")] credential_id: String,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential_id,);
         Ok(())
     }
@@ -54,7 +54,7 @@ pub trait WebAuthnEventsService {
     async fn credential_updated(
         #[serde(rename = "authenticatorId")] authenticator_id: super::types::WebAuthnAuthenticatorId,
         credential: super::types::WebAuthnCredential,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, authenticator_id, credential,);
         Ok(())
     }

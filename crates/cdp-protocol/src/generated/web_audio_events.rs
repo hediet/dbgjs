@@ -19,7 +19,7 @@ pub trait WebAudioEventsService {
     /// Notifies that the construction of an AudioListener has finished.
     #[name("audioListenerCreated")]
     #[notification]
-    async fn audio_listener_created(listener: super::types::WebAudioAudioListener) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn audio_listener_created(listener: super::types::WebAudioAudioListener) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, listener,);
         Ok(())
     }
@@ -29,14 +29,14 @@ pub trait WebAudioEventsService {
     async fn audio_listener_will_be_destroyed(
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "listenerId")] listener_id: super::types::WebAudioGraphObjectId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, listener_id,);
         Ok(())
     }
     /// Notifies that a new AudioNode has been created.
     #[name("audioNodeCreated")]
     #[notification]
-    async fn audio_node_created(node: super::types::WebAudioAudioNode) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn audio_node_created(node: super::types::WebAudioAudioNode) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node,);
         Ok(())
     }
@@ -46,14 +46,14 @@ pub trait WebAudioEventsService {
     async fn audio_node_will_be_destroyed(
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "nodeId")] node_id: super::types::WebAudioGraphObjectId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, node_id,);
         Ok(())
     }
     /// Notifies that a new AudioParam has been created.
     #[name("audioParamCreated")]
     #[notification]
-    async fn audio_param_created(param: super::types::WebAudioAudioParam) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn audio_param_created(param: super::types::WebAudioAudioParam) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, param,);
         Ok(())
     }
@@ -64,28 +64,28 @@ pub trait WebAudioEventsService {
         #[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "nodeId")] node_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "paramId")] param_id: super::types::WebAudioGraphObjectId,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, node_id, param_id,);
         Ok(())
     }
     /// Notifies that existing BaseAudioContext has changed some properties (id stays the same)..
     #[name("contextChanged")]
     #[notification]
-    async fn context_changed(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn context_changed(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context,);
         Ok(())
     }
     /// Notifies that a new BaseAudioContext has been created.
     #[name("contextCreated")]
     #[notification]
-    async fn context_created(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn context_created(context: super::types::WebAudioBaseAudioContext) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context,);
         Ok(())
     }
     /// Notifies that an existing BaseAudioContext will be destroyed.
     #[name("contextWillBeDestroyed")]
     #[notification]
-    async fn context_will_be_destroyed(#[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn context_will_be_destroyed(#[serde(rename = "contextId")] context_id: super::types::WebAudioGraphObjectId) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id,);
         Ok(())
     }
@@ -97,7 +97,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceOutputIndex")] source_output_index: Option<f64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
     }
@@ -109,7 +109,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "sourceId")] source_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceOutputIndex")] source_output_index: Option<f64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index,);
         Ok(())
     }
@@ -122,7 +122,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceOutputIndex")] source_output_index: Option<f64>,
         #[serde(rename = "destinationInputIndex")] destination_input_index: Option<f64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())
     }
@@ -135,7 +135,7 @@ pub trait WebAudioEventsService {
         #[serde(rename = "destinationId")] destination_id: super::types::WebAudioGraphObjectId,
         #[serde(rename = "sourceOutputIndex")] source_output_index: Option<f64>,
         #[serde(rename = "destinationInputIndex")] destination_input_index: Option<f64>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, context_id, source_id, destination_id, source_output_index, destination_input_index,);
         Ok(())
     }

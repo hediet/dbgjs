@@ -17,21 +17,21 @@
 pub trait OverlayService {
     /// Disables domain notifications.
     #[name("disable")]
-    async fn disable() -> Result<super::types::OverlayDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::OverlayDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables domain notifications.
     #[name("enable")]
-    async fn enable() -> Result<super::types::OverlayEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::OverlayEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// For Persistent Grid testing.
     #[name("getGridHighlightObjectsForTest")]
-    async fn get_grid_highlight_objects_for_test(#[serde(rename = "nodeIds")] node_ids: Vec<super::types::DomNodeId>) -> Result<super::types::OverlayGetGridHighlightObjectsForTestResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_grid_highlight_objects_for_test(#[serde(rename = "nodeIds")] node_ids: Vec<super::types::DomNodeId>) -> Result<super::types::OverlayGetGridHighlightObjectsForTestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_ids,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getGridHighlightObjectsForTest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getGridHighlightObjectsForTest")))
     }
     /// For testing.
     #[name("getHighlightObjectForTest")]
@@ -41,21 +41,21 @@ pub trait OverlayService {
         #[serde(rename = "includeStyle")] include_style: Option<bool>,
         #[serde(rename = "colorFormat")] color_format: Option<super::types::OverlayColorFormat>,
         #[serde(rename = "showAccessibilityInfo")] show_accessibility_info: Option<bool>,
-    ) -> Result<super::types::OverlayGetHighlightObjectForTestResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayGetHighlightObjectForTestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id, include_distance, include_style, color_format, show_accessibility_info,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHighlightObjectForTest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHighlightObjectForTest")))
     }
     /// For Source Order Viewer testing.
     #[name("getSourceOrderHighlightObjectForTest")]
-    async fn get_source_order_highlight_object_for_test(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::OverlayGetSourceOrderHighlightObjectForTestResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_source_order_highlight_object_for_test(#[serde(rename = "nodeId")] node_id: super::types::DomNodeId) -> Result<super::types::OverlayGetSourceOrderHighlightObjectForTestResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSourceOrderHighlightObjectForTest"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getSourceOrderHighlightObjectForTest")))
     }
     /// Hides any highlight.
     #[name("hideHighlight")]
-    async fn hide_highlight() -> Result<super::types::OverlayHideHighlightResult, linkrpc::prelude::JsonRpcError> {
+    async fn hide_highlight() -> Result<super::types::OverlayHideHighlightResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "hideHighlight"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "hideHighlight")))
     }
     /// Highlights owner element of the frame with given id.
     /// Deprecated: Doesn't work reliably and cannot be fixed due to process
@@ -66,9 +66,9 @@ pub trait OverlayService {
         #[serde(rename = "frameId")] frame_id: super::types::PageFrameId,
         #[serde(rename = "contentColor")] content_color: Option<super::types::DomRgba>,
         #[serde(rename = "contentOutlineColor")] content_outline_color: Option<super::types::DomRgba>,
-    ) -> Result<super::types::OverlayHighlightFrameResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayHighlightFrameResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, frame_id, content_color, content_outline_color,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightFrame"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightFrame")))
     }
     /// Highlights DOM node with given id or with the given JavaScript object wrapper. Either nodeId or
     /// objectId must be specified.
@@ -79,9 +79,9 @@ pub trait OverlayService {
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
         selector: Option<String>,
-    ) -> Result<super::types::OverlayHighlightNodeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayHighlightNodeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, highlight_config, node_id, backend_node_id, object_id, selector,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightNode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightNode")))
     }
     /// Highlights given quad. Coordinates are absolute with respect to the main frame viewport.
     #[name("highlightQuad")]
@@ -89,9 +89,9 @@ pub trait OverlayService {
         quad: super::types::DomQuad,
         color: Option<super::types::DomRgba>,
         #[serde(rename = "outlineColor")] outline_color: Option<super::types::DomRgba>,
-    ) -> Result<super::types::OverlayHighlightQuadResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayHighlightQuadResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, quad, color, outline_color,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightQuad"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightQuad")))
     }
     /// Highlights given rectangle. Coordinates are absolute with respect to the main frame viewport.
     /// Issue: the method does not handle device pixel ratio (DPR) correctly.
@@ -105,9 +105,9 @@ pub trait OverlayService {
         height: i64,
         color: Option<super::types::DomRgba>,
         #[serde(rename = "outlineColor")] outline_color: Option<super::types::DomRgba>,
-    ) -> Result<super::types::OverlayHighlightRectResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayHighlightRectResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, x, y, width, height, color, outline_color,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightRect"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightRect")))
     }
     /// Highlights the source order of the children of the DOM node with given id or with the given
     /// JavaScript object wrapper. Either nodeId or objectId must be specified.
@@ -117,9 +117,9 @@ pub trait OverlayService {
         #[serde(rename = "nodeId")] node_id: Option<super::types::DomNodeId>,
         #[serde(rename = "backendNodeId")] backend_node_id: Option<super::types::DomBackendNodeId>,
         #[serde(rename = "objectId")] object_id: Option<super::types::RuntimeRemoteObjectId>,
-    ) -> Result<super::types::OverlayHighlightSourceOrderResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlayHighlightSourceOrderResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, source_order_config, node_id, backend_node_id, object_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightSourceOrder"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "highlightSourceOrder")))
     }
     /// Enters the 'inspect' mode. In this mode, elements that user is hovering over are highlighted.
     /// Backend then generates 'inspectNodeRequested' event upon element selection.
@@ -127,118 +127,118 @@ pub trait OverlayService {
     async fn set_inspect_mode(
         mode: super::types::OverlayInspectMode,
         #[serde(rename = "highlightConfig")] highlight_config: Option<super::types::OverlayHighlightConfig>,
-    ) -> Result<super::types::OverlaySetInspectModeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::OverlaySetInspectModeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, mode, highlight_config,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInspectMode"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setInspectMode")))
     }
     #[name("setPausedInDebuggerMessage")]
-    async fn set_paused_in_debugger_message(message: Option<String>) -> Result<super::types::OverlaySetPausedInDebuggerMessageResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_paused_in_debugger_message(message: Option<String>) -> Result<super::types::OverlaySetPausedInDebuggerMessageResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, message,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPausedInDebuggerMessage"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPausedInDebuggerMessage")))
     }
     /// Highlights owner element of all frames detected to be ads.
     #[name("setShowAdHighlights")]
-    async fn set_show_ad_highlights(show: bool) -> Result<super::types::OverlaySetShowAdHighlightsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_ad_highlights(show: bool) -> Result<super::types::OverlaySetShowAdHighlightsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowAdHighlights"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowAdHighlights")))
     }
     #[name("setShowContainerQueryOverlays")]
-    async fn set_show_container_query_overlays(#[serde(rename = "containerQueryHighlightConfigs")] container_query_highlight_configs: Vec<super::types::OverlayContainerQueryHighlightConfig>) -> Result<super::types::OverlaySetShowContainerQueryOverlaysResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_container_query_overlays(#[serde(rename = "containerQueryHighlightConfigs")] container_query_highlight_configs: Vec<super::types::OverlayContainerQueryHighlightConfig>) -> Result<super::types::OverlaySetShowContainerQueryOverlaysResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, container_query_highlight_configs,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowContainerQueryOverlays"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowContainerQueryOverlays")))
     }
     /// Requests that backend shows debug borders on layers
     #[name("setShowDebugBorders")]
-    async fn set_show_debug_borders(show: bool) -> Result<super::types::OverlaySetShowDebugBordersResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_debug_borders(show: bool) -> Result<super::types::OverlaySetShowDebugBordersResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowDebugBorders"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowDebugBorders")))
     }
     /// Add a display cutout overlay.
     #[name("setShowDisplayCutout")]
-    async fn set_show_display_cutout(#[serde(rename = "displayCutoutConfig")] display_cutout_config: Option<super::types::OverlayDisplayCutoutConfig>) -> Result<super::types::OverlaySetShowDisplayCutoutResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_display_cutout(#[serde(rename = "displayCutoutConfig")] display_cutout_config: Option<super::types::OverlayDisplayCutoutConfig>) -> Result<super::types::OverlaySetShowDisplayCutoutResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, display_cutout_config,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowDisplayCutout"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowDisplayCutout")))
     }
     /// Requests that backend shows the FPS counter
     #[name("setShowFPSCounter")]
-    async fn set_show_fpscounter(show: bool) -> Result<super::types::OverlaySetShowFpscounterResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_fpscounter(show: bool) -> Result<super::types::OverlaySetShowFpscounterResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowFPSCounter"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowFPSCounter")))
     }
     #[name("setShowFlexOverlays")]
-    async fn set_show_flex_overlays(#[serde(rename = "flexNodeHighlightConfigs")] flex_node_highlight_configs: Vec<super::types::OverlayFlexNodeHighlightConfig>) -> Result<super::types::OverlaySetShowFlexOverlaysResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_flex_overlays(#[serde(rename = "flexNodeHighlightConfigs")] flex_node_highlight_configs: Vec<super::types::OverlayFlexNodeHighlightConfig>) -> Result<super::types::OverlaySetShowFlexOverlaysResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, flex_node_highlight_configs,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowFlexOverlays"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowFlexOverlays")))
     }
     /// Highlight multiple elements with the CSS Grid overlay.
     #[name("setShowGridOverlays")]
-    async fn set_show_grid_overlays(#[serde(rename = "gridNodeHighlightConfigs")] grid_node_highlight_configs: Vec<super::types::OverlayGridNodeHighlightConfig>) -> Result<super::types::OverlaySetShowGridOverlaysResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_grid_overlays(#[serde(rename = "gridNodeHighlightConfigs")] grid_node_highlight_configs: Vec<super::types::OverlayGridNodeHighlightConfig>) -> Result<super::types::OverlaySetShowGridOverlaysResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, grid_node_highlight_configs,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowGridOverlays"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowGridOverlays")))
     }
     /// Add a dual screen device hinge
     #[name("setShowHinge")]
-    async fn set_show_hinge(#[serde(rename = "hingeConfig")] hinge_config: Option<super::types::OverlayHingeConfig>) -> Result<super::types::OverlaySetShowHingeResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_hinge(#[serde(rename = "hingeConfig")] hinge_config: Option<super::types::OverlayHingeConfig>) -> Result<super::types::OverlaySetShowHingeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, hinge_config,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowHinge"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowHinge")))
     }
     /// Deprecated, no longer has any effect.
     #[name("setShowHitTestBorders")]
-    async fn set_show_hit_test_borders(show: bool) -> Result<super::types::OverlaySetShowHitTestBordersResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_hit_test_borders(show: bool) -> Result<super::types::OverlaySetShowHitTestBordersResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowHitTestBorders"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowHitTestBorders")))
     }
     #[name("setShowInspectedElementAnchor")]
-    async fn set_show_inspected_element_anchor(#[serde(rename = "inspectedElementAnchorConfig")] inspected_element_anchor_config: super::types::OverlayInspectedElementAnchorConfig) -> Result<super::types::OverlaySetShowInspectedElementAnchorResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_inspected_element_anchor(#[serde(rename = "inspectedElementAnchorConfig")] inspected_element_anchor_config: super::types::OverlayInspectedElementAnchorConfig) -> Result<super::types::OverlaySetShowInspectedElementAnchorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, inspected_element_anchor_config,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowInspectedElementAnchor"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowInspectedElementAnchor")))
     }
     /// Show elements in isolation mode with overlays.
     #[name("setShowIsolatedElements")]
-    async fn set_show_isolated_elements(#[serde(rename = "isolatedElementHighlightConfigs")] isolated_element_highlight_configs: Vec<super::types::OverlayIsolatedElementHighlightConfig>) -> Result<super::types::OverlaySetShowIsolatedElementsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_isolated_elements(#[serde(rename = "isolatedElementHighlightConfigs")] isolated_element_highlight_configs: Vec<super::types::OverlayIsolatedElementHighlightConfig>) -> Result<super::types::OverlaySetShowIsolatedElementsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, isolated_element_highlight_configs,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowIsolatedElements"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowIsolatedElements")))
     }
     /// Requests that backend shows layout shift regions
     #[name("setShowLayoutShiftRegions")]
-    async fn set_show_layout_shift_regions(result: bool) -> Result<super::types::OverlaySetShowLayoutShiftRegionsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_layout_shift_regions(result: bool) -> Result<super::types::OverlaySetShowLayoutShiftRegionsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, result,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowLayoutShiftRegions"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowLayoutShiftRegions")))
     }
     /// Requests that backend shows paint rectangles
     #[name("setShowPaintRects")]
-    async fn set_show_paint_rects(result: bool) -> Result<super::types::OverlaySetShowPaintRectsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_paint_rects(result: bool) -> Result<super::types::OverlaySetShowPaintRectsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, result,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowPaintRects"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowPaintRects")))
     }
     /// Requests that backend shows scroll bottleneck rects
     #[name("setShowScrollBottleneckRects")]
-    async fn set_show_scroll_bottleneck_rects(show: bool) -> Result<super::types::OverlaySetShowScrollBottleneckRectsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_scroll_bottleneck_rects(show: bool) -> Result<super::types::OverlaySetShowScrollBottleneckRectsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowScrollBottleneckRects"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowScrollBottleneckRects")))
     }
     #[name("setShowScrollSnapOverlays")]
-    async fn set_show_scroll_snap_overlays(#[serde(rename = "scrollSnapHighlightConfigs")] scroll_snap_highlight_configs: Vec<super::types::OverlayScrollSnapHighlightConfig>) -> Result<super::types::OverlaySetShowScrollSnapOverlaysResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_scroll_snap_overlays(#[serde(rename = "scrollSnapHighlightConfigs")] scroll_snap_highlight_configs: Vec<super::types::OverlayScrollSnapHighlightConfig>) -> Result<super::types::OverlaySetShowScrollSnapOverlaysResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, scroll_snap_highlight_configs,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowScrollSnapOverlays"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowScrollSnapOverlays")))
     }
     /// Paints viewport size upon main frame resize.
     #[name("setShowViewportSizeOnResize")]
-    async fn set_show_viewport_size_on_resize(show: bool) -> Result<super::types::OverlaySetShowViewportSizeOnResizeResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_viewport_size_on_resize(show: bool) -> Result<super::types::OverlaySetShowViewportSizeOnResizeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowViewportSizeOnResize"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowViewportSizeOnResize")))
     }
     /// Deprecated, no longer has any effect.
     #[name("setShowWebVitals")]
-    async fn set_show_web_vitals(show: bool) -> Result<super::types::OverlaySetShowWebVitalsResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_web_vitals(show: bool) -> Result<super::types::OverlaySetShowWebVitalsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, show,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowWebVitals"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowWebVitals")))
     }
     /// Show Window Controls Overlay for PWA
     #[name("setShowWindowControlsOverlay")]
-    async fn set_show_window_controls_overlay(#[serde(rename = "windowControlsOverlayConfig")] window_controls_overlay_config: Option<super::types::OverlayWindowControlsOverlayConfig>) -> Result<super::types::OverlaySetShowWindowControlsOverlayResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_show_window_controls_overlay(#[serde(rename = "windowControlsOverlayConfig")] window_controls_overlay_config: Option<super::types::OverlayWindowControlsOverlayConfig>) -> Result<super::types::OverlaySetShowWindowControlsOverlayResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, window_controls_overlay_config,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowWindowControlsOverlay"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setShowWindowControlsOverlay")))
     }
 }
 

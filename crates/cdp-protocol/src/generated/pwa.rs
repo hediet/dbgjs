@@ -29,15 +29,15 @@ pub trait PWAService {
         #[serde(rename = "manifestId")] manifest_id: String,
         #[serde(rename = "linkCapturing")] link_capturing: Option<bool>,
         #[serde(rename = "displayMode")] display_mode: Option<super::types::PwaDisplayMode>,
-    ) -> Result<super::types::PwaChangeAppUserSettingsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::PwaChangeAppUserSettingsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id, link_capturing, display_mode,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "changeAppUserSettings"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "changeAppUserSettings")))
     }
     /// Returns the following OS state for the given manifest id.
     #[name("getOsAppState")]
-    async fn get_os_app_state(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaGetOsAppStateResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_os_app_state(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaGetOsAppStateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOsAppState"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getOsAppState")))
     }
     /// Installs the given manifest identity, optionally using the given installUrlOrBundleUrl
     ///
@@ -69,9 +69,9 @@ pub trait PWAService {
     async fn install(
         #[serde(rename = "manifestId")] manifest_id: String,
         #[serde(rename = "installUrlOrBundleUrl")] install_url_or_bundle_url: Option<String>,
-    ) -> Result<super::types::PwaInstallResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::PwaInstallResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id, install_url_or_bundle_url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "install"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "install")))
     }
     /// Launches the installed web app, or an url in the same web app instead of the
     /// default start url if it is provided. Returns a page Target.TargetID which
@@ -80,9 +80,9 @@ pub trait PWAService {
     async fn launch(
         #[serde(rename = "manifestId")] manifest_id: String,
         url: Option<String>,
-    ) -> Result<super::types::PwaLaunchResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::PwaLaunchResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id, url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "launch"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "launch")))
     }
     /// Opens one or more local files from an installed web app identified by its
     /// manifestId. The web app needs to have file handlers registered to process
@@ -101,23 +101,23 @@ pub trait PWAService {
     async fn launch_files_in_app(
         #[serde(rename = "manifestId")] manifest_id: String,
         files: Vec<String>,
-    ) -> Result<super::types::PwaLaunchFilesInAppResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::PwaLaunchFilesInAppResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id, files,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "launchFilesInApp"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "launchFilesInApp")))
     }
     /// Opens the current page in its web app identified by the manifest id, needs
     /// to be called on a page target. This function returns immediately without
     /// waiting for the app to finish loading.
     #[name("openCurrentPageInApp")]
-    async fn open_current_page_in_app(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaOpenCurrentPageInAppResult, linkrpc::prelude::JsonRpcError> {
+    async fn open_current_page_in_app(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaOpenCurrentPageInAppResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openCurrentPageInApp"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "openCurrentPageInApp")))
     }
     /// Uninstalls the given manifest_id and closes any opened app windows.
     #[name("uninstall")]
-    async fn uninstall(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaUninstallResult, linkrpc::prelude::JsonRpcError> {
+    async fn uninstall(#[serde(rename = "manifestId")] manifest_id: String) -> Result<super::types::PwaUninstallResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, manifest_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "uninstall"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "uninstall")))
     }
 }
 

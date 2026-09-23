@@ -18,85 +18,85 @@ pub trait BrowserService {
     /// Allows a site to use privacy sandbox features that require enrollment
     /// without the site actually being enrolled. Only supported on page targets.
     #[name("addPrivacySandboxEnrollmentOverride")]
-    async fn add_privacy_sandbox_enrollment_override(url: String) -> Result<super::types::BrowserAddPrivacySandboxEnrollmentOverrideResult, linkrpc::prelude::JsonRpcError> {
+    async fn add_privacy_sandbox_enrollment_override(url: String) -> Result<super::types::BrowserAddPrivacySandboxEnrollmentOverrideResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, url,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addPrivacySandboxEnrollmentOverride"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "addPrivacySandboxEnrollmentOverride")))
     }
     /// Cancel a download if in progress
     #[name("cancelDownload")]
     async fn cancel_download(
         guid: String,
         #[serde(rename = "browserContextId")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
-    ) -> Result<super::types::BrowserCancelDownloadResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserCancelDownloadResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, guid, browser_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelDownload"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "cancelDownload")))
     }
     /// Close browser gracefully.
     #[name("close")]
-    async fn close() -> Result<super::types::BrowserCloseResult, linkrpc::prelude::JsonRpcError> {
+    async fn close() -> Result<super::types::BrowserCloseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "close")))
     }
     /// Crashes browser on the main thread.
     #[name("crash")]
-    async fn crash() -> Result<super::types::BrowserCrashResult, linkrpc::prelude::JsonRpcError> {
+    async fn crash() -> Result<super::types::BrowserCrashResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "crash"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "crash")))
     }
     /// Crashes GPU process.
     #[name("crashGpuProcess")]
-    async fn crash_gpu_process() -> Result<super::types::BrowserCrashGpuProcessResult, linkrpc::prelude::JsonRpcError> {
+    async fn crash_gpu_process() -> Result<super::types::BrowserCrashGpuProcessResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "crashGpuProcess"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "crashGpuProcess")))
     }
     /// Invoke custom browser commands used by telemetry.
     #[name("executeBrowserCommand")]
-    async fn execute_browser_command(#[serde(rename = "commandId")] command_id: super::types::BrowserBrowserCommandId) -> Result<super::types::BrowserExecuteBrowserCommandResult, linkrpc::prelude::JsonRpcError> {
+    async fn execute_browser_command(#[serde(rename = "commandId")] command_id: super::types::BrowserBrowserCommandId) -> Result<super::types::BrowserExecuteBrowserCommandResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, command_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "executeBrowserCommand"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "executeBrowserCommand")))
     }
     /// Returns the command line switches for the browser process if, and only if
     /// --enable-automation is on the commandline.
     #[name("getBrowserCommandLine")]
-    async fn get_browser_command_line() -> Result<super::types::BrowserGetBrowserCommandLineResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_browser_command_line() -> Result<super::types::BrowserGetBrowserCommandLineResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBrowserCommandLine"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getBrowserCommandLine")))
     }
     /// Get a Chrome histogram by name.
     #[name("getHistogram")]
     async fn get_histogram(
         name: String,
         delta: Option<bool>,
-    ) -> Result<super::types::BrowserGetHistogramResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserGetHistogramResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, name, delta,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistogram"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistogram")))
     }
     /// Get Chrome histograms.
     #[name("getHistograms")]
     async fn get_histograms(
         query: Option<String>,
         delta: Option<bool>,
-    ) -> Result<super::types::BrowserGetHistogramsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserGetHistogramsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, query, delta,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistograms"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getHistograms")))
     }
     /// Returns version information.
     #[name("getVersion")]
-    async fn get_version() -> Result<super::types::BrowserGetVersionResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_version() -> Result<super::types::BrowserGetVersionResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getVersion"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getVersion")))
     }
     /// Get position and size of the browser window.
     #[name("getWindowBounds")]
-    async fn get_window_bounds(#[serde(rename = "windowId")] window_id: super::types::BrowserWindowId) -> Result<super::types::BrowserGetWindowBoundsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_window_bounds(#[serde(rename = "windowId")] window_id: super::types::BrowserWindowId) -> Result<super::types::BrowserGetWindowBoundsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, window_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWindowBounds"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWindowBounds")))
     }
     /// Get the browser window that contains the devtools target.
     #[name("getWindowForTarget")]
-    async fn get_window_for_target(#[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::BrowserGetWindowForTargetResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_window_for_target(#[serde(rename = "targetId")] target_id: Option<super::types::TargetTargetId>) -> Result<super::types::BrowserGetWindowForTargetResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWindowForTarget"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getWindowForTarget")))
     }
     /// Grant specific permissions to the given origin and reject all others. Deprecated. Use
     /// setPermission instead.
@@ -105,15 +105,15 @@ pub trait BrowserService {
         permissions: Vec<super::types::BrowserPermissionType>,
         origin: Option<String>,
         #[serde(rename = "browserContextId")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
-    ) -> Result<super::types::BrowserGrantPermissionsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserGrantPermissionsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, permissions, origin, browser_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "grantPermissions"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "grantPermissions")))
     }
     /// Reset all permission management for all origins.
     #[name("resetPermissions")]
-    async fn reset_permissions(#[serde(rename = "browserContextId")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::BrowserResetPermissionsResult, linkrpc::prelude::JsonRpcError> {
+    async fn reset_permissions(#[serde(rename = "browserContextId")] browser_context_id: Option<super::types::BrowserBrowserContextId>) -> Result<super::types::BrowserResetPermissionsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, browser_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetPermissions"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "resetPermissions")))
     }
     /// Set size of the browser contents resizing browser window as necessary.
     #[name("setContentsSize")]
@@ -121,24 +121,24 @@ pub trait BrowserService {
         #[serde(rename = "windowId")] window_id: super::types::BrowserWindowId,
         width: Option<i64>,
         height: Option<i64>,
-    ) -> Result<super::types::BrowserSetContentsSizeResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserSetContentsSizeResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, window_id, width, height,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setContentsSize"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setContentsSize")))
     }
     /// Set dock tile details, platform-specific.
     #[name("setDockTile")]
     async fn set_dock_tile(
         #[serde(rename = "badgeLabel")] badge_label: Option<String>,
         image: Option<String>,
-    ) -> Result<super::types::BrowserSetDockTileResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserSetDockTileResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, badge_label, image,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDockTile"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDockTile")))
     }
     /// Set the behavior when downloading a file.
     #[name("setDownloadBehavior")]
-    async fn set_download_behavior(#[params] params: super::types::BrowserSetDownloadBehaviorParams) -> Result<super::types::BrowserSetDownloadBehaviorResult, linkrpc::prelude::JsonRpcError> {
+    async fn set_download_behavior(#[params] params: super::types::BrowserSetDownloadBehaviorParams) -> Result<super::types::BrowserSetDownloadBehaviorResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDownloadBehavior"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setDownloadBehavior")))
     }
     /// Set permission settings for given embedding and embedded origins.
     #[name("setPermission")]
@@ -148,18 +148,18 @@ pub trait BrowserService {
         origin: Option<String>,
         #[serde(rename = "embeddedOrigin")] embedded_origin: Option<String>,
         #[serde(rename = "browserContextId")] browser_context_id: Option<super::types::BrowserBrowserContextId>,
-    ) -> Result<super::types::BrowserSetPermissionResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserSetPermissionResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, permission, setting, origin, embedded_origin, browser_context_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPermission"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setPermission")))
     }
     /// Set position and/or size of the browser window.
     #[name("setWindowBounds")]
     async fn set_window_bounds(
         #[serde(rename = "windowId")] window_id: super::types::BrowserWindowId,
         bounds: super::types::BrowserBounds,
-    ) -> Result<super::types::BrowserSetWindowBoundsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::BrowserSetWindowBoundsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, window_id, bounds,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setWindowBounds"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setWindowBounds")))
     }
 }
 

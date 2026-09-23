@@ -17,9 +17,9 @@
 pub trait CrashReportContextService {
     /// Returns all entries in the CrashReportContext across all frames in the page.
     #[name("getEntries")]
-    async fn get_entries() -> Result<super::types::CrashReportContextGetEntriesResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_entries() -> Result<super::types::CrashReportContextGetEntriesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEntries"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEntries")))
     }
 }
 

@@ -463,8 +463,8 @@ fn quoted(value: &str, max_chars: usize) -> String {
     format!("\"{}\"", inline(value, max_chars))
 }
 
-fn rpc_error(error: linkrpc::prelude::JsonRpcError) -> io::Error {
-    io::Error::other(format!("{error:?}"))
+fn rpc_error(error: impl std::fmt::Display) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
 #[cfg(test)]

@@ -3,8 +3,8 @@ members = ["crates/cdp-protocol", "crates/dbgjs-tui", "tools/cdp-codegen"]
 resolver = "3"
 
 [workspace.dependencies]
-linkrpc = "=0.3.0-next.20260922.2"
-linkrpc-tokio = "=0.3.0-next.20260922.2"
+linkrpc = "=0.3.0-next.20260923.1"
+linkrpc-tokio = "=0.3.0-next.20260923.1"
 
 [package]
 name = "dbgjs"

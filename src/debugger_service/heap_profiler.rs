@@ -10,7 +10,7 @@ impl HeapProfilerApi for DebuggerService {
         capture_numeric_value: bool,
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
-    ) -> Result<HeapSnapshotResult, JsonRpcError> {
+    ) -> Result<HeapSnapshotResult, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -49,7 +49,7 @@ impl HeapProfilerApi for DebuggerService {
         capture_numeric_value: bool,
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
-    ) -> Result<HeapCaptureResult, JsonRpcError> {
+    ) -> Result<HeapCaptureResult, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -72,11 +72,11 @@ impl HeapProfilerApi for DebuggerService {
             let CapturePayload::HeapSnapshot { .. } = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             return completed
                 .heap_result
-                .ok_or_else(|| invalid_state("completed heap capture result is missing"));
+                .ok_or_else(|| invalid_state("completed heap capture result is missing").into());
         }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
@@ -110,7 +110,7 @@ impl HeapProfilerApi for DebuggerService {
             let CapturePayload::HeapSnapshot { .. } = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             let result = completed
                 .heap_result
@@ -132,7 +132,7 @@ impl HeapProfilerApi for DebuggerService {
         .await;
         let cancellation = outcome.cancellation;
         let delivery_error = outcome.delivery_error;
-        let result = match outcome.result.map_err(target_debugger_rpc_error) {
+        let result = match outcome.result.map_err(HeapProfilerError::from) {
             Ok(result) => result,
             Err(error) => {
                 self.abandon_capture(&reservation.reservation).await;
@@ -141,7 +141,7 @@ impl HeapProfilerApi for DebuggerService {
                         Some(reason) => reason.clone(),
                         None => ctx.cancelled().await,
                     };
-                    return Err(cancelled_heap_call(reason));
+                    return Err(cancelled_heap_call(reason).into());
                 }
                 return Err(error);
             }
@@ -158,15 +158,15 @@ impl HeapProfilerApi for DebuggerService {
             debugger
                 .delete_stored_capture(name)
                 .await
-                .map_err(target_debugger_rpc_error)?;
+                .map_err(HeapProfilerError::from)?;
             self.abandon_capture(&reservation.reservation).await;
-            return Err(error);
+            return Err(error.into());
         }
         let (staging_path, final_path) = self.heap_capture_paths(&reservation.reservation);
         if let Err(error) = debugger
             .copy_heap_capture(name, staging_path.to_string_lossy().into_owned())
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
         {
             self.abandon_capture(&reservation.reservation).await;
             remove_capture_payload_files([staging_path]);
@@ -177,21 +177,21 @@ impl HeapProfilerApi for DebuggerService {
             remove_capture_payload_files([staging_path]);
             return Err(internal_error(format!(
                 "failed to synchronize heap capture storage before publication: {error}"
-            )));
+            )).into());
         }
         if let Err(error) = fs::rename(&staging_path, &final_path) {
             self.abandon_capture(&reservation.reservation).await;
             remove_capture_payload_files([staging_path, final_path]);
             return Err(internal_error(format!(
                 "failed to publish heap capture storage: {error}"
-            )));
+            )).into());
         }
         if let Err(error) = self.capture_storage.sync_parent(&final_path) {
             self.abandon_capture(&reservation.reservation).await;
             remove_capture_payload_files([final_path]);
             return Err(internal_error(format!(
                 "failed to synchronize heap capture storage publication: {error}"
-            )));
+            )).into());
         }
         if let Err(error) = self
             .store_heap_capture(
@@ -209,7 +209,7 @@ impl HeapProfilerApi for DebuggerService {
             {
                 remove_capture_payload_files([final_path]);
             }
-            return Err(error);
+            return Err(error.into());
         }
         if cancellation.is_some() || ctx.is_cancelled() {
             let reason = match &cancellation {
@@ -217,8 +217,8 @@ impl HeapProfilerApi for DebuggerService {
                 None => ctx.cancelled().await,
             };
             self.delete_capture(&CallCtx::default(), context_id, result.capture_id.clone())
-                .await?;
-            return Err(cancelled_heap_call(reason));
+                .await.map_err(JsonRpcError::from)?;
+            return Err(cancelled_heap_call(reason).into());
         }
         Ok(result)
     }
@@ -230,7 +230,7 @@ impl HeapProfilerApi for DebuggerService {
         capture_id: String,
         filter: Option<String>,
         no_cache: bool,
-    ) -> Result<HeapClassSnapshot, JsonRpcError> {
+    ) -> Result<HeapClassSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -243,7 +243,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .get_heap_classes(capture_id, filter, no_cache)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn select_promises(
@@ -254,7 +254,7 @@ impl HeapProfilerApi for DebuggerService {
         state: Option<PromiseState>,
         limit: u32,
         max_preview_length: u32,
-    ) -> Result<PromiseSelectionSnapshot, JsonRpcError> {
+    ) -> Result<PromiseSelectionSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -267,7 +267,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .select_promises(capture_id, state, limit, max_preview_length)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn select_heap_nodes(
@@ -278,7 +278,7 @@ impl HeapProfilerApi for DebuggerService {
         selector: HeapNodeSelector,
         max_string_length: Option<u32>,
         include_dominators: bool,
-    ) -> Result<HeapNodeSelectionSnapshot, JsonRpcError> {
+    ) -> Result<HeapNodeSelectionSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -291,7 +291,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .select_heap_nodes(capture_id, selector, max_string_length, include_dominators)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn get_heap_references(
@@ -303,7 +303,7 @@ impl HeapProfilerApi for DebuggerService {
         edge_policy: HeapEdgePolicy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapReferencesSnapshot, JsonRpcError> {
+    ) -> Result<HeapReferencesSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -316,7 +316,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .get_heap_references(reference, direction, edge_policy, limit, max_string_length)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn get_heap_path(
@@ -327,7 +327,7 @@ impl HeapProfilerApi for DebuggerService {
         to: String,
         options: HeapPathOptions,
         max_string_length: Option<u32>,
-    ) -> Result<Option<HeapPathSnapshot>, JsonRpcError> {
+    ) -> Result<Option<HeapPathSnapshot>, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -340,7 +340,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .get_heap_path(from, to, options, max_string_length)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn get_heap_dominator_chain(
@@ -349,7 +349,7 @@ impl HeapProfilerApi for DebuggerService {
         target_ref: TargetRef,
         reference: String,
         max_string_length: Option<u32>,
-    ) -> Result<HeapDominatorSnapshot, JsonRpcError> {
+    ) -> Result<HeapDominatorSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -362,7 +362,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .get_heap_dominator_chain(reference, max_string_length)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn aggregate_heap_snapshot(
@@ -373,7 +373,7 @@ impl HeapProfilerApi for DebuggerService {
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapAggregateSnapshot, JsonRpcError> {
+    ) -> Result<HeapAggregateSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -386,7 +386,7 @@ impl HeapProfilerApi for DebuggerService {
             .await?
             .aggregate_heap_snapshot(capture_id, by, limit, max_string_length)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn diff_heap_snapshots(
@@ -398,7 +398,7 @@ impl HeapProfilerApi for DebuggerService {
         by: HeapAggregateBy,
         limit: u32,
         max_string_length: Option<u32>,
-    ) -> Result<HeapDiffSnapshot, JsonRpcError> {
+    ) -> Result<HeapDiffSnapshot, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -417,14 +417,14 @@ impl HeapProfilerApi for DebuggerService {
                 max_string_length,
             )
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(HeapProfilerError::from)
     }
 
     async fn get_heap_snapshot_progress(
         &self,
         _ctx: &CallCtx,
         target_ref: TargetRef,
-    ) -> Result<Option<HeapSnapshotProgress>, JsonRpcError> {
+    ) -> Result<Option<HeapSnapshotProgress>, HeapProfilerError> {
         let TargetRef {
             connection:
                 ConnectionRef {

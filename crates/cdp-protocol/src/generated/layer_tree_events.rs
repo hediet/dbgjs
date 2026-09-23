@@ -19,13 +19,13 @@ pub trait LayerTreeEventsService {
     async fn layer_painted(
         #[serde(rename = "layerId")] layer_id: super::types::LayerTreeLayerId,
         clip: super::types::DomRect,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, layer_id, clip,);
         Ok(())
     }
     #[name("layerTreeDidChange")]
     #[notification]
-    async fn layer_tree_did_change(layers: Option<Vec<super::types::LayerTreeLayer>>) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn layer_tree_did_change(layers: Option<Vec<super::types::LayerTreeLayer>>) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, layers,);
         Ok(())
     }

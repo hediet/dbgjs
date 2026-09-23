@@ -77,6 +77,33 @@ async fn stdio_reflects_every_service_contract_and_exits_on_eof_without_persiste
 }
 
 #[tokio::test]
+async fn stdio_returns_a_structured_application_error_response() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut child, mut output) = spawn(directory.path(), &directory.path().join("unused.json"));
+    let response = request_response(
+        &mut child,
+        &mut output,
+        "dev.dbgjs.capture::list_captures",
+        json!({ "contextId": "missing-context" }),
+    )
+    .await;
+    assert_eq!(response, json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": 1,
+            "message": "context 'missing-context' does not exist",
+            "data": {
+                "type": "ContextNotFound",
+                "data": { "context_id": "missing-context" }
+            }
+        }
+    }));
+    drop(child.stdin.take());
+    assert!(timeout(Duration::from_secs(10), child.wait()).await.unwrap().unwrap().success());
+}
+
+#[tokio::test]
 async fn stdio_shutdown_exits_even_while_parent_keeps_stdin_open() {
     let directory = tempfile::tempdir().unwrap();
     let (mut child, mut output) = spawn(directory.path(), &directory.path().join("unused.json"));
@@ -146,6 +173,17 @@ async fn request(
     method: &str,
     params: Value,
 ) -> Value {
+    let response = request_response(child, output, method, params).await;
+    assert!(response.get("error").is_none(), "{response}");
+    response.get("result").expect("RPC result").clone()
+}
+
+async fn request_response(
+    child: &mut Child,
+    output: &mut Lines<BufReader<ChildStdout>>,
+    method: &str,
+    params: Value,
+) -> Value {
     let frame = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
     let input = child.stdin.as_mut().unwrap();
     input
@@ -160,6 +198,5 @@ async fn request(
         .expect("daemon responds");
     let response: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(response["id"], 1);
-    assert!(response.get("error").is_none(), "{response}");
-    response.get("result").expect("RPC result").clone()
+    response
 }

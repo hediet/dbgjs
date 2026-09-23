@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use linkrpc::connection::channel::{Channel, RequestHandler};
-use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, error_codes};
+use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, RpcCallError, error_codes};
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, oneshot, watch};
@@ -733,7 +733,7 @@ struct ContextRelayProvider(Arc<ContextRelayState>);
 
 #[async_trait]
 impl crate::cdp::browser::BrowserService for ContextRelayProvider {
-    async fn get_version(&self, _ctx: &CallCtx) -> Result<BrowserGetVersionResult, JsonRpcError> {
+    async fn get_version(&self, _ctx: &CallCtx) -> Result<BrowserGetVersionResult, RpcCallError> {
         Ok(BrowserGetVersionResult {
             protocol_version: "1.3".to_owned(),
             product: format!("dbgjs-context-relay/{}", env!("CARGO_PKG_VERSION")),
@@ -750,8 +750,8 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         &self,
         _ctx: &CallCtx,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetGetTargetsResult, JsonRpcError> {
-        let targets = self.0.targets().await?;
+    ) -> Result<TargetGetTargetsResult, RpcCallError> {
+        let targets = self.0.targets().await.map_err(RpcCallError::Local)?;
         Ok(TargetGetTargetsResult {
             target_infos: targets
                 .iter()
@@ -764,13 +764,14 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         &self,
         _ctx: &CallCtx,
         target_id: Option<TargetTargetId>,
-    ) -> Result<TargetGetTargetInfoResult, JsonRpcError> {
-        let target_id =
-            target_id.ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))?;
+    ) -> Result<TargetGetTargetInfoResult, RpcCallError> {
+        let target_id = target_id
+            .ok_or_else(|| invalid_params("Target.getTargetInfo requires targetId"))
+            .map_err(RpcCallError::Local)?;
         let Some((_, snapshot)) = self.0.lookup_target(&target_id).await else {
-            return Err(invalid_params(format!(
+            return Err(RpcCallError::Local(invalid_params(format!(
                 "no such target '{target_id}' in this relay's scope"
-            )));
+            ))));
         };
         Ok(TargetGetTargetInfoResult {
             target_info: target_info_from_snapshot(&snapshot),
@@ -780,9 +781,13 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
     async fn attach_to_browser_target(
         &self,
         _ctx: &CallCtx,
-    ) -> Result<TargetAttachToBrowserTargetResult, JsonRpcError> {
+    ) -> Result<TargetAttachToBrowserTargetResult, RpcCallError> {
         Ok(TargetAttachToBrowserTargetResult {
-            session_id: self.0.open_browser_session().await?,
+            session_id: self
+                .0
+                .open_browser_session()
+                .await
+                .map_err(RpcCallError::Local)?,
         })
     }
 
@@ -791,7 +796,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         _ctx: &CallCtx,
         discover: bool,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetSetDiscoverTargetsResult, JsonRpcError> {
+    ) -> Result<TargetSetDiscoverTargetsResult, RpcCallError> {
         let was_enabled = self.0.discover.swap(discover, Ordering::Relaxed);
         if discover && !was_enabled {
             let targets = self
@@ -816,7 +821,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         wait_for_debugger_on_start: bool,
         _flatten: Option<bool>,
         _filter: Option<TargetTargetFilter>,
-    ) -> Result<TargetSetAutoAttachResult, JsonRpcError> {
+    ) -> Result<TargetSetAutoAttachResult, RpcCallError> {
         let was_enabled = self.0.auto_attach.swap(auto_attach, Ordering::Relaxed);
         if auto_attach && !was_enabled {
             let targets = self
@@ -842,12 +847,12 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         target_id: TargetTargetId,
         _flatten: Option<bool>,
         dbgjs_auto_attach: Option<bool>,
-    ) -> Result<TargetAttachToTargetResult, JsonRpcError> {
+    ) -> Result<TargetAttachToTargetResult, RpcCallError> {
         let Some((connection_id, snapshot)) = self.0.lookup_target(&target_id).await else {
-            return Err(invalid_params(format!(
+            return Err(RpcCallError::Local(invalid_params(format!(
                 "no such target '{}' in this relay's context",
                 target_id
-            )));
+            ))));
         };
         let (handle, created) = self
             .0
@@ -858,7 +863,8 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
                 &connection_id,
                 &snapshot.target_id,
             )
-            .await?;
+            .await
+            .map_err(RpcCallError::Local)?;
         if created {
             self.0.owned_attachments.lock().await.insert(
                 (connection_id.clone(), snapshot.target_id.clone()),
@@ -883,7 +889,7 @@ impl crate::cdp::target::TargetService for ContextRelayProvider {
         _ctx: &CallCtx,
         session_id: Option<TargetSessionId>,
         target_id: Option<TargetTargetId>,
-    ) -> Result<TargetDetachFromTargetResult, JsonRpcError> {
+    ) -> Result<TargetDetachFromTargetResult, RpcCallError> {
         if let Some(session_id) = session_id.as_deref()
             && self.0.detach_browser_session(session_id).await
         {

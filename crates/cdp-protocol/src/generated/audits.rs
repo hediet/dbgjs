@@ -18,29 +18,29 @@ pub trait AuditsService {
     /// Runs the form issues check for the target page. Found issues are reported
     /// using Audits.issueAdded event.
     #[name("checkFormsIssues")]
-    async fn check_forms_issues() -> Result<super::types::AuditsCheckFormsIssuesResult, linkrpc::prelude::JsonRpcError> {
+    async fn check_forms_issues() -> Result<super::types::AuditsCheckFormsIssuesResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "checkFormsIssues"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "checkFormsIssues")))
     }
     /// Disables issues domain, prevents further issues from being reported to the client.
     #[name("disable")]
-    async fn disable() -> Result<super::types::AuditsDisableResult, linkrpc::prelude::JsonRpcError> {
+    async fn disable() -> Result<super::types::AuditsDisableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "disable")))
     }
     /// Enables issues domain, sends the issues collected so far to the client by means of the
     /// `issueAdded` event.
     #[name("enable")]
-    async fn enable() -> Result<super::types::AuditsEnableResult, linkrpc::prelude::JsonRpcError> {
+    async fn enable() -> Result<super::types::AuditsEnableResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "enable")))
     }
     /// Returns the response body and size if it were re-encoded with the specified settings. Only
     /// applies to images.
     #[name("getEncodedResponse")]
-    async fn get_encoded_response(#[params] params: super::types::AuditsGetEncodedResponseParams) -> Result<super::types::AuditsGetEncodedResponseResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_encoded_response(#[params] params: super::types::AuditsGetEncodedResponseParams) -> Result<super::types::AuditsGetEncodedResponseResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEncodedResponse"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getEncodedResponse")))
     }
 }
 

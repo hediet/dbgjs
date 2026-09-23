@@ -20,15 +20,15 @@ pub trait ExtensionsService {
     async fn clear_storage_items(
         id: String,
         #[serde(rename = "storageArea")] storage_area: super::types::ExtensionsStorageArea,
-    ) -> Result<super::types::ExtensionsClearStorageItemsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsClearStorageItemsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, storage_area,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearStorageItems"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "clearStorageItems")))
     }
     /// Gets a list of all unpacked extensions.
     #[name("getExtensions")]
-    async fn get_extensions() -> Result<super::types::ExtensionsGetExtensionsResult, linkrpc::prelude::JsonRpcError> {
+    async fn get_extensions() -> Result<super::types::ExtensionsGetExtensionsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getExtensions"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getExtensions")))
     }
     /// Gets data from extension storage in the given `storageArea`. If `keys` is
     /// specified, these are used to filter the result.
@@ -37,9 +37,9 @@ pub trait ExtensionsService {
         id: String,
         #[serde(rename = "storageArea")] storage_area: super::types::ExtensionsStorageArea,
         keys: Option<Vec<String>>,
-    ) -> Result<super::types::ExtensionsGetStorageItemsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsGetStorageItemsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, storage_area, keys,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageItems"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "getStorageItems")))
     }
     /// Installs an unpacked extension from the filesystem similar to
     /// --load-extension CLI flags. Returns extension ID once the extension
@@ -48,9 +48,9 @@ pub trait ExtensionsService {
     async fn load_unpacked(
         path: String,
         #[serde(rename = "enableInIncognito")] enable_in_incognito: Option<bool>,
-    ) -> Result<super::types::ExtensionsLoadUnpackedResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsLoadUnpackedResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, path, enable_in_incognito,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "loadUnpacked"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "loadUnpacked")))
     }
     /// Removes `keys` from extension storage in the given `storageArea`.
     #[name("removeStorageItems")]
@@ -58,9 +58,9 @@ pub trait ExtensionsService {
         id: String,
         #[serde(rename = "storageArea")] storage_area: super::types::ExtensionsStorageArea,
         keys: Vec<String>,
-    ) -> Result<super::types::ExtensionsRemoveStorageItemsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsRemoveStorageItemsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, storage_area, keys,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeStorageItems"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "removeStorageItems")))
     }
     /// Sets `values` in extension storage in the given `storageArea`. The provided `values`
     /// will be merged with existing values in the storage area.
@@ -69,24 +69,24 @@ pub trait ExtensionsService {
         id: String,
         #[serde(rename = "storageArea")] storage_area: super::types::ExtensionsStorageArea,
         values: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Result<super::types::ExtensionsSetStorageItemsResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsSetStorageItemsResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, storage_area, values,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStorageItems"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "setStorageItems")))
     }
     /// Runs an extension default action.
     #[name("triggerAction")]
     async fn trigger_action(
         id: String,
         #[serde(rename = "targetId")] target_id: String,
-    ) -> Result<super::types::ExtensionsTriggerActionResult, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<super::types::ExtensionsTriggerActionResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, target_id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "triggerAction"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "triggerAction")))
     }
     /// Uninstalls an unpacked extension (others not supported) from the profile.
     #[name("uninstall")]
-    async fn uninstall(id: String) -> Result<super::types::ExtensionsUninstallResult, linkrpc::prelude::JsonRpcError> {
+    async fn uninstall(id: String) -> Result<super::types::ExtensionsUninstallResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "uninstall"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "uninstall")))
     }
 }
 

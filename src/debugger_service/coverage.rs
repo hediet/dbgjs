@@ -6,7 +6,7 @@ impl CoverageApi for DebuggerService {
         &self,
         _ctx: &CallCtx,
         target_ref: TargetRef,
-    ) -> Result<bool, JsonRpcError> {
+    ) -> Result<bool, CoverageError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -19,7 +19,7 @@ impl CoverageApi for DebuggerService {
             .await?
             .start_coverage()
             .await
-            .map_err(target_debugger_rpc_error)?;
+            .map_err(CoverageError::from)?;
         Ok(true)
     }
 
@@ -29,7 +29,7 @@ impl CoverageApi for DebuggerService {
         target_ref: TargetRef,
         capture_id: Option<String>,
         raw: Option<bool>,
-    ) -> Result<CoverageSnapshot, JsonRpcError> {
+    ) -> Result<CoverageSnapshot, CoverageError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -52,7 +52,7 @@ impl CoverageApi for DebuggerService {
             let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             snapshot.capture_id = Some(name.clone());
             return Ok(snapshot);
@@ -87,7 +87,7 @@ impl CoverageApi for DebuggerService {
             let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
             return Ok(snapshot);
@@ -98,7 +98,7 @@ impl CoverageApi for DebuggerService {
                 raw.unwrap_or(false),
             )
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(CoverageError::from)
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -120,7 +120,7 @@ impl CoverageApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         capture_id: Option<String>,
-    ) -> Result<CoverageSnapshot, JsonRpcError> {
+    ) -> Result<CoverageSnapshot, CoverageError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -143,7 +143,7 @@ impl CoverageApi for DebuggerService {
             let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             snapshot.capture_id = Some(name.clone());
             return Ok(snapshot);
@@ -178,7 +178,7 @@ impl CoverageApi for DebuggerService {
             let CapturePayload::Coverage(mut snapshot) = completed.payload else {
                 return Err(invalid_state(
                     "completed capture kind does not match reservation",
-                ));
+                ).into());
             };
             snapshot.capture_id = Some(reservation.reservation.metadata.name.clone());
             return Ok(snapshot);
@@ -186,7 +186,7 @@ impl CoverageApi for DebuggerService {
         let mut snapshot = match debugger
             .stop_coverage()
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(CoverageError::from)
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
@@ -208,7 +208,7 @@ impl CoverageApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         capture_id: Option<String>,
-    ) -> Result<bool, JsonRpcError> {
+    ) -> Result<bool, CoverageError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -239,7 +239,7 @@ impl CoverageApi for DebuggerService {
         capture_id: String,
         source_path: Option<String>,
         no_cache: bool,
-    ) -> Result<CoverageSnapshot, JsonRpcError> {
+    ) -> Result<CoverageSnapshot, CoverageError> {
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -252,6 +252,6 @@ impl CoverageApi for DebuggerService {
             .await?
             .get_coverage(capture_id, source_path, no_cache)
             .await
-            .map_err(target_debugger_rpc_error)
+            .map_err(CoverageError::from)
     }
 }
