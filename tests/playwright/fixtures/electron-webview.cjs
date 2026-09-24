@@ -2,7 +2,8 @@ const { app, BrowserWindow } = require("electron");
 
 process.mainModule ??= module;
 
-const [url, profile] = process.argv.slice(2);
+// Electron can retain launch switches in process.argv; fixture arguments come last.
+const [url, profile] = process.argv.slice(-2);
 if (!url || !profile) throw new Error("Electron fixture requires URL and profile");
 
 app.setPath("userData", profile);

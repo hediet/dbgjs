@@ -51,8 +51,8 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		const electronEnvironment = { ...process.env };
 		delete electronEnvironment.ELECTRON_RUN_AS_NODE;
 		child = spawn(electron, [
+			"--inspect=0", "--no-sandbox", "--disable-dev-shm-usage",
 			fixtureProgram, fixture.rootUrl, join(root, "profile"),
-			"--no-sandbox", "--disable-dev-shm-usage", "--inspect=0",
 		], {
 			cwd: process.cwd(),
 			env: electronEnvironment,
@@ -61,10 +61,18 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		child.stdout.on("data", (chunk) => { output += chunk; });
 		child.stderr.on("data", (chunk) => { output += chunk; });
 		child.stdin.on("error", () => {});
-		await expect.poll(() => output.includes('"kind":"loaded"'), {
-			timeout: 20_000,
-			message: `Electron fixture did not load its host: ${output}`,
-		}).toBe(true);
+		await Promise.race([
+			expect.poll(() => output.includes('"kind":"loaded"'), {
+				timeout: 20_000,
+				message: "Electron fixture did not load its host",
+			}).toBe(true),
+			new Promise((_, reject) => {
+				child.once("error", (error) => reject(new Error(`Electron launch failed: ${error.message}`)));
+				child.once("exit", (code, signal) => reject(new Error(
+					`Electron exited before fixture load (code ${code}, signal ${signal}); output: ${output.slice(-2200)}`,
+				)));
+			}),
+		]);
 		const loaded = output.split("\n").map((line) => {
 			try { return JSON.parse(line); } catch { return undefined; }
 		}).find((entry) => entry?.kind === "loaded");
