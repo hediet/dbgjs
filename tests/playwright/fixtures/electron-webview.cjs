@@ -19,7 +19,8 @@ app.setPath("userData", profile);
 app.commandLine.appendSwitch("site-per-process");
 app.disableHardwareAcceleration();
 
-app.whenReady().then(() => {
+const diagnostics = {};
+app.whenReady().then(async () => {
 	reportStartup("ready");
 	const window = new BrowserWindow({
 		show: true,
@@ -29,6 +30,17 @@ app.whenReady().then(() => {
 			nodeIntegration: false,
 		},
 	});
+	window.webContents.on("render-process-gone", (_event, details) => {
+		diagnostics.rendererGone = details;
+		reportStartup("renderer-gone", diagnostics);
+	});
+	window.webContents.on("did-fail-load", (_event, code, description, validatedURL, isMainFrame) => {
+		diagnostics.loadFailure = { code, description, validatedURL, isMainFrame };
+		reportStartup("load-failed", diagnostics);
+	});
+	diagnostics.proxy = await window.webContents.session.resolveProxy(url)
+		.catch((error) => `proxy resolution failed: ${error}`);
+	reportStartup("loading", diagnostics);
 	process.stdout.write(`${JSON.stringify({ kind: "ready", pid: process.pid })}\n`);
 	return window.loadURL(url).then(async () => {
 		reportStartup("loaded");
@@ -67,7 +79,7 @@ app.whenReady().then(() => {
 		});
 	});
 }).catch((error) => {
-	reportStartup("error", String(error.stack ?? error));
+	reportStartup("error", { ...diagnostics, error: String(error.stack ?? error) });
 	process.stderr.write(`Electron fixture initialization failed: ${error.stack ?? error}\n`);
 	app.quit();
 });

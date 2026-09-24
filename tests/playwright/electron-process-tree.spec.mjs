@@ -35,6 +35,9 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 	try {
 		await mkdir(join(root, "profile"), { recursive: true });
 		fixture = await startPages();
+		assert.equal((await fetch(fixture.rootUrl)).status, 200,
+			"fixture host must be reachable from the test runner");
+		fixture.requests.length = 0;
 		env = {
 			DBGJS_SERVICE_EXE: service,
 			DBGJS_SERVICE_STATE: join(root, "service.json"),
