@@ -254,7 +254,19 @@ into `--target`, or omit `@1` to follow the current connection generation.
 `renderer-2/target/F2CDE85C`, since discovery need not belong to a persistent
 connection yet. `target attach`, `target cdp`, evaluation, source inspection,
 and screenshot capture accept those IDs once the corresponding connection
-is present. An OOPIF cannot execute `Page.captureScreenshot` directly, so the
+is present. In `target list`, `CDP client attached` describes native
+`TargetInfo.attached` (including discovery supervision); only `debugger
+attached` means dbgjs owns a managed attachment for evaluation, source
+inspection, and other debugger commands. `target list --attached` filters the
+native CDP flag, not managed debugger readiness. Explicitly run `target attach` for
+a discovered child before those operations; `--force` is not implied by native
+attachment and is only needed when explicitly taking over an existing owner.
+For raw CDP child sessions returned by `Target.attachToTarget`, pass the same
+parent target and `--session-id` on subsequent `target cdp` requests. The child
+session stays bound to its originating endpoint until it detaches or that target
+closes; unknown, stale, or wrong-target IDs fail without redirecting to another
+endpoint. Each raw CDP session request has a 30-second timeout.
+An OOPIF cannot execute `Page.captureScreenshot` directly, so the
 screenshot capability follows the frame-owner relation and clips a temporary
 capture from the embedding page; it does not user-attach the rest of the tree.
 

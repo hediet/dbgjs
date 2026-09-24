@@ -30,7 +30,7 @@ use crate::cdp::{
 };
 use crate::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::service_api::TargetSnapshot;
-use crate::session_transport::{CdpEnvelope, CdpSessionMux};
+use crate::session_transport::{CdpEnvelope, CdpSessionMux, RawCdpSession};
 use crate::target_domain::{invalid_params, normalize_typed_cdp_params, target_info_from_snapshot};
 
 /// One target a [`TargetSource`] knows about. `snapshot` is the provider-neutral CDP `TargetInfo`;
@@ -155,6 +155,7 @@ pub struct TargetEndpoint {
     owns_transport: bool,
     parent_client: Option<CdpClient<Channel>>,
     owned_session_id: Option<String>,
+    closed: watch::Sender<Option<String>>,
     tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -176,6 +177,7 @@ impl TargetEndpoint {
             let channel = channel.clone();
             async move { channel.run().await }
         });
+        let (closed, _) = watch::channel(None);
         Ok(Arc::new(Self {
             transport,
             mux,
@@ -184,11 +186,13 @@ impl TargetEndpoint {
             owns_transport: true,
             parent_client: None,
             owned_session_id: None,
+            closed,
             tasks: std::sync::Mutex::new(vec![mux_task, channel_task]),
         }))
     }
 
     pub async fn attach_child(&self, target_id: &str) -> Result<Arc<Self>, String> {
+        let mut parent_events = self.subscribe();
         let attached = self
             .client()
             .target()
@@ -211,6 +215,23 @@ impl TargetEndpoint {
             let channel = channel.clone();
             async move { channel.run().await }
         });
+        let (closed, _) = watch::channel(None);
+        let native_id = session_id.clone();
+        let closed_on_detach = closed.clone();
+        let mux_on_detach = self.mux.clone();
+        let detach_task = tokio::spawn(async move {
+            while let Some((method, params)) = parent_events.recv().await {
+                if method == "Target.detachedFromTarget"
+                    && params.get("sessionId").and_then(Value::as_str) == Some(&native_id)
+                {
+                    closed_on_detach.send_replace(Some(format!(
+                        "native CDP session '{native_id}' detached; reattach the target"
+                    )));
+                    mux_on_detach.retire_session(&native_id);
+                    return;
+                }
+            }
+        });
         Ok(Arc::new(Self {
             transport: self.transport.clone(),
             mux: self.mux.clone(),
@@ -219,7 +240,8 @@ impl TargetEndpoint {
             owns_transport: false,
             parent_client: Some(self.client()),
             owned_session_id: Some(session_id),
-            tasks: std::sync::Mutex::new(vec![channel_task]),
+            closed,
+            tasks: std::sync::Mutex::new(vec![channel_task, detach_task]),
         }))
     }
 
@@ -233,21 +255,45 @@ impl TargetEndpoint {
         receiver
     }
 
+    pub fn open_raw_session(&self, session_id: String) -> Result<Arc<RawCdpSession>, String> {
+        RawCdpSession::open(&self.mux, session_id).map_err(|error| error.to_string())
+    }
+
     async fn call(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
+        if let Some(reason) = self.close_reason().await {
+            return Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, reason));
+        }
         self.channel.call(method, params).await
     }
 
+    pub async fn close_reason(&self) -> Option<String> {
+        if let Some(reason) = self.closed.borrow().clone() {
+            return Some(reason);
+        }
+        self.transport.close_reason().lock().await.clone()
+    }
+
     pub async fn wait_closed(&self) -> String {
-        self.transport.wait_closed().await
+        let mut closed = self.closed.subscribe();
+        tokio::select! {
+            reason = self.transport.wait_closed() => reason,
+            _ = async {
+                while closed.borrow_and_update().is_none() {
+                    if closed.changed().await.is_err() { break; }
+                }
+            } => closed.borrow().clone().unwrap_or_else(|| "CDP child session closed".to_owned()),
+        }
     }
 
     pub async fn close(&self) {
+        let was_closed = self.close_reason().await.is_some();
+        self.closed.send_replace(Some("CDP target endpoint closed; reattach the target".to_owned()));
         if let Some(session_id) = &self.owned_session_id {
-            if let Some(parent) = &self.parent_client {
-                let _ = parent
-                    .target()
-                    .detach_from_target(Some(session_id.clone()), None)
-                    .await;
+            if !was_closed && let Some(parent) = &self.parent_client {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    parent.target().detach_from_target(Some(session_id.clone()), None),
+                ).await;
             }
             self.mux.retire_session(session_id);
         } else if self.owns_transport {
@@ -321,7 +367,8 @@ impl VirtualBrowserRoot {
             outbound: to_client,
             inbound: Mutex::new(server_inbound),
         }));
-        let state = Arc::new(VirtualRootState::new(source, mux.clone()));
+        let (closed_attachment_tx, mut closed_attachment_rx) = mpsc::unbounded_channel();
+        let state = Arc::new(VirtualRootState::new(source, mux.clone(), closed_attachment_tx));
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(|error| error.to_string())?),
             Box::new(RootHandler::new(state.clone())),
@@ -337,6 +384,20 @@ impl VirtualBrowserRoot {
             async move {
                 while let Some(event) = events.recv().await {
                     state.apply_source_event(event).await;
+                }
+            }
+        }));
+        state.track(tokio::spawn({
+            let state = state.clone();
+            async move {
+                while let Some(closed) = closed_attachment_rx.recv().await {
+                    let target_id = state.sessions.lock().unwrap().get(&closed.session_id)
+                        .filter(|session| Arc::ptr_eq(&session.endpoint, &closed.endpoint))
+                        .map(|session| session.target_id.clone());
+                    if let Some(target_id) = target_id {
+                        state.closed_targets.lock().unwrap().insert(target_id, closed.reason);
+                        state.detach(Some(&closed.session_id), None).await;
+                    }
                 }
             }
         }));
@@ -382,6 +443,22 @@ impl VirtualBrowserRoot {
             .unwrap()
             .get(target_id)
             .is_some_and(|target| target.waiting_for_debugger)
+    }
+
+    pub fn target_endpoint(&self, target_id: &str) -> Option<Arc<TargetEndpoint>> {
+        self.state.sessions.lock().unwrap().values()
+            .find(|session| session.target_id == target_id)
+            .map(|session| session.endpoint.clone())
+    }
+
+    pub fn owns_target_endpoint(&self, target_id: &str, endpoint: &Arc<TargetEndpoint>) -> bool {
+        self.state.sessions.lock().unwrap().values().any(|session| {
+            session.target_id == target_id && Arc::ptr_eq(&session.endpoint, endpoint)
+        })
+    }
+
+    pub fn closed_target_reason(&self, target_id: &str) -> Option<String> {
+        self.state.closed_targets.lock().unwrap().get(target_id).cloned()
     }
 
     /// Attaches to one target, in-process. CDP's `Target.attachToTarget` has no way to express
@@ -458,7 +535,14 @@ impl ManagedCdpTransport for VirtualBrowserRoot {
 /// it fed with the target's events.
 struct RootSession {
     target_id: String,
+    endpoint: Arc<TargetEndpoint>,
     tasks: Vec<JoinHandle<()>>,
+}
+
+struct ClosedAttachment {
+    session_id: String,
+    endpoint: Arc<TargetEndpoint>,
+    reason: String,
 }
 
 struct VirtualRootState {
@@ -466,8 +550,10 @@ struct VirtualRootState {
     mux: CdpSessionMux,
     root_channel: OnceLock<Channel>,
     known: std::sync::Mutex<BTreeMap<String, HostTarget>>,
+    closed_targets: std::sync::Mutex<BTreeMap<String, String>>,
     revisions: watch::Sender<u64>,
     sessions: std::sync::Mutex<BTreeMap<String, RootSession>>,
+    closed_attachment_tx: mpsc::UnboundedSender<ClosedAttachment>,
     discover: AtomicBool,
     auto_attach: AtomicBool,
     next_session_id: AtomicU64,
@@ -475,15 +561,21 @@ struct VirtualRootState {
 }
 
 impl VirtualRootState {
-    fn new(source: Arc<dyn TargetSource>, mux: CdpSessionMux) -> Self {
+    fn new(
+        source: Arc<dyn TargetSource>,
+        mux: CdpSessionMux,
+        closed_attachment_tx: mpsc::UnboundedSender<ClosedAttachment>,
+    ) -> Self {
         let (revisions, _) = watch::channel(0);
         Self {
             source,
             mux,
             root_channel: OnceLock::new(),
             known: std::sync::Mutex::new(BTreeMap::new()),
+            closed_targets: std::sync::Mutex::new(BTreeMap::new()),
             revisions,
             sessions: std::sync::Mutex::new(BTreeMap::new()),
+            closed_attachment_tx,
             discover: AtomicBool::new(false),
             auto_attach: AtomicBool::new(false),
             next_session_id: AtomicU64::new(1),
@@ -525,11 +617,9 @@ impl VirtualRootState {
     async fn refresh_known(&self) -> Vec<HostTarget> {
         let listed = self.source.list_targets().await;
         let mut known = self.known.lock().unwrap();
-        let attached = known
-            .iter()
-            .filter(|(_, target)| target.snapshot.attached)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
+        let attached = self.sessions.lock().unwrap().values()
+            .map(|session| session.target_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         let replacement = listed
             .into_iter()
             .map(|mut target| {
@@ -567,7 +657,8 @@ impl VirtualRootState {
                     let mut known = self.known.lock().unwrap();
                     match known.get(target.target_id()) {
                         Some(previous) => {
-                            target.snapshot.attached |= previous.snapshot.attached;
+                            target.snapshot.attached |= self.sessions.lock().unwrap().values()
+                                .any(|session| session.target_id == target.snapshot.target_id);
                             let changed = previous != &target;
                             known.insert(target.snapshot.target_id.clone(), target.clone());
                             if changed {
@@ -602,6 +693,7 @@ impl VirtualRootState {
                 }
             }
             TargetSourceEvent::Removed(target_id) => {
+                self.closed_targets.lock().unwrap().remove(&target_id);
                 let existed = {
                     let mut known = self.known.lock().unwrap();
                     let existed = known.remove(&target_id).is_some();
@@ -664,13 +756,29 @@ impl VirtualRootState {
                 }
             }
         }));
+        let closing_endpoint = attachment.endpoint.clone();
+        let closed_attachment_tx = self.closed_attachment_tx.clone();
+        let closed_session_id = session_id.clone();
         self.sessions.lock().unwrap().insert(
             session_id.clone(),
             RootSession {
                 target_id: target_id.to_owned(),
+                endpoint: attachment.endpoint.clone(),
                 tasks,
             },
         );
+        self.closed_targets.lock().unwrap().remove(target_id);
+        let close_task = tokio::spawn(async move {
+            let reason = closing_endpoint.wait_closed().await;
+            let _ = closed_attachment_tx.send(ClosedAttachment {
+                session_id: closed_session_id,
+                endpoint: closing_endpoint,
+                reason,
+            });
+        });
+        if let Some(session) = self.sessions.lock().unwrap().get_mut(&session_id) {
+            session.tasks.push(close_task);
+        }
         if self.discover.load(Ordering::Relaxed) || self.auto_attach.load(Ordering::Relaxed) {
             self.source.set_child_discovery(target_id, true).await;
         }
@@ -916,9 +1024,10 @@ impl RequestHandler for SessionHandler {
 mod tests {
     use super::*;
     use linkrpc::connection::channel::RejectingHandler;
-    use linkrpc::prelude::{JsonRpcMessage, JsonRpcResponse};
+    use linkrpc::prelude::{JsonRpcMessage, JsonRpcNotification, JsonRpcResponse};
     use linkrpc::protocol::jsonrpc::ResponsePayload;
     use serde_json::json;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex as StdMutex;
 
     /// A target endpoint that answers every request with the method it received, so session
@@ -927,38 +1036,73 @@ mod tests {
         inbound: Mutex<mpsc::UnboundedReceiver<CdpEnvelope>>,
         outbound: mpsc::UnboundedSender<CdpEnvelope>,
         close_reason: Arc<Mutex<Option<String>>>,
+        closed: watch::Sender<bool>,
+        unresponsive: AtomicBool,
     }
 
     impl EchoTransport {
         fn new() -> Arc<Self> {
             let (outbound, inbound) = mpsc::unbounded_channel();
+            let (closed, _) = watch::channel(false);
             Arc::new(Self {
                 inbound: Mutex::new(inbound),
                 outbound,
                 close_reason: Arc::new(Mutex::new(None)),
+                closed,
+                unresponsive: AtomicBool::new(false),
             })
+        }
+
+        fn lose(&self) {
+            self.closed.send_replace(true);
+        }
+
+        fn notify(&self, method: &str, params: Value) {
+            self.outbound.send(CdpEnvelope {
+                session_id: None,
+                message: JsonRpcMessage::Notification(JsonRpcNotification {
+                    method: method.to_owned(),
+                    params: Some(params),
+                }),
+            }).unwrap();
         }
     }
 
     #[async_trait]
     impl MessageTransport<CdpEnvelope, CdpEnvelope> for EchoTransport {
         async fn send(&self, message: CdpEnvelope) -> Result<(), TransportError> {
+            if *self.closed.borrow() {
+                return Err(TransportError::Closed);
+            }
             let JsonRpcMessage::Request(request) = message.message else {
                 return Ok(());
+            };
+            if self.unresponsive.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            let result = if request.method == "Target.attachToTarget" {
+                json!({"sessionId": "native-child"})
+            } else {
+                json!({ "echo": request.method, "sessionId": message.session_id })
             };
             self.outbound
                 .send(CdpEnvelope {
                     session_id: message.session_id,
                     message: JsonRpcMessage::Response(JsonRpcResponse {
                         id: Some(request.id),
-                        payload: ResponsePayload::Result(json!({ "echo": request.method })),
+                        payload: ResponsePayload::Result(result),
                     }),
                 })
                 .map_err(|_| TransportError::Closed)
         }
 
         async fn recv(&self) -> Option<CdpEnvelope> {
-            self.inbound.lock().await.recv().await
+            let mut closed = self.closed.subscribe();
+            let mut inbound = self.inbound.lock().await;
+            tokio::select! {
+                message = inbound.recv() => message,
+                _ = closed.changed() => None,
+            }
         }
     }
 
@@ -969,10 +1113,18 @@ mod tests {
         }
 
         async fn wait_closed(&self) -> String {
-            std::future::pending().await
+            let mut closed = self.closed.subscribe();
+            while !*closed.borrow_and_update() {
+                if closed.changed().await.is_err() {
+                    break;
+                }
+            }
+            "child CDP transport closed".to_owned()
         }
 
-        async fn close(&self) {}
+        async fn close(&self) {
+            self.lose();
+        }
     }
 
     #[derive(Default)]
@@ -988,6 +1140,7 @@ mod tests {
     struct StubSource {
         targets: StdMutex<Vec<HostTarget>>,
         calls: Arc<StdMutex<StubCalls>>,
+        endpoints: StdMutex<BTreeMap<String, Arc<EchoTransport>>>,
     }
 
     impl StubSource {
@@ -997,6 +1150,7 @@ mod tests {
                 Arc::new(Self {
                     targets: StdMutex::new(targets),
                     calls: calls.clone(),
+                    endpoints: StdMutex::new(BTreeMap::new()),
                 }),
                 calls,
             )
@@ -1040,8 +1194,10 @@ mod tests {
                 .unwrap()
                 .attached
                 .push(target_id.to_owned());
+            let transport = EchoTransport::new();
+            self.endpoints.lock().unwrap().insert(target_id.to_owned(), transport.clone());
             Ok(TargetAttachment {
-                endpoint: TargetEndpoint::open(EchoTransport::new())?,
+                endpoint: TargetEndpoint::open(transport)?,
                 stole_external_owner: force,
             })
         }
@@ -1327,6 +1483,127 @@ mod tests {
                 ("renderer-a".to_owned(), false),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn dead_child_attachment_retires_without_closing_host_or_sibling() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10), host_target("renderer-b", 20)]);
+        harness.call("Target.getTargets", json!({})).await;
+        let a = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await;
+        let b = harness.call("Target.attachToTarget", json!({"targetId":"renderer-b"})).await;
+        let a_id = a["sessionId"].as_str().unwrap().to_owned();
+        let b_id = b["sessionId"].as_str().unwrap().to_owned();
+        let old_endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        let a_channel = Channel::new(Box::new(harness.mux.open_session(a_id.clone()).unwrap()), Box::new(RejectingHandler));
+        let b_channel = Channel::new(Box::new(harness.mux.open_session(b_id.clone()).unwrap()), Box::new(RejectingHandler));
+        for channel in [a_channel.clone(), b_channel.clone()] {
+            tokio::spawn(async move { channel.run().await });
+        }
+        assert_eq!(a_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        let a_transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
+        a_transport.unresponsive.store(true, Ordering::Relaxed);
+        let pending = tokio::spawn({
+            let channel = a_channel.clone();
+            async move { channel.call("Runtime.evaluate", json!({})).await }
+        });
+        harness.settle().await;
+        a_transport.lose();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if !harness.root.refresh_targets().await.targets.iter().find(|t| t.target_id() == "renderer-a").unwrap().snapshot.attached {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("dead child must cease being advertised as attached");
+        assert_eq!(b_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        assert_eq!(harness.call("Browser.getVersion", json!({})).await["product"], "Process 4242");
+        assert!(harness.events.events.lock().unwrap().iter().any(|(method, params)| {
+            method == "Target.detachedFromTarget" && params["sessionId"] == a_id
+        }));
+        harness.mux.retire_session(&a_id);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), pending).await.is_ok(),
+            "requests pending on the dead child must settle promptly");
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), a_channel.call("Runtime.evaluate", json!({}))).await.is_ok(),
+            "dead child requests must settle promptly");
+        let fresh = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await;
+        let fresh_id = fresh["sessionId"].as_str().unwrap().to_owned();
+        let fresh_channel = Channel::new(Box::new(harness.mux.open_session(fresh_id).unwrap()), Box::new(RejectingHandler));
+        tokio::spawn({ let channel = fresh_channel.clone(); async move { channel.run().await } });
+        assert_eq!(fresh_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        harness.root.state.closed_attachment_tx.send(ClosedAttachment {
+            session_id: a_id,
+            endpoint: old_endpoint,
+            reason: "late old endpoint close".into(),
+        }).unwrap();
+        harness.settle().await;
+        assert_eq!(fresh_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        assert!(harness.root.observe_targets().targets.iter().find(|t| t.target_id() == "renderer-a").unwrap().snapshot.attached);
+    }
+
+    #[tokio::test]
+    async fn raw_native_session_uses_its_own_endpoint_for_repeated_and_concurrent_requests() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10)]);
+        harness.call("Target.getTargets", json!({})).await;
+        let virtual_id = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await["sessionId"].as_str().unwrap().to_owned();
+        let parent = Channel::new(Box::new(harness.mux.open_session(virtual_id).unwrap()), Box::new(RejectingHandler));
+        tokio::spawn({ let parent = parent.clone(); async move { parent.run().await } });
+        let attach = parent.call("Target.attachToTarget", json!({"targetId":"iframe", "flatten":true})).await.unwrap();
+        let native_id = attach["sessionId"].as_str().unwrap().to_owned();
+        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        let native = endpoint.open_raw_session(native_id.clone()).unwrap();
+        for _ in 0..3 {
+            let result = native.request("Runtime.evaluate", json!({"expression":"1+1"}), std::time::Duration::from_secs(1)).await.unwrap();
+            assert_eq!(result["echo"], "Runtime.evaluate");
+            assert_eq!(result["sessionId"], native_id);
+        }
+        let (first, second) = tokio::join!(
+            native.request("Runtime.evaluate", json!({"expression":"2"}), std::time::Duration::from_secs(1)),
+            native.request("Runtime.evaluate", json!({"expression":"3"}), std::time::Duration::from_secs(1)),
+        );
+        assert_eq!(first.unwrap()["sessionId"], native_id);
+        assert_eq!(second.unwrap()["sessionId"], native_id);
+        native.close();
+        assert!(native.request("Runtime.evaluate", json!({}), std::time::Duration::from_millis(20)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn identical_native_ids_on_distinct_endpoints_never_cross_route() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10), host_target("renderer-b", 20)]);
+        harness.call("Target.getTargets", json!({})).await;
+        for target in ["renderer-a", "renderer-b"] {
+            harness.call("Target.attachToTarget", json!({"targetId":target})).await;
+        }
+        let a = harness.root.target_endpoint("renderer-a").unwrap();
+        let b = harness.root.target_endpoint("renderer-b").unwrap();
+        let a_session = a.open_raw_session("native-child".to_owned()).unwrap();
+        let b_session = b.open_raw_session("native-child".to_owned()).unwrap();
+        a_session.close();
+        assert_eq!(b_session.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["echo"], "Runtime.evaluate");
+    }
+
+    #[tokio::test]
+    async fn native_child_detach_by_session_id_closes_only_the_child_route() {
+        let transport = EchoTransport::new();
+        let parent = TargetEndpoint::open(transport.clone()).unwrap();
+        let child = parent.attach_child("iframe").await.unwrap();
+        assert_eq!(child.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        transport.notify("Target.detachedFromTarget", json!({"sessionId":"native-child"}));
+        let reason = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait_closed()).await.unwrap();
+        assert!(reason.contains("native-child"), "{reason}");
+        assert_eq!(parent.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+    }
+
+    #[tokio::test]
+    async fn timed_out_raw_request_does_not_retire_other_sessions_or_lock_channel() {
+        let transport = EchoTransport::new();
+        let endpoint = TargetEndpoint::open(transport.clone()).unwrap();
+        let child = endpoint.open_raw_session("native-child".to_owned()).unwrap();
+        transport.unresponsive.store(true, Ordering::Relaxed);
+        let error = child.request("Runtime.evaluate", json!({}), std::time::Duration::from_millis(20)).await.unwrap_err();
+        assert_eq!(error.code, error_codes::REQUEST_TIMEOUT);
+        transport.unresponsive.store(false, Ordering::Relaxed);
+        assert_eq!(child.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["echo"], "Runtime.evaluate");
     }
 
     #[tokio::test]

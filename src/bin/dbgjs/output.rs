@@ -122,6 +122,7 @@ pub struct TargetListEntry {
     pub connection_generation: u64,
     pub selected: bool,
     pub parent_target_id: Option<String>,
+    pub attachment: dbgjs::service_api::TargetAttachmentState,
     #[serde(flatten)]
     pub target: TargetSnapshot,
 }
@@ -1860,7 +1861,7 @@ fn print_target_tree(
         if entry.selected { "*" } else { "" },
         terminal_text(&selector),
         terminal_text(&target.target_type),
-        if target.attached { "; attached" } else { "" },
+        target_attachment_label(entry.attachment),
         title,
         terminal_text(&target.url),
     );
@@ -1875,6 +1876,16 @@ fn print_target_tree(
             children,
             visited,
         );
+    }
+
+}
+
+fn target_attachment_label(state: dbgjs::service_api::TargetAttachmentState) -> &'static str {
+    use dbgjs::service_api::TargetAttachmentState;
+    match state {
+        TargetAttachmentState::Debugger => "; debugger attached",
+        TargetAttachmentState::CdpClient => "; CDP client attached",
+        TargetAttachmentState::Detached => "",
     }
 }
 
@@ -2033,7 +2044,7 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                     "{}  [{}{}]  {:?}  {}",
                     terminal_text(label),
                     terminal_text(&target.target_type),
-                    if target.attached { "; attached" } else { "" },
+                    if target.attached { "; CDP client attached" } else { "" },
                     title,
                     terminal_text(&target.url),
                 )
@@ -5139,6 +5150,7 @@ mod tests {
             connection_generation: 1,
             selected: false,
             parent_target_id: None,
+            attachment: dbgjs::service_api::TargetAttachmentState::Detached,
             target: TargetSnapshot {
                 target_id: target_id.to_owned(),
                 target_type: "page".to_owned(),
