@@ -525,9 +525,12 @@ This does not change the metadata or mapping results of older captures.
 - Renderer: `process-tree-<vscode-main-pid>`
 - Extension host or agent host: `process-<pid>`
 
-Repeating an attach reports an ownership conflict. Use `--force` only when the
-existing debugger owner should be detached and replaced; successful output
-distinguishes `created` from `stolen`.
+`process attach` reuses an attachment already managed by the same context and
+connection, including a renderer auto-attached during connection startup.
+It reports `reused` without detaching the active debugger. A different owner's
+attachment still reports an ownership conflict; use `--force` only when that
+debugger should be detached and replaced. Explicit `target attach` continues
+to report a conflict on repeated attachment unless forced.
 
 Disconnect only one connection:
 

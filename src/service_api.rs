@@ -936,6 +936,7 @@ pub struct TargetDebuggerSnapshot {
 pub enum TargetAttachmentOutcome {
     Created,
     Stolen,
+    Reused,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

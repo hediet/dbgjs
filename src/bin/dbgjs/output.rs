@@ -2756,6 +2756,7 @@ impl HumanOutput for TargetAttachmentResult {
             match self.outcome {
                 TargetAttachmentOutcome::Created => "created",
                 TargetAttachmentOutcome::Stolen => "stolen",
+                TargetAttachmentOutcome::Reused => "reused",
             }
         );
         print_target_human(&self.target, &self.target.target_id);
