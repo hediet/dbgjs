@@ -416,6 +416,9 @@ async (token, independent = false) => {
 			}
 			if (!childTree?.frame || childTree.frame.id !== info.targetId) continue;
 			childTree.frame.parentId = info.parentId;
+			if (!childTree.frame.url && info.url) {
+				childTree.frame.url = info.url;
+			}
 			// The child session owns its local descendants; projecting them here would race
 			// Playwright's OOPIF attachment and create duplicate frame identities.
 			(parentTree.childFrames ??= []).push({ frame: childTree.frame });
@@ -454,6 +457,14 @@ async (token, independent = false) => {
 					if (!announced) {
 						announced = new Set();
 						entry.announcedFrames.set(envelope.sessionId, announced);
+					}
+					const main = result.frameTree.frame;
+					if (main?.url && !announced.has(main.id)) {
+						// Playwright ignores a child session's getFrameTree result; replay its
+						// main-frame navigation before announcing local descendants.
+						announced.add(main.id);
+						routeDebuggerMessage(entry, "Page.frameNavigated",
+							{ frame: main }, envelope.sessionId);
 					}
 					const announceChildren = (tree) => {
 						for (const child of tree.childFrames ?? []) {
