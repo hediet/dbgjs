@@ -163,7 +163,9 @@ if its JSON `breakpoints[].status.kind` is `waitingForScript`,
 `sourceNotFound`, `ambiguousSource`, `unmapped`, or `failed`; only `installed`
 confirms a live binding. Add `--require-installed [--timeout-ms 30000]` to
 require a binding before returning successfully (maximum 300000 ms). A
-not-yet-loaded script can remain configured after a timed-out attempt.
+not-yet-loaded script can become installed while the command waits; unresolved
+or ambiguous mapping states are retried until the deadline. Configuration
+remains after a timed-out attempt.
 
 ```sh
 dbgjs target logpoint proof 'file:///app.js' 12 3 '({value})' --require-installed
@@ -173,11 +175,15 @@ dbgjs target logpoint delete proof
 
 `target logpoint delete` reports whether the ID existed and the number of live
 bindings removed; `breakpoint delete log:proof` does **not** remove a
-target-local logpoint. Logpoints use a debugger-installed `Runtime.addBinding`
+target-local logpoint. Context-owned breakpoints named `log:<id>` are not
+target logpoints and cannot be replaced or removed by target logpoint commands.
+Logpoints use a debugger-installed `Runtime.addBinding`
 instead of application `console.log`. `log` reports successes, expression and
 serialization errors (including cycles and BigInt), bounded retention and
 eviction counts. `capture.logpoints[]` distinguishes hits from successful
-evaluations, errors and recorded events. Installing a probe fails explicitly
+evaluations, errors and recorded events for active target logpoints; deleting
+one retires its counters without removing already captured log messages.
+Installing a probe fails explicitly
 if its CDP binding transport is unavailable; the binding is scoped to the
 attached debugging session. Detaching removes the live instrumentation.
 

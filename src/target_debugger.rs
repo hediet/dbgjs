@@ -191,6 +191,20 @@ impl TargetDebuggerHandle {
         self.command(|response| TargetCommand::SetBreakpoints {
             context_revision,
             breakpoints,
+            target_logpoints: false,
+            response,
+        })
+        .await
+    }
+
+    pub async fn set_logpoints(
+        &self,
+        breakpoints: Vec<TargetBreakpointSpec>,
+    ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
+        self.command(|response| TargetCommand::SetBreakpoints {
+            context_revision: u64::MAX,
+            breakpoints,
+            target_logpoints: true,
             response,
         })
         .await
@@ -946,6 +960,7 @@ enum TargetCommand {
     SetBreakpoints {
         context_revision: u64,
         breakpoints: Vec<TargetBreakpointSpec>,
+        target_logpoints: bool,
         response: CommandResponse,
     },
     RemoveBreakpoint {
@@ -1165,6 +1180,7 @@ async fn run_target(
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
 ) {
     let mut breakpoint_revisions = BTreeMap::<String, u64>::new();
+    let mut target_logpoints = BTreeSet::<String>::new();
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
@@ -1189,13 +1205,27 @@ async fn run_target(
             Next::Command(Some(TargetCommand::SetBreakpoints {
                 context_revision,
                 breakpoints,
+                target_logpoints: target_owned,
                 response,
             })) => {
                 let result = async {
-                    let logpoint_ids = breakpoints.iter()
-                        .filter_map(|breakpoint| breakpoint.id.strip_prefix("log:").map(str::to_owned))
+                    let breakpoints_ids = breakpoints.iter()
+                        .map(|breakpoint| breakpoint.id.clone())
                         .collect::<Vec<_>>();
-                    if !logpoint_ids.is_empty() {
+                    if target_owned {
+                        for breakpoint in &breakpoints {
+                            if breakpoint_spec(
+                                driver.state(),
+                                &BreakpointKey {
+                                    client_id: context_id.clone(),
+                                    breakpoint_id: breakpoint.id.clone(),
+                                },
+                            ).is_some() && !target_logpoints.contains(&breakpoint.id) {
+                                return Err(TargetDebuggerError::BreakpointOwnedByContext(
+                                    breakpoint.id.clone(),
+                                ));
+                            }
+                        }
                         driver.ensure_logpoint_binding().await.map_err(|error| {
                             TargetDebuggerError::LogpointTransport(error.message)
                         })?;
@@ -1263,7 +1293,13 @@ async fn run_target(
                             };
                         }
                     }
-                    driver.register_logpoints(&logpoint_ids);
+                    if target_owned {
+                        let ids = breakpoints_ids.iter()
+                            .filter_map(|id| id.strip_prefix("log:").map(str::to_owned))
+                            .collect::<Vec<_>>();
+                        driver.register_logpoints(&ids);
+                        target_logpoints.extend(breakpoints_ids);
+                    }
                     Ok(snapshot_from_driver(
                         &context_id,
                         &connection_id,
@@ -1337,21 +1373,25 @@ async fn run_target(
                         &session_key,
                         &driver,
                     );
+                    let owned = target_logpoints.contains(&breakpoint_id);
                     let existing = previous
                         .breakpoints
                         .iter()
                         .find(|breakpoint| breakpoint.id == breakpoint_id);
-                    let existed = existing.is_some();
-                    let removed_bindings = existing.map_or(0, |breakpoint| match breakpoint.status {
+                    let removed_bindings = existing.filter(|_| owned).map_or(0, |breakpoint| match breakpoint.status {
                         TargetBreakpointStatus::Installed { binding_count } => binding_count,
                         _ => 0,
                     });
-                    if existed {
+                    if owned {
                         remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
-                        breakpoint_revisions.insert(breakpoint_id, u64::MAX);
+                        breakpoint_revisions.remove(&breakpoint_id);
+                        target_logpoints.remove(&breakpoint_id);
+                        if let Some(id) = breakpoint_id.strip_prefix("log:") {
+                            driver.unregister_logpoint(id);
+                        }
                     }
                     Ok(crate::service_api::LogpointRemovalResult {
-                        existed,
+                        existed: owned,
                         removed_bindings,
                         target: snapshot_from_driver(
                             &context_id,
@@ -6348,6 +6388,8 @@ pub enum TargetDebuggerError {
     InvalidBreakpointPosition,
     #[error("logpoint capture transport unavailable: {0}")]
     LogpointTransport(String),
+    #[error("breakpoint {0} belongs to the context, not a target logpoint")]
+    BreakpointOwnedByContext(String),
     #[error("the debugger session is no longer available")]
     SessionMissing,
     #[error("pause epoch {0} is stale")]

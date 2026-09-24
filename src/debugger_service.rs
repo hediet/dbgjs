@@ -4821,6 +4821,10 @@ fn validate_id(kind: &str, id: &str) -> Result<(), JsonRpcError> {
     Ok(())
 }
 
+fn validate_breakpoint_id(id: &str) -> Result<(), JsonRpcError> {
+    validate_id("breakpoint", id.strip_prefix("log:").unwrap_or(id))
+}
+
 fn validate_context_identity(id: &str, kind: ContextKind) -> Result<(), JsonRpcError> {
     match kind {
         ContextKind::Named => {
@@ -5244,6 +5248,7 @@ fn validate_raw_cdp_params(method: &str, params: &serde_json::Value) -> Result<(
 fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
     let code = match error {
         TargetDebuggerError::InvalidBreakpointPosition
+        | TargetDebuggerError::BreakpointOwnedByContext(_)
         | TargetDebuggerError::StalePause(_)
         | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::ScopeNotFound(_)

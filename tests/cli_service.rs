@@ -421,6 +421,30 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
     let repeated = run(&["target", "logpoint", "delete", "probe", "--connection", "node"]);
     assert_eq!(repeated["existed"], false);
     assert_eq!(repeated["removedBindings"], 0);
+    run(&["breakpoint", "set", "log:owned", "file:///dbgjs-test/logpoint.js", "1", "--column", "22"]);
+    let context_owned = run(&["target", "show", "--connection", "node"]);
+    assert!(context_owned.to_string().contains("\"log:owned\""));
+    let collision = run(&["target", "logpoint", "delete", "owned", "--connection", "node"]);
+    assert_eq!(collision["existed"], false, "context-owned breakpoint is not a target logpoint");
+    assert!(collision["target"]["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:owned"));
+    let configured = run(&["context", "show"]);
+    assert!(configured["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:owned"));
+    let overwrite = run_in(&cli, &service, &state_file, &root, &[
+        "target", "logpoint", "owned", "file:///dbgjs-test/logpoint.js",
+        "1", "22", "1", "--connection", "node",
+    ]);
+    assert!(!overwrite.0.success(), "target logpoint must not overwrite context-owned breakpoint");
+    assert!(String::from_utf8_lossy(&overwrite.2).contains("belongs to the context"));
+    let still_owned = run(&["target", "show", "--connection", "node"]);
+    let still_owned = still_owned.get("target").unwrap_or(&still_owned);
+    assert!(still_owned["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:owned"));
+    run(&["breakpoint", "delete", "log:owned"]);
+    run(&["breakpoint", "set", "log:probe", "file:///dbgjs-test/logpoint.js", "1", "--column", "22"]);
+    let reused = run(&["target", "show", "--connection", "node"]);
+    let reused = reused.get("target").unwrap_or(&reused);
+    assert!(reused["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:probe"),
+        "deleting a target logpoint must not permanently tombstone its ID");
+    run(&["breakpoint", "delete", "log:probe"]);
     run(&["connection", "disconnect", "--connection", "node"]);
     run(&["service", "stop"]);
     wait_until_removed(&state_file);
@@ -548,6 +572,19 @@ fn logpoint_records_hits_without_application_console_and_reports_expression_erro
         assert!(Instant::now() < deadline, "bounded logpoint retention not observed: {logs}");
         thread::sleep(Duration::from_millis(50));
     }
+    run(&["target", "logpoint", "delete", "probe", "--connection", "node"]);
+    assert!(run(&["log", "--connection", "node"])["capture"]["logpoints"]
+        .as_array().is_none_or(Vec::is_empty), "deleted logpoint statistics must be retired");
+    for index in 0..12 {
+        let id = format!("cycle-{index}");
+        run(&["target", "logpoint", &id, "file:///dbgjs-test/logpoint.js",
+            "1", "22", "globalThis.probeHits", "--connection", "node"]);
+        assert_eq!(run(&["log", "--connection", "node"])["capture"]["logpoints"]
+            .as_array().unwrap().len(), 1);
+        run(&["target", "logpoint", "delete", &id, "--connection", "node"]);
+        assert!(run(&["log", "--connection", "node"])["capture"]["logpoints"]
+            .as_array().is_none_or(Vec::is_empty), "statistics grew after cycle {index}");
+    }
     run(&["connection", "disconnect", "--connection", "node"]);
     run(&["service", "stop"]);
     wait_until_removed(&state_file);
@@ -625,6 +662,40 @@ fn logpoint_can_require_confirmed_installation_without_discarding_pending_config
     ]);
     assert!(installed["breakpoints"].as_array().unwrap().iter().any(|b| {
         b["id"] == "log:future" && b["status"]["kind"] == "installed"
+    }));
+    let strict_cli = cli.clone();
+    let strict_service = service.clone();
+    let strict_state = state_file.clone();
+    let strict_root = root.clone();
+    let waiting = thread::spawn(move || run_in(
+        &strict_cli, &strict_service, &strict_state, &strict_root,
+        &["target", "logpoint", "later", "file:///dbgjs-test/later.js",
+          "1", "21", "1", "--require-installed", "--timeout-ms", "5000",
+          "--connection", "node"],
+    ));
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let snapshot = run(&["target", "show", "--connection", "node"]);
+        let target = snapshot.get("target").unwrap_or(&snapshot);
+        if target["breakpoints"].as_array().unwrap().iter().any(|b| {
+            b["id"] == "log:later" && b["status"]["kind"] == "sourceNotFound"
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "later logpoint did not become unresolved");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!waiting.is_finished(), "strict command stopped waiting for late script");
+    run(&[
+        "target", "eval",
+        "require('node:vm').runInThisContext('function later(){return 1}\\n',{filename:'file:///dbgjs-test/later.js'})",
+        "--connection", "node",
+    ]);
+    let result = waiting.join().unwrap();
+    assert_success(&["target", "logpoint", "later", "--require-installed"], result.0, &result.1, &result.2);
+    let result: Value = serde_json::from_slice(&result.1).unwrap();
+    assert!(result["breakpoints"].as_array().unwrap().iter().any(|b| {
+        b["id"] == "log:later" && b["status"]["kind"] == "installed"
     }));
     run(&["connection", "disconnect", "--connection", "node"]);
     run(&["service", "stop"]);
