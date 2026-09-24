@@ -3944,7 +3944,7 @@ fn render_symbol_groups(
                 String::new()
             }
         ));
-        if expand_methods && summary.entries.len() > 1 {
+        if expand_methods && summary.is_class {
             let child_prefix = format!("{prefix}{}", if last { "   " } else { "│  " });
             for (method_index, entry) in summary.entries.iter().enumerate() {
                 if output.len() >= budget {
@@ -4421,6 +4421,30 @@ mod tests {
         ValueSelector, ValueSnapshot,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn all_coverage_symbols_expands_even_a_single_class_method() {
+        let entries = vec![CoverageEntry {
+            path: "src/chatListWidget.ts".into(),
+            function: "ChatListWidget.handleCopy".into(),
+            line_counts: BTreeMap::from([(42, 3)]),
+            metrics: CoverageMetrics {
+                hit_lines: 1,
+                run_lines: 3,
+            },
+            generated_location: None,
+        }];
+        let lines = super::render_symbol_groups("", &entries, 10, true);
+        assert!(lines.iter().any(|line| line.contains("handleCopy")), "{lines:?}");
+        let mut tree = BoundedTree::default();
+        tree.insert(
+            ["src".to_owned(), "chatListWidget.ts".to_owned()],
+            CoverageMetrics { hit_lines: 1, run_lines: 3 },
+            entries,
+        );
+        let rendered = tree.render(&CoverageTreeStyle, true, 20);
+        assert!(rendered.iter().any(|line| line.contains("handleCopy")), "{rendered:?}");
+    }
 
     #[test]
     fn terminal_text_escapes_control_sequences() {
