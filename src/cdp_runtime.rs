@@ -25,7 +25,7 @@ use crate::cdp::{
 };
 use crate::cdp_transport::ManagedCdpTransport;
 use crate::debugger_engine::{Effect, Input, RawFrame, RawScope, SessionKey, StepKind};
-use crate::session_transport::CdpSessionMux;
+use crate::session_transport::{CdpSessionMux, RawCdpSession};
 use crate::source_view::{Position, SourceMapData};
 use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
 
@@ -66,6 +66,7 @@ impl CdpConnection {
             Box::new(
                 RootCdpEventHandler {
                     sender: root_event_sender,
+                    mux: mux.clone(),
                 }
                 .into_dispatcher(),
             ),
@@ -203,6 +204,10 @@ impl CdpConnection {
         self.mux.retire_session(session_id);
     }
 
+    pub fn open_raw_session(&self, session_id: String) -> Result<Arc<RawCdpSession>, CdpRuntimeError> {
+        RawCdpSession::open(&self.mux, session_id).map_err(CdpRuntimeError::OpenSession)
+    }
+
     pub fn take_root_debugger_session(&self) -> Option<CdpDebuggerSession> {
         self.root_debugger.lock().unwrap().take()
     }
@@ -234,11 +239,13 @@ pub enum RootCdpEvent {
     TargetCreated(TargetTargetCreatedParams),
     TargetChanged(TargetTargetInfoChangedParams),
     TargetDestroyed(TargetTargetDestroyedParams),
+    TargetDetached { session_id: String, target_id: Option<String> },
 }
 
 #[derive(Clone)]
 struct RootCdpEventHandler {
     sender: mpsc::UnboundedSender<Result<RootCdpEvent, CdpRuntimeEventError>>,
+    mux: CdpSessionMux,
 }
 
 struct RootCdpEventDispatcher {
@@ -266,6 +273,16 @@ impl RootCdpEventHandler {
 
 #[async_trait]
 impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
+    async fn detached_from_target(
+        &self,
+        _ctx: &linkrpc::prelude::CallCtx,
+        session_id: crate::cdp::TargetSessionId,
+        target_id: Option<crate::cdp::TargetTargetId>,
+    ) -> Result<(), RpcCallError> {
+        self.mux.retire_session(&session_id);
+        let _ = self.sender.send(Ok(RootCdpEvent::TargetDetached { session_id, target_id }));
+        Ok(())
+    }
     async fn target_created(
         &self,
         _ctx: &linkrpc::prelude::CallCtx,

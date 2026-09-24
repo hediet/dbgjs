@@ -6,11 +6,12 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::time::timeout;
 use url::Url;
 
@@ -29,10 +30,12 @@ use crate::resource_graph::ResourceId;
 use crate::service_api::{
     CdpStdioTopology, ConnectionConfiguration, PlaywrightChannel, TargetSnapshot,
 };
+use crate::session_transport::RawCdpSession;
 use crate::stdio_transport::CdpStdioTransport;
-use crate::virtual_browser_root::VirtualBrowserRoot;
+use crate::virtual_browser_root::{TargetEndpoint, VirtualBrowserRoot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+const RAW_CDP_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("providers/playwright.mjs");
 const CHROME_HELPER: &str = include_str!("providers/chrome.mjs");
 const NODE_HELPER: &str = include_str!("providers/node.mjs");
@@ -48,12 +51,18 @@ pub struct ConnectionRuntime {
     /// runtime keeps it to answer the two questions CDP's `Target` domain cannot express:
     /// which OS process backs a target, and whether it is genuinely paused at startup.
     virtual_root: Option<Arc<VirtualBrowserRoot>>,
+    raw_sessions: std::sync::Mutex<BTreeMap<(String, String), RawAttachment>>,
     direct_debuggers: std::sync::Mutex<BTreeMap<String, Arc<CdpConnection>>>,
     direct_debugger_endpoints: std::sync::Mutex<BTreeMap<String, String>>,
     direct_debugger_attach_lock: Mutex<()>,
     provider_target_events: Mutex<Option<mpsc::UnboundedReceiver<ProviderTargetEvent>>>,
     provider_target_sender: mpsc::UnboundedSender<ProviderTargetEvent>,
     pause_future_children: OnceLock<Arc<ConnectionPauseFutureChildrenCapability>>,
+}
+
+struct RawAttachment {
+    session: Arc<RawCdpSession>,
+    endpoint: Option<Arc<TargetEndpoint>>,
 }
 
 #[derive(Clone, Debug)]
@@ -451,6 +460,7 @@ impl ConnectionRuntime {
             connection_generation,
             root_endpoint: endpoint,
             virtual_root: None,
+            raw_sessions: std::sync::Mutex::new(BTreeMap::new()),
             direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_attach_lock: Mutex::new(()),
@@ -525,6 +535,7 @@ impl ConnectionRuntime {
             connection_generation,
             root_endpoint: launch.endpoint,
             virtual_root: Some(virtual_root),
+            raw_sessions: std::sync::Mutex::new(BTreeMap::new()),
             direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_attach_lock: Mutex::new(()),
@@ -569,6 +580,7 @@ impl ConnectionRuntime {
             connection_generation,
             root_endpoint: format!("stdio:{command}"),
             virtual_root: None,
+            raw_sessions: std::sync::Mutex::new(BTreeMap::new()),
             direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
             direct_debugger_attach_lock: Mutex::new(()),
@@ -720,12 +732,135 @@ impl ConnectionRuntime {
         self.virtual_root.is_some()
     }
 
+    pub fn register_raw_session(
+        self: &Arc<Self>,
+        target_id: &str,
+        session_id: &str,
+        mut events: broadcast::Receiver<crate::cdp_runtime::RawCdpEvent>,
+    ) -> Result<(), String> {
+        let key = (target_id.to_owned(), session_id.to_owned());
+        let mut sessions = self.raw_sessions.lock().unwrap();
+        if sessions.contains_key(&key) {
+            return Err(format!("raw CDP session '{session_id}' is already registered for target '{target_id}'"));
+        }
+        let endpoint = self.virtual_root.as_ref().map(|root| {
+            root.target_endpoint(target_id).ok_or_else(|| {
+                format!("target '{target_id}' no longer has a live endpoint; attach again")
+            })
+        }).transpose()?;
+        let session = match &endpoint {
+            Some(endpoint) => endpoint.open_raw_session(session_id.to_owned())?,
+            None => self.cdp.open_raw_session(session_id.to_owned())
+                .map_err(|error| error.to_string())?,
+        };
+        sessions.insert(key.clone(), RawAttachment { session: session.clone(), endpoint });
+        drop(sessions);
+
+        let owner = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if event.method == "Target.detachedFromTarget"
+                    && event.params.get("sessionId").and_then(Value::as_str) == Some(&key.1)
+                {
+                    if let Some(owner) = owner.upgrade() {
+                        owner.retire_raw_session_if_same(&key.0, &key.1, &session);
+                    }
+                    break;
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn retire_raw_session_if_same(
+        &self,
+        target_id: &str,
+        session_id: &str,
+        expected: &Arc<RawCdpSession>,
+    ) {
+        let key = (target_id.to_owned(), session_id.to_owned());
+        let mut sessions = self.raw_sessions.lock().unwrap();
+        if sessions.get(&key).is_some_and(|attachment| Arc::ptr_eq(&attachment.session, expected))
+            && let Some(attachment) = sessions.remove(&key)
+        {
+            attachment.session.close();
+        }
+    }
+
+    pub fn retire_raw_session(&self, target_id: &str, session_id: &str) {
+        if let Some(attachment) = self.raw_sessions.lock().unwrap()
+            .remove(&(target_id.to_owned(), session_id.to_owned()))
+        {
+            attachment.session.close();
+        }
+    }
+
+    pub fn retire_raw_sessions_for_target(&self, target_id: &str) {
+        let mut sessions = self.raw_sessions.lock().unwrap();
+        let keys = sessions.keys().filter(|(owner, _)| owner == target_id).cloned().collect::<Vec<_>>();
+        for key in keys {
+            if let Some(attachment) = sessions.remove(&key) {
+                attachment.session.close();
+            }
+        }
+    }
+
+    pub async fn raw_session_request(
+        &self,
+        target_id: &str,
+        session_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, JsonRpcError> {
+        let (session, endpoint) = {
+            let sessions = self.raw_sessions.lock().unwrap();
+            let attachment = sessions.get(&(target_id.to_owned(), session_id.to_owned()))
+                .ok_or_else(|| JsonRpcError::new(
+                    error_codes::INVALID_PARAMS,
+                    format!("unknown or detached raw CDP session '{session_id}' for target '{target_id}'; run Target.attachToTarget again"),
+                ))?;
+            (attachment.session.clone(), attachment.endpoint.clone())
+        };
+        if let Some(endpoint) = &endpoint {
+            if !self.virtual_root.as_ref().is_some_and(|root| root.owns_target_endpoint(target_id, endpoint))
+                || endpoint.close_reason().await.is_some()
+            {
+                self.retire_raw_session_if_same(target_id, session_id, &session);
+                return Err(JsonRpcError::new(
+                    error_codes::PEER_DISCONNECTED,
+                    format!("raw CDP session '{session_id}' lost its target endpoint; reattach target '{target_id}'"),
+                ));
+            }
+        }
+        let result = if let Some(endpoint) = endpoint {
+            tokio::select! {
+                result = session.request(method, params, RAW_CDP_SESSION_TIMEOUT) => result,
+                reason = endpoint.wait_closed() => Err(JsonRpcError::new(
+                    error_codes::PEER_DISCONNECTED,
+                    format!("raw CDP session '{session_id}' lost its child endpoint: {reason}; reattach target '{target_id}'"),
+                )),
+            }
+        } else {
+            session.request(method, params, RAW_CDP_SESSION_TIMEOUT).await
+        };
+        result
+    }
+
     /// The OS process behind a target, when the connection can tell. Real browsers do not expose
     /// this through `Target`, so only the virtual root answers.
     pub fn target_process_id(&self, target_id: &str) -> Option<u32> {
         self.virtual_root
             .as_ref()
             .and_then(|root| root.target_process_id(target_id))
+    }
+
+    pub fn closed_target_reason(&self, target_id: &str) -> Option<String> {
+        self.virtual_root.as_ref()?.closed_target_reason(target_id)
     }
 
     pub fn target_primary_window_id(&self, target_id: &str) -> Option<u32> {
@@ -815,6 +950,9 @@ impl ConnectionRuntime {
     }
 
     pub async fn close(&self) {
+        for attachment in std::mem::take(&mut *self.raw_sessions.lock().unwrap()).into_values() {
+            attachment.session.close();
+        }
         let direct_debuggers = std::mem::take(&mut *self.direct_debuggers.lock().unwrap());
         for connection in direct_debuggers.into_values() {
             connection.close().await;
@@ -1504,4 +1642,86 @@ pub enum ConnectionProviderError {
     ProcessTree(String),
     #[error(transparent)]
     Cdp(#[from] CdpRuntimeError),
+}
+
+#[cfg(test)]
+mod raw_session_tests {
+    use super::*;
+    use crate::cdp_transport::ManagedCdpTransport;
+    use crate::session_transport::CdpEnvelope;
+    use linkrpc::prelude::{MessageTransport, TransportError};
+    use tokio::sync::Mutex;
+
+    struct IdleTransport(Arc<Mutex<Option<String>>>);
+
+    #[async_trait]
+    impl MessageTransport<CdpEnvelope, CdpEnvelope> for IdleTransport {
+        async fn send(&self, _: CdpEnvelope) -> Result<(), TransportError> {
+            Ok(())
+        }
+        async fn recv(&self) -> Option<CdpEnvelope> {
+            std::future::pending().await
+        }
+    }
+
+    #[async_trait]
+    impl ManagedCdpTransport for IdleTransport {
+        fn close_reason(&self) -> Arc<Mutex<Option<String>>> {
+            self.0.clone()
+        }
+        async fn wait_closed(&self) -> String {
+            std::future::pending().await
+        }
+        async fn close(&self) {}
+    }
+
+    async fn runtime(generation: u64) -> Arc<ConnectionRuntime> {
+        let transport = Arc::new(IdleTransport(Arc::new(Mutex::new(None))));
+        let cdp = Arc::new(CdpConnection::connect_transport(transport).await.unwrap());
+        let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
+        Arc::new(ConnectionRuntime {
+            cdp,
+            provider: None,
+            direct_debugger: false,
+            connection_generation: generation,
+            root_endpoint: "test".into(),
+            virtual_root: None,
+            raw_sessions: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debuggers: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debugger_endpoints: std::sync::Mutex::new(BTreeMap::new()),
+            direct_debugger_attach_lock: Mutex::new(()),
+            provider_target_events: Mutex::new(Some(provider_target_events)),
+            provider_target_sender,
+            pause_future_children: OnceLock::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn raw_session_is_scoped_to_owner_and_generation() {
+        let first = runtime(1).await;
+        let second = runtime(2).await;
+        let session = first.cdp.open_raw_session("native".into()).unwrap();
+        first.raw_sessions.lock().unwrap().insert(
+            ("owner".into(), "native".into()),
+            RawAttachment { session, endpoint: None },
+        );
+        for (runtime, target, id) in [
+            (&first, "sibling", "native"),
+            (&first, "owner", "unknown"),
+            (&second, "owner", "native"),
+        ] {
+            let result = tokio::time::timeout(
+                Duration::from_millis(50),
+                runtime.raw_session_request(target, id, "Runtime.evaluate", Value::Null),
+            )
+            .await
+            .expect("unknown, wrong-owner and stale IDs must fail promptly");
+            assert_eq!(result.unwrap_err().code, error_codes::INVALID_PARAMS);
+        }
+        first.retire_raw_session("owner", "native");
+        let retired = first.raw_session_request("owner", "native", "Runtime.evaluate", Value::Null).await.unwrap_err();
+        assert_eq!(retired.code, error_codes::INVALID_PARAMS);
+        first.close().await;
+        second.close().await;
+    }
 }

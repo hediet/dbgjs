@@ -315,6 +315,31 @@ impl DebuggerService {
                 generation,
             };
             while let Some(event) = events.recv().await {
+                if let Ok(crate::cdp_runtime::RootCdpEvent::TargetDetached {
+                    session_id,
+                    target_id: _,
+                }) = &event {
+                    let key = {
+                        let mut state = service.state.lock().await;
+                        if !state.runtimes.get(&(context_id.clone(), connection_id.clone()))
+                            .is_some_and(|current| Arc::ptr_eq(current, &runtime)) {
+                            break;
+                        }
+                        let key = state.debug_attachments.iter().find_map(|(key, attachment)| {
+                            (key.0 == context_id && key.1 == connection_id
+                                && attachment.handle.session_id == *session_id)
+                                .then(|| key.clone())
+                        });
+                        if let Some(key) = &key {
+                            remove_debugger_registration(&mut state, key);
+                        }
+                        key
+                    };
+                    if let Some(key) = key {
+                        service.publish_target_attachment_change(&key, attempt).await;
+                    }
+                    continue;
+                }
                 let update = match event {
                     Ok(crate::cdp_runtime::RootCdpEvent::TargetCreated(params)) => {
                         ConnectionTargetUpdate::Upsert(canonicalize_synthetic_target(
@@ -334,6 +359,7 @@ impl DebuggerService {
                             &connection_id,
                         ))
                     }
+                    Ok(crate::cdp_runtime::RootCdpEvent::TargetDetached { .. }) => continue,
                     Err(error) => {
                         eprintln!("failed to decode root CDP event: {error}");
                         continue;
@@ -2227,7 +2253,32 @@ impl DebuggerService {
                 target_id.clone(),
             ))
             .cloned()
-            .ok_or_else(|| TargetError::TargetNotFound { target_id }.into())
+            .ok_or_else(|| {
+                let generation = state
+                    .contexts
+                    .get(context_id)
+                    .and_then(|context| context.connections.get(connection_id))
+                    .map(|connection| connection.generation);
+                if generation.is_some_and(|generation| {
+                    context_connection_has_target(
+                        &state, context_id, connection_id, generation, &target_id,
+                    )
+                }) {
+                    let reason = state.runtimes
+                        .get(&(context_id.to_owned(), connection_id.to_owned()))
+                        .and_then(|runtime| runtime.closed_target_reason(&target_id))
+                        .map(|reason| format!(" (last child attachment closed: {reason})"))
+                        .unwrap_or_default();
+                    let selector = crate::target_selector::qualified_target_selector(
+                        connection_id, &target_id, generation.unwrap(),
+                    );
+                    invalid_state(&format!(
+                        "target '{target_id}' is discovered but not attached for debugging{reason}; run dbgjs target attach --context \":{context_id}\" --target \"{selector}\""
+                    ))
+                } else {
+                    TargetError::TargetNotFound { target_id }.into()
+                }
+            })
     }
 
     /// Every canonical target currently known in `context_id`, paired with its owning
@@ -3841,6 +3892,11 @@ fn remove_debugger_registration(
     key: &(String, String, String),
 ) -> Option<TargetDebuggerHandle> {
     let debugger = state.target_debuggers.remove(key);
+    if debugger.is_some()
+        && let Some(runtime) = state.runtimes.get(&(key.0.clone(), key.1.clone()))
+    {
+        runtime.retire_raw_sessions_for_target(&key.2);
+    }
     if let Some(attachment) = state.debug_attachments.remove(key) {
         retract_debug_session_resource(state, &key.0, &attachment.graph_source);
     }
@@ -8576,7 +8632,7 @@ mod tests {
             guarded.message
         );
 
-        // The bypass reaches the ordinary "no attached target" failure instead of the relay
+        // The bypass reaches the ordinary "no managed debugger" failure instead of the relay
         // guard, proving relay-internal forwarding is unaffected by context exclusivity.
         let bypassed = match service
             .target_debugger_bypassing_relay("ctx", "conn", "page-1")
@@ -8587,7 +8643,10 @@ mod tests {
         };
         assert!(!bypassed.message.contains("relay"), "{}", bypassed.message);
         assert!(
-            bypassed.message.contains("attached target"),
+            bypassed.message.contains("discovered but not attached for debugging")
+                && bypassed.message.contains(
+                    "dbgjs target attach --context \":ctx\" --target \"conn/page-1@1\""
+                ),
             "{}",
             bypassed.message
         );
