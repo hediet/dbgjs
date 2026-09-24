@@ -504,7 +504,7 @@ impl TargetDebuggerApi for DebuggerService {
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         debugger
-            .set_breakpoints(u64::MAX, breakpoints)
+            .set_logpoints(breakpoints)
             .await
             .map_err(TargetError::from)
     }

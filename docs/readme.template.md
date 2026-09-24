@@ -97,6 +97,39 @@ or `source explain <path>` to inspect source candidates.
 
 ## Source-mapped breakpoints and live inspection
 
+Target logpoints are scoped to the selected **attached target**, not to
+persistent context breakpoints. Use an authored URL returned by `source list`
+or `source show`, a `?formatted` projection, or the original runtime script
+URL with one-based *raw* coordinates. A formatted view does not change raw
+runtime coordinates. `target logpoint` accepts configuration by default, even
+if its JSON `breakpoints[].status.kind` is `waitingForScript`,
+`sourceNotFound`, `ambiguousSource`, `unmapped`, or `failed`; only `installed`
+confirms a live binding. Add `--require-installed [--timeout-ms 30000]` to
+require a binding before returning successfully (maximum 300000 ms). A
+not-yet-loaded script can become installed while the command waits; unresolved
+or ambiguous mapping states are retried until the deadline. Configuration
+remains after a timed-out attempt.
+
+```sh
+dbgjs target logpoint proof 'file:///app.js' 12 3 '({value})' --require-installed
+dbgjs log --after 0 --json
+dbgjs target logpoint delete proof
+```
+
+`target logpoint delete` reports whether the ID existed and the number of live
+bindings removed; `breakpoint delete log:proof` does **not** remove a
+target-local logpoint. Context-owned breakpoints named `log:<id>` are not
+target logpoints and cannot be replaced or removed by target logpoint commands.
+Logpoints use a debugger-installed `Runtime.addBinding`
+instead of application `console.log`. `log` reports successes, expression and
+serialization errors (including cycles and BigInt), bounded retention and
+eviction counts. `capture.logpoints[]` distinguishes hits from successful
+evaluations, errors and recorded events for active target logpoints; deleting
+one retires its counters without removing already captured log messages.
+Installing a probe fails explicitly
+if its CDP binding transport is unavailable; the binding is scoped to the
+attached debugging session. Detaching removes the live instrumentation.
+
 Set a breakpoint in authored TypeScript. dbgjs resolves it to the generated
 script and shows the actual source location.
 

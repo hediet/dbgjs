@@ -3658,10 +3658,7 @@ async fn require_logpoints_installed(
             .map(|breakpoint| &breakpoint.status);
         match status {
             Some(TargetBreakpointStatus::Installed { .. }) => continue,
-            Some(TargetBreakpointStatus::SourceNotFound { .. }
-                | TargetBreakpointStatus::AmbiguousSource { .. }
-                | TargetBreakpointStatus::Unmapped { .. }
-                | TargetBreakpointStatus::Failed { .. }) => {
+            Some(TargetBreakpointStatus::Failed { .. }) => {
                 return Err(io::Error::other(format!(
                     "logpoint {id} was accepted but not installed: {:?}",
                     status.unwrap()

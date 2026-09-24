@@ -692,7 +692,7 @@ impl ContextApi for DebuggerService {
         line: u32,
         column: u32,
     ) -> Result<ContextSnapshot, JsonRpcError> {
-        validate_id("breakpoint", &breakpoint_id)?;
+        validate_breakpoint_id(&breakpoint_id)?;
         if source_path.is_empty() {
             return Err(invalid_params("source path must not be empty"));
         }
@@ -773,7 +773,7 @@ impl ContextApi for DebuggerService {
         specification: BreakpointSpec,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError> {
-        validate_id("breakpoint", &breakpoint_id)?;
+        validate_breakpoint_id(&breakpoint_id)?;
         validate_breakpoint_spec(&specification)?;
         let runtime_breakpoint = TargetBreakpointSpec {
             id: breakpoint_id.clone(),

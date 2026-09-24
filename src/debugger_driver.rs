@@ -189,6 +189,10 @@ impl DebuggerDriver {
         }
     }
 
+    pub fn unregister_logpoint(&mut self, id: &str) {
+        self.log_capture.logpoints.retain(|item| item.id != id);
+    }
+
     pub fn logical_source_content(
         &self,
         script: &crate::debugger_engine::ScriptKey,
