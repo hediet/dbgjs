@@ -6,7 +6,8 @@ use dbgjs::service_api::{
     CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, HeapAggregateSnapshot,
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
-    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, ObservationResult,
+    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointRemovalResult,
+    ObservationResult,
     PlaywrightChannel, ProcessRole, ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot,
     ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ResourceGraphSnapshot,
     ServiceInfo, SourceContentSnapshot, SourceExcerpt, SourceFormattingMode,
@@ -342,7 +343,19 @@ impl OutputFormat {
                     );
                 }
                 for message in &displayed {
-                    println!("[{}] {}", message.index, message.values.join(" "));
+                    if let Some(outcome) = message.params.as_ref()
+                        .filter(|params| params["kind"] == "logpoint")
+                        .and_then(|params| params["outcome"].as_str())
+                    {
+                        println!(
+                            "[{}] logpoint {}: {} ({outcome})",
+                            message.index,
+                            message.values.first().map(String::as_str).unwrap_or("?"),
+                            message.values.get(1).map(String::as_str).unwrap_or(""),
+                        );
+                    } else {
+                        println!("[{}] {}", message.index, message.values.join(" "));
+                    }
                 }
             }
             Self::Json => println!(
@@ -582,6 +595,18 @@ fn log_coverage_human(
         capture.evicted_count.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
         capture.dropped_count.map_or_else(|| "unknown".to_owned(), |value| value.to_string()),
     );
+    for probe in &capture.logpoints {
+        text.push_str(&format!(
+            "\nLogpoint {}: {} hit(s), {} evaluated, {} expression error(s), {} serialization error(s), {} recorded, {} dropped.",
+            terminal_text(&probe.id),
+            probe.hits,
+            probe.successful_evaluations,
+            probe.failed_evaluations,
+            probe.failed_serializations,
+            probe.recorded_events,
+            probe.dropped_events,
+        ));
+    }
     if empty {
         text.push_str(if after == 0 {
             "\nNo captured entries to display; this does not mean no errors occurred."
@@ -2702,6 +2727,20 @@ impl HumanOutput for TargetDebuggerSnapshot {
     }
 }
 
+impl HumanOutput for LogpointRemovalResult {
+    fn print_human(&self) {
+        if self.existed {
+            println!(
+                "Removed target logpoint ({} live binding(s) removed).",
+                self.removed_bindings
+            );
+        } else {
+            println!("Target logpoint did not exist; no binding removed.");
+        }
+        self.target.print_human();
+    }
+}
+
 impl HumanOutput for TargetAttachmentResult {
     fn print_human(&self) {
         println!(
@@ -4316,14 +4355,25 @@ fn print_target_breakpoint_explanation(
     }
     for application in &breakpoint.applications {
         if let Some(mapping) = &application.mapping {
+            let actual = if (mapping.generated_line, mapping.generated_column)
+                != (application.generated_line, application.generated_column)
+            {
+                format!(
+                    " (CDP bound at {}:{})",
+                    application.generated_line, application.generated_column
+                )
+            } else {
+                String::new()
+            };
             println!(
-                "      script {} v{} -> {}:{}:{} via {}",
+                "      script {} v{} -> {}:{}:{} via {}{}",
                 application.script_id,
                 application.script_version,
                 mapping.generated_url,
                 mapping.generated_line,
                 mapping.generated_column,
-                mapping.projection.join(" -> ")
+                mapping.projection.join(" -> "),
+                actual,
             );
         }
     }
@@ -5766,6 +5816,7 @@ mod tests {
                 collected_events: vec!["Runtime.consoleAPICalled".into()],
                 evicted_count: Some(0),
                 dropped_count: None,
+                logpoints: Vec::new(),
             },
         };
         let text = super::log_coverage_human(&snapshot, true, 0);

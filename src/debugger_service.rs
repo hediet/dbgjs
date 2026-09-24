@@ -5270,6 +5270,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
         | TargetDebuggerError::Stopped
         | TargetDebuggerError::SessionMissing
         | TargetDebuggerError::BreakpointFailed { .. }
+        | TargetDebuggerError::LogpointTransport(_)
         | TargetDebuggerError::Evaluation(_)
         | TargetDebuggerError::Properties(_)
         | TargetDebuggerError::Interaction(_)

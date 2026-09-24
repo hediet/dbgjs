@@ -226,7 +226,15 @@ impl SourceEffectInterpreter {
                 ..
             } => {
                 let retained = self.view_for(*view_id, script)?;
-                let mappings = retained
+                let mappings = if source_url == &retained.generated_url {
+                    vec![BreakpointMapping {
+                        generated_position: *position,
+                        quality: "exact".to_owned(),
+                        generated_url: retained.generated_url.clone(),
+                        projection: vec!["identity".to_owned()],
+                    }]
+                } else {
+                    retained
                     .view
                     .reverse(source_url, *position)
                     .into_iter()
@@ -242,7 +250,8 @@ impl SourceEffectInterpreter {
                             .map(projection_step_label)
                             .collect(),
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()
+                };
                 let mappings = mappings
                     .into_iter()
                     .fold(BTreeMap::new(), |mut result, mapping| {

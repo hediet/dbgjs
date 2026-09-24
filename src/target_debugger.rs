@@ -209,6 +209,21 @@ impl TargetDebuggerHandle {
         .await
     }
 
+    pub async fn remove_logpoint(
+        &self,
+        breakpoint_id: String,
+    ) -> Result<crate::service_api::LogpointRemovalResult, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::RemoveLogpoint {
+                breakpoint_id,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -938,6 +953,10 @@ enum TargetCommand {
         breakpoint_id: String,
         response: CommandResponse,
     },
+    RemoveLogpoint {
+        breakpoint_id: String,
+        response: oneshot::Sender<Result<crate::service_api::LogpointRemovalResult, TargetDebuggerError>>,
+    },
     ReleaseIfWaiting {
         response: CommandResponse,
     },
@@ -1173,6 +1192,14 @@ async fn run_target(
                 response,
             })) => {
                 let result = async {
+                    let logpoint_ids = breakpoints.iter()
+                        .filter_map(|breakpoint| breakpoint.id.strip_prefix("log:").map(str::to_owned))
+                        .collect::<Vec<_>>();
+                    if !logpoint_ids.is_empty() {
+                        driver.ensure_logpoint_binding().await.map_err(|error| {
+                            TargetDebuggerError::LogpointTransport(error.message)
+                        })?;
+                    }
                     let mut applied = Vec::new();
                     for breakpoint in breakpoints {
                         if breakpoint_revisions
@@ -1236,6 +1263,7 @@ async fn run_target(
                             };
                         }
                     }
+                    driver.register_logpoints(&logpoint_ids);
                     Ok(snapshot_from_driver(
                         &context_id,
                         &connection_id,
@@ -1293,6 +1321,51 @@ async fn run_target(
                 .await;
                 if let Ok(snapshot) = &result {
                     publish_snapshot(&snapshots, &pause_events, snapshot.clone());
+                }
+                let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::RemoveLogpoint {
+                breakpoint_id,
+                response,
+            })) => {
+                let result = async {
+                    let previous = snapshot_from_driver(
+                        &context_id,
+                        &connection_id,
+                        &target_id,
+                        connection_generation,
+                        &session_key,
+                        &driver,
+                    );
+                    let existing = previous
+                        .breakpoints
+                        .iter()
+                        .find(|breakpoint| breakpoint.id == breakpoint_id);
+                    let existed = existing.is_some();
+                    let removed_bindings = existing.map_or(0, |breakpoint| match breakpoint.status {
+                        TargetBreakpointStatus::Installed { binding_count } => binding_count,
+                        _ => 0,
+                    });
+                    if existed {
+                        remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
+                        breakpoint_revisions.insert(breakpoint_id, u64::MAX);
+                    }
+                    Ok(crate::service_api::LogpointRemovalResult {
+                        existed,
+                        removed_bindings,
+                        target: snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    })
+                }
+                .await;
+                if let Ok(result) = &result {
+                    publish_snapshot(&snapshots, &pause_events, result.target.clone());
                 }
                 let _ = response.send(result);
             }
@@ -5801,9 +5874,17 @@ fn breakpoint_wait_failure(
 
 fn breakpoint_candidate_snapshot(
     candidate: &BreakpointSourceCandidate,
+    source_map_url: Option<&str>,
 ) -> BreakpointSourceCandidateSnapshot {
+    let source_url = if source_map_url.is_some()
+        && url::Url::parse(&candidate.source_url).is_err()
+    {
+        crate::source_view::canonical_source_uri(source_map_url, &candidate.source_url).display()
+    } else {
+        candidate.source_url.clone()
+    };
     BreakpointSourceCandidateSnapshot {
-        source_url: candidate.source_url.clone(),
+        source_url,
         content_hash: format!("{:?}", candidate.content.content),
         provenance: format!("{:?}", candidate.content.provenance),
     }
@@ -5950,6 +6031,9 @@ fn snapshot(
                 .iter()
                 .filter_map(|(script_key, assessment)| {
                     let script = state.scripts.get(script_key)?;
+                    let source_map_url = script.captured_source.as_ref()
+                        .and_then(|captured| captured.source_map_url.as_deref())
+                        .or(script.source_map_url.as_deref());
                     Some(BreakpointScriptAssessmentSnapshot {
                         connection_id: connection_id.to_owned(),
                         target_id: target_id.to_owned(),
@@ -5972,28 +6056,36 @@ fn snapshot(
                             } => BreakpointScriptAssessmentStatus::AmbiguousSource {
                                 candidates: candidates
                                     .iter()
-                                    .map(breakpoint_candidate_snapshot)
+                                    .map(|candidate| breakpoint_candidate_snapshot(
+                                        candidate, source_map_url
+                                    ))
                                     .collect(),
                                 omitted_candidate_count: u32::try_from(*omitted_candidate_count)
                                     .unwrap_or(u32::MAX),
                             },
                             BreakpointAssessmentStatus::Mapping { candidate, .. } => {
                                 BreakpointScriptAssessmentStatus::Mapping {
-                                    candidate: breakpoint_candidate_snapshot(candidate),
+                                    candidate: breakpoint_candidate_snapshot(
+                                        candidate, source_map_url
+                                    ),
                                 }
                             }
                             BreakpointAssessmentStatus::Unmapped {
                                 candidate,
                                 diagnostics,
                             } => BreakpointScriptAssessmentStatus::Unmapped {
-                                candidate: breakpoint_candidate_snapshot(candidate),
+                                candidate: breakpoint_candidate_snapshot(
+                                    candidate, source_map_url
+                                ),
                                 diagnostics: diagnostics.as_ref().clone(),
                             },
                             BreakpointAssessmentStatus::Applicable {
                                 candidate,
                                 mappings,
                             } => BreakpointScriptAssessmentStatus::Applicable {
-                                candidate: breakpoint_candidate_snapshot(candidate),
+                                candidate: breakpoint_candidate_snapshot(
+                                    candidate, source_map_url
+                                ),
                                 mappings: mappings
                                     .iter()
                                     .map(|mapping| {
@@ -6254,6 +6346,8 @@ pub enum TargetDebuggerError {
     SourceSearch(#[from] SearchError),
     #[error("breakpoint line and column must be one-based")]
     InvalidBreakpointPosition,
+    #[error("logpoint capture transport unavailable: {0}")]
+    LogpointTransport(String),
     #[error("the debugger session is no longer available")]
     SessionMissing,
     #[error("pause epoch {0} is stale")]

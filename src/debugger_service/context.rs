@@ -865,6 +865,11 @@ impl ContextApi for DebuggerService {
                 .get(&context_id)
                 .cloned()
                 .ok_or_else(|| not_found("context", &context_id))?;
+            if breakpoint_id.starts_with("log:") && !context.breakpoints.contains_key(&breakpoint_id) {
+                return Err(invalid_params(
+                    "target logpoints are target-scoped; use `target logpoint delete <id>` with target scope",
+                ));
+            }
             let transition = reduce_context(
                 &context,
                 ContextInput::UserCommand(UserCommand::RemoveBreakpoint {

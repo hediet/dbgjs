@@ -623,12 +623,54 @@ impl CdpDebuggerSession {
                     i64::from(physical.position.line),
                 );
                 location.column_number = Some(i64::from(physical.position.column));
-                let installed = self
+                let installed = match self
                     .client
                     .debugger()
                     .set_breakpoint(location, physical.condition.clone())
                     .await
-                    .map_err(CdpRuntimeError::protocol)?;
+                {
+                    Ok(installed) => installed,
+                    Err(original)
+                        if physical.condition.is_some()
+                            && format!("{original:?}").contains("already exists") =>
+                    {
+                        let mut alias = None;
+                        // CDP rejects the same requested offset twice, but distinct earlier
+                        // offsets can resolve to the same executable location.
+                        for column in (physical.position.column.saturating_sub(32)
+                            ..physical.position.column).rev()
+                        {
+                            let mut location = DebuggerLocation::new(
+                                physical.script.script_id.clone(),
+                                i64::from(physical.position.line),
+                            );
+                            location.column_number = Some(i64::from(column));
+                            let Ok(installed) = self
+                                .client
+                                .debugger()
+                                .set_breakpoint(location, physical.condition.clone())
+                                .await
+                            else {
+                                continue;
+                            };
+                            if installed.actual_location.line_number
+                                == i64::from(physical.position.line)
+                                && installed.actual_location.column_number
+                                    == Some(i64::from(physical.position.column))
+                            {
+                                alias = Some(installed);
+                                break;
+                            }
+                            self.client
+                                .debugger()
+                                .remove_breakpoint(installed.breakpoint_id)
+                                .await
+                                .map_err(CdpRuntimeError::protocol)?;
+                        }
+                        alias.ok_or_else(|| CdpRuntimeError::protocol(original))?
+                    }
+                    Err(error) => return Err(CdpRuntimeError::protocol(error)),
+                };
                 let confirmed_position = crate::source_view::Position {
                     line: u32::try_from(installed.actual_location.line_number).map_err(|_| {
                         CdpRuntimeError::InvalidBreakpointLocation {

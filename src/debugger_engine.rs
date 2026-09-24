@@ -1709,6 +1709,22 @@ fn index_breakpoint_script(
     script_key: &ScriptKey,
     script: &ScriptState,
 ) {
+    if source_urls_match(&script.url, requested_source)
+        && let Some(captured) = &script.captured_source
+    {
+        index.exact.insert(
+            script_key,
+            BreakpointSourceCandidate {
+                source_url: script.url.clone(),
+                content: ContentCandidate {
+                    content: ContentHash::of_bytes(captured.content.as_bytes()),
+                    provenance: crate::source_view::Provenance::RuntimeSource {
+                        url: script.url.clone(),
+                    },
+                },
+            },
+        );
+    }
     match &script.source {
         ScriptSourceState::Resolved(view) => {
             for (source_url, content) in view.logical_sources.iter() {
@@ -1716,7 +1732,18 @@ fn index_breakpoint_script(
                     source_url: source_url.clone(),
                     content: content.clone(),
                 };
-                if source_urls_match(source_url, requested_source) {
+                let source_map_url = script.captured_source.as_ref()
+                    .and_then(|captured| captured.source_map_url.as_deref())
+                    .or(script.source_map_url.as_deref());
+                if source_urls_match(source_url, requested_source)
+                    || source_map_url.is_some_and(|map_url| {
+                        source_urls_match(
+                            &crate::source_view::canonical_source_uri(Some(map_url), source_url)
+                                .display(),
+                            requested_source,
+                        )
+                    })
+                {
                     index.exact.insert(script_key, candidate);
                 } else if friendly_source_matches(source_url, requested_source) {
                     index.friendly.insert(script_key, candidate);
@@ -2186,9 +2213,13 @@ fn schedule_mapping(
 
 fn source_urls_match(left: &str, right: &str) -> bool {
     left == right
-        || comparable_file_path(left)
-            .zip(comparable_file_path(right))
-            .is_some_and(|(left, right)| left == right)
+        || (!left.contains('?')
+            && !left.contains('#')
+            && !right.contains('?')
+            && !right.contains('#')
+            && comparable_file_path(left)
+                .zip(comparable_file_path(right))
+                .is_some_and(|(left, right)| left == right))
 }
 
 fn friendly_source_matches(candidate: &str, requested: &str) -> bool {
@@ -2913,6 +2944,100 @@ fn with_set_remove<T: Ord + Clone>(set: &BTreeSet<T>, value: &T) -> BTreeSet<T> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authored_breakpoint_accepts_canonical_url_resolved_against_absolute_map() {
+        let map_url = "https://cdn.test/maps/out/sessions/app.js.map";
+        let logical = "../../src/widget.ts";
+        let canonical = crate::source_view::canonical_source_uri(Some(map_url), logical).display();
+        let script_key = ScriptKey {
+            session: SessionKey {
+                connection_generation: 1,
+                session_id: "session".to_owned(),
+            },
+            script_id: "script".to_owned(),
+        };
+        let mut index = BreakpointCandidateIndex::default();
+        index_breakpoint_script(
+            &mut index,
+            &canonical,
+            &script_key,
+            &ScriptState {
+                url: "https://cdn.test/runtime/app.js".to_owned(),
+                hash: String::new(),
+                source_map_url: Some("app.js.map".to_owned()),
+                version: 1,
+                source: ScriptSourceState::Resolved(SourceViewState {
+                    view_id: EffectId(1),
+                    logical_sources: Arc::new(BTreeMap::from([(
+                        logical.to_owned(),
+                        ContentCandidate {
+                            content: crate::content_store::ContentStore::default().intern("widget"),
+                            provenance: crate::source_view::Provenance::Workspace {
+                                logical_url: logical.to_owned(),
+                            },
+                        },
+                    )])),
+                }),
+                provenance: Default::default(),
+                captured_source: Some(CapturedScriptSource {
+                    content: Arc::from("function widget(){}"),
+                    source_map: None,
+                    source_map_url: Some(map_url.to_owned()),
+                    source_map_error: None,
+                }),
+            },
+        );
+        assert!(
+            matches!(index.selection(), BreakpointCandidateSelection::Unique { candidate, friendly: false, .. } if candidate.source_url == logical),
+            "canonical authored identity should select the logical mapping key without a basename fallback"
+        );
+    }
+
+    #[test]
+    fn formatted_projection_does_not_hide_exact_runtime_source_identity() {
+        let runtime = "file:///dbgjs-test/mapping.min.js";
+        let formatted = format!("{runtime}?formatted");
+        let script_key = ScriptKey {
+            session: SessionKey {
+                connection_generation: 1,
+                session_id: "session".into(),
+            },
+            script_id: "script".into(),
+        };
+        let candidate = ContentCandidate {
+            content: crate::content_store::ContentStore::default().intern("function runMapping(x) {}"),
+            provenance: crate::source_view::Provenance::Formatted {
+                generated_url: runtime.into(),
+            },
+        };
+        let script = ScriptState {
+            url: runtime.into(),
+            hash: String::new(),
+            source_map_url: None,
+            version: 1,
+            source: ScriptSourceState::Resolved(SourceViewState {
+                view_id: EffectId(1),
+                logical_sources: Arc::new(BTreeMap::from([(formatted, candidate)])),
+            }),
+            provenance: Default::default(),
+            captured_source: Some(CapturedScriptSource {
+                content: Arc::from(
+                    "function runMapping(x){const y=x+1;globalThis.mappingRuns++;return y*2}",
+                ),
+                source_map: None,
+                source_map_url: None,
+                source_map_error: None,
+            }),
+        };
+        let mut index = BreakpointCandidateIndex::default();
+        index_breakpoint_script(&mut index, runtime, &script_key, &script);
+        assert!(matches!(
+            index.selection(),
+            BreakpointCandidateSelection::Unique { candidate, friendly: false, .. }
+                if candidate.source_url == runtime
+        ));
+    }
 
     #[cfg(windows)]
     #[test]

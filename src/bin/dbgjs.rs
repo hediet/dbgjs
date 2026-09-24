@@ -416,19 +416,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             output.print(&value)?;
         }
-        [target, logpoint, id, source, line, column, expression]
-            if target == "target" && logpoint == "logpoint" =>
+        [target, logpoint, delete, id]
+            if target == "target" && logpoint == "logpoint" && delete == "delete" =>
         {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let result = rpc(client
+                .targets
+                .remove_logpoint(scope.target_ref(), id.clone())
+                .await)?;
+            output.print(&result)?;
+        }
+        [target, logpoint, id, source, line, column, expression, options @ ..]
+            if target == "target" && logpoint == "logpoint" =>
+        {
+            let install = parse_logpoint_install_options(options)?;
+            let client = ensure_service(&state_file).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let mut snapshot = rpc(client
                 .targets
                 .set_logpoints(
                     scope.target_ref(),
                     vec![parse_logpoint_spec(id, source, line, column, expression)?],
                 )
                 .await)?;
+            if let Some(timeout_ms) = install {
+                snapshot = require_logpoints_installed(
+                    &client, &scope, snapshot, &[format!("log:{id}")], timeout_ms,
+                ).await?;
+            }
             output.print_target_with_breakpoint_sources(
                 &snapshot,
                 &scope.target,
@@ -438,6 +456,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, logpoints, specifications @ ..]
             if target == "target" && logpoints == "logpoints" =>
         {
+            let (specifications, install) = split_logpoint_install_options(specifications)?;
             let logpoints = parse_logpoint_specs(specifications)?;
             let ids = logpoints
                 .iter()
@@ -446,10 +465,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client
+            let mut snapshot = rpc(client
                 .targets
                 .set_logpoints(scope.target_ref(), logpoints)
                 .await)?;
+            if let Some(timeout_ms) = install {
+                snapshot = require_logpoints_installed(
+                    &client, &scope, snapshot, &ids, timeout_ms,
+                ).await?;
+            }
             output.print_target_with_breakpoint_sources(&snapshot, &scope.target, &ids)?;
         }
         [target, click, selector] if target == "target" && click == "click" => {
@@ -3523,6 +3547,88 @@ fn parse_log_options(
         index += 1;
     }
     Ok((after, limit, explicit_after))
+}
+
+fn split_logpoint_install_options(values: &[String]) -> Result<(&[String], Option<u64>), io::Error> {
+    let split = values.iter().enumerate()
+        .position(|(index, value)| index % 5 == 0 && value.starts_with("--"))
+        .unwrap_or(values.len());
+    Ok((&values[..split], parse_logpoint_install_options(&values[split..])?))
+}
+
+fn parse_logpoint_install_options(options: &[String]) -> Result<Option<u64>, io::Error> {
+    let mut required = false;
+    let mut timeout = None;
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--require-installed" if !required => {
+                required = true;
+                index += 1;
+            }
+            "--timeout-ms" if timeout.is_none() => {
+                let value = options.get(index + 1).ok_or_else(|| io::Error::new(
+                    io::ErrorKind::InvalidInput, "--timeout-ms requires milliseconds"
+                ))?;
+                let ms = value.parse::<u64>().map_err(|_| io::Error::new(
+                    io::ErrorKind::InvalidInput, "--timeout-ms must be a positive integer"
+                ))?;
+                if ms == 0 || ms > 300_000 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                        "--timeout-ms must be between 1 and 300000"));
+                }
+                timeout = Some(ms);
+                index += 2;
+            }
+            value => return Err(io::Error::new(
+                io::ErrorKind::InvalidInput, format!("unknown or repeated logpoint option '{value}'")
+            )),
+        }
+    }
+    if timeout.is_some() && !required {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "--timeout-ms requires --require-installed"));
+    }
+    Ok(required.then_some(timeout.unwrap_or(30_000)))
+}
+
+async fn require_logpoints_installed(
+    client: &DbgServiceClient,
+    scope: &ResolvedScope,
+    mut snapshot: TargetDebuggerSnapshot,
+    ids: &[String],
+    timeout_ms: u64,
+) -> Result<TargetDebuggerSnapshot, Box<dyn std::error::Error>> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    for id in ids {
+        let status = snapshot.breakpoints.iter()
+            .find(|breakpoint| breakpoint.id == *id)
+            .map(|breakpoint| &breakpoint.status);
+        match status {
+            Some(TargetBreakpointStatus::Installed { .. }) => continue,
+            Some(TargetBreakpointStatus::SourceNotFound { .. }
+                | TargetBreakpointStatus::AmbiguousSource { .. }
+                | TargetBreakpointStatus::Unmapped { .. }
+                | TargetBreakpointStatus::Failed { .. }) => {
+                return Err(io::Error::other(format!(
+                    "logpoint {id} was accepted but not installed: {:?}",
+                    status.unwrap()
+                )).into());
+            }
+            _ => {}
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut,
+                format!("logpoint {id} was accepted but not installed within {timeout_ms} ms")).into());
+        }
+        snapshot = rpc(client.targets.wait_target(
+            scope.target_ref(),
+            TargetWaitPredicate::BreakpointInstalled { breakpoint_id: id.clone() },
+            remaining.as_millis().min(u64::MAX as u128) as u64,
+        ).await)?;
+    }
+    Ok(snapshot)
 }
 
 fn parse_logpoint_specs(values: &[String]) -> Result<Vec<LogpointSpec>, io::Error> {
@@ -6816,8 +6922,10 @@ commands:
   dbgjs target relay --stdio [target scope]
   dbgjs value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
-  dbgjs target logpoint <id> <source> <line> <column> <expression> [target scope]
-  dbgjs target logpoints (<id> <source> <line> <column> <expression>)+ [target scope]
+  dbgjs target logpoint <id> <source> <line> <column> <expression> [--require-installed [--timeout-ms <ms>]] [target scope]
+  dbgjs target logpoint delete <id> [target scope]
+  dbgjs target logpoints (<id> <source> <line> <column> <expression>)+ [--require-installed [--timeout-ms <ms>]] [target scope]
+    default accepts configuration even when pending or unresolved; --require-installed waits up to 30s (max 300s) and exits nonzero unless every live binding is installed
   dbgjs log [--after <cursor>] [--limit <count>] [target scope]
     reports target-local console capture coverage, not browser/network diagnostics; does not attach
   dbgjs target click <css-selector> [target scope]
@@ -7846,6 +7954,18 @@ mod tests {
             super::parse_log_options(&["--after".into(), "0".into()], 17).unwrap(),
             (0, 20, true)
         );
+    }
+
+    #[test]
+    fn logpoint_options_do_not_consume_expression_starting_with_dashes() {
+        let fields = [
+            "probe", "file:///app.js", "1", "1", "--counter",
+            "--require-installed", "--timeout-ms", "300",
+        ].map(str::to_owned);
+        let (specs, wait) = super::split_logpoint_install_options(&fields).unwrap();
+        assert_eq!(specs.len(), 5);
+        assert_eq!(specs[4], "--counter");
+        assert_eq!(wait, Some(300));
     }
 
     #[test]

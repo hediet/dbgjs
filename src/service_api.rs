@@ -970,6 +970,20 @@ pub struct LogCaptureSnapshot {
     pub collected_events: Vec<String>,
     pub evicted_count: Option<u64>,
     pub dropped_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logpoints: Vec<LogpointCaptureSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointCaptureSnapshot {
+    pub id: String,
+    pub hits: u64,
+    pub successful_evaluations: u64,
+    pub failed_evaluations: u64,
+    pub failed_serializations: u64,
+    pub recorded_events: u64,
+    pub dropped_events: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1110,6 +1124,14 @@ pub struct LogpointSpec {
     pub line: u32,
     pub column: u32,
     pub expression: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointRemovalResult {
+    pub existed: bool,
+    pub removed_bindings: u32,
+    pub target: TargetDebuggerSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

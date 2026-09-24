@@ -10,7 +10,12 @@ use crate::cdp_runtime::{
     HeapSnapshotStreamProgress, RawCdpEvent, SourceMapCacheStats,
 };
 use crate::debugger_engine::{DebuggerState, Effect, Input, SessionPhase, reduce};
-use crate::service_api::{ConsoleMessageSnapshot, LogCaptureSnapshot, LogCaptureStatus};
+use crate::service_api::{
+    ConsoleMessageSnapshot, LogCaptureSnapshot, LogCaptureStatus, LogpointCaptureSnapshot,
+};
+
+pub(crate) const LOGPOINT_BINDING_NAME: &str = "__dbgjs_logpoint_emit_v1";
+const MAX_LOGPOINT_PAYLOAD: usize = 16 * 1024;
 use crate::source_effects::{SourceEffectError, SourceEffectInterpreter};
 
 #[derive(Default)]
@@ -21,7 +26,7 @@ struct ConsoleLog {
 }
 
 impl ConsoleLog {
-    fn push(&mut self, params: &crate::cdp::RuntimeConsoleApicalledParams) {
+    fn push_message(&mut self, values: Vec<String>, params: Option<serde_json::Value>) {
         const MAX_CONSOLE_MESSAGES: usize = 100;
         if self.messages.len() == MAX_CONSOLE_MESSAGES {
             self.messages.pop_front();
@@ -30,7 +35,14 @@ impl ConsoleLog {
         self.next_index = self.next_index.saturating_add(1);
         self.messages.push_back(ConsoleMessageSnapshot {
             index: self.next_index,
-            values: params
+            values,
+            params,
+        });
+    }
+
+    fn push(&mut self, params: &crate::cdp::RuntimeConsoleApicalledParams) {
+        self.push_message(
+            params
                 .args
                 .iter()
                 .map(|argument| {
@@ -46,8 +58,8 @@ impl ConsoleLog {
                         .unwrap_or_else(|| "undefined".to_owned())
                 })
                 .collect(),
-            params: serde_json::to_value(params).ok(),
-        });
+            serde_json::to_value(params).ok(),
+        );
     }
 }
 
@@ -58,6 +70,7 @@ pub struct DebuggerDriver {
     recording: DebuggerRecording,
     console_log: ConsoleLog,
     log_capture: LogCaptureSnapshot,
+    logpoint_binding_ready: bool,
 }
 
 impl DebuggerDriver {
@@ -73,6 +86,7 @@ impl DebuggerDriver {
             recording: DebuggerRecording::default(),
             console_log: ConsoleLog::default(),
             log_capture: LogCaptureSnapshot::default(),
+            logpoint_binding_ready: false,
         }
     }
 
@@ -142,6 +156,36 @@ impl DebuggerDriver {
         LogCaptureSnapshot {
             evicted_count: Some(self.console_log.evicted_count),
             ..self.log_capture.clone()
+        }
+    }
+
+    pub async fn ensure_logpoint_binding(
+        &mut self,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        if !self.logpoint_binding_ready {
+            self.session
+                .raw_request(
+                    "Runtime.addBinding",
+                    serde_json::json!({"name": LOGPOINT_BINDING_NAME}),
+                )
+                .await?;
+            self.logpoint_binding_ready = true;
+            self.log_capture
+                .collected_events
+                .push("Runtime.bindingCalled".to_owned());
+            self.log_capture.dropped_count = Some(0);
+        }
+        Ok(())
+    }
+
+    pub fn register_logpoints(&mut self, ids: &[String]) {
+        for id in ids {
+            if !self.log_capture.logpoints.iter().any(|item| item.id == *id) {
+                self.log_capture.logpoints.push(LogpointCaptureSnapshot {
+                    id: id.clone(),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -247,11 +291,94 @@ impl DebuggerDriver {
             self.apply(Input::ConsoleMessageObserved).await?;
             return Ok(true);
         }
+        if let CdpRuntimeEvent::Other { session, method, params } = &event
+            && method == "Runtime.bindingCalled"
+            && params.get("name").and_then(serde_json::Value::as_str) == Some(LOGPOINT_BINDING_NAME)
+        {
+            self.record_logpoint_event(session, params);
+            self.apply(Input::ConsoleMessageObserved).await?;
+            return Ok(true);
+        }
         let Some(input) = event.into_input(pause_epoch)? else {
             return Ok(false);
         };
         self.apply(input).await?;
         Ok(true)
+    }
+
+    fn record_logpoint_event(
+        &mut self,
+        session: &crate::debugger_engine::SessionKey,
+        params: &serde_json::Value,
+    ) {
+        let Some(payload) = params.get("payload").and_then(serde_json::Value::as_str) else {
+            self.log_capture.dropped_count =
+                Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+            return;
+        };
+        if payload.len() > MAX_LOGPOINT_PAYLOAD {
+            self.log_capture.dropped_count =
+                Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+            return;
+        }
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(payload) else {
+            self.log_capture.dropped_count =
+                Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+            return;
+        };
+        let (Some(id), Some(outcome)) = (
+            event.get("id").and_then(serde_json::Value::as_str),
+            event.get("outcome").and_then(serde_json::Value::as_str),
+        ) else {
+            self.log_capture.dropped_count =
+                Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+            return;
+        };
+        let Some(stats) = self.log_capture.logpoints.iter_mut().find(|item| item.id == id) else {
+            self.log_capture.dropped_count =
+                Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+            return;
+        };
+        stats.hits = stats.hits.saturating_add(1);
+        match outcome {
+            "success" => stats.successful_evaluations = stats.successful_evaluations.saturating_add(1),
+            "evaluationError" => stats.failed_evaluations = stats.failed_evaluations.saturating_add(1),
+            "serializationError" => stats.failed_serializations = stats.failed_serializations.saturating_add(1),
+            _ => {
+                stats.dropped_events = stats.dropped_events.saturating_add(1);
+                self.log_capture.dropped_count =
+                    Some(self.log_capture.dropped_count.unwrap_or(0).saturating_add(1));
+                return;
+            }
+        };
+        stats.recorded_events = stats.recorded_events.saturating_add(1);
+        let breakpoint = self
+            .state
+            .breakpoints
+            .iter()
+            .find(|(key, _)| key.breakpoint_id == format!("log:{id}"))
+            .map(|(_, breakpoint)| breakpoint);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
+        self.console_log.push_message(
+            vec![id.to_owned(), event.get("value").or_else(|| event.get("error"))
+                .map_or_else(|| "undefined".to_owned(), |value| value.as_str()
+                    .map_or_else(|| value.to_string(), str::to_owned))],
+            Some(serde_json::json!({
+                "kind": "logpoint",
+                "outcome": outcome,
+                "id": id,
+                "targetId": self.state.sessions.get(session).map(|session| &session.target_id),
+                "sourceUrl": breakpoint.map(|b| &b.source_url),
+                "line": breakpoint.map(|b| b.position.line + 1),
+                "column": breakpoint.map(|b| b.position.column + 1),
+                "timestampUnixMs": timestamp,
+                "exception": event.get("error"),
+                "executionContextId": params.get("executionContextId"),
+            })),
+        );
     }
 
     async fn drain_effects(&mut self, effects: Vec<Effect>) -> Result<(), DebuggerDriverError> {
@@ -333,6 +460,7 @@ fn begin_log_capture(session_id: &str) -> LogCaptureSnapshot {
         collected_events: vec!["Runtime.consoleAPICalled".to_owned()],
         evicted_count: Some(0),
         dropped_count: None,
+        logpoints: Vec::new(),
     }
 }
 

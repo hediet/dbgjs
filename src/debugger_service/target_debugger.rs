@@ -485,6 +485,9 @@ impl TargetDebuggerApi for DebuggerService {
             .into_iter()
             .map(|logpoint| {
                 validate_id("logpoint", &logpoint.id)?;
+                if logpoint.id.starts_with("log:") {
+                    return Err(invalid_params("use the bare logpoint ID, without the 'log:' prefix"));
+                }
                 if logpoint.line == 0 || logpoint.column == 0 {
                     return Err(invalid_params("logpoint lines and columns are one-based"));
                 }
@@ -493,12 +496,7 @@ impl TargetDebuggerApi for DebuggerService {
                     source_url: logpoint.source_url,
                     line: logpoint.line,
                     column: logpoint.column,
-                    condition: Some(format!(
-                        "console.log({}, JSON.stringify(({}))), false",
-                        serde_json::to_string(&logpoint.id)
-                            .map_err(|error| internal_error(error.to_string()))?,
-                        logpoint.expression
-                    )),
+                    condition: Some(logpoint_condition(&logpoint.id, &logpoint.expression)?),
                 })
             })
             .collect::<Result<Vec<_>, JsonRpcError>>()?;
@@ -510,4 +508,47 @@ impl TargetDebuggerApi for DebuggerService {
             .await
             .map_err(TargetError::from)
     }
+
+    async fn remove_logpoint(
+        &self,
+        _ctx: &CallCtx,
+        target_ref: TargetRef,
+        logpoint_id: String,
+    ) -> Result<crate::service_api::LogpointRemovalResult, TargetError> {
+        validate_id("logpoint", &logpoint_id)?;
+        if logpoint_id.starts_with("log:") {
+            return Err(
+                invalid_params("use the bare logpoint ID, without the 'log:' prefix").into(),
+            );
+        }
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .remove_logpoint(format!("log:{logpoint_id}"))
+            .await
+            .map_err(TargetError::from)
+    }
+}
+
+fn logpoint_condition(id: &str, expression: &str) -> Result<String, JsonRpcError> {
+    let id = serde_json::to_string(id).map_err(|error| internal_error(error.to_string()))?;
+    let binding = serde_json::to_string(crate::debugger_driver::LOGPOINT_BINDING_NAME)
+        .map_err(|error| internal_error(error.to_string()))?;
+    Ok(format!(
+        "(()=>{{const emit=globalThis[{binding}];\
+        try{{const value=({expression});\
+        try{{const serialized=JSON.stringify(value);\
+        if(serialized!==undefined&&serialized.length>8192)throw new Error('serialized value exceeds 8192 characters');\
+        emit(JSON.stringify({{id:{id},outcome:'success',value:serialized??'undefined'}}))\
+        }}catch(error){{emit(JSON.stringify({{id:{id},outcome:'serializationError',error:String(error)}}))}}\
+        }}catch(error){{emit(JSON.stringify({{id:{id},outcome:'evaluationError',error:String(error)}}))}}\
+        return false}})()"
+    ))
 }

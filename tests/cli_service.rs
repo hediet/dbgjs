@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use sourcemap::SourceMapBuilder;
 
 use dbgjs::local_rpc::{
     LocalTransportEndpoint, persistent_state_file, read_endpoint, startup_error_file,
@@ -327,6 +328,494 @@ fn cli_log_reports_empty_capture_retention_and_reconnect() {
     assert_ne!(fresh["connectionGeneration"], empty["connectionGeneration"]);
     assert_eq!(fresh["nextCursor"], 0);
     assert_eq!(fresh["messages"], serde_json::json!([]));
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
+fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
+    let mut node = Command::new("node")
+        .args([
+            "-e",
+            "const vm=require('node:vm');vm.runInThisContext('function runProbe(){globalThis.probeHits++;return globalThis.probeHits}\\nglobalThis.probeHits=0;globalThis.runProbe=runProbe;\\n',{filename:'file:///dbgjs-test/logpoint.js'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Node is required for the logpoint integration test");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap())
+        .read_line(&mut endpoint)
+        .unwrap();
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("logpoint-delete-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":logpoint-delete", "--set"]);
+    run(&[
+        "connection",
+        "add",
+        "--node-inspector",
+        endpoint.trim(),
+        "--connection",
+        "node",
+        "--connect",
+    ]);
+    run(&["target", "attach", "--connection", "node"]);
+    let installed = run(&[
+        "target",
+        "logpoint",
+        "probe",
+        "file:///dbgjs-test/logpoint.js",
+        "1",
+        "22",
+        "globalThis.probeHits",
+        "--connection",
+        "node",
+    ]);
+    assert_eq!(installed["breakpoints"][0]["status"]["kind"], "installed");
+    let updated = run(&[
+        "target", "logpoint", "probe", "file:///dbgjs-test/logpoint.js",
+        "1", "22", "globalThis.probeHits+1", "--connection", "node",
+    ]);
+    assert_eq!(updated["breakpoints"][0]["status"]["kind"], "installed");
+    assert_eq!(updated["breakpoints"][0]["applications"].as_array().unwrap().len(), 1);
+    let wrong_delete = run_in(
+        &cli,
+        &service,
+        &state_file,
+        &root,
+        &["breakpoint", "delete", "log:probe"],
+    );
+    assert!(!wrong_delete.0.success(), "context deletion must not claim success");
+    assert!(
+        String::from_utf8_lossy(&wrong_delete.2).contains("target logpoint delete"),
+        "{}",
+        String::from_utf8_lossy(&wrong_delete.2)
+    );
+    let removed = run(&["target", "logpoint", "delete", "probe", "--connection", "node"]);
+    assert_eq!(removed["existed"], true);
+    assert_eq!(removed["removedBindings"], 1);
+    assert!(removed["target"]["breakpoints"].as_array().unwrap().is_empty());
+    let shown = run(&["target", "show", "--connection", "node"]);
+    assert!(
+        shown["breakpoints"].as_array().is_some_and(Vec::is_empty)
+            || shown["target"]["breakpoints"].as_array().is_some_and(Vec::is_empty),
+        "{shown}"
+    );
+    run(&["target", "eval", "runProbe()", "--connection", "node"]);
+    let logs = run(&["log", "--after", "0", "--connection", "node"]);
+    assert!(logs["messages"].as_array().unwrap().iter()
+        .all(|entry| entry["params"]["kind"] != "logpoint"));
+    let repeated = run(&["target", "logpoint", "delete", "probe", "--connection", "node"]);
+    assert_eq!(repeated["existed"], false);
+    assert_eq!(repeated["removedBindings"], 0);
+    run(&["connection", "disconnect", "--connection", "node"]);
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
+fn logpoint_records_hits_without_application_console_and_reports_expression_errors() {
+    let mut node = Command::new("node")
+        .args([
+            "-e",
+            "const vm=require('node:vm');vm.runInThisContext('function runProbe(){globalThis.probeHits++;return globalThis.probeHits}\\nglobalThis.probeHits=0;globalThis.runProbe=runProbe;\\n',{filename:'file:///dbgjs-test/logpoint.js'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Node is required for the logpoint integration test");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap())
+        .read_line(&mut endpoint)
+        .unwrap();
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("logpoint-capture-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":logpoint-capture", "--set"]);
+    run(&[
+        "connection", "add", "--node-inspector", endpoint.trim(),
+        "--connection", "node", "--connect",
+    ]);
+    run(&["target", "attach", "--connection", "node"]);
+    let set = |expression: &str| run(&[
+        "target", "logpoint", "probe", "file:///dbgjs-test/logpoint.js",
+        "1", "22", expression, "--connection", "node",
+    ]);
+    assert_eq!(set("({hit:globalThis.probeHits})")["breakpoints"][0]["status"]["kind"], "installed");
+    run(&[
+        "target", "eval", "(console.log=()=>{},runProbe())", "--connection", "node",
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let successful = loop {
+        let logs = run(&["log", "--after", "0", "--connection", "node"]);
+        if logs["messages"].as_array().unwrap().iter().any(|message| {
+            message["values"][0] == "probe" && message["params"]["kind"] == "logpoint"
+        }) {
+            break logs;
+        }
+        assert!(Instant::now() < deadline, "logpoint success not captured: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(successful["capture"]["logpoints"][0]["hits"], 1);
+    assert_eq!(successful["capture"]["logpoints"][0]["successfulEvaluations"], 1);
+    let cursor = successful["nextCursor"].as_u64().unwrap().to_string();
+
+    assert_eq!(set("missingDbgjsVariable.value")["breakpoints"][0]["status"]["kind"], "installed");
+    run(&["target", "eval", "runProbe()", "--connection", "node"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let failed = loop {
+        let logs = run(&["log", "--after", &cursor, "--connection", "node"]);
+        if logs["messages"].as_array().unwrap().iter().any(|message| {
+            message["params"]["kind"] == "logpoint" && message["params"]["outcome"] == "evaluationError"
+        }) {
+            break logs;
+        }
+        assert!(Instant::now() < deadline, "logpoint expression failure not captured: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(failed["capture"]["logpoints"][0]["hits"], 2);
+    assert_eq!(failed["capture"]["logpoints"][0]["failedEvaluations"], 1);
+    let cursor = failed["nextCursor"].as_u64().unwrap().to_string();
+
+    set("({toJSON(){throw new Error('cannot serialize')}})");
+    run(&["target", "eval", "runProbe()", "--connection", "node"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let serialization = loop {
+        let logs = run(&["log", "--after", &cursor, "--connection", "node"]);
+        if logs["messages"].as_array().unwrap().iter().any(|message| {
+            message["params"]["kind"] == "logpoint" && message["params"]["outcome"] == "serializationError"
+        }) {
+            break logs;
+        }
+        assert!(Instant::now() < deadline, "logpoint serialization failure not captured: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(serialization["capture"]["logpoints"][0]["hits"], 3);
+    assert_eq!(serialization["capture"]["logpoints"][0]["failedSerializations"], 1);
+    for expression in ["(o=>{o.self=o;return o})({})", "1n"] {
+        set(expression);
+        run(&["target", "eval", "runProbe()", "--connection", "node"]);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logs = run(&["log", "--after", "0", "--connection", "node"]);
+        if logs["capture"]["logpoints"][0]["failedSerializations"] == 3 {
+            assert_eq!(logs["capture"]["logpoints"][0]["hits"], 5);
+            assert_eq!(logs["capture"]["logpoints"][0]["recordedEvents"], 5);
+            break;
+        }
+        assert!(Instant::now() < deadline, "cyclic and BigInt failures were not captured: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    }
+    set("globalThis.probeHits");
+    run(&[
+        "target", "eval", "Array.from({length:110},()=>runProbe()).length", "--connection", "node",
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logs = run(&["log", "--after", "0", "--connection", "node"]);
+        if logs["capture"]["logpoints"][0]["hits"] == 115 {
+            assert_eq!(logs["capture"]["logpoints"][0]["recordedEvents"], 115);
+            assert!(logs["capture"]["evictedCount"].as_u64().unwrap() >= 15);
+            assert!(logs["messages"].as_array().unwrap().len() <= 100);
+            break;
+        }
+        assert!(Instant::now() < deadline, "bounded logpoint retention not observed: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    }
+    run(&["connection", "disconnect", "--connection", "node"]);
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
+fn logpoint_can_require_confirmed_installation_without_discarding_pending_configuration() {
+    let mut node = Command::new("node")
+        .args([
+            "-e",
+            "const vm=require('node:vm');vm.runInThisContext('function loaded(){return 1}\\n',{filename:'file:///dbgjs-test/loaded.js'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Node is required for the logpoint integration test");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap())
+        .read_line(&mut endpoint)
+        .unwrap();
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("logpoint-install-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":logpoint-install", "--set"]);
+    run(&[
+        "connection", "add", "--node-inspector", endpoint.trim(),
+        "--connection", "node", "--connect",
+    ]);
+    run(&["target", "attach", "--connection", "node"]);
+    let installed = run(&[
+        "target", "logpoint", "loaded", "file:///dbgjs-test/loaded.js", "1", "21", "1",
+        "--require-installed", "--timeout-ms", "300",
+        "--connection", "node",
+    ]);
+    assert_eq!(installed["breakpoints"][0]["status"]["kind"], "installed");
+    let missing_source = run_in(
+        &cli, &service, &state_file, &root,
+        &["target", "logpoint", "missing", "file:///dbgjs-test/not-loaded.js",
+          "1", "1", "1", "--require-installed", "--timeout-ms", "300",
+          "--connection", "node"],
+    );
+    assert!(!missing_source.0.success(), "unresolved source must not pass strict installation");
+    let unresolved = run_in(
+        &cli, &service, &state_file, &root,
+        &["target", "logpoint", "future", "file:///dbgjs-test/future.js",
+          "1", "21", "1", "--require-installed", "--timeout-ms", "300",
+          "--connection", "node"],
+    );
+    assert!(!unresolved.0.success(), "require-installed must not succeed before binding");
+    let pending = run(&["target", "show", "--connection", "node"]);
+    let target = pending.get("target").unwrap_or(&pending);
+    assert!(target["breakpoints"].as_array().unwrap().iter().any(|b| {
+        b["id"] == "log:future" && b["status"]["kind"] != "installed"
+    }));
+    run(&[
+        "target", "eval",
+        "require('node:vm').runInThisContext('function future(){return 1}\\n',{filename:'file:///dbgjs-test/future.js'})",
+        "--connection", "node",
+    ]);
+    let installed = run(&[
+        "target", "wait", "breakpoint-installed", "log:future", "5000",
+        "--connection", "node",
+    ]);
+    assert!(installed["breakpoints"].as_array().unwrap().iter().any(|b| {
+        b["id"] == "log:future" && b["status"]["kind"] == "installed"
+    }));
+    run(&["connection", "disconnect", "--connection", "node"]);
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
+fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
+    let mut node = Command::new("node")
+        .args([
+            "-e",
+            "const vm=require('node:vm');const source='function runMapping(x){const y=x+1;globalThis.mappingRuns++;return y*2}globalThis.mappingRuns=0;globalThis.mappingHits=[];globalThis.runMapping=runMapping;\\n';vm.runInThisContext(source,{filename:'file:///dbgjs-test/mapping.min.js'});vm.runInThisContext(source.replaceAll('runMapping','runControl').replaceAll('mappingRuns','controlRuns').replaceAll('mappingHits','controlHits'),{filename:'file:///dbgjs-test/mapping.min.cjs'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Node is required for the minified runtime integration test");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap())
+        .read_line(&mut endpoint)
+        .unwrap();
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("logpoint-runtime-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":runtime-logpoints", "--set"]);
+    run(&["source", "formatting", "set", "on"]);
+    run(&[
+        "connection", "add", "--node-inspector", endpoint.trim(),
+        "--connection", "node", "--connect",
+    ]);
+    run(&["target", "attach", "--connection", "node"]);
+    let source = "file:///dbgjs-test/mapping.min.js";
+    let formatted = format!("{source}?formatted");
+    let _ = run(&["source", "show", source, "--view", "formatted"]);
+    let sources = run(&["source", "list", "--path", "mapping.min.js"]);
+    assert!(sources.as_array().unwrap().iter().any(|item| {
+        item["path"] == formatted
+    }), "formatted source not discoverable: {sources}");
+    let installed = run(&[
+        "target", "logpoint", "formatted", &formatted, "3", "2",
+        "globalThis.mappingHits.push('formatted')", "--require-installed",
+        "--connection", "node",
+    ]);
+    let binding = &installed["breakpoints"][0]["applications"][0];
+    assert_eq!(binding["generatedLine"], 1);
+    assert!(binding["generatedColumn"].as_u64().unwrap() >= 35, "{binding}");
+    let raw_near = run(&[
+        "target", "logpoint", "raw-near", source, "1", "35",
+        "globalThis.mappingHits.push('raw-near')", "--require-installed",
+        "--connection", "node",
+    ]);
+    assert_eq!(raw_near["breakpoints"].as_array().unwrap().iter()
+        .find(|b| b["id"] == "log:raw-near").unwrap()["status"]["kind"], "installed");
+    run(&["target", "eval", "runMapping(5)", "--connection", "node"]);
+    let near_hits = run(&[
+        "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
+    ]);
+    let text = near_hits["value"].as_str().or_else(|| near_hits["preview"]["preview"].as_str())
+        .unwrap_or_else(|| panic!("missing evaluation result: {near_hits}"));
+    assert!(text.contains("formatted") && text.contains("raw-near"), "{text}");
+    let raw_exact = run(&[
+        "target", "logpoint", "raw-exact", source, "1", "36",
+        "globalThis.mappingHits.push('raw-exact')", "--require-installed",
+        "--connection", "node",
+    ]);
+    assert_eq!(raw_exact["breakpoints"].as_array().unwrap().iter()
+        .find(|b| b["id"] == "log:raw-exact").unwrap()["status"]["kind"], "installed");
+    let control = run(&[
+        "target", "logpoint", "control", "file:///dbgjs-test/mapping.min.cjs",
+        "1", "35", "globalThis.controlHits.push('control')", "--require-installed",
+        "--connection", "node",
+    ]);
+    assert_eq!(control["breakpoints"].as_array().unwrap().iter()
+        .find(|b| b["id"] == "log:control").unwrap()["status"]["kind"], "installed");
+    run(&["target", "eval", "(runMapping(5),runControl(5))", "--connection", "node"]);
+    let hits = run(&[
+        "target", "eval",
+        "JSON.stringify({mappingHits,controlHits})", "--connection", "node",
+    ]);
+    let text = hits["value"].as_str().or_else(|| hits["preview"]["preview"].as_str())
+        .unwrap_or_else(|| panic!("missing evaluation result: {hits}"));
+    assert!(text.contains("formatted"), "{text}");
+    assert!(text.contains("raw-near"), "{text}");
+    assert!(text.contains("raw-exact"), "{text}");
+    assert!(text.contains("control"), "{text}");
+    let removed = run(&["target", "logpoint", "delete", "raw-exact", "--connection", "node"]);
+    assert_eq!(removed["removedBindings"], 1);
+    run(&["target", "eval", "runMapping(7)", "--connection", "node"]);
+    let after = run(&[
+        "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
+    ]);
+    let text = after["value"].as_str().or_else(|| after["preview"]["preview"].as_str())
+        .unwrap_or_else(|| panic!("missing evaluation result: {after}"));
+    assert_eq!(text.matches("raw-exact").count(), 1, "{text}");
+    assert!(text.matches("formatted").count() >= 3, "{text}");
+    run(&["connection", "disconnect", "--connection", "node"]);
+    run(&["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    remove_test_directory(&root, Duration::from_secs(5)).unwrap();
+    cleanup.disarm();
+}
+
+#[test]
+fn canonical_authored_source_from_relative_map_entry_installs_live_logpoint() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("artifacts")
+        .join(format!("authored-logpoint-{}-{}", std::process::id(), unique_suffix()));
+    let map_path = root.join("out").join("bundle.js.map");
+    fs::create_dir_all(map_path.parent().unwrap()).unwrap();
+    let mut map = SourceMapBuilder::new(Some("bundle.js"));
+    let source_id = map.add_source("../../src/widget.ts");
+    map.set_source_contents(
+        source_id,
+        Some("function mapped(){globalThis.authoredHits++;return globalThis.authoredHits}"),
+    );
+    map.add(0, 18, 0, 18, Some("../../src/widget.ts"), None, false);
+    let mut bytes = Vec::new();
+    map.into_sourcemap().to_writer(&mut bytes).unwrap();
+    fs::write(&map_path, bytes).unwrap();
+    let map_url = url::Url::from_file_path(&map_path).unwrap().to_string();
+    let script_url = url::Url::from_file_path(root.join("out").join("bundle.js"))
+        .unwrap().to_string();
+    let authored_url = url::Url::parse(&map_url).unwrap()
+        .join("../../src/widget.ts").unwrap().to_string();
+    let source = format!(
+        "function mapped(){{globalThis.authoredHits++;return globalThis.authoredHits}};globalThis.authoredHits=0;globalThis.runMapped=mapped;\n//# sourceMappingURL={map_url}"
+    );
+    let script = format!(
+        "const vm=require('node:vm');vm.runInThisContext({},{{filename:{}}});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{{}},1000)",
+        serde_json::to_string(&source).unwrap(),
+        serde_json::to_string(&script_url).unwrap(),
+    );
+    let mut node = Command::new("node")
+        .args(["-e", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Node is required for source-map integration");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap())
+        .read_line(&mut endpoint)
+        .unwrap();
+    assert!(endpoint.starts_with("ws://"), "{endpoint}");
+    let _node = ChildCleanup(node);
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let run = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    run(&["context", "create", ":authored-logpoint", "--set"]);
+    run(&[
+        "connection", "add", "--node-inspector", endpoint.trim(),
+        "--connection", "node", "--connect",
+    ]);
+    run(&["target", "attach", "--connection", "node"]);
+    let authored = run(&["source", "show", &authored_url]);
+    assert!(authored.to_string().contains("authoredHits"), "{authored}");
+    let mapping = run(&["source", "map", &authored_url, "1", "19"]);
+    assert!(mapping.to_string().contains("bundle.js"), "{mapping}");
+    let installed = run(&[
+        "target", "logpoint", "authored", &authored_url, "1", "19",
+        "globalThis.authoredHits", "--require-installed", "--connection", "node",
+    ]);
+    assert_eq!(installed["breakpoints"][0]["status"]["kind"], "installed");
+    run(&["target", "eval", "runMapped()", "--connection", "node"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let logs = run(&["log", "--after", "0", "--connection", "node"]);
+        if logs["messages"].as_array().unwrap().iter().any(|entry| {
+            entry["values"][0] == "authored" && entry["params"]["kind"] == "logpoint"
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "authored logpoint did not fire: {logs}");
+        thread::sleep(Duration::from_millis(50));
+    }
+    run(&["connection", "disconnect", "--connection", "node"]);
     run(&["service", "stop"]);
     wait_until_removed(&state_file);
     cleanup_persistent_state(&state_file);

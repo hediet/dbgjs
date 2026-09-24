@@ -86,4 +86,9 @@ pub trait TargetDebuggerApi {
         target_ref: TargetRef,
         logpoints: Vec<LogpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, TargetError>;
+
+    async fn remove_logpoint(
+        target_ref: TargetRef,
+        logpoint_id: String,
+    ) -> Result<LogpointRemovalResult, TargetError>;
 }
