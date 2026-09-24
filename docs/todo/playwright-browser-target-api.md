@@ -84,9 +84,17 @@ selected target or its primary lifecycle session is destroyed. Auxiliary
 page-scoped CDP sessions may attach and detach without ending the proxy. Sessions
 wait at most 15 seconds for an authenticated client and 10 seconds for the
 upstream WebSocket handshake. Cancellation interrupts either wait, and the
-entire capability lifecycle is capped at 45 seconds. CLI execution is limited to
-30 seconds; program input and JSON result are each limited to 1 MiB, protocol
-messages to 16 MiB, and diagnostics to 64 KiB.
+entire capability lifecycle is capped at 24 seconds so upstream connection and
+page-identity failures reach the caller before its watchdog. CLI execution,
+including proxy opening, helper startup, and cleanup, has a 30-second deadline;
+the helper gets the remaining budget (at most 27 seconds), reserving time for
+closing the browser-side connection and the command-owned proxy lease. Timeout
+errors identify the last reported phase (starting, connecting, initializing,
+executing, or closing) and elapsed time. Phase progress goes to a structured
+stderr channel removed by the CLI before forwarding program console output;
+it never includes program values or capability URLs. Program input and JSON
+result are each limited to 1 MiB, protocol messages to 16 MiB, and diagnostics
+to 64 KiB.
 
 The CDP source is an explicit adapter (`PlaywrightCdpSource`). Browser-root
 connections are supported. Process-tree page targets can reuse that adapter,

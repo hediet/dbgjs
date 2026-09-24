@@ -119,6 +119,8 @@ jobs:
         run: cargo build --locked --workspace --bins
       - name: Test workspace
         run: cargo test --locked --workspace
+      - name: Test bounded Playwright helper phases
+        run: node --test tests/playwright-page-helper.test.mjs
       - name: Test offline recordings
         run: npm run test:offline
       - name: Test generated TypeScript heap streaming against Rust daemon
