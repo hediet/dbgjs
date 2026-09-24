@@ -252,9 +252,11 @@ example `process-tree-33508/renderer-2/target/F2CDE85C@1`. You can copy it direc
 into `--target`, or omit `@1` to follow the current connection generation.
 `process list --full` prints canonical IDs such as
 `renderer-2/target/F2CDE85C`, since discovery need not belong to a persistent
-connection yet. `target attach`, `target cdp`, evaluation, source inspection,
-and screenshot capture accept those IDs once the corresponding connection
-is present. In `target list`, `CDP client attached` describes native
+connection yet. When a service is already running, the process tree projects its
+managed debugger attachments from the same context snapshot as `target list`;
+otherwise it reports native CDP attachments. `target attach`, `target cdp`,
+evaluation, source inspection, and screenshot capture accept those IDs once
+the corresponding connection is present. In `target list`, `CDP client attached` describes native
 `TargetInfo.attached` (including discovery supervision); only `debugger
 attached` means dbgjs owns a managed attachment for evaluation, source
 inspection, and other debugger commands. `target list --attached` filters the
@@ -266,6 +268,7 @@ parent target and `--session-id` on subsequent `target cdp` requests. The child
 session stays bound to its originating endpoint until it detaches or that target
 closes; unknown, stale, or wrong-target IDs fail without redirecting to another
 endpoint. Each raw CDP session request has a 30-second timeout.
+After a detach, attach again even if the native endpoint reuses the same session ID.
 An OOPIF cannot execute `Page.captureScreenshot` directly, so the
 screenshot capability follows the frame-owner relation and clips a temporary
 capture from the embedding page; it does not user-attach the rest of the tree.
@@ -522,9 +525,12 @@ This does not change the metadata or mapping results of older captures.
 - Renderer: `process-tree-<vscode-main-pid>`
 - Extension host or agent host: `process-<pid>`
 
-Repeating an attach reports an ownership conflict. Use `--force` only when the
-existing debugger owner should be detached and replaced; successful output
-distinguishes `created` from `stolen`.
+`process attach` and `target attach` reuse a live attachment already managed by
+the same context, connection, target, and connection generation, including a
+renderer auto-attached during connection startup. They report `reused` without
+detaching the active debugger, even if discovery's attachment projection has
+not caught up. A different owner's attachment still reports an ownership
+conflict; use `--force` only when that debugger should be detached and replaced.
 
 Disconnect only one connection:
 

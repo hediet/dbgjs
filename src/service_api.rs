@@ -88,6 +88,8 @@ pub struct ProcessTargetSnapshot {
     pub process_id: Option<u32>,
     #[serde(flatten)]
     pub target: TargetSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<TargetAttachmentState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -934,6 +936,7 @@ pub struct TargetDebuggerSnapshot {
 pub enum TargetAttachmentOutcome {
     Created,
     Stolen,
+    Reused,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
