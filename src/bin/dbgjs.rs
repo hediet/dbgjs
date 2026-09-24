@@ -41,6 +41,8 @@ mod bounded_tree;
 mod daemon_view;
 #[path = "dbgjs/output.rs"]
 mod output;
+#[path = "dbgjs/transcript.rs"]
+mod transcript;
 
 use output::{
     ConnectionListEntry, ConnectionListOutput, CoverageOutputOptions, CpuProfileOutputOptions,
@@ -57,6 +59,16 @@ const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.
 const COVERAGE_HINT_DELAY: Duration = Duration::from_secs(20);
 
 fn main() {
+    if env::var_os("DBGJS_RECORD_CHILD").is_none() {
+        match transcript::entry(&env::args_os().skip(1).collect::<Vec<_>>(), &default_state_file()) {
+            Ok(Some(status)) => std::process::exit(status),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("dbgjs: recording: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     let thread = std::thread::Builder::new()
         .name("dbgjs-main".to_owned())
         .stack_size(16 * 1024 * 1024)
@@ -172,6 +184,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         activate_selection_scope(&selection_file, &normalized_cwd, context)?;
     }
+    transcript::note_options(
+        scope_options.context.as_deref(),
+        scope_options.connection.as_deref(),
+        scope_options.target.as_deref(),
+    );
     match arguments.as_slice() {
         [daemon, view, options @ ..] if daemon == "daemon" && view == "view" => {
             if output.is_json() {
@@ -1220,6 +1237,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 id: context_id,
                 kind,
             } = resolve_context_expression(&expression, &cwd)?;
+            transcript::note_context(Some(&context_id));
             let client = ensure_service(&state_file).await?;
             let snapshot = rpc(client
                 .contexts
@@ -1960,6 +1978,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(usage().into());
         }
     }
+    transcript::enrich_connection(&state_file).await;
     Ok(())
 }
 
@@ -2906,9 +2925,11 @@ fn selected_or_explicit_context(
     selection_file: &Path,
     explicit_context: Option<String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    explicit_context
+    let context = explicit_context
         .or(load_selection(selection_file)?.context)
-        .ok_or_else(|| io::Error::other("no context is selected; use --context <id>").into())
+        .ok_or_else(|| io::Error::other("no context is selected; use --context <id>"))?;
+    transcript::note_context(Some(&context));
+    Ok(context)
 }
 
 async fn resolve_implicit_context(
@@ -2967,6 +2988,7 @@ fn selected_or_explicit_connection(
         .ok_or_else(|| {
             io::Error::other("no connection is selected; use --connection <id> or --set")
         })?;
+    transcript::note_options(Some(&context), Some(&connection), None);
     Ok((context, connection))
 }
 
@@ -3170,9 +3192,9 @@ async fn resolve_scope(
     };
     let snapshot = rpc(client.contexts.get_context(context.clone()).await)?;
     if options.connection.is_some() {
-        return Ok(resolve_target_scope(
-            context, &snapshot, selection, options,
-        )?);
+        let scope = resolve_target_scope(context, &snapshot, selection, options)?;
+        transcript::note_scope(&scope, &snapshot);
+        return Ok(scope);
     }
     let use_selection = selection.context.as_deref() == Some(context.as_str());
     if let Some(selector) = options
@@ -3184,7 +3206,7 @@ async fn resolve_scope(
             .targets
             .resolve_target(context.clone(), selector.clone())
             .await)?;
-        return Ok(ResolvedScope {
+        let scope = ResolvedScope {
             context,
             target: dbgjs::target_selector::resolved_target_selector(
                 &target.connection_id,
@@ -3193,11 +3215,13 @@ async fn resolve_scope(
                 Some(selector),
             ),
             connection: target.connection_id,
-        });
+        };
+        transcript::note_scope(&scope, &snapshot);
+        return Ok(scope);
     }
-    Ok(resolve_target_scope(
-        context, &snapshot, selection, options,
-    )?)
+    let scope = resolve_target_scope(context, &snapshot, selection, options)?;
+    transcript::note_scope(&scope, &snapshot);
+    Ok(scope)
 }
 
 async fn resolve_offline_scope(
@@ -5398,6 +5422,9 @@ async fn put_selected_breakpoint(
         Err(_) if !explicit_target_scope => None,
         Err(error) => return Err(error.into()),
     };
+    if let Some(scope) = &scope {
+        transcript::note_scope(scope, &current);
+    }
     let context = rpc(client
         .contexts
         .put_breakpoint(
@@ -6753,6 +6780,10 @@ fn usage() -> &'static str {
 commands:
   dbgjs --version | -V | version
     reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
+  dbgjs record start --output <new-local-directory> [--max-entries <n>] [--max-bytes <n>] [--redact <literal>]... [--omit-args] [--omit-stdin] [--omit-output]
+  dbgjs record stop
+  dbgjs record export --input <directory> --output <file.md> [--format markdown]
+    local opt-in CLI investigation transcript; see docs/investigation-transcripts.md
   dbgjs daemon view [--context <id> | --all-contexts]
   dbgjs service status|stop
   dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
