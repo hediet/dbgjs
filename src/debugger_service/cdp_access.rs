@@ -30,27 +30,37 @@ impl CdpAccessApi for DebuggerService {
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;
         let identity = debugger.snapshot();
-        let result = debugger.raw_cdp_request(method, params).await;
-        let is_current = self
-            .state
-            .lock()
-            .await
-            .target_debuggers
-            .get(&(
-                identity.context_id.clone(),
-                identity.connection_id.clone(),
-                identity.target_id.clone(),
-            ))
-            .is_some_and(|current| {
-                current.same_instance(&debugger)
-                    && current.snapshot().connection_generation == identity.connection_generation
-            });
+        let detached_id = (method == "Target.detachFromTarget")
+            .then(|| params.get("sessionId").and_then(serde_json::Value::as_str).map(str::to_owned))
+            .flatten();
+        let raw_events = (method == "Target.attachToTarget")
+            .then(|| debugger.subscribe_raw_events());
+        let result = debugger.raw_cdp_request(method.clone(), params).await;
+        let state = self.state.lock().await;
+        let is_current = state.target_debuggers
+            .get(&(identity.context_id.clone(), identity.connection_id.clone(), identity.target_id.clone()))
+            .is_some_and(|current| current.same_instance(&debugger)
+                && current.snapshot().connection_generation == identity.connection_generation);
+        let runtime = state.runtimes.get(&(context_id, connection_id)).cloned();
+        drop(state);
         if !is_current {
             return Err(invalid_state(
                 "target connection changed while the CDP request was in flight",
             ));
         }
-        result
+        let result = result?;
+        if method == "Target.attachToTarget" {
+            let session_id = result.get("sessionId").and_then(serde_json::Value::as_str)
+                .ok_or_else(|| invalid_state("Target.attachToTarget did not return a sessionId"))?;
+            runtime.ok_or_else(|| invalid_state("connection is not connected"))?
+                .register_raw_session(&identity.target_id, session_id, raw_events.unwrap())
+                .map_err(|error| invalid_state(&error))?;
+        } else if let Some(session_id) = detached_id {
+            if let Some(runtime) = runtime {
+                runtime.retire_raw_session(&identity.target_id, &session_id);
+            }
+        }
+        Ok(result)
     }
 
     async fn raw_cdp_session_request(
@@ -89,19 +99,13 @@ impl CdpAccessApi for DebuggerService {
             .get(&(context_id.clone(), connection_id.clone()))
             .cloned()
             .ok_or_else(|| invalid_state("connection is not connected"))?;
-        let session = runtime
-            .open_session(SessionKey {
-                connection_generation: identity.connection_generation,
-                session_id,
-            })
-            .map_err(|error| invalid_state(&error.to_string()))?;
-        let result = session.raw_request(&method, params).await;
+        let result = runtime.raw_session_request(&identity.target_id, &session_id, &method, params).await;
         let is_current = self
             .state
             .lock()
             .await
             .target_debuggers
-            .get(&(context_id, connection_id, target_id))
+            .get(&(identity.context_id.clone(), identity.connection_id.clone(), identity.target_id.clone()))
             .is_some_and(|current| {
                 current.same_instance(&debugger)
                     && current.snapshot().connection_generation == identity.connection_generation

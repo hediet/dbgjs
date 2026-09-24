@@ -452,7 +452,8 @@ pub struct TargetNodeSnapshot {
 #[serde(rename_all = "camelCase")]
 pub enum TargetAttachmentState {
     Detached,
-    External,
+    #[serde(alias = "external")]
+    CdpClient,
     Debugger,
 }
 
@@ -585,7 +586,7 @@ impl ConnectionSnapshot {
             target: (*target).clone(),
             parent_target_id: parent_target_id.map(str::to_owned),
             attachment: if target.attached {
-                TargetAttachmentState::External
+                TargetAttachmentState::CdpClient
             } else {
                 TargetAttachmentState::Detached
             },
@@ -2078,7 +2079,7 @@ mod tests {
             .unwrap();
         assert_eq!(z_root.connection_id, "connection");
         assert_eq!(z_root.connection_generation, 7);
-        assert_eq!(z_root.attachment, TargetAttachmentState::External);
+        assert_eq!(z_root.attachment, TargetAttachmentState::CdpClient);
         assert_eq!(
             forest
                 .iter()

@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
+use linkrpc::connection::channel::{Channel, RejectingHandler};
 use linkrpc::prelude::{
-    JsonRpcMessage, MessageTransport, MultiplexedTransport, MuxChannel, MuxCodec, MuxError,
-    TransportError,
+    JsonRpcError, JsonRpcMessage, MessageTransport, MultiplexedTransport, MuxChannel, MuxCodec,
+    MuxError, TransportError, error_codes,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 pub type SessionId = String;
 pub type OpenSessionError = MuxError;
@@ -148,6 +151,70 @@ pub struct CdpSessionTransport {
     id: String,
     inner: Arc<InnerChannel>,
     channels: Weak<Mutex<HashMap<String, Weak<InnerChannel>>>>,
+}
+
+/// A live native child session on exactly one mux. Requests share its channel until detach or
+/// owner loss; the session ID alone is never a cross-endpoint routing key.
+pub struct RawCdpSession {
+    id: String,
+    mux: CdpSessionMux,
+    channel: Channel,
+    task: JoinHandle<()>,
+    closed: watch::Sender<bool>,
+}
+
+impl RawCdpSession {
+    pub fn open(mux: &CdpSessionMux, id: String) -> Result<Arc<Self>, OpenSessionError> {
+        let channel = Channel::new(
+            Box::new(mux.open_session(id.clone())?),
+            Box::new(RejectingHandler),
+        );
+        let task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        Ok(Arc::new(Self {
+            id,
+            mux: mux.clone(),
+            channel,
+            task,
+            closed: watch::channel(false).0,
+        }))
+    }
+
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        budget: std::time::Duration,
+    ) -> Result<Value, JsonRpcError> {
+        let mut closed = self.closed.subscribe();
+        if *closed.borrow() {
+            return Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "raw CDP session detached; attach again"));
+        }
+        tokio::select! {
+            result = self.channel.call(method, params) => result,
+            _ = closed.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "raw CDP session detached; attach again")),
+            _ = tokio::time::sleep(budget) => Err(JsonRpcError::new(
+                error_codes::REQUEST_TIMEOUT,
+                format!("raw CDP session request timed out after {} seconds", budget.as_secs()),
+            )),
+        }
+    }
+
+    pub fn close(&self) {
+        if !*self.closed.borrow() {
+            self.closed.send_replace(true);
+            self.mux.retire_session(&self.id);
+            self.task.abort();
+        }
+    }
+}
+
+impl Drop for RawCdpSession {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 #[async_trait]

@@ -67,6 +67,7 @@ pub struct ProcessTreeTargetSource {
     supervised_targets: Arc<std::sync::Mutex<BTreeSet<String>>>,
     debugger_targets: std::sync::Mutex<BTreeSet<String>>,
     attachments: Mutex<BTreeMap<String, Arc<TargetEndpoint>>>,
+    attachment_guard: Mutex<()>,
     next_scan_id: AtomicU64,
     scans: std::sync::Mutex<BTreeMap<u64, oneshot::Sender<()>>>,
     activations: std::sync::Mutex<BTreeMap<u64, oneshot::Sender<Result<String, String>>>>,
@@ -117,6 +118,7 @@ impl ProcessTreeTargetSource {
             supervised_targets: Arc::new(std::sync::Mutex::new(BTreeSet::new())),
             debugger_targets: std::sync::Mutex::new(BTreeSet::new()),
             attachments: Mutex::new(BTreeMap::new()),
+            attachment_guard: Mutex::new(()),
             next_scan_id: AtomicU64::new(1),
             scans: std::sync::Mutex::new(BTreeMap::new()),
             activations: std::sync::Mutex::new(BTreeMap::new()),
@@ -378,12 +380,17 @@ impl ProcessTreeTargetSource {
                 .get(renderer_id)
                 .map(|renderer| renderer.process_id);
             self.track(tokio::spawn(async move {
+                let mut native_sessions = BTreeMap::<String, String>::new();
                 while let Some((method, params)) = notifications.recv().await {
                     match method.as_str() {
                         "Target.attachedToTarget" => {
                             if let Ok(params) =
                                 serde_json::from_value::<TargetAttachedToTargetParams>(params)
                             {
+                                native_sessions.insert(
+                                    params.session_id.clone(),
+                                    params.target_info.target_id.clone(),
+                                );
                                 upsert_nested_target(
                                     &nested_targets,
                                     &events,
@@ -415,15 +422,15 @@ impl ProcessTreeTargetSource {
                         "Target.detachedFromTarget" => {
                             if let Ok(params) =
                                 serde_json::from_value::<TargetDetachedFromTargetParams>(params)
-                                && let Some(target_id) = params.target_id
                             {
-                                remove_nested_target(
-                                    &nested_targets,
-                                    &aliases,
-                                    &events,
-                                    &parent_id,
-                                    &target_id,
-                                );
+                                let target_id = params.target_id
+                                    .or_else(|| native_sessions.get(&params.session_id).cloned());
+                                native_sessions.remove(&params.session_id);
+                                if let Some(target_id) = target_id {
+                                    mark_nested_target_detached(
+                                        &nested_targets, &events, &parent_id, &target_id,
+                                    );
+                                }
                             }
                         }
                         _ => {}
@@ -732,7 +739,9 @@ impl TargetSource for ProcessTreeTargetSource {
             return;
         }
 
-        if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned() {
+        if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned()
+            && endpoint.close_reason().await.is_none()
+        {
             if self.renderers.lock().unwrap().contains_key(target_id) {
                 let _ = endpoint
                     .client()
@@ -764,13 +773,16 @@ impl TargetSource for ProcessTreeTargetSource {
     }
 
     async fn attach(&self, target_id: &str, force: bool) -> Result<TargetAttachment, String> {
+        let _guard = self.attachment_guard.lock().await;
         if target_id == ROOT_TARGET_ID {
             return Ok(TargetAttachment {
                 endpoint: self.root_endpoint.clone(),
                 stole_external_owner: false,
             });
         }
-        if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned() {
+        if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned()
+            && endpoint.close_reason().await.is_none()
+        {
             self.debugger_targets
                 .lock()
                 .unwrap()
@@ -779,6 +791,12 @@ impl TargetSource for ProcessTreeTargetSource {
                 endpoint,
                 stole_external_owner: false,
             });
+        }
+        if let Some(endpoint) = self.attachments.lock().await.remove(target_id) {
+            self.supervised_targets.lock().unwrap().remove(target_id);
+            self.renderer_correlations.lock().unwrap().remove(target_id);
+            self.debugger_targets.lock().unwrap().remove(target_id);
+            endpoint.close().await;
         }
         let nested = { self.nested_targets.lock().unwrap().get(target_id).cloned() };
         if let Some(nested) = nested {
@@ -882,6 +900,7 @@ impl TargetSource for ProcessTreeTargetSource {
     }
 
     async fn detach(&self, target_id: &str) {
+        let _guard = self.attachment_guard.lock().await;
         if target_id == ROOT_TARGET_ID {
             // The main process endpoint is shared with the renderer bridge and outlives sessions.
             return;
@@ -1057,6 +1076,20 @@ fn remove_nested_target(
     }
 }
 
+fn mark_nested_target_detached(
+    nested_targets: &std::sync::Mutex<BTreeMap<String, NestedTargetRecord>>,
+    events: &mpsc::UnboundedSender<TargetSourceEvent>,
+    parent_target_id: &str,
+    native_target_id: &str,
+) {
+    let target_id = nested_target_id(parent_target_id, native_target_id);
+    let mut targets = nested_targets.lock().unwrap();
+    if let Some(record) = targets.get_mut(&target_id) {
+        record.target.snapshot.attached = false;
+        let _ = events.send(TargetSourceEvent::Upserted(record.target.clone()));
+    }
+}
+
 fn renderer_host_target(target: &ElectronRendererTarget) -> HostTarget {
     let target_id = renderer_target_id(target.web_contents_id);
     let parent_id = target
@@ -1111,6 +1144,30 @@ fn node_target_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_nested_session_preserves_target_discovery_and_siblings() {
+        let nested = std::sync::Mutex::new(BTreeMap::new());
+        let aliases = std::sync::Mutex::new(BTreeMap::new());
+        let renderers = std::sync::Mutex::new(BTreeMap::new());
+        let (events, mut receiver) = mpsc::unbounded_channel();
+        for native_id in ["iframe-a", "iframe-b"] {
+            let mut info = target_info(native_id, None);
+            info.attached = true;
+            upsert_nested_target(
+                &nested, &events, "renderer-1", Some(10), &aliases, &renderers, true, info,
+            );
+            assert!(matches!(receiver.try_recv(), Ok(TargetSourceEvent::Upserted(_))));
+        }
+        mark_nested_target_detached(&nested, &events, "renderer-1", "iframe-a");
+        let event = receiver.try_recv().unwrap();
+        assert!(matches!(event, TargetSourceEvent::Upserted(target)
+            if target.target_id() == "renderer-1/target/iframe-a" && !target.snapshot.attached));
+        let nested = nested.lock().unwrap();
+        assert!(!nested["renderer-1/target/iframe-a"].target.snapshot.attached);
+        assert!(nested["renderer-1/target/iframe-b"].target.snapshot.attached);
+        assert_eq!(aliases.lock().unwrap()["iframe-a"], "renderer-1/target/iframe-a");
+    }
 
     #[test]
     fn browser_renderer_selection_excludes_oopifs_and_rejects_ambiguous_identity() {

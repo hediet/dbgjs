@@ -292,7 +292,7 @@ fn render_target(
             "unobserved".to_owned(),
             String::new(),
             if target.attached {
-                "externally-attached".to_owned()
+                "cdp-client-attached".to_owned()
             } else {
                 "observed".to_owned()
             },
@@ -301,7 +301,7 @@ fn render_target(
     let attachment = if debugger.is_some() {
         "attached"
     } else if target.attached {
-        "external"
+        "cdp-client"
     } else {
         "detached"
     };

@@ -2339,6 +2339,7 @@ fn target_list_output(
                 .is_some_and(|rank| rank >= dbgjs::target_selector::TargetSelectorMatch::Canonical)
             }),
         parent_target_id: node.parent_target_id.clone(),
+        attachment: node.attachment,
         target: node.target.clone(),
     })
     .collect();
@@ -7713,6 +7714,7 @@ mod tests {
             .iter()
             .flat_map(ConnectionSnapshot::target_forest)
             .collect();
+        snapshot.target_forest[0].attachment = dbgjs::service_api::TargetAttachmentState::Debugger;
         let selection = CliSelection {
             context: Some("ctx".to_owned()),
             connection: Some("browser".to_owned()),
@@ -7748,6 +7750,22 @@ mod tests {
         assert_eq!(targets.targets.len(), 1);
         assert_eq!(targets.targets[0].target.target_id, "page-1");
         assert!(targets.targets[0].selected);
+        assert_eq!(
+            serde_json::to_value(&targets.targets[0]).unwrap()["attachment"],
+            "debugger",
+            "a managed debugger must be distinct from CDP's targetInfo.attached"
+        );
+        let mut native = snapshot.clone();
+        native.target_forest[0].attachment = dbgjs::service_api::TargetAttachmentState::CdpClient;
+        let discovered = target_list_output(
+            &native,
+            &selection,
+            &ScopeOptions::default(),
+            &TargetListOptions::default(),
+        )
+        .unwrap();
+        let native = discovered.targets.iter().find(|entry| entry.target.target_id == "page-1").unwrap();
+        assert_eq!(serde_json::to_value(native).unwrap()["attachment"], "cdpClient");
         let entry = &targets.targets[0];
         let qualified = dbgjs::target_selector::qualified_target_selector(
             &entry.connection_id,
