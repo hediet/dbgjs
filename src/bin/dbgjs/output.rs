@@ -2034,6 +2034,13 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                 style_process_label(label, process.attachable, self.colorize)
             }
             Some(ProcessTreeLeaf::Target(target)) => {
+                let attachment = target.attachment.unwrap_or_else(|| {
+                    if target.target.attached {
+                        dbgjs::service_api::TargetAttachmentState::CdpClient
+                    } else {
+                        dbgjs::service_api::TargetAttachmentState::Detached
+                    }
+                });
                 let target = &target.target;
                 let title = if target.title.is_empty() {
                     "(untitled)"
@@ -2044,7 +2051,7 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
                     "{}  [{}{}]  {:?}  {}",
                     terminal_text(label),
                     terminal_text(&target.target_type),
-                    if target.attached { "; CDP client attached" } else { "" },
+                    target_attachment_label(attachment),
                     title,
                     terminal_text(&target.url),
                 )
@@ -2100,6 +2107,35 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
         _aggregate: &ProcessOrder,
     ) -> String {
         format!("all {child_count} process tree nodes pruned")
+    }
+}
+
+pub(super) fn project_process_tree_target_attachments(
+    trees: &mut [ProcessTreeSnapshot],
+    contexts: &[dbgjs::service_api::ContextSnapshot],
+) {
+    use dbgjs::service_api::{ConnectionConfiguration, TargetAttachmentState};
+    for context in contexts {
+        for connection in &context.connections {
+            let root_pid = match connection.configuration {
+                ConnectionConfiguration::ProcessTree { root_pid }
+                | ConnectionConfiguration::ScopedProcessTree { root_pid, .. } => root_pid,
+                _ => continue,
+            };
+            for node in context.target_forest.iter().filter(|node| {
+                node.connection_id == connection.id
+                    && node.connection_generation == connection.generation
+                    && node.attachment == TargetAttachmentState::Debugger
+            }) {
+                if let Some(tree) = trees.iter_mut().find(|tree| tree.root_process_id == root_pid)
+                    && let Some(target) = tree.targets.iter_mut().find(|target| {
+                        target.target.target_id == node.target.target_id
+                    })
+                {
+                    target.attachment = Some(TargetAttachmentState::Debugger);
+                }
+            }
+        }
     }
 }
 
@@ -5095,6 +5131,7 @@ mod tests {
         let target = |process_id, target_id: &str, parent_id: Option<&str>, target_type: &str| {
             ProcessTargetSnapshot {
                 process_id: Some(process_id),
+                attachment: None,
                 target: TargetSnapshot {
                     target_id: target_id.to_owned(),
                     target_type: target_type.to_owned(),
@@ -5141,6 +5178,74 @@ mod tests {
                 "         └─ renderer-3/target/iframe  [iframe]  \"renderer-3/target/iframe\"  ",
             ]
         );
+    }
+
+    #[test]
+    fn process_tree_distinguishes_managed_debuggers_from_cdp_clients() {
+        use dbgjs::service_api::{
+            ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
+            TargetAttachmentState, TargetNodeSnapshot,
+        };
+        let mut tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            root_kind: ProcessRootKind::Electron,
+            runtime_metadata_available: false,
+            processes: vec![process(1, None, "electron", ProcessRole::ElectronMain, None, None)],
+            targets: ["debugged", "external", "free"].into_iter().map(|id| ProcessTargetSnapshot {
+                process_id: Some(1),
+                attachment: None,
+                target: TargetSnapshot {
+                    target_id: id.to_owned(),
+                    target_type: "page".to_owned(),
+                    title: id.to_owned(),
+                    url: String::new(),
+                    attached: id != "free",
+                    parent_id: None,
+                    opener_id: None,
+                    browser_context_id: None,
+                    subtype: None,
+                },
+            }).collect(),
+            targets_observed: true,
+            target_discovery_error: None,
+        };
+        let context = ContextSnapshot {
+            agent_instance_id: "agent".into(),
+            id: "context".into(),
+            display_name: "test".into(),
+            revision: 1,
+            resource_revision: 1,
+            connections: vec![ConnectionSnapshot {
+                id: "tree".into(),
+                configuration: ConnectionConfiguration::ProcessTree { root_pid: 1 },
+                generation: 3,
+                status: ConnectionStatus::Connected {
+                    product: "Electron".into(),
+                    protocol_version: "1.3".into(),
+                },
+                targets: vec![],
+            }],
+            target_forest: vec![TargetNodeSnapshot {
+                connection_id: "tree".into(),
+                connection_generation: 3,
+                target: tree.targets[0].target.clone(),
+                parent_target_id: None,
+                attachment: TargetAttachmentState::Debugger,
+            }],
+            breakpoints: vec![],
+            source_formatting: Default::default(),
+        };
+        let mut stale = context.clone();
+        stale.target_forest[0].connection_generation = 2;
+        super::project_process_tree_target_attachments(std::slice::from_mut(&mut tree), &[stale]);
+        assert!(process_tree_lines(&tree, ProcessTreeOutputOptions::default())
+            .iter().any(|line| line.contains("debugged  [page; CDP client attached]")));
+        super::project_process_tree_target_attachments(std::slice::from_mut(&mut tree), &[context]);
+        let lines = process_tree_lines(&tree, ProcessTreeOutputOptions::default());
+        assert!(lines.iter().any(|line| line.contains("debugged  [page; debugger attached]")));
+        assert!(lines.iter().any(|line| line.contains("external  [page; CDP client attached]")));
+        assert!(lines.iter().any(|line| line.contains("free  [page]")));
+        assert_eq!(serde_json::to_value(&tree).unwrap()["targets"][0]["attachment"], "debugger");
     }
 
     #[test]

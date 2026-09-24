@@ -1056,6 +1056,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             if options.full {
                 dbgjs::process_discovery::populate_process_tree_targets(&mut trees).await;
+                if let Ok(client) = connect_existing(&state_file).await
+                    && let Ok(contexts) = client.contexts.list_contexts(None).await
+                {
+                    let mut snapshots = Vec::new();
+                    for context in contexts {
+                        if let Ok(snapshot) = client.contexts.get_context(context.id).await {
+                            snapshots.push(snapshot);
+                        }
+                    }
+                    output::project_process_tree_target_attachments(&mut trees, &snapshots);
+                }
             }
             output.print_process_trees(
                 &trees,

@@ -40,10 +40,20 @@ impl CdpAccessApi for DebuggerService {
         let is_current = state.target_debuggers
             .get(&(identity.context_id.clone(), identity.connection_id.clone(), identity.target_id.clone()))
             .is_some_and(|current| current.same_instance(&debugger)
-                && current.snapshot().connection_generation == identity.connection_generation);
+                && current.snapshot().connection_generation == identity.connection_generation)
+            && state.runtimes.get(&(context_id.clone(), connection_id.clone()))
+                .is_some_and(|runtime| runtime.generation() == identity.connection_generation);
         let runtime = state.runtimes.get(&(context_id, connection_id)).cloned();
         drop(state);
+        let attached_id = if method == "Target.attachToTarget" {
+            result.as_ref().ok().and_then(|value| value.get("sessionId")).and_then(serde_json::Value::as_str)
+        } else {
+            None
+        };
         if !is_current {
+            if let Some(session_id) = attached_id {
+                detach_unregistered_raw_session(&debugger, session_id).await;
+            }
             return Err(invalid_state(
                 "target connection changed while the CDP request was in flight",
             ));
@@ -52,9 +62,18 @@ impl CdpAccessApi for DebuggerService {
         if method == "Target.attachToTarget" {
             let session_id = result.get("sessionId").and_then(serde_json::Value::as_str)
                 .ok_or_else(|| invalid_state("Target.attachToTarget did not return a sessionId"))?;
-            runtime.ok_or_else(|| invalid_state("connection is not connected"))?
-                .register_raw_session(&identity.target_id, session_id, raw_events.unwrap())
-                .map_err(|error| invalid_state(&error))?;
+            let Some(runtime) = runtime else {
+                detach_unregistered_raw_session(&debugger, session_id).await;
+                return Err(invalid_state("connection is not connected"));
+            };
+            if let Err(error) = runtime.register_raw_session(
+                &identity.target_id, session_id, raw_events.unwrap(),
+            ) {
+                if !runtime.has_raw_session(&identity.target_id, session_id) {
+                    detach_unregistered_raw_session(&debugger, session_id).await;
+                }
+                return Err(invalid_state(&error));
+            }
         } else if let Some(session_id) = detached_id {
             if let Some(runtime) = runtime {
                 runtime.retire_raw_session(&identity.target_id, &session_id);
@@ -117,4 +136,14 @@ impl CdpAccessApi for DebuggerService {
         }
         result
     }
+}
+
+async fn detach_unregistered_raw_session(debugger: &TargetDebuggerHandle, session_id: &str) {
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        debugger.raw_cdp_request(
+            "Target.detachFromTarget".to_owned(),
+            serde_json::json!({"sessionId": session_id}),
+        ),
+    ).await;
 }
