@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import electron from "electron";
@@ -274,9 +274,27 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		assert.doesNotMatch(stalled.output, /wss?:\/\/127\.0\.0\.1/);
 		await command(["--json", "target", "show", ...scope], env);
 	} catch (error) {
+		let startupState;
+		try {
+			startupState = JSON.parse(await readFile(join(root, "profile", "fixture-startup.json"), "utf8"));
+		} catch (stateError) {
+			startupState = { unavailable: stateError.code ?? stateError.message };
+		}
+		let executableProbe;
+		if (child && child.exitCode !== null && child.exitCode !== 0 && !output) {
+			try {
+				const probe = await run(electron, ["--version"], {}, { timeoutMs: 8_000 });
+				executableProbe = {
+					code: probe.code, timedOut: probe.timedOut,
+					output: probe.output.slice(-300),
+				};
+			} catch (probeError) {
+				executableProbe = { error: probeError.message };
+			}
+		}
 		throw new Error(redactEndpoints(`${error.message}\nTargets: ${JSON.stringify(inventory.map(
 			(entry) => ({ targetId: entry.targetId, targetType: entry.targetType, url: entry.url }),
-		))}\nConnections: ${JSON.stringify(connectionSummary)}\nRelay inventory: ${JSON.stringify(lastRelayInventory)}\nNative inventory: ${JSON.stringify(nativeInventory)}\nFrame tree: ${JSON.stringify(frameTree)}\nHTTP requests: ${JSON.stringify(fixture?.requests ?? [])}\nService: ${serviceOutput.slice(-12000)}\nElectron exited ${child?.exitCode}; output: ${output.slice(-2200)}`));
+		))}\nConnections: ${JSON.stringify(connectionSummary)}\nRelay inventory: ${JSON.stringify(lastRelayInventory)}\nNative inventory: ${JSON.stringify(nativeInventory)}\nFrame tree: ${JSON.stringify(frameTree)}\nHTTP requests: ${JSON.stringify(fixture?.requests ?? [])}\nFixture startup: ${JSON.stringify(startupState)}\nElectron executable: ${JSON.stringify(executableProbe)}\nService: ${serviceOutput.slice(-12000)}\nElectron exited ${child?.exitCode}; output: ${output.slice(-2200)}`));
 	} finally {
 		try {
 			if (env) await run(cli, ["service", "stop"], env, { timeoutMs: 8_000 });

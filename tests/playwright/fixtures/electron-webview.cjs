@@ -1,3 +1,5 @@
+const { writeFileSync } = require("node:fs");
+const { join } = require("node:path");
 const { app, BrowserWindow } = require("electron");
 
 process.mainModule ??= module;
@@ -5,12 +7,19 @@ process.mainModule ??= module;
 // Electron can retain launch switches in process.argv; fixture arguments come last.
 const [url, profile] = process.argv.slice(-2);
 if (!url || !profile) throw new Error("Electron fixture requires URL and profile");
+const startupState = join(profile, "fixture-startup.json");
+const reportStartup = (phase, detail) => writeFileSync(startupState, JSON.stringify({
+	phase, detail, electron: process.versions.electron,
+	stdout: Boolean(process.stdout), stderr: Boolean(process.stderr),
+}));
+reportStartup("module");
 
 app.setPath("userData", profile);
 app.commandLine.appendSwitch("site-per-process");
 app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
+	reportStartup("ready");
 	const window = new BrowserWindow({
 		show: true,
 		webPreferences: {
@@ -21,6 +30,7 @@ app.whenReady().then(() => {
 	});
 	process.stdout.write(`${JSON.stringify({ kind: "ready", pid: process.pid })}\n`);
 	return window.loadURL(url).then(async () => {
+		reportStartup("loaded");
 		window.webContents.debugger.attach("1.3");
 		try {
 			const { targetInfos } = await window.webContents.debugger.sendCommand("Target.getTargets");
@@ -56,6 +66,7 @@ app.whenReady().then(() => {
 		});
 	});
 }).catch((error) => {
+	reportStartup("error", String(error.stack ?? error));
 	process.stderr.write(`Electron fixture initialization failed: ${error.stack ?? error}\n`);
 	app.quit();
 });
