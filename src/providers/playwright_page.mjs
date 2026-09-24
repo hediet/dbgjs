@@ -2,42 +2,64 @@ import { Console } from "node:console";
 import { pathToFileURL } from "node:url";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
+const DEFAULT_TIMEOUT_MS = 27_000;
+const progressEnabled = process.env.DBGJS_PLAYWRIGHT_PROGRESS === "1";
+const requestedTimeout = Number(process.env.DBGJS_PLAYWRIGHT_TIMEOUT_MS);
+const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+	? Math.min(requestedTimeout, DEFAULT_TIMEOUT_MS)
+	: DEFAULT_TIMEOUT_MS;
+const started = performance.now();
+const deadline = started + timeoutMs;
 
 main().catch((error) => finish({ ok: false, error: formatError(error) }, 1));
 
 async function main() {
-	const endpoint = process.env.DBGJS_PLAYWRIGHT_ENDPOINT;
-	const packagePath = process.env.DBGJS_PLAYWRIGHT_PACKAGE;
-	if (!endpoint || !packagePath) {
-		throw new Error("Playwright execution configuration is incomplete");
-	}
-	let program = "";
-	process.stdin.setEncoding("utf8");
-	for await (const chunk of process.stdin) program += chunk;
-	const { chromium } = await import(pathToFileURL(packagePath));
-	const browser = await chromium.connectOverCDP(endpoint);
+	const { chromium, endpoint, program } = await runPhase("starting", async () => {
+		const endpoint = process.env.DBGJS_PLAYWRIGHT_ENDPOINT;
+		const packagePath = process.env.DBGJS_PLAYWRIGHT_PACKAGE;
+		if (!endpoint || !packagePath) {
+			throw new Error("Playwright execution configuration is incomplete");
+		}
+		let program = "";
+		process.stdin.setEncoding("utf8");
+		for await (const chunk of process.stdin) program += chunk;
+		const { chromium } = await import(pathToFileURL(packagePath));
+		return { chromium, endpoint, program };
+	});
+	const browser = await runPhase("connecting", async () => {
+		try {
+			return await chromium.connectOverCDP(endpoint);
+		} catch (error) {
+			if (/page identity lookup|proxy deadline during/.test(String(error?.message))) {
+				throw new Error(`Playwright initializing failed: ${error.message}`, { cause: error });
+			}
+			throw error;
+		}
+	}, Math.min(2_000, timeoutMs / 4));
 	let result;
+	let executionError;
 	try {
-		const pages = browser.contexts().flatMap((context) => context.pages());
+		const pages = await runPhase("initializing", () =>
+			browser.contexts().flatMap((context) => context.pages()),
+		);
 		if (pages.length !== 1) {
 			throw new Error(
 				`virtual CDP endpoint exposed ${pages.length} pages; expected exactly one`,
 			);
 		}
-		Object.defineProperty(globalThis, "page", {
-			value: pages[0],
-			configurable: true,
-		});
-		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const programConsole = new Console({
-			stdout: process.stderr,
-			stderr: process.stderr,
-			colorMode: false,
-		});
-		const value = await new AsyncFunction("console", program)(programConsole);
-		if (value === undefined) {
-			result = { ok: true, hasValue: false };
-		} else {
+		result = await runPhase("executing", async () => {
+			Object.defineProperty(globalThis, "page", {
+				value: pages[0],
+				configurable: true,
+			});
+			const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+			const programConsole = new Console({
+				stdout: process.stderr,
+				stderr: process.stderr,
+				colorMode: false,
+			});
+			const value = await new AsyncFunction("console", program)(programConsole);
+			if (value === undefined) return { ok: true, hasValue: false };
 			assertJsonValue(value, "$", new Set());
 			const serialized = JSON.stringify({ ok: true, hasValue: true, value });
 			if (serialized === undefined) {
@@ -46,13 +68,48 @@ async function main() {
 			if (Buffer.byteLength(serialized) > MAX_RESULT_BYTES) {
 				throw new Error(`Playwright program result exceeds ${MAX_RESULT_BYTES} bytes`);
 			}
-			result = JSON.parse(serialized);
-		}
+			return JSON.parse(serialized);
+		}, Math.min(1_500, timeoutMs / 4));
+	} catch (error) {
+		executionError = error;
 	} finally {
 		delete globalThis.page;
-		await browser.close();
+		try {
+			await runPhase("closing", () => browser.close());
+		} catch (error) {
+			throw new Error(
+				`Playwright closing failed after ${executionError ? "program failure" : "program completed"}: ${error.message}`,
+				{ cause: executionError },
+			);
+		}
 	}
+	if (executionError) throw executionError;
 	finish(result, 0);
+}
+
+async function runPhase(phase, operation, reserveMs = 0) {
+	const elapsedMs = Math.round(performance.now() - started);
+	if (progressEnabled) {
+		process.stderr.write(`DBGJS_PLAYWRIGHT_PROGRESS:${JSON.stringify({ phase, elapsedMs })}\n`);
+	}
+	const remaining = Math.max(0, deadline - performance.now() - reserveMs);
+	if (remaining === 0) throw new Error(`Playwright ${phase} exceeded its deadline after ${elapsedMs} ms`);
+	let timer;
+	try {
+		return await Promise.race([
+			Promise.resolve().then(operation),
+			new Promise((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error(
+						`Playwright ${phase} exceeded its deadline after ${Math.round(performance.now() - started)} ms`,
+					)),
+					remaining,
+				);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 function assertJsonValue(value, path, seen) {
@@ -89,17 +146,22 @@ function assertJsonValue(value, path, seen) {
 function finish(value, exitCode) {
 	const text = `${JSON.stringify(value)}\n`;
 	process.stdout.write(text, () => {
-		process.exitCode = exitCode;
+		process.exit(exitCode);
 	});
 }
 
 function formatError(error) {
-	if (!(error instanceof Error)) return String(error);
+	if (!(error instanceof Error)) return redactEndpoint(String(error));
 	let text = error.stack ?? `${error.name}: ${error.message}`;
 	let cause = error.cause;
 	while (cause !== undefined) {
 		text += `\nCaused by: ${cause instanceof Error ? cause.stack ?? cause.message : String(cause)}`;
 		cause = cause instanceof Error ? cause.cause : undefined;
 	}
-	return text;
+	return redactEndpoint(text);
+}
+
+function redactEndpoint(text) {
+	const endpoint = process.env.DBGJS_PLAYWRIGHT_ENDPOINT;
+	return endpoint ? text.replaceAll(endpoint, "<playwright-endpoint>") : text;
 }

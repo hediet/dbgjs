@@ -12,15 +12,17 @@ const packagePath = fileURLToPath(
 	new URL("./fixtures/playwright-page-browser.mjs", import.meta.url),
 );
 
-function runProgram(program) {
+function runProgram(program, phase, timeoutMs = 10_000) {
 	const child = spawnSync(process.execPath, ["--input-type=module", "--eval", helper], {
 		input: program,
 		encoding: "utf8",
-		timeout: 10_000,
+		timeout: 3_500,
 		env: {
 			...process.env,
 			DBGJS_PLAYWRIGHT_ENDPOINT: "mock:playwright-page",
 			DBGJS_PLAYWRIGHT_PACKAGE: packagePath,
+			...(phase ? { DBGJS_FIXTURE_PHASE: phase } : {}),
+			DBGJS_PLAYWRIGHT_TIMEOUT_MS: String(timeoutMs),
 		},
 	});
 	assert.ifError(child.error);
@@ -31,6 +33,58 @@ function runProgram(program) {
 		stderr: child.stderr,
 	};
 }
+
+for (const [phase, program] of [
+	["connecting", "return 1"],
+	["executing", "await new Promise(() => setInterval(() => {}, 1000))"],
+	["closing", "return 1"],
+]) {
+	test(`${phase} stall reports its phase instead of waiting for the outer watchdog`, () => {
+		const output = runProgram(program, phase, 450);
+		assert.equal(output.status, 1);
+		assert.match(output.result.error, new RegExp(phase));
+		assert.match(output.result.error, /deadline|limit|timed out/i);
+	});
+}
+
+test("cleanup failure after a successful program is attributed to closing", () => {
+	const output = runProgram("return { success: true }", "closing", 450);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /closing/);
+	assert.doesNotMatch(output.result.error, /executing.*failed/);
+});
+
+test("immediate proxy setup errors reach the caller without waiting for the deadline", () => {
+	const output = runProgram("return 1", "connection-error", 300);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /fixture proxy setup failed/);
+	assert.doesNotMatch(output.result.error, /exceeded its deadline/);
+	assert.doesNotMatch(output.result.error, /mock:playwright-page/);
+});
+
+test("frame initialization failures are distinct from user execution", () => {
+	const output = runProgram("return 1", "initialization-error", 450);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /fixture frame initialization failed/);
+	assert.doesNotMatch(output.result.error, /executing.*deadline/);
+});
+
+test("proxy identity failure is attributed to initialization", () => {
+	const output = runProgram("return 1", "identity-error", 450);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /Playwright initializing failed.*Page.getFrameTree/);
+});
+
+test("timeout diagnostic does not include code or capability endpoint", () => {
+	const output = runProgram(
+		'await new Promise(() => setInterval(() => {}, 1000)); return "private-document-value"',
+		undefined,
+		450,
+	);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /executing.*deadline/);
+	assert.doesNotMatch(output.result.error, /private-document-value|mock:playwright-page/);
+});
 
 test("console.log does not corrupt the helper's JSON result", () => {
 	assert.deepEqual(

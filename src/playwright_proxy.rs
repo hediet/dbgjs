@@ -11,7 +11,9 @@ use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::{
+    CloseFrame, WebSocketConfig, frame::coding::CloseCode,
+};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use tokio_tungstenite::{accept_hdr_async_with_config, connect_async_with_config};
 
@@ -20,7 +22,7 @@ use crate::cdp::TargetAttachToTargetParams;
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const SESSION_TIMEOUT: Duration = Duration::from_secs(45);
+const SESSION_TIMEOUT: Duration = Duration::from_secs(24);
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -72,7 +74,7 @@ pub async fn start(
         )
         .await
         {
-            eprintln!("Playwright CDP proxy failed: {error}");
+            eprintln!("Playwright CDP proxy failed: {}", safe_proxy_error(&error));
         }
         let _ = completion_sender.send(());
     });
@@ -91,30 +93,42 @@ async fn run(
     mut cancel: watch::Receiver<bool>,
     capability_deadline: Instant,
 ) -> Result<(), PlaywrightProxyError> {
-    let Some(client) = accept_authenticated(&listener, &path, &mut cancel).await? else {
+    let Some(mut client) = accept_authenticated(&listener, &path, &mut cancel).await? else {
         return Ok(());
     };
     drop(listener);
 
     let config = websocket_config();
     let PlaywrightCdpSource::BrowserRoot { endpoint } = source;
-    let Some(mut upstream) = connect_upstream(
+    let upstream_result = connect_upstream(
         endpoint,
         config.clone(),
         &mut cancel,
         capability_deadline,
         UPSTREAM_CONNECT_TIMEOUT,
     )
-    .await?
-    else {
-        return Ok(());
+    .await;
+    let mut upstream = match upstream_result {
+        Ok(Some(upstream)) => upstream,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            notify_setup_failure(&mut client, &error).await;
+            return Err(error);
+        }
     };
-    let client_target_id = tokio::select! {
-        result = resolve_page_identity(&mut upstream, &page) => result?,
+    let identity = tokio::select! {
+        result = resolve_page_identity(&mut upstream, &page) => result,
         _ = tokio::time::sleep_until(capability_deadline) => {
-            return Err(PlaywrightProxyError::CapabilityTimeout);
+            Err(PlaywrightProxyError::CapabilityTimeout)
         }
         _ = cancel.changed() => return Ok(()),
+    };
+    let client_target_id = match identity {
+        Ok(id) => id,
+        Err(error) => {
+            notify_setup_failure(&mut client, &error).await;
+            return Err(error);
+        }
     };
     bridge(
         client,
@@ -125,6 +139,51 @@ async fn run(
         capability_deadline,
     )
     .await
+}
+
+async fn notify_setup_failure(
+    client: &mut tokio_tungstenite::WebSocketStream<TcpStream>,
+    error: &PlaywrightProxyError,
+) {
+    let reason = if matches!(error, PlaywrightProxyError::CapabilityTimeout) {
+        "page identity lookup exceeded its deadline".to_owned()
+    } else {
+        safe_proxy_error(error)
+    };
+    let _ = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.close(Some(CloseFrame {
+            code: CloseCode::Error,
+            reason: format!("Playwright proxy {reason}").into(),
+        })),
+    )
+    .await;
+}
+
+fn safe_proxy_error(error: &PlaywrightProxyError) -> String {
+    match error {
+        PlaywrightProxyError::UpstreamConnectTimeout => {
+            "upstream connection exceeded its deadline".to_owned()
+        }
+        PlaywrightProxyError::CapabilityTimeout => "capability exceeded its deadline".to_owned(),
+        PlaywrightProxyError::PageIdentityRequest { method, .. } => {
+            format!("page identity lookup failed at {method}")
+        }
+        PlaywrightProxyError::InvalidPageIdentity => {
+            "page identity lookup returned an invalid root frame".to_owned()
+        }
+        PlaywrightProxyError::SelectedTargetDestroyed => {
+            "selected page target was destroyed".to_owned()
+        }
+        PlaywrightProxyError::ScopeViolation(_) => {
+            "page-scoped protocol operation was rejected".to_owned()
+        }
+        PlaywrightProxyError::InvalidCdpMessage => "invalid CDP message".to_owned(),
+        PlaywrightProxyError::WebSocket(_) | PlaywrightProxyError::Io(_) => {
+            "upstream connection or CDP transport failed".to_owned()
+        }
+        _ => "CDP proxy protocol failed".to_owned(),
+    }
 }
 
 async fn resolve_page_identity(
@@ -311,7 +370,19 @@ async fn bridge(
 
     loop {
         tokio::select! {
-            _ = &mut deadline => return Err(PlaywrightProxyError::CapabilityTimeout),
+            _ = &mut deadline => {
+                let last_method = pending.values().filter_map(|request| match request {
+                    PendingRequest::Forwarded { method, .. } => Some(method.as_str()),
+                    PendingRequest::InternalAttach => Some("Target.attachToTarget"),
+                }).filter(|method| method.len() <= 80 && method.bytes().all(|byte|
+                    byte.is_ascii_alphanumeric() || byte == b'.'
+                )).next().unwrap_or("protocol initialization");
+                let _ = client_sender.send(Message::Close(Some(CloseFrame {
+                    code: CloseCode::Error,
+                    reason: format!("Playwright proxy deadline during {last_method}").into(),
+                }))).await;
+                return Err(PlaywrightProxyError::CapabilityTimeout);
+            },
             _ = cancel.changed() => return Ok(()),
             message = client_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
@@ -1411,6 +1482,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn immediate_upstream_failure_reaches_claiming_client() {
+        let proxy = start(
+            PlaywrightCdpSource::BrowserRoot {
+                endpoint: "ws://127.0.0.1:1".to_owned(),
+            },
+            page(),
+            "fixture-token".to_owned(),
+        )
+        .await
+        .unwrap();
+        let (mut socket, _) = connect_async(&proxy.websocket_url).await.unwrap();
+        let message = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Message::Close(Some(frame)) = message else {
+            panic!("setup failure should close with a reason: {message:?}");
+        };
+        assert!(frame.reason.contains("upstream"), "{frame:?}");
+        proxy.completion.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn resolves_real_root_frame_identity_before_exposing_selected_page() {
         let id = resolve_mock_identity(json!({
             "result": { "frameTree": { "frame": { "id": "chromium-root-frame" } } }
@@ -2498,6 +2593,61 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(matches!(error, PlaywrightProxyError::CapabilityTimeout));
+    }
+
+    #[tokio::test]
+    async fn identity_stall_reports_a_bounded_error_to_the_client() {
+        let upstream_listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let upstream_endpoint = format!("ws://{}", upstream_listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = upstream_listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            let attach = parse_data_message(socket.next().await.unwrap().unwrap())
+                .unwrap()
+                .unwrap();
+            socket
+                .send(text(json!({
+                    "id": attach["id"], "result": { "sessionId": "identity-session" }
+                })))
+                .await
+                .unwrap();
+            let tree = parse_data_message(socket.next().await.unwrap().unwrap())
+                .unwrap()
+                .unwrap();
+            assert_eq!(tree["method"], "Page.getFrameTree");
+            let _ = socket.next().await;
+        });
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let client_endpoint = format!("ws://{}/session/test", listener.local_addr().unwrap());
+        let (_cancel_sender, cancel) = watch::channel(false);
+        let proxy = tokio::spawn(run(
+            listener,
+            PlaywrightCdpSource::BrowserRoot {
+                endpoint: upstream_endpoint,
+            },
+            page(),
+            "/session/test".to_owned(),
+            cancel,
+            Instant::now() + Duration::from_millis(150),
+        ));
+        let (mut client, _) = connect_async(client_endpoint).await.unwrap();
+        let message = timeout(Duration::from_secs(2), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Message::Close(Some(frame)) = message else {
+            panic!("identity timeout should close with phase diagnostics: {message:?}");
+        };
+        assert!(
+            frame.reason.contains("page identity lookup exceeded"),
+            "{frame:?}"
+        );
+        assert!(matches!(
+            proxy.await.unwrap(),
+            Err(PlaywrightProxyError::CapabilityTimeout)
+        ));
+        upstream.await.unwrap();
     }
 
     async fn proxy_with_mock_upstream() -> (PlaywrightProxy, tokio::task::JoinHandle<()>) {
