@@ -726,6 +726,10 @@ impl ConnectionRuntime {
         self.direct_debugger
     }
 
+    pub fn generation(&self) -> u64 {
+        self.connection_generation
+    }
+
     /// True when the CDP root of this connection is dbgjs's own virtual browser root rather than
     /// a real browser.
     pub fn is_virtual_root(&self) -> bool {
@@ -798,6 +802,10 @@ impl ConnectionRuntime {
         {
             attachment.session.close();
         }
+    }
+
+    pub fn has_raw_session(&self, target_id: &str, session_id: &str) -> bool {
+        self.raw_sessions.lock().unwrap().contains_key(&(target_id.to_owned(), session_id.to_owned()))
     }
 
     pub fn retire_raw_sessions_for_target(&self, target_id: &str) {
@@ -1723,5 +1731,43 @@ mod raw_session_tests {
         assert_eq!(retired.code, error_codes::INVALID_PARAMS);
         first.close().await;
         second.close().await;
+    }
+
+    #[tokio::test]
+    async fn raw_session_can_reopen_native_id_after_detach() {
+        let runtime = runtime(1).await;
+        let (events, _) = broadcast::channel(8);
+        runtime.register_raw_session("owner", "native", events.subscribe()).unwrap();
+        assert!(runtime.register_raw_session("owner", "native", events.subscribe()).is_err());
+        events.send(crate::cdp_runtime::RawCdpEvent {
+            session: SessionKey { connection_generation: 1, session_id: "root".into() },
+            method: "Target.detachedFromTarget".into(),
+            params: serde_json::json!({"sessionId": "native"}),
+        }).unwrap();
+        runtime.retire_raw_session("owner", "native");
+        runtime.register_raw_session("owner", "native", events.subscribe())
+            .expect("a new native attachment may reuse a detached session ID");
+        tokio::task::yield_now().await;
+        assert_eq!(runtime.raw_sessions.lock().unwrap().len(), 1);
+        events.send(crate::cdp_runtime::RawCdpEvent {
+            session: SessionKey { connection_generation: 1, session_id: "root".into() },
+            method: "Target.detachedFromTarget".into(),
+            params: serde_json::json!({"sessionId": "native"}),
+        }).unwrap();
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while runtime.has_raw_session("owner", "native") {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("native detach must retire only the current attachment");
+        runtime.close().await;
+    }
+
+    #[tokio::test]
+    async fn raw_session_setup_failure_does_not_register_an_unroutable_session() {
+        let runtime = runtime(1).await;
+        let (events, _) = broadcast::channel(8);
+        assert!(runtime.register_raw_session("owner", "$cdp-root", events.subscribe()).is_err());
+        assert!(!runtime.has_raw_session("owner", "$cdp-root"));
+        runtime.close().await;
     }
 }

@@ -1565,6 +1565,12 @@ mod tests {
         assert_eq!(second.unwrap()["sessionId"], native_id);
         native.close();
         assert!(native.request("Runtime.evaluate", json!({}), std::time::Duration::from_millis(20)).await.is_err());
+        parent.call("Target.detachFromTarget", json!({"sessionId":native_id})).await.unwrap();
+        let reattached = parent.call("Target.attachToTarget", json!({"targetId":"iframe", "flatten":true})).await.unwrap();
+        assert_eq!(reattached["sessionId"], native_id);
+        let reopened = endpoint.open_raw_session(native_id.clone()).unwrap();
+        assert_eq!(reopened.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["sessionId"], native_id);
+        reopened.close();
     }
 
     #[tokio::test]

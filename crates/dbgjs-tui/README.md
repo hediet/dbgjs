@@ -29,7 +29,7 @@ cargo run -p dbgjs-tui --bin dbgjs-tui -- --context :my-context
 - `c`: add and connect the selected process/window, or connect/disconnect its configured
   connection.
 - `a`: attach/detach the selected target.
-- `f`: force attachment of an externally attached target.
+- `f`: explicitly force takeover of a target with a native CDP client attachment.
 - `d` / `Delete`: remove the selected inactive connection.
 - `m`: cycle source maps, formatted code, and no projection in Sources.
 - `b`: toggle a breakpoint at the selected line while the source document has focus.
@@ -73,8 +73,9 @@ disconnected, transitioning, connected, and failed state. Connections expose
 their scoped resource hierarchy as a collapsible tree. A renderer connection
 can use the main process tree as its access path while exposing only the
 renderer and its descendants as its visible scope; sibling renderers are not
-shown. Targets can be attached or detached directly, with explicit force
-attachment for targets owned by another debugger.
+shown. Targets can be attached or detached directly. A native CDP client attachment
+does not prove another debugger owns the target: `a` tries normal attachment,
+while `f` explicitly requests takeover if needed.
 
 The TUI queries the process projection when Processes or Connections needs it,
 and queries runtime children only for expanded process roots. Independent root
@@ -96,6 +97,6 @@ with `Enter`, navigate lines with the usual movement keys, and toggle
 breakpoints with `b`. The selected context is observed continuously. Detailed
 target state is observed for debugger-owned targets so every paused target can
 appear as a collapsible root in Call Stacks. Attention is a derived view of
-paused targets, failed connections and target debuggers, external ownership
-conflicts, and partially bound or failed breakpoints; it does not introduce a
+paused targets, failed connections and target debuggers, and partially bound
+or failed breakpoints; it does not introduce a
 second state model.

@@ -5505,6 +5505,7 @@ mod tests {
             runtime_metadata_available: true,
             targets: vec![crate::service_api::ProcessTargetSnapshot {
                 process_id: Some(200),
+                attachment: None,
                 target: TargetSnapshot {
                     target_id: "renderer-7".to_owned(),
                     target_type: "page".to_owned(),

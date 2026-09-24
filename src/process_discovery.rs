@@ -279,6 +279,11 @@ async fn discover_process_tree_targets(
             .into_iter()
             .map(|target| ProcessTargetSnapshot {
                 process_id: target.process_id,
+                attachment: Some(if target.snapshot.attached {
+                    crate::service_api::TargetAttachmentState::CdpClient
+                } else {
+                    crate::service_api::TargetAttachmentState::Detached
+                }),
                 target: target.snapshot,
             })
             .filter(|target| {

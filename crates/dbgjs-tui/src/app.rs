@@ -1147,7 +1147,7 @@ impl App {
                         attached: false,
                         force: false,
                     }),
-                    TargetAttachmentState::Detached => Ok(UiAction::SetTargetAttachment {
+                    TargetAttachmentState::Detached | TargetAttachmentState::CdpClient => Ok(UiAction::SetTargetAttachment {
                         target: TargetRef {
                             reference: dbgjs::service_api::TargetRef {
                                 connection: dbgjs::service_api::ConnectionRef {
@@ -1159,25 +1159,8 @@ impl App {
                             connection_generation: target.connection_generation,
                         },
                         attached: true,
-                        force: false,
+                        force: force && target.attachment == TargetAttachmentState::CdpClient,
                     }),
-                    TargetAttachmentState::External if force => Ok(UiAction::SetTargetAttachment {
-                        target: TargetRef {
-                            reference: dbgjs::service_api::TargetRef {
-                                connection: dbgjs::service_api::ConnectionRef {
-                                    context_id: self.context_id().to_owned(),
-                                    connection_id,
-                                },
-                                target_id,
-                            },
-                            connection_generation: target.connection_generation,
-                        },
-                        attached: true,
-                        force: true,
-                    }),
-                    TargetAttachmentState::External => Err(
-                        "target has an external debugger; press f to steal attachment".to_owned(),
-                    ),
                 }
             }
             _ => Err("select a target to attach or detach".to_owned()),
@@ -1589,8 +1572,8 @@ impl App {
                 .map(|target| match target.attachment {
                     TargetAttachmentState::Debugger => "a detach target".to_owned(),
                     TargetAttachmentState::Detached => "a attach target".to_owned(),
-                    TargetAttachmentState::External => {
-                        "f force attach · currently owned by another debugger".to_owned()
+                    TargetAttachmentState::CdpClient => {
+                        "a attach target · f force takeover · CDP client attached".to_owned()
                     }
                 })
                 .unwrap_or_else(|_| "Target is no longer available".to_owned()),
@@ -2196,7 +2179,7 @@ impl App {
                     expanded: false,
                     tone: match target.attachment {
                         TargetAttachmentState::Debugger => Tone::Good,
-                        TargetAttachmentState::External => Tone::Warning,
+                        TargetAttachmentState::CdpClient => Tone::Normal,
                         TargetAttachmentState::Detached => Tone::Muted,
                     },
                 });
@@ -2410,28 +2393,6 @@ impl App {
                     expandable: false,
                     expanded: false,
                     tone: Tone::Error,
-                });
-            }
-        }
-
-        for target in &context.target_forest {
-            if target.attachment == TargetAttachmentState::External {
-                rows.push(OutlineRow {
-                    key: format!(
-                        "attention:external:{}:{}",
-                        target.connection_id, target.target.target_id
-                    ),
-                    depth: 0,
-                    label: format!("! {}", target_label(target)),
-                    state: "externally owned".to_owned(),
-                    detail: target.connection_id.clone(),
-                    item: OutlineItem::AttentionTarget {
-                        connection_id: target.connection_id.clone(),
-                        target_id: target.target.target_id.clone(),
-                    },
-                    expandable: false,
-                    expanded: false,
-                    tone: Tone::Warning,
                 });
             }
         }
@@ -3238,8 +3199,8 @@ impl App {
         lines.push(match target.attachment {
             TargetAttachmentState::Debugger => "a detaches this target.".to_owned(),
             TargetAttachmentState::Detached => "a attaches this target.".to_owned(),
-            TargetAttachmentState::External => {
-                "An external debugger owns this target; press f to steal.".to_owned()
+            TargetAttachmentState::CdpClient => {
+                "A CDP client is attached; a attaches without takeover, f forces takeover.".to_owned()
             }
         });
         Inspector {
@@ -3657,7 +3618,7 @@ fn connection_configuration_lines(configuration: &ConnectionConfiguration) -> Ve
 fn attachment_toggle(state: TargetAttachmentState) -> &'static str {
     match state {
         TargetAttachmentState::Detached => "[ ]",
-        TargetAttachmentState::External => "[!]",
+        TargetAttachmentState::CdpClient => "[~]",
         TargetAttachmentState::Debugger => "[x]",
     }
 }
@@ -3665,7 +3626,7 @@ fn attachment_toggle(state: TargetAttachmentState) -> &'static str {
 fn attachment_name(state: TargetAttachmentState) -> &'static str {
     match state {
         TargetAttachmentState::Detached => "detached",
-        TargetAttachmentState::External => "external",
+        TargetAttachmentState::CdpClient => "CDP client attached",
         TargetAttachmentState::Debugger => "attached",
     }
 }
@@ -3990,13 +3951,13 @@ mod tests {
     }
 
     #[test]
-    fn target_toggle_is_safe_for_external_owners() {
+    fn cdp_client_state_allows_plain_attach_without_implied_takeover() {
         let mut app = test_app(
             ConnectionStatus::Connected {
                 product: "Chrome".to_owned(),
                 protocol_version: "1.3".to_owned(),
             },
-            TargetAttachmentState::External,
+            TargetAttachmentState::CdpClient,
         );
         app.set_tab(Tab::Runtime);
         app.expanded.insert("targets:available".to_owned());
@@ -4004,11 +3965,14 @@ mod tests {
             .insert("target-group:available:browser".to_owned());
         focus_row(&mut app, Section::Targets, 2);
 
-        assert!(
-            app.target_action_for_selected(false)
-                .unwrap_err()
-                .contains("press f")
-        );
+        assert!(matches!(
+            app.target_action_for_selected(false).unwrap(),
+            UiAction::SetTargetAttachment {
+                attached: true,
+                force: false,
+                ..
+            }
+        ));
         assert!(matches!(
             app.target_action_for_selected(true).unwrap(),
             UiAction::SetTargetAttachment {
@@ -4105,6 +4069,7 @@ mod tests {
         });
         tree.targets = vec![dbgjs::service_api::ProcessTargetSnapshot {
             process_id: Some(200),
+            attachment: None,
             target: TargetSnapshot {
                 target_id: "renderer-7".to_owned(),
                 target_type: "page".to_owned(),
@@ -4779,22 +4744,18 @@ mod tests {
     }
 
     #[test]
-    fn attention_is_a_projection_of_failures_and_ownership_conflicts() {
+    fn native_cdp_client_is_not_misreported_as_ownership_conflict() {
         let app = test_app(
             ConnectionStatus::Failed {
                 message: "endpoint refused".to_owned(),
             },
-            TargetAttachmentState::External,
+            TargetAttachmentState::CdpClient,
         );
         let rows = app.rows(Section::Attention);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert!(rows.iter().any(|row| {
             matches!(row.item, OutlineItem::AttentionConnection { .. })
                 && row.detail == "endpoint refused"
-        }));
-        assert!(rows.iter().any(|row| {
-            matches!(row.item, OutlineItem::AttentionTarget { .. })
-                && row.state == "externally owned"
         }));
     }
 
