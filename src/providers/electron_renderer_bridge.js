@@ -294,13 +294,214 @@ async (token, independent = false) => {
 		}
 		writeFrame(entry.socket, { kind: "cdp", envelope });
 	};
+	const refreshAutoAttachedChildren = async (entry, parentSessionId) => {
+		const key = parentSessionId || "";
+		const parent = entry.autoAttachParents.get(key);
+		if (!parent || parent.scanning || entry.releasePromise) {
+			return;
+		}
+		parent.scanning = true;
+		try {
+			const { targetInfo } = await entry.contents.debugger.sendCommand(
+				"Target.getTargetInfo", {}, parentSessionId,
+			);
+			const { targetInfos } = await entry.contents.debugger.sendCommand(
+				"Target.getTargets", {}, parentSessionId,
+			);
+			if (entry.autoAttachParents.get(key) !== parent) {
+				return;
+			}
+			const children = targetInfos.filter((info) =>
+				info.type === "iframe" && info.parentId === targetInfo.targetId);
+			const live = new Set(children.map((info) => info.targetId));
+			for (const [targetId, sessionId] of parent.children) {
+				if (live.has(targetId)) {
+					continue;
+				}
+				parent.children.delete(targetId);
+				routeDebuggerMessage(entry, "Target.detachedFromTarget",
+					{ sessionId, targetId }, parentSessionId);
+				try {
+					await entry.contents.debugger.sendCommand(
+						"Target.detachFromTarget", { sessionId }, parentSessionId,
+					);
+				} catch {
+					// The native target was already destroyed.
+				}
+			}
+			for (const info of children) {
+				if (parent.children.has(info.targetId)) {
+					continue;
+				}
+				let sessionId;
+				({ sessionId } = await entry.contents.debugger.sendCommand(
+					"Target.attachToTarget", { targetId: info.targetId, flatten: true },
+					parentSessionId,
+				));
+				if (entry.autoAttachParents.get(key) !== parent) {
+					await entry.contents.debugger.sendCommand(
+						"Target.detachFromTarget", { sessionId }, parentSessionId,
+					).catch(() => {});
+					return;
+				}
+				if (parent.children.has(info.targetId)) {
+					if (parent.children.get(info.targetId) === sessionId) {
+						continue;
+					}
+					await entry.contents.debugger.sendCommand(
+						"Target.detachFromTarget", { sessionId }, parentSessionId,
+					).catch(() => {});
+					continue;
+				}
+				parent.children.set(info.targetId, sessionId);
+				routeDebuggerMessage(entry, "Target.attachedToTarget",
+					{ sessionId, targetInfo: { ...info, attached: true }, waitingForDebugger: false },
+					parentSessionId);
+			}
+		} finally {
+			parent.scanning = false;
+			if (parent.rescan) {
+				parent.rescan = false;
+				scheduleAutoAttachRefresh(entry, parentSessionId);
+			}
+		}
+	};
+	const scheduleAutoAttachRefresh = (entry, parentSessionId) => {
+		const parent = entry.autoAttachParents.get(parentSessionId || "");
+		if (!parent || entry.releasePromise) {
+			return;
+		}
+		if (parent.scanning) {
+			parent.rescan = true;
+		} else if (!parent.timer) {
+			parent.timer = setTimeout(() => {
+				parent.timer = undefined;
+				void refreshAutoAttachedChildren(entry, parentSessionId).catch(() => {});
+			}, 20);
+			parent.timer.unref?.();
+		}
+	};
+	const addRemoteFrameTrees = async (entry, parentSessionId, result) => {
+		const parent = entry.autoAttachParents.get(parentSessionId || "");
+		if (!parent || !result?.frameTree) {
+			return;
+		}
+		for (let attempt = 0; attempt < 50 && parent.scanning; attempt++) {
+			await delay(10);
+		}
+		await refreshAutoAttachedChildren(entry, parentSessionId);
+		const { targetInfos } = await entry.contents.debugger.sendCommand(
+			"Target.getTargets", {}, parentSessionId,
+		);
+		const findFrame = (tree, id) => {
+			if (tree.frame.id === id) return tree;
+			for (const child of tree.childFrames ?? []) {
+				const found = findFrame(child, id);
+				if (found) return found;
+			}
+			return undefined;
+		};
+		for (const info of targetInfos) {
+			const sessionId = parent.children.get(info.targetId);
+			if (!sessionId || info.type !== "iframe") continue;
+			const parentTree = findFrame(result.frameTree, info.parentId);
+			if (!parentTree || findFrame(result.frameTree, info.targetId)) continue;
+			let childTree;
+			try {
+				({ frameTree: childTree } = await entry.contents.debugger.sendCommand(
+					"Page.getFrameTree", {}, sessionId,
+				));
+			} catch {
+				continue;
+			}
+			if (!childTree?.frame || childTree.frame.id !== info.targetId) continue;
+			childTree.frame.parentId = info.parentId;
+			// The child session owns its local descendants; projecting them here would race
+			// Playwright's OOPIF attachment and create duplicate frame identities.
+			(parentTree.childFrames ??= []).push({ frame: childTree.frame });
+		}
+	};
 	const sendRendererCommand = async (entry, envelope) => {
 		try {
-			const result = await entry.contents.debugger.sendCommand(
-				envelope.method,
-				envelope.params ?? {},
-				envelope.sessionId,
-			);
+			if (envelope.method === "Target.setAutoAttach" && envelope.params?.autoAttach) {
+				const key = envelope.sessionId || "";
+				if (!entry.autoAttachParents.has(key)) {
+					entry.autoAttachParents.set(key, {
+						children: new Map(),
+						scanning: false, rescan: false, timer: undefined,
+					});
+				}
+			}
+			if (envelope.method === "Target.attachToTarget") {
+				entry.rawAttaching.add(envelope.params?.targetId);
+			}
+			let result;
+			try {
+				result = await entry.contents.debugger.sendCommand(
+					envelope.method,
+					envelope.params ?? {},
+					envelope.sessionId,
+				);
+			} finally {
+				if (envelope.method === "Target.attachToTarget") {
+					entry.rawAttaching.delete(envelope.params?.targetId);
+				}
+			}
+			if (envelope.method === "Page.getFrameTree") {
+				await addRemoteFrameTrees(entry, envelope.sessionId, result);
+				if (envelope.sessionId && result?.frameTree) {
+					let announced = entry.announcedFrames.get(envelope.sessionId);
+					if (!announced) {
+						announced = new Set();
+						entry.announcedFrames.set(envelope.sessionId, announced);
+					}
+					const announceChildren = (tree) => {
+						for (const child of tree.childFrames ?? []) {
+							if (!announced.has(child.frame.id)) {
+								announced.add(child.frame.id);
+								routeDebuggerMessage(entry, "Page.frameAttached",
+									{ frameId: child.frame.id, parentFrameId: tree.frame.id },
+									envelope.sessionId);
+								routeDebuggerMessage(entry, "Page.frameNavigated",
+									{ frame: child.frame }, envelope.sessionId);
+							}
+							announceChildren(child);
+						}
+					};
+					announceChildren(result.frameTree);
+				}
+			}
+			if (envelope.method === "Page.createIsolatedWorld" && envelope.sessionId) {
+				const { frameTree } = await entry.contents.debugger.sendCommand(
+					"Page.getFrameTree", {}, envelope.sessionId,
+				);
+				const createChildWorlds = async (tree) => {
+					for (const child of tree.childFrames ?? []) {
+						// Existing local frames need the utility world too: Playwright
+						// creates it explicitly only for the OOPIF's main frame.
+						await entry.contents.debugger.sendCommand("Page.createIsolatedWorld",
+							{ ...envelope.params, frameId: child.frame.id }, envelope.sessionId)
+							.catch(() => {});
+						await createChildWorlds(child);
+					}
+				};
+				await createChildWorlds(frameTree);
+			}
+			if (envelope.method === "Target.setAutoAttach") {
+				const key = envelope.sessionId || "";
+				if (envelope.params?.autoAttach) {
+					scheduleAutoAttachRefresh(entry, envelope.sessionId);
+				} else {
+					const parent = entry.autoAttachParents.get(key);
+					entry.autoAttachParents.delete(key);
+					if (parent?.timer) clearTimeout(parent.timer);
+					for (const sessionId of parent?.children.values() ?? []) {
+						await entry.contents.debugger.sendCommand(
+							"Target.detachFromTarget", { sessionId }, envelope.sessionId,
+						).catch(() => {});
+					}
+				}
+			}
 			if (!Object.hasOwn(envelope, "id")) {
 				return;
 			}
@@ -359,12 +560,45 @@ async (token, independent = false) => {
 			webContentsId,
 			contents,
 			socket,
+			autoAttachParents: new Map(),
+			announcedFrames: new Map(),
+			rawAttaching: new Set(),
 			adoptedStartup: Boolean(startup),
 			releasePromise: undefined,
 			onMessage: undefined,
 			onDetach: undefined,
 		};
 		entry.onMessage = (_event, method, params, sessionId) => {
+			if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe") {
+				const parent = entry.autoAttachParents.get(sessionId || "");
+				const targetId = params.targetInfo.targetId;
+				if (parent && !entry.rawAttaching.has(targetId)) {
+					const existing = parent.children.get(targetId);
+					if (existing && existing !== params.sessionId) {
+						void entry.contents.debugger.sendCommand("Target.detachFromTarget",
+							{ sessionId: params.sessionId }, sessionId).catch(() => {});
+						return;
+					}
+					parent.children.set(targetId, params.sessionId);
+				}
+			}
+			if (method === "Target.detachedFromTarget") {
+				entry.announcedFrames.delete(params?.sessionId);
+				for (const parent of entry.autoAttachParents.values()) {
+					for (const [id, childSessionId] of parent.children) {
+						if (childSessionId === params?.sessionId) parent.children.delete(id);
+					}
+				}
+				scheduleAutoAttachRefresh(entry, sessionId);
+			}
+			if (method === "Target.targetCreated" || method === "Target.targetDestroyed"
+				|| method === "Page.frameAttached" || method === "Page.frameDetached"
+				|| method === "Page.frameNavigated") {
+				scheduleAutoAttachRefresh(entry, sessionId);
+			}
+			if (method === "Page.frameDetached") {
+				entry.announcedFrames.get(sessionId)?.delete(params?.frameId);
+			}
 			routeDebuggerMessage(entry, method, params, sessionId);
 		};
 		entry.onDetach = (_event, reason) => {

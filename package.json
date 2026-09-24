@@ -42,6 +42,7 @@
     "@playwright/test": "^1.62.1",
     "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",
+    "electron": "44.4.5",
     "esbuild": "^0.28.2",
     "express": "^5.1.0",
     "typescript": "5.9.2"

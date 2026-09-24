@@ -450,6 +450,28 @@ async fn bridge(
                     }
                     UpstreamAction::Reply(message) => client_sender.send(message).await?,
                     UpstreamAction::Drop => {}
+                    UpstreamAction::EnableSelectedChildren { request_id, session_id } => {
+                        let internal_id = allocate_internal_request_id(
+                            &mut next_internal_id,
+                            &pending,
+                            &internal,
+                        )?;
+                        reserve_internal_request(
+                            &mut internal,
+                            id_key(&internal_id)?,
+                            InternalRequest::EnableSelectedChildren { request_id },
+                        )?;
+                        upstream_sender.send(json_message(json!({
+                            "id": internal_id,
+                            "sessionId": session_id,
+                            "method": "Target.setAutoAttach",
+                            "params": {
+                                "autoAttach": true,
+                                "waitForDebuggerOnStart": false,
+                                "flatten": true
+                            }
+                        }))?).await?;
+                    }
                     UpstreamAction::Detach(session_id) => {
                         let internal_id = allocate_internal_request_id(
                             &mut next_internal_id,
@@ -616,6 +638,7 @@ enum PendingRequest {
 
 enum InternalRequest {
     AutoAttach { request_id: Value },
+    EnableSelectedChildren { request_id: Value },
     Detach,
 }
 
@@ -1112,6 +1135,14 @@ fn internal_response(
 ) -> Result<UpstreamAction, PlaywrightProxyError> {
     match request {
         InternalRequest::Detach => Ok(UpstreamAction::Drop),
+        InternalRequest::EnableSelectedChildren { request_id } => {
+            let response = if let Some(error) = object.get("error") {
+                json!({ "id": request_id, "error": error })
+            } else {
+                json!({ "id": request_id, "result": {} })
+            };
+            Ok(UpstreamAction::Reply(json_message(response)?))
+        }
         InternalRequest::AutoAttach { request_id } => {
             if !matches!(
                 pending.remove(&id_key(&request_id)?),
@@ -1125,19 +1156,18 @@ fn internal_response(
                     "error": error
                 }))?));
             }
-            if let Some(session_id) = object
+            let session_id = object
                 .get("result")
                 .and_then(|result| result.get("sessionId"))
                 .and_then(Value::as_str)
-            {
-                let target_id = scope.page.target_id.clone();
-                scope.register_page_session(session_id, &target_id);
-                scope.primary_session_id = Some(session_id.to_owned());
-            }
-            Ok(UpstreamAction::Reply(json_message(json!({
-                "id": request_id,
-                "result": {}
-            }))?))
+                .ok_or(PlaywrightProxyError::InvalidCdpMessage)?;
+            let target_id = scope.page.target_id.clone();
+            scope.register_page_session(session_id, &target_id);
+            scope.primary_session_id = Some(session_id.to_owned());
+            Ok(UpstreamAction::EnableSelectedChildren {
+                request_id,
+                session_id: session_id.to_owned(),
+            })
         }
     }
 }
@@ -1189,7 +1219,11 @@ fn validate_target_info(
     if target_info
         .get("browserContextId")
         .and_then(Value::as_str)
-        .is_some_and(|context| page.browser_context_id.as_deref() != Some(context))
+        .is_some_and(|context| {
+            page.browser_context_id
+                .as_deref()
+                .is_some_and(|expected| expected != context)
+        })
     {
         return Err(PlaywrightProxyError::ScopeViolation(
             ScopeViolation::BrowserContextId,
@@ -1368,6 +1402,10 @@ enum UpstreamAction {
     ForwardAndClose(Message),
     Reply(Message),
     Drop,
+    EnableSelectedChildren {
+        request_id: Value,
+        session_id: String,
+    },
     Detach(String),
 }
 
@@ -2049,6 +2087,45 @@ mod tests {
     }
 
     #[test]
+    fn root_auto_attach_enables_children_before_acknowledging_the_client() {
+        let mut scope = ActiveScope::new(page());
+        let mut pending = HashMap::from([("41".to_owned(), PendingRequest::InternalAttach)]);
+        let attached = json!({ "result": { "sessionId": "page-session" } });
+        let action = internal_response(
+            attached.as_object().unwrap(),
+            InternalRequest::AutoAttach {
+                request_id: json!(41),
+            },
+            &mut scope,
+            &mut pending,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            UpstreamAction::EnableSelectedChildren { request_id, session_id }
+                if request_id == json!(41) && session_id == "page-session"
+        ));
+        assert_eq!(scope.primary_session_id.as_deref(), Some("page-session"));
+        assert!(pending.is_empty());
+
+        let enabled = json!({ "result": {} });
+        let ack = internal_response(
+            enabled.as_object().unwrap(),
+            InternalRequest::EnableSelectedChildren {
+                request_id: json!(41),
+            },
+            &mut scope,
+            &mut pending,
+        )
+        .unwrap();
+        let UpstreamAction::Reply(message) = ack else {
+            panic!("child auto-attach must finish before the client receives its reply");
+        };
+        let response = parse_data_message(message).unwrap().unwrap();
+        assert_eq!(response, json!({ "id": 41, "result": {} }));
+    }
+
+    #[test]
     fn schema_identifiers_are_validated_for_their_methods() {
         for (method, params, expected) in [
             (
@@ -2235,6 +2312,41 @@ mod tests {
             assert!(!scope.sessions.contains("unrelated-session"));
             assert!(!scope.descendant_target_ids.contains("unrelated-target"));
         }
+    }
+
+    #[test]
+    fn verified_electron_descendant_accepts_native_context_when_root_has_no_context_id() {
+        let mut scope = ActiveScope::new(PlaywrightPageScope {
+            target_id: "renderer-1".to_owned(),
+            browser_context_id: None,
+        });
+        scope.register_page_session("selected-session", "renderer-1");
+        let event = text(json!({
+            "method": "Target.attachedToTarget",
+            "sessionId": "selected-session",
+            "params": {
+                "sessionId": "native-child",
+                "targetInfo": {
+                    "targetId": "oopif",
+                    "type": "iframe",
+                    "url": "http://other-origin.test/",
+                    "title": "",
+                    "browserContextId": "native-electron-context"
+                },
+                "waitingForDebugger": false
+            }
+        }));
+        let action =
+            upstream_message(event, &mut scope, &mut HashMap::new(), &mut HashMap::new()).unwrap();
+        let UpstreamAction::Forward(message) = action else {
+            panic!("a child of the verified page session must be forwarded");
+        };
+        let message = parse_data_message(message).unwrap().unwrap();
+        assert_eq!(
+            message["params"]["targetInfo"]["browserContextId"],
+            "dbgjs-playwright-default"
+        );
+        assert!(scope.sessions.contains("native-child"));
     }
 
     #[test]

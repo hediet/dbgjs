@@ -313,13 +313,7 @@ impl ProcessTreeTargetSource {
             .unwrap()
             .insert(renderer_id.to_owned());
         if !is_new {
-            if let Some(endpoint) = self.attachments.lock().await.get(renderer_id).cloned() {
-                let _ = endpoint
-                    .client()
-                    .target()
-                    .set_auto_attach(true, false, Some(true), None)
-                    .await;
-            }
+            self.refresh_renderer_children().await;
             return;
         }
         let Some(endpoint) = self.attachments.lock().await.get(renderer_id).cloned() else {
@@ -358,91 +352,133 @@ impl ProcessTreeTargetSource {
                 .remove(renderer_id);
         }
         let mut notifications = endpoint.subscribe();
-        if endpoint
+        let _ = endpoint
             .client()
             .target()
-            .set_auto_attach(true, false, Some(true), None)
-            .await
-            .is_ok()
-        {
-            self.supervised_targets
-                .lock()
-                .unwrap()
-                .insert(renderer_id.to_owned());
-            let nested_targets = self.nested_targets.clone();
-            let aliases = self.native_target_aliases.clone();
-            let renderers = self.renderers.clone();
-            let events = self.events.clone();
-            let parent_id = renderer_id.to_owned();
-            let process_id = renderers
-                .lock()
-                .unwrap()
-                .get(renderer_id)
-                .map(|renderer| renderer.process_id);
-            self.track(tokio::spawn(async move {
-                let mut native_sessions = BTreeMap::<String, String>::new();
-                while let Some((method, params)) = notifications.recv().await {
-                    match method.as_str() {
-                        "Target.attachedToTarget" => {
-                            if let Ok(params) =
-                                serde_json::from_value::<TargetAttachedToTargetParams>(params)
-                            {
-                                native_sessions.insert(
-                                    params.session_id.clone(),
-                                    params.target_info.target_id.clone(),
-                                );
-                                upsert_nested_target(
-                                    &nested_targets,
-                                    &events,
-                                    &parent_id,
-                                    process_id,
-                                    &aliases,
-                                    &renderers,
-                                    true,
-                                    params.target_info,
-                                );
-                            }
-                        }
-                        "Target.targetInfoChanged" => {
-                            if let Ok(params) =
-                                serde_json::from_value::<TargetTargetInfoChangedParams>(params)
-                            {
-                                upsert_nested_target(
-                                    &nested_targets,
-                                    &events,
-                                    &parent_id,
-                                    process_id,
-                                    &aliases,
-                                    &renderers,
-                                    true,
-                                    params.target_info,
-                                );
-                            }
-                        }
-                        "Target.detachedFromTarget" => {
-                            if let Ok(params) =
-                                serde_json::from_value::<TargetDetachedFromTargetParams>(params)
-                            {
-                                let target_id = params.target_id
-                                    .or_else(|| native_sessions.get(&params.session_id).cloned());
-                                native_sessions.remove(&params.session_id);
-                                if let Some(target_id) = target_id {
-                                    mark_nested_target_detached(
-                                        &nested_targets, &events, &parent_id, &target_id,
-                                    );
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }));
-            return;
-        }
-        self.renderer_correlations
+            .set_discover_targets(true, None)
+            .await;
+        self.supervised_targets
             .lock()
             .unwrap()
-            .remove(renderer_id);
+            .insert(renderer_id.to_owned());
+        let nested_targets = self.nested_targets.clone();
+        let aliases = self.native_target_aliases.clone();
+        let renderers = self.renderers.clone();
+        let events = self.events.clone();
+        let parent_id = renderer_id.to_owned();
+        let process_id = renderers
+            .lock()
+            .unwrap()
+            .get(renderer_id)
+            .map(|renderer| renderer.process_id);
+        self.track(tokio::spawn(async move {
+            let mut native_sessions = BTreeMap::<String, String>::new();
+            while let Some((method, params)) = notifications.recv().await {
+                match method.as_str() {
+                    "Target.targetCreated" => {
+                        if let Ok(params) =
+                            serde_json::from_value::<TargetTargetCreatedParams>(params)
+                            && renderer_owns_nested_target(
+                                &params.target_info,
+                                &parent_id,
+                                &aliases,
+                            )
+                        {
+                            upsert_nested_target(
+                                &nested_targets,
+                                &events,
+                                &parent_id,
+                                process_id,
+                                &aliases,
+                                &renderers,
+                                true,
+                                params.target_info,
+                            );
+                        }
+                    }
+                    "Target.attachedToTarget" => {
+                        if let Ok(params) =
+                            serde_json::from_value::<TargetAttachedToTargetParams>(params)
+                            && renderer_owns_nested_target(
+                                &params.target_info,
+                                &parent_id,
+                                &aliases,
+                            )
+                        {
+                            native_sessions.insert(
+                                params.session_id.clone(),
+                                params.target_info.target_id.clone(),
+                            );
+                            upsert_nested_target(
+                                &nested_targets,
+                                &events,
+                                &parent_id,
+                                process_id,
+                                &aliases,
+                                &renderers,
+                                true,
+                                params.target_info,
+                            );
+                        }
+                    }
+                    "Target.targetInfoChanged" => {
+                        if let Ok(params) =
+                            serde_json::from_value::<TargetTargetInfoChangedParams>(params)
+                            && renderer_owns_nested_target(
+                                &params.target_info,
+                                &parent_id,
+                                &aliases,
+                            )
+                        {
+                            upsert_nested_target(
+                                &nested_targets,
+                                &events,
+                                &parent_id,
+                                process_id,
+                                &aliases,
+                                &renderers,
+                                true,
+                                params.target_info,
+                            );
+                        }
+                    }
+                    "Target.detachedFromTarget" => {
+                        if let Ok(params) =
+                            serde_json::from_value::<TargetDetachedFromTargetParams>(params)
+                        {
+                            let target_id = params
+                                .target_id
+                                .or_else(|| native_sessions.get(&params.session_id).cloned());
+                            native_sessions.remove(&params.session_id);
+                            if let Some(target_id) = target_id {
+                                mark_nested_target_detached(
+                                    &nested_targets,
+                                    &events,
+                                    &parent_id,
+                                    &target_id,
+                                );
+                            }
+                        }
+                    }
+                    "Target.targetDestroyed" => {
+                        if let Ok(params) =
+                            serde_json::from_value::<TargetTargetDestroyedParams>(params)
+                        {
+                            remove_nested_target(
+                                &nested_targets,
+                                &aliases,
+                                &events,
+                                &parent_id,
+                                &params.target_id,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }));
+        self.refresh_renderer_children().await;
+        return;
     }
 
     async fn start_nested_discovery(&self, parent_target_id: &str) {
@@ -662,6 +698,90 @@ impl ProcessTreeTargetSource {
             .collect();
         renderers.values().map(renderer_host_target).collect()
     }
+
+    async fn refresh_renderer_children(&self) {
+        let attached = self
+            .attachments
+            .lock()
+            .await
+            .iter()
+            .filter(|(id, _)| self.renderers.lock().unwrap().contains_key(*id))
+            .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
+            .collect::<Vec<_>>();
+        for (renderer_id, endpoint) in attached {
+            let lookup = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let client = endpoint.client();
+                let target_client = client.target();
+                let parent = target_client.get_target_info(None).await.ok()?;
+                let targets = target_client.get_targets(None).await.ok()?;
+                Some((parent, targets))
+            })
+            .await;
+            let Ok(Some((parent, targets))) = lookup else {
+                continue;
+            };
+            let process_id = self
+                .renderers
+                .lock()
+                .unwrap()
+                .get(&renderer_id)
+                .map(|renderer| renderer.process_id);
+            let mut remaining = targets
+                .target_infos
+                .into_iter()
+                .filter(|info| info.r#type == "iframe")
+                .collect::<Vec<_>>();
+            let mut parents = BTreeSet::from([parent.target_info.target_id]);
+            let mut current = BTreeSet::new();
+            while !remaining.is_empty() {
+                let before = remaining.len();
+                remaining.retain(|info| {
+                    let Some(parent_id) = info.parent_id.as_ref() else {
+                        return false;
+                    };
+                    if !parents.contains(parent_id) {
+                        return true;
+                    }
+                    parents.insert(info.target_id.clone());
+                    current.insert(info.target_id.clone());
+                    upsert_nested_target(
+                        &self.nested_targets,
+                        &self.events,
+                        &renderer_id,
+                        process_id,
+                        &self.native_target_aliases,
+                        &self.renderers,
+                        true,
+                        info.clone(),
+                    );
+                    false
+                });
+                if remaining.len() == before {
+                    break;
+                }
+            }
+            let stale = self
+                .nested_targets
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|record| {
+                    record.parent_target_id == renderer_id
+                        && !current.contains(&record.native_target_id)
+                })
+                .map(|record| record.native_target_id.clone())
+                .collect::<Vec<_>>();
+            for native_id in stale {
+                remove_nested_target(
+                    &self.nested_targets,
+                    &self.native_target_aliases,
+                    &self.events,
+                    &renderer_id,
+                    &native_id,
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -683,6 +803,7 @@ impl TargetSource for ProcessTreeTargetSource {
                 .map(|record| record.target.clone()),
         );
         targets.extend(self.refresh_renderers().await);
+        self.refresh_renderer_children().await;
         targets.extend(
             self.nested_targets
                 .lock()
@@ -742,19 +863,11 @@ impl TargetSource for ProcessTreeTargetSource {
         if let Some(endpoint) = self.attachments.lock().await.get(target_id).cloned()
             && endpoint.close_reason().await.is_none()
         {
-            if self.renderers.lock().unwrap().contains_key(target_id) {
-                let _ = endpoint
-                    .client()
-                    .target()
-                    .set_auto_attach(false, false, Some(true), None)
-                    .await;
-            } else {
-                let _ = endpoint
-                    .client()
-                    .target()
-                    .set_discover_targets(false, None)
-                    .await;
-            }
+            let _ = endpoint
+                .client()
+                .target()
+                .set_discover_targets(false, None)
+                .await;
         }
         self.supervised_targets.lock().unwrap().remove(target_id);
         self.renderer_correlations.lock().unwrap().remove(target_id);
@@ -978,6 +1091,19 @@ fn nested_target_id(parent_target_id: &str, native_target_id: &str) -> String {
     format!("{parent_target_id}/target/{native_target_id}")
 }
 
+fn renderer_owns_nested_target(
+    info: &TargetTargetInfo,
+    renderer_id: &str,
+    aliases: &std::sync::Mutex<BTreeMap<String, String>>,
+) -> bool {
+    info.r#type == "iframe"
+        && info.parent_id.as_ref().is_some_and(|parent_id| {
+            aliases.lock().unwrap().get(parent_id).is_some_and(|alias| {
+                alias == renderer_id || alias.starts_with(&format!("{renderer_id}/target/"))
+            })
+        })
+}
+
 fn upsert_nested_target(
     nested_targets: &std::sync::Mutex<BTreeMap<String, NestedTargetRecord>>,
     events: &mpsc::UnboundedSender<TargetSourceEvent>,
@@ -1155,18 +1281,41 @@ mod tests {
             let mut info = target_info(native_id, None);
             info.attached = true;
             upsert_nested_target(
-                &nested, &events, "renderer-1", Some(10), &aliases, &renderers, true, info,
+                &nested,
+                &events,
+                "renderer-1",
+                Some(10),
+                &aliases,
+                &renderers,
+                true,
+                info,
             );
-            assert!(matches!(receiver.try_recv(), Ok(TargetSourceEvent::Upserted(_))));
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(TargetSourceEvent::Upserted(_))
+            ));
         }
         mark_nested_target_detached(&nested, &events, "renderer-1", "iframe-a");
         let event = receiver.try_recv().unwrap();
         assert!(matches!(event, TargetSourceEvent::Upserted(target)
             if target.target_id() == "renderer-1/target/iframe-a" && !target.snapshot.attached));
         let nested = nested.lock().unwrap();
-        assert!(!nested["renderer-1/target/iframe-a"].target.snapshot.attached);
-        assert!(nested["renderer-1/target/iframe-b"].target.snapshot.attached);
-        assert_eq!(aliases.lock().unwrap()["iframe-a"], "renderer-1/target/iframe-a");
+        assert!(
+            !nested["renderer-1/target/iframe-a"]
+                .target
+                .snapshot
+                .attached
+        );
+        assert!(
+            nested["renderer-1/target/iframe-b"]
+                .target
+                .snapshot
+                .attached
+        );
+        assert_eq!(
+            aliases.lock().unwrap()["iframe-a"],
+            "renderer-1/target/iframe-a"
+        );
     }
 
     #[test]
@@ -1207,6 +1356,37 @@ mod tests {
         );
         info.parent_id = parent_id.map(str::to_owned);
         info
+    }
+
+    #[test]
+    fn renderer_child_discovery_excludes_unrelated_windows_and_page_targets() {
+        let aliases = std::sync::Mutex::new(BTreeMap::from([
+            ("native-a".to_owned(), "renderer-a".to_owned()),
+            ("native-b".to_owned(), "renderer-b".to_owned()),
+            ("child-a".to_owned(), "renderer-a/target/child-a".to_owned()),
+        ]));
+        assert!(renderer_owns_nested_target(
+            &target_info("child-a", Some("native-a")),
+            "renderer-a",
+            &aliases,
+        ));
+        assert!(renderer_owns_nested_target(
+            &target_info("grandchild-a", Some("child-a")),
+            "renderer-a",
+            &aliases,
+        ));
+        assert!(!renderer_owns_nested_target(
+            &target_info("child-b", Some("native-b")),
+            "renderer-a",
+            &aliases,
+        ));
+        let mut unrelated_page = target_info("page-b", Some("native-a"));
+        unrelated_page.r#type = "page".to_owned();
+        assert!(!renderer_owns_nested_target(
+            &unrelated_page,
+            "renderer-a",
+            &aliases
+        ));
     }
 
     #[test]

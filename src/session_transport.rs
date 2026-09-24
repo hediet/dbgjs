@@ -181,6 +181,19 @@ impl CdpSessionMux {
         }))
     }
 
+    /// Shares an already-routed native child channel with raw CDP callers.
+    pub fn raw_channel(&self, id: &str) -> Option<Channel> {
+        self.raw_routes.lock().unwrap().get(id).map(|route| route.channel.clone())
+    }
+
+    pub fn adopt_raw_channel(&self, id: String, channel: Channel, task: JoinHandle<()>) {
+        self.raw_routes.lock().unwrap().insert(id, Arc::new(RawSessionRoute {
+            channel,
+            task,
+            active: AtomicBool::new(false),
+        }));
+    }
+
     pub async fn run(&self) {
         self.inner.run().await;
     }
