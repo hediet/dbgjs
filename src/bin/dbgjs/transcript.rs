@@ -1,9 +1,10 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -14,7 +15,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use super::ResolvedScope;
+use super::{ResolvedScope, ScopeOptions};
 
 const DEFAULT_MAX_ENTRIES: usize = 500;
 const DEFAULT_MAX_BYTES: usize = 32 * 1024 * 1024;
@@ -26,6 +27,8 @@ struct Manifest {
     version: u32,
     max_entries: usize,
     max_bytes: usize,
+    #[serde(default)]
+    next_index: usize,
     redact: Vec<String>,
     omit_args: bool,
     omit_stdin: bool,
@@ -36,6 +39,8 @@ struct Manifest {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Entry {
+    #[serde(default)]
+    index: usize,
     started_unix_ms: u128,
     ended_unix_ms: u128,
     duration_ms: u128,
@@ -170,6 +175,7 @@ fn handle_record(args: &[OsString], state: &Path) -> Result<i32, String> {
                 version: 1,
                 max_entries: DEFAULT_MAX_ENTRIES,
                 max_bytes: DEFAULT_MAX_BYTES,
+                next_index: 1,
                 redact: Vec::new(),
                 omit_args: false,
                 omit_stdin: false,
@@ -277,7 +283,17 @@ pub(super) fn entry(args: &[OsString], state: &Path) -> io::Result<Option<i32>> 
     if !active_file(state).exists() {
         return Ok(None);
     }
-    let _lock = match open_lock(state) {
+    if io::stdout().is_terminal()
+        && args
+            .windows(2)
+            .any(|pair| pair[0] == "daemon" && pair[1] == "view")
+    {
+        eprintln!(
+            "dbgjs: recording: interactive daemon view is not recorded; terminal view remains live"
+        );
+        return Ok(None);
+    }
+    let lock = match open_lock(state) {
         Ok(lock) => lock,
         Err(error) => {
             eprintln!("dbgjs: recording unavailable: {error}");
@@ -303,11 +319,29 @@ pub(super) fn entry(args: &[OsString], state: &Path) -> io::Result<Option<i32>> 
             return Ok(None);
         }
     };
-    if manifest.entries.len() >= manifest.max_entries {
+    let index = manifest
+        .next_index
+        .max(
+            manifest
+                .entries
+                .iter()
+                .map(|entry| entry.index)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        )
+        .max(manifest.entries.len().saturating_add(1));
+    if index > manifest.max_entries {
         eprintln!("dbgjs: recording reached the --max-entries limit; command runs unrecorded");
         return Ok(None);
     }
-    let status = record_command(args, &directory, &mut manifest)?;
+    manifest.next_index = index.saturating_add(1);
+    if let Err(error) = save_json(&manifest_file(&directory), &manifest) {
+        eprintln!("dbgjs: recording unavailable: cannot reserve command: {error}");
+        return Ok(None);
+    }
+    drop(lock);
+    let status = record_command(args, state, &directory, index, &manifest)?;
     Ok(Some(status))
 }
 
@@ -402,20 +436,21 @@ fn scrub_bytes(bytes: &[u8], literals: &[String]) -> Vec<u8> {
     }
 }
 
-fn record_command(args: &[OsString], directory: &Path, manifest: &mut Manifest) -> io::Result<i32> {
-    let index = manifest.entries.len() + 1;
-    let stored = manifest.entries.iter().fold(0usize, |sum, entry| {
-        sum.saturating_add(entry.stdin_saved)
-            .saturating_add(entry.stdout_saved)
-            .saturating_add(entry.stderr_saved)
-    });
-    let available = manifest.max_bytes.saturating_sub(stored);
+fn record_command(
+    args: &[OsString],
+    state: &Path,
+    directory: &Path,
+    index: usize,
+    manifest: &Manifest,
+) -> io::Result<i32> {
+    let capture_limit = manifest.max_bytes;
     let scope_path = directory.join(format!(".{index:06}.scope"));
     let mut command = Command::new(env::current_exe()?);
     command
         .args(args)
         .env("DBGJS_RECORD_CHILD", "1")
         .env("DBGJS_RECORD_SCOPE_FILE", &scope_path)
+        .env("DBGJS_RECORD_MANIFEST_FILE", manifest_file(directory))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let script = stdin_script(args);
@@ -427,26 +462,35 @@ fn record_command(args: &[OsString], directory: &Path, manifest: &mut Manifest) 
     let started_unix_ms = now_ms();
     let clock = Instant::now();
     let mut child = command.spawn()?;
-    let (input, stdin_bytes) = if script {
-        match capture(
-            io::stdin(),
-            child.stdin.take().expect("piped stdin"),
-            available,
-        ) {
-            Ok(captured) => captured,
-            Err(error) => {
-                eprintln!("dbgjs: recording stdin forwarding failed: {error}");
-                (Vec::new(), 0)
-            }
-        }
+    let stdin_rx = if script {
+        let (sender, receiver) = mpsc::channel();
+        let stdin = child.stdin.take().expect("piped stdin");
+        thread::spawn(move || {
+            let _ = sender.send(capture(io::stdin(), stdin, capture_limit));
+        });
+        Some(receiver)
     } else {
-        (Vec::new(), 0)
+        None
     };
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let out = thread::spawn(move || capture(stdout, io::stdout(), available));
-    let err = thread::spawn(move || capture(stderr, io::stderr(), available));
+    let out = thread::spawn(move || capture(stdout, io::stdout(), capture_limit));
+    let err = thread::spawn(move || capture(stderr, io::stderr(), capture_limit));
     let status = child.wait()?;
+    let (input, stdin_bytes) = match stdin_rx {
+        Some(receiver) => match receiver.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(Ok(captured)) => captured,
+            Ok(Err(error)) => {
+                eprintln!("dbgjs: recording stdin forwarding failed: {error}");
+                (Vec::new(), 0)
+            }
+            Err(error) => {
+                eprintln!("dbgjs: recording stdin incomplete when command exited: {error}");
+                (Vec::new(), 0)
+            }
+        },
+        None => (Vec::new(), 0),
+    };
     let (stdout, stdout_bytes) = match out.join() {
         Ok(Ok(captured)) => captured,
         other => {
@@ -502,39 +546,49 @@ fn record_command(args: &[OsString], directory: &Path, manifest: &mut Manifest) 
             1
         }
     });
+    let safe_stdin = (!manifest.omit_stdin).then(|| scrub_bytes(&input, &manifest.redact));
+    let safe_stdout = (!manifest.omit_output).then(|| scrub_bytes(&stdout, &manifest.redact));
+    let safe_stderr = (!manifest.omit_output).then(|| scrub_bytes(&stderr, &manifest.redact));
     let persistence = (|| -> io::Result<()> {
-        let mut remaining = available;
-        let mut save = |stream: &str, raw: &[u8], original: usize| -> io::Result<(usize, bool)> {
-            let scrubbed = scrub_bytes(raw, &manifest.redact);
-            let size = scrubbed.len().min(remaining);
+        let _lock = open_lock(state)?;
+        let mut current: Manifest = serde_json::from_slice(&fs::read(manifest_file(directory))?)?;
+        let stored = current.entries.iter().fold(0usize, |sum, entry| {
+            sum.saturating_add(entry.stdin_saved)
+                .saturating_add(entry.stdout_saved)
+                .saturating_add(entry.stderr_saved)
+        });
+        let mut remaining = current.max_bytes.saturating_sub(stored);
+        let mut save = |stream: &str,
+                        safe: &[u8],
+                        captured: usize,
+                        original: usize|
+         -> io::Result<(usize, bool)> {
+            let size = safe.len().min(remaining);
             remaining -= size;
             if size > 0 {
-                private_file(&output_path(directory, index, stream))?
-                    .write_all(&scrubbed[..size])?;
+                private_file(&output_path(directory, index, stream))?.write_all(&safe[..size])?;
             }
-            Ok((size, size < scrubbed.len() || raw.len() < original))
+            Ok((size, size < safe.len() || captured < original))
         };
-        let (stdin_saved, stdin_truncated) = if manifest.omit_stdin {
-            (0, false)
-        } else {
-            save("stdin", &input, stdin_bytes)?
+        let (stdin_saved, stdin_truncated) = match safe_stdin.as_ref() {
+            Some(safe) => save("stdin", safe, input.len(), stdin_bytes)?,
+            None => (0, false),
         };
-        let (stdout_saved, stdout_truncated) = if manifest.omit_output {
-            (0, false)
-        } else {
-            save("stdout", &stdout, stdout_bytes)?
+        let (stdout_saved, stdout_truncated) = match safe_stdout.as_ref() {
+            Some(safe) => save("stdout", safe, stdout.len(), stdout_bytes)?,
+            None => (0, false),
         };
-        let (stderr_saved, stderr_truncated) = if manifest.omit_output {
-            (0, false)
-        } else {
-            save("stderr", &stderr, stderr_bytes)?
+        let (stderr_saved, stderr_truncated) = match safe_stderr.as_ref() {
+            Some(safe) => save("stderr", safe, stderr.len(), stderr_bytes)?,
+            None => (0, false),
         };
         if stdin_truncated || stdout_truncated || stderr_truncated {
             eprintln!(
                 "dbgjs: recording output truncated at the --max-bytes limit; debugger exit status is unchanged"
             );
         }
-        manifest.entries.push(Entry {
+        current.entries.push(Entry {
+            index,
             started_unix_ms,
             ended_unix_ms,
             duration_ms,
@@ -555,7 +609,7 @@ fn record_command(args: &[OsString], directory: &Path, manifest: &mut Manifest) 
             build_dirty: env!("DBGJS_BUILD_GIT_DIRTY").into(),
             structured_json: serde_json::from_slice::<serde_json::Value>(&stdout).is_ok(),
         });
-        save_json(&manifest_file(directory), manifest)
+        save_json(&manifest_file(directory), &current)
     })();
     if let Err(error) = persistence {
         eprintln!("dbgjs: recording failed after command exited {exit_code}: {error}");
@@ -602,8 +656,23 @@ fn export(directory: &Path, path: &Path) -> io::Result<()> {
     let mut markdown = String::from(
         "# dbgjs investigation transcript\n\nLocal evidence only; CLI completion does not imply completion of target promises, background tasks, or persistent runtime edits. Times are Unix milliseconds. Attachments contain exact retained bytes except where recording policy masks or omits sensitive data; truncation is explicitly marked.\n\n",
     );
-    for (offset, entry) in manifest.entries.iter().enumerate() {
-        let index = offset + 1;
+    let mut entries = manifest
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(offset, entry)| {
+            (
+                if entry.index == 0 {
+                    offset + 1
+                } else {
+                    entry.index
+                },
+                entry,
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(index, _)| *index);
+    for (index, entry) in entries {
         markdown.push_str(&format!(
             "## Command {index} — exit {}\n\n",
             entry.exit_code
@@ -788,7 +857,7 @@ pub(super) fn note_scope(scope: &ResolvedScope, snapshot: &dbgjs::service_api::C
     });
 }
 
-pub(super) async fn enrich_connection(state: &Path) {
+pub(super) async fn enrich_connection(state: &Path, selection_file: &Path, options: &ScopeOptions) {
     let Some(path) = env::var_os("DBGJS_RECORD_SCOPE_FILE") else {
         return;
     };
@@ -798,9 +867,23 @@ pub(super) async fn enrich_connection(state: &Path) {
     let Ok(scope) = serde_json::from_slice::<Scope>(&bytes) else {
         return;
     };
-    let (Some(context), Some(connection)) = (scope.context, scope.connection) else {
+    if scope.connection.is_none() {
         return;
-    };
+    }
+    let selected = super::load_selection(selection_file).ok();
+    let context = options
+        .context
+        .clone()
+        .or_else(|| selected.as_ref()?.context.clone());
+    let Some(context) = context else { return };
+    let connection = options.connection.clone().or_else(|| {
+        selected.as_ref().and_then(|selection| {
+            (selection.context.as_deref() == Some(context.as_str()))
+                .then(|| selection.connection.clone())
+                .flatten()
+        })
+    });
+    let Some(connection) = connection else { return };
     if let Ok(client) = connect_existing(state).await
         && let Ok(snapshot) = client.contexts.get_context(context).await
     {
@@ -818,12 +901,30 @@ fn note(change: impl FnOnce(&mut Scope)) {
     let Some(path) = env::var_os("DBGJS_RECORD_SCOPE_FILE") else {
         return;
     };
+    let Some(manifest_file) = env::var_os("DBGJS_RECORD_MANIFEST_FILE") else {
+        eprintln!("dbgjs: recording scope unavailable: no recording policy");
+        return;
+    };
+    let manifest: Manifest = match fs::read(manifest_file)
+        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(io::Error::other))
+    {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("dbgjs: recording scope unavailable: {error}");
+            return;
+        }
+    };
     let path = PathBuf::from(path);
     let mut scope: Scope = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
     change(&mut scope);
+    for field in [&mut scope.context, &mut scope.connection, &mut scope.target] {
+        if let Some(value) = field {
+            *value = scrub(value, &manifest.redact);
+        }
+    }
     if let Err(error) = save_json(&path, &scope) {
         eprintln!("dbgjs: recording scope unavailable: {error}");
     }

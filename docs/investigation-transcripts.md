@@ -15,10 +15,19 @@ dbgjs record export --input ./private-investigation --format markdown --output i
 The output directory must not exist yet. `record start` and `record stop` themselves
 are not investigation entries. All commands between them, including unsuccessful
 commands and scope-selection changes, are recorded across CLI processes and
-contexts. `--max-entries` and `--max-bytes` bound stored commands and total
+contexts, except `daemon view` attached to a terminal: it stays interactive and
+runs without recording, with an explicit warning. A noninteractive `daemon view`
+is recorded normally. Recording never serializes independent debugger commands
+behind a long-running one. `record stop` blocks new recordings but does not
+cancel or wait for commands already running; wait for those commands to finish
+before exporting a complete transcript.
+
+`--max-entries` and `--max-bytes` bound started command slots and total
 captured stdin/stdout/stderr; the defaults are 500 and 32 MiB. When the limit is
 reached, dbgjs warns on stderr but the debugger command's output and exit status
 remain unchanged. Commands beyond the entry limit run without recording.
+An interrupted command can consume a slot without producing an entry; completed
+commands are exported in their original invocation order.
 
 The manifest contains each invocation's argument vector, CLI start/end times,
 duration, exit code, build identity, and resolved context/connection/target and

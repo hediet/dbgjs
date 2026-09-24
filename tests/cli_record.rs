@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -63,6 +65,226 @@ impl Drop for Fixture {
         }
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+fn wait_briefly(child: &mut Child) -> Option<ExitStatus> {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(2) {
+        if let Some(status) = child.try_wait().unwrap() {
+            return Some(status);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+#[cfg(unix)]
+#[test]
+fn recording_regression_interactive_daemon_view_preserves_terminal_mode() {
+    use std::os::fd::FromRawFd;
+
+    let fixture = Fixture::new();
+    fixture.good(&["context", "create", ":view", "--set"]);
+    let recording = fixture.root.join("tty");
+    fixture.good(&["record", "start", "--output", recording.to_str().unwrap()]);
+    let (mut master, mut slave) = (0, 0);
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    let _master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let mut child = fixture
+        .process(&["daemon", "view"])
+        .stdout(Stdio::from(slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_briefly(&mut child);
+    if status.is_none() {
+        child.kill().unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        status.is_none(),
+        "terminal daemon view exited instead of remaining live: {status:?}"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not recorded"));
+    fixture.good(&["record", "stop"]);
+}
+
+#[test]
+fn recording_regression_concurrent_command_and_stop_do_not_wait_for_stdin() {
+    let fixture = Fixture::new();
+    fixture.good(&["context", "create", ":lock", "--set"]);
+    let recording = fixture.root.join("concurrency");
+    fixture.good(&["record", "start", "--output", recording.to_str().unwrap()]);
+    let mut waiting = fixture
+        .process(&["target", "eval", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(250));
+    let mut other = fixture
+        .process(&["--version"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let other_status = wait_briefly(&mut other);
+    if other_status.is_none() {
+        other.kill().unwrap();
+    }
+    other.wait().unwrap();
+    let mut stop = fixture
+        .process(&["record", "stop"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stop_status = wait_briefly(&mut stop);
+    if stop_status.is_none() {
+        stop.kill().unwrap();
+    }
+    stop.wait().unwrap();
+    waiting.kill().unwrap();
+    waiting.wait().unwrap();
+    assert!(
+        other_status.is_some_and(|status| status.success()),
+        "another command blocked behind open stdin"
+    );
+    assert!(
+        stop_status.is_some_and(|status| status.success()),
+        "record stop blocked behind open stdin"
+    );
+    let manifest = fixture.manifest(&recording);
+    let entries = manifest["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["index"], 2);
+    let markdown = fixture.root.join("concurrent.md");
+    fixture.good(&[
+        "record",
+        "export",
+        "--input",
+        recording.to_str().unwrap(),
+        "--output",
+        markdown.to_str().unwrap(),
+    ]);
+    assert!(
+        fs::read_to_string(markdown)
+            .unwrap()
+            .contains("## Command 2 — exit 0")
+    );
+}
+
+#[test]
+fn recording_regression_invalid_eval_exits_with_stdin_still_open() {
+    let fixture = Fixture::new();
+    fixture.good(&["context", "create", ":stdin", "--set"]);
+    let recording = fixture.root.join("stdin");
+    fixture.good(&["record", "start", "--output", recording.to_str().unwrap()]);
+    let mut child = fixture
+        .process(&["target", "eval", "-", "--full", "--max-preview-length", "1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_briefly(&mut child);
+    if status.is_none() {
+        child.kill().unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        status.is_some_and(|status| !status.success()),
+        "invalid eval waited for terminal EOF"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("--full and --max-preview-length cannot be combined")
+    );
+    fixture.good(&["record", "stop"]);
+}
+
+#[test]
+fn recording_stop_keeps_finalization_of_an_already_started_command() {
+    use std::io::Write;
+
+    let fixture = Fixture::new();
+    fixture.good(&["context", "create", ":finish", "--set"]);
+    let recording = fixture.root.join("inflight");
+    fixture.good(&["record", "start", "--output", recording.to_str().unwrap()]);
+    let mut child = fixture
+        .process(&["target", "eval", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let sidecar = recording.join(".000001.scope");
+    let started = Instant::now();
+    while !sidecar.exists() && started.elapsed() < Duration::from_secs(3) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(sidecar.exists(), "child never reserved its recording slot");
+    fixture.good(&["record", "stop"]);
+    child.stdin.take().unwrap().write_all(b"42\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let entry = fixture.manifest(&recording)["entries"][0].clone();
+    assert_eq!(entry["index"], 1);
+    assert_eq!(entry["exitCode"], output.status.code().unwrap());
+    assert_eq!(
+        fs::read(recording.join("000001.stdin.bin")).unwrap(),
+        b"42\n"
+    );
+}
+
+#[test]
+fn recording_regression_scope_sidecar_is_redacted_before_child_exit() {
+    let fixture = Fixture::new();
+    fixture.good(&["context", "create", ":hidden-scope", "--set"]);
+    let recording = fixture.root.join("sidecar");
+    fixture.good(&[
+        "record",
+        "start",
+        "--output",
+        recording.to_str().unwrap(),
+        "--redact",
+        "hidden",
+    ]);
+    let mut child = fixture
+        .process(&["target", "eval", "-", "--context", ":hidden-scope"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let sidecar = recording.join(".000001.scope");
+    let started = Instant::now();
+    while !sidecar.exists() && started.elapsed() < Duration::from_secs(3) {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let data =
+        fs::read_to_string(&sidecar).expect("child should persist scope before reading stdin");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        !data.contains("hidden"),
+        "sensitive scope persisted before redaction: {data}"
+    );
+    assert!(data.contains("[REDACTED]"));
+    fixture.good(&["record", "stop"]);
 }
 
 #[test]

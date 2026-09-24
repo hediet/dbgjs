@@ -1978,7 +1978,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(usage().into());
         }
     }
-    transcript::enrich_connection(&state_file).await;
+    transcript::enrich_connection(&state_file, &selection_file, &scope_options).await;
     Ok(())
 }
 
