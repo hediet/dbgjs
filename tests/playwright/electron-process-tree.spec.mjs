@@ -50,9 +50,11 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		}, { timeout: 15_000 }).toBe(true);
 		const electronEnvironment = { ...process.env };
 		delete electronEnvironment.ELECTRON_RUN_AS_NODE;
+		electronEnvironment.DBGJS_ELECTRON_FIXTURE_URL = fixture.rootUrl;
+		electronEnvironment.DBGJS_ELECTRON_FIXTURE_PROFILE = join(root, "profile");
 		child = spawn(electron, [
 			"--inspect=0", "--no-sandbox", "--disable-dev-shm-usage",
-			fixtureProgram, fixture.rootUrl, join(root, "profile"),
+			fixtureProgram,
 		], {
 			cwd: process.cwd(),
 			env: electronEnvironment,

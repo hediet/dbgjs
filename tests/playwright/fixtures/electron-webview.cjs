@@ -1,17 +1,18 @@
 const { writeFileSync } = require("node:fs");
 const { join } = require("node:path");
-const { app, BrowserWindow } = require("electron");
 
-process.mainModule ??= module;
-
-// Electron can retain launch switches in process.argv; fixture arguments come last.
-const [url, profile] = process.argv.slice(-2);
-if (!url || !profile) throw new Error("Electron fixture requires URL and profile");
+const url = process.env.DBGJS_ELECTRON_FIXTURE_URL;
+const profile = process.env.DBGJS_ELECTRON_FIXTURE_PROFILE;
+if (!url || !profile) throw new Error("Electron fixture requires URL and profile environment");
 const startupState = join(profile, "fixture-startup.json");
 const reportStartup = (phase, detail) => writeFileSync(startupState, JSON.stringify({
 	phase, detail, electron: process.versions.electron,
 	stdout: Boolean(process.stdout), stderr: Boolean(process.stderr),
 }));
+reportStartup("module-entry");
+
+const { app, BrowserWindow } = require("electron");
+process.mainModule ??= module;
 reportStartup("module");
 
 app.setPath("userData", profile);
