@@ -32,6 +32,8 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 	let connectionSummary = [];
 	let frameTree;
 	let nativeInventory = [];
+	const controlToken = randomUUID();
+	let controlPort;
 	try {
 		await mkdir(join(root, "profile"), { recursive: true });
 		fixture = await startPages();
@@ -55,6 +57,7 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		delete electronEnvironment.ELECTRON_RUN_AS_NODE;
 		electronEnvironment.DBGJS_ELECTRON_FIXTURE_URL = fixture.rootUrl;
 		electronEnvironment.DBGJS_ELECTRON_FIXTURE_PROFILE = join(root, "profile");
+		electronEnvironment.DBGJS_ELECTRON_FIXTURE_CONTROL_TOKEN = controlToken;
 		child = spawn(electron, [
 			"--inspect=0", "--no-sandbox", "--disable-dev-shm-usage",
 			fixtureProgram,
@@ -81,6 +84,17 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		const loaded = output.split("\n").map((line) => {
 			try { return JSON.parse(line); } catch { return undefined; }
 		}).find((entry) => entry?.kind === "loaded");
+		controlPort = loaded.controlPort;
+		assert.ok(Number.isInteger(controlPort), "fixture must expose its local control port");
+		const action = async (kind, url) => {
+			const response = await fetch(`http://127.0.0.1:${controlPort}/action`, {
+				method: "POST",
+				headers: { "x-dbgjs-fixture-token": controlToken },
+				body: JSON.stringify({ kind, url }),
+				signal: AbortSignal.timeout(10_000),
+			});
+			assert.equal(response.status, 200, `fixture ${kind} failed: ${await response.text()}`);
+		};
 		const nativeTargetId = loaded.targetInfos.find((entry) =>
 			entry.url.startsWith(fixture.webviewUrl))?.targetId;
 		assert.ok(nativeTargetId, "Electron fixture must expose a native OOPIF target");
@@ -229,8 +243,7 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		assert.equal(attachment.target.targetId, target.targetId);
 		assert.match(await command(["target", "eval", "document.title", ...childScope], env),
 			/Webview/);
-		child.stdin.write('{"kind":"remove"}\n');
-		await expect.poll(() => output.includes('"kind":"remove"'), { timeout: 10_000 }).toBe(true);
+		await action("remove");
 		nativeInventory = JSON.parse(await command([
 			"--json", "target", "cdp", "Target.getTargets", ...scope,
 		], env)).targetInfos?.filter(({ type }) => type === "iframe");
@@ -245,8 +258,7 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		assert.notEqual(stale.code, 0, "dead managed child must not look attached");
 		assert.match(stale.output, /target|attach|stale|disconnect|not found/i);
 		const replacementUrl = `${fixture.webviewUrl}?generation=2`;
-		child.stdin.write(`${JSON.stringify({ kind: "replace", url: replacementUrl })}\n`);
-		await expect.poll(() => output.includes('"kind":"replace"'), { timeout: 10_000 }).toBe(true);
+		await action("replace", replacementUrl);
 		let replacement;
 		await expect.poll(async () => {
 			replacement = (await readTargets(env))
@@ -309,6 +321,16 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 					serviceChild.kill("SIGTERM");
 				}
 				if (child) {
+					if (controlPort && child.exitCode === null) {
+						try {
+							await fetch(`http://127.0.0.1:${controlPort}/action`, {
+								method: "POST",
+								headers: { "x-dbgjs-fixture-token": controlToken },
+								body: '{"kind":"shutdown"}',
+								signal: AbortSignal.timeout(3_000),
+							});
+						} catch {}
+					}
 					child.stdin.end();
 					for (const signal of [undefined, "SIGTERM", "SIGKILL"]) {
 						if (child.exitCode !== null || child.signalCode !== null) break;
