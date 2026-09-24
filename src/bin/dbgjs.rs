@@ -28,8 +28,7 @@ use dbgjs::service_api::{
     ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
     SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
     TargetAttachOptions, TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot,
-    TargetAttachmentOutcome, TargetAttachmentResult, TargetAttachmentState, TargetScriptStatus,
-    TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
+    TargetScriptStatus, TargetWaitPredicate, ValueInspectionOptions, ValueSelector,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -1175,14 +1174,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
-            let result = attach_process_target(
-                &client,
-                &context_id,
-                &connection_id,
-                &target_id,
-                options.force,
-            )
-            .await?;
+            let result = rpc(client
+                .targets
+                .attach_target(
+                    dbgjs::service_api::TargetRef {
+                        connection: dbgjs::service_api::ConnectionRef {
+                            context_id: context_id.clone(),
+                            connection_id: connection_id.clone(),
+                        },
+                        target_id: target_id.clone(),
+                    },
+                    TargetAttachOptions {
+                        force: options.force,
+                        expected_connection_generation: None,
+                    },
+                )
+                .await)?;
             if options.set_default {
                 select_scope(
                     &selection_file,
@@ -5495,87 +5502,6 @@ enum RendererAttachSelector {
     Window { root_pid: u32, window_id: u32 },
 }
 
-fn owned_process_target_generation(
-    context: &ContextSnapshot,
-    connection_id: &str,
-    target_id: &str,
-) -> Option<u64> {
-    let generation = context.connections.iter()
-        .find(|connection| connection.id == connection_id
-            && matches!(connection.status, ConnectionStatus::Connected { .. }))?
-        .generation;
-    context.target_forest.iter().any(|node| {
-        node.connection_id == connection_id
-            && node.connection_generation == generation
-            && node.target.target_id == target_id
-            && node.attachment == TargetAttachmentState::Debugger
-    }).then_some(generation)
-}
-
-async fn existing_process_attachment(
-    client: &DbgServiceClient,
-    context_id: &str,
-    connection_id: &str,
-    target_id: &str,
-) -> Result<Option<TargetAttachmentResult>, io::Error> {
-    let context = rpc(client.contexts.get_context(context_id.to_owned()).await)?;
-    let Some(generation) = owned_process_target_generation(&context, connection_id, target_id) else {
-        return Ok(None);
-    };
-    let target_ref = dbgjs::service_api::TargetRef {
-        connection: dbgjs::service_api::ConnectionRef {
-            context_id: context_id.to_owned(),
-            connection_id: connection_id.to_owned(),
-        },
-        target_id: target_id.to_owned(),
-    };
-    let Ok(target) = client.targets.get_target(target_ref).await else {
-        return Ok(None);
-    };
-    Ok((target.connection_generation == generation).then_some(TargetAttachmentResult {
-        outcome: TargetAttachmentOutcome::Reused,
-        target,
-    }))
-}
-
-async fn attach_process_target(
-    client: &DbgServiceClient,
-    context_id: &str,
-    connection_id: &str,
-    target_id: &str,
-    force: bool,
-) -> Result<TargetAttachmentResult, io::Error> {
-    if !force
-        && let Some(existing) =
-            existing_process_attachment(client, context_id, connection_id, target_id).await?
-    {
-        return Ok(existing);
-    }
-    let target_ref = dbgjs::service_api::TargetRef {
-        connection: dbgjs::service_api::ConnectionRef {
-            context_id: context_id.to_owned(),
-            connection_id: connection_id.to_owned(),
-        },
-        target_id: target_id.to_owned(),
-    };
-    match client.targets.attach_target(target_ref, TargetAttachOptions {
-        force,
-        expected_connection_generation: None,
-    }).await {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            // Auto-attach can win the race between the first snapshot and the explicit attach.
-            if !force
-                && let Ok(Some(existing)) =
-                    existing_process_attachment(client, context_id, connection_id, target_id).await
-            {
-                return Ok(existing);
-            }
-            Err(io::Error::other(error.to_string()))
-        }
-    }
-}
-
 impl std::fmt::Display for RendererAttachSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -6979,8 +6905,7 @@ mod tests {
         select_implicit_context, split_heap_reference_cli, target_list_output,
     };
     use super::{
-        ProcessAttachTarget, RendererAttachSelector, owned_process_target_generation,
-        process_attach_destination,
+        ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
         select_renderer_target, wait_for_renderer_target_id,
     };
     use dbgjs::context_identity::ContextKind;
@@ -7767,47 +7692,6 @@ mod tests {
         .unwrap();
         assert_eq!(filtered.targets.len(), 1);
         assert_eq!(filtered.targets[0].target.target_id, "page-1");
-    }
-
-    #[test]
-    fn process_attach_reuses_only_the_current_managed_owner_of_the_selected_target() {
-        let mut context = context_snapshot(&[("process-tree-100", &["renderer-1", "renderer-2"])]);
-        context.connections[0].configuration = ConnectionConfiguration::ProcessTree { root_pid: 100 };
-        context.target_forest = context.connections[0].target_forest();
-        context.target_forest[0].attachment =
-            dbgjs::service_api::TargetAttachmentState::Debugger;
-        assert_eq!(
-            owned_process_target_generation(&context, "process-tree-100", "renderer-1"),
-            Some(1),
-        );
-        assert_eq!(
-            owned_process_target_generation(&context, "process-tree-100", "renderer-2"),
-            None,
-        );
-        assert_eq!(
-            owned_process_target_generation(&context, "another-connection", "renderer-1"),
-            None,
-        );
-
-        context.target_forest[0].attachment =
-            dbgjs::service_api::TargetAttachmentState::CdpClient;
-        assert_eq!(
-            owned_process_target_generation(&context, "process-tree-100", "renderer-1"),
-            None,
-        );
-        context.target_forest[0].attachment =
-            dbgjs::service_api::TargetAttachmentState::Debugger;
-        context.target_forest[0].connection_generation = 0;
-        assert_eq!(
-            owned_process_target_generation(&context, "process-tree-100", "renderer-1"),
-            None,
-        );
-        context.target_forest[0].connection_generation = 1;
-        context.connections[0].status = ConnectionStatus::Disconnected;
-        assert_eq!(
-            owned_process_target_generation(&context, "process-tree-100", "renderer-1"),
-            None,
-        );
     }
 
     #[test]

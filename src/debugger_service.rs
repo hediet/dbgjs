@@ -971,6 +971,20 @@ fn ownership_conflict(owner: &(String, String, String)) -> JsonRpcError {
     ))
 }
 
+fn same_live_managed_owner(
+    owner_key: &(String, String, String),
+    owner_generation: u64,
+    debugger_generation: u64,
+    has_attachment: bool,
+    requested_key: &(String, String, String),
+    requested_generation: u64,
+) -> bool {
+    owner_key == requested_key
+        && owner_generation == requested_generation
+        && debugger_generation == requested_generation
+        && has_attachment
+}
+
 fn direct_attachment_error(message: String, force: bool) -> JsonRpcError {
     if message.contains("already attached by another debugger")
         || message.contains("already has a dbgjs client")
@@ -1942,6 +1956,20 @@ impl DebuggerService {
             });
             if let Some(owner) = &prior_owner {
                 if !options.force {
+                    let debugger = owner.debugger.snapshot();
+                    if same_live_managed_owner(
+                        &owner.key,
+                        owner.attempt.generation,
+                        debugger.connection_generation,
+                        owner.attachment.is_some(),
+                        &debugger_key,
+                        resolved_generation,
+                    ) {
+                        return Ok(TargetAttachmentResult {
+                            outcome: TargetAttachmentOutcome::Reused,
+                            target: debugger,
+                        });
+                    }
                     return Err(ownership_conflict(&owner.key));
                 }
                 remove_debugger_registration(&mut state, &owner.key);
@@ -8179,6 +8207,81 @@ mod tests {
             TargetAttachmentState::Detached
         );
         assert!(!graph.resources.contains_key(&session));
+    }
+
+    #[test]
+    fn same_owner_attach_must_not_depend_on_a_lagging_attachment_projection() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(&mut state, "ctx", [(
+            "process-tree-100", 3, vec![target("renderer-1", "Window", "vscode-file://workbench")]
+        )]);
+        let graph = state.resource_graphs["ctx"].snapshot();
+        let context = snapshot("agent", "ctx", &state.contexts["ctx"], Some(&graph));
+        assert_eq!(context.target_forest[0].attachment, TargetAttachmentState::Detached);
+
+        // Discovery attached this exact target, but the graph projection has not yet caught up.
+        let owner = ("ctx".to_owned(), "process-tree-100".to_owned(), "renderer-1".to_owned());
+        assert!(same_live_managed_owner(&owner, 3, 3, true, &owner, 3));
+        assert!(!same_live_managed_owner(&owner, 3, 3, true,
+            &("other".into(), "process-tree-100".into(), "renderer-1".into()), 3));
+        assert!(!same_live_managed_owner(&owner, 3, 3, true,
+            &("ctx".into(), "process-tree-100".into(), "renderer-2".into()), 3));
+        assert!(!same_live_managed_owner(&owner, 2, 3, true, &owner, 3));
+        assert!(!same_live_managed_owner(&owner, 3, 2, true, &owner, 3));
+        assert!(!same_live_managed_owner(&owner, 3, 3, true, &owner, 4));
+        assert!(!same_live_managed_owner(&owner, 3, 3, false, &owner, 3));
+    }
+
+    #[tokio::test]
+    async fn attach_reuses_existing_renderer_debugger_before_graph_projection_catches_up() {
+        let mut state = ServiceState::default();
+        insert_context_with_targets(&mut state, "ctx", [(
+            "process-tree-100", 3, vec![target("renderer-1", "Window", "vscode-file://workbench")]
+        )]);
+        let runtime = crate::connection_provider::raw_session_tests::runtime(3).await;
+        let key = ("ctx".to_owned(), "process-tree-100".to_owned(), "renderer-1".to_owned());
+        let resource = context_connection_target(&state, "ctx", "process-tree-100", 3, "renderer-1")
+            .unwrap().resource_id;
+        let debugger = TargetDebuggerHandle::stub_for_tests(TargetDebuggerSnapshot {
+            context_id: key.0.clone(),
+            connection_id: key.1.clone(),
+            target_id: key.2.clone(),
+            connection_generation: 3,
+            revision: 1,
+            phase: crate::service_api::TargetDebuggerPhase::Running,
+            scripts: Vec::new(),
+            breakpoints: Vec::new(),
+            logs: Vec::new(),
+            log_capture: Default::default(),
+            pause: None,
+        });
+        state.runtimes.insert((key.0.clone(), key.1.clone()), runtime.clone());
+        state.target_debuggers.insert(key.clone(), debugger.clone());
+        state.debug_attachments.insert(key.clone(), DebugAttachment {
+            capability: runtime.debug_capability(resource.clone(), key.2.clone()),
+            handle: DebugSessionHandle {
+                session_id: debugger.session_id().to_owned(),
+                resource,
+                stole_existing_owner: false,
+            },
+            graph_source: SourceId::new("test-debugger"),
+        });
+        let graph = state.resource_graphs["ctx"].snapshot();
+        let projected = snapshot("agent", "ctx", &state.contexts["ctx"], Some(&graph));
+        assert_eq!(projected.target_forest[0].attachment, TargetAttachmentState::Detached);
+
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let reused = service.attach_target_internal(
+            &CallCtx::default(),
+            key.0.clone(), key.1.clone(), key.2.clone(), TargetAttachOptions::default(),
+        ).await.unwrap();
+        assert_eq!(reused.outcome, TargetAttachmentOutcome::Reused);
+        assert_eq!(reused.target.connection_generation, 3);
+        let state = service.state.lock().await;
+        assert!(state.target_debuggers[&key].same_instance(&debugger));
+        assert_eq!(state.debug_attachments.len(), 1);
+        drop(state);
+        runtime.close().await;
     }
 
     #[test]

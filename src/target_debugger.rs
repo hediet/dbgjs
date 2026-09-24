@@ -88,6 +88,24 @@ pub struct TargetDebuggerHandle {
 }
 
 impl TargetDebuggerHandle {
+    #[cfg(test)]
+    pub(crate) fn stub_for_tests(snapshot: TargetDebuggerSnapshot) -> Self {
+        let (commands, _) = mpsc::channel(1);
+        let (_, snapshots) = watch::channel(snapshot);
+        let (pause_events, _) = broadcast::channel(1);
+        let (_, heap_snapshot_progress) = watch::channel(None);
+        let (raw_events, _) = broadcast::channel(1);
+        Self {
+            commands,
+            snapshots,
+            pause_events,
+            session_id: "native-session".to_owned(),
+            heap_snapshot_progress,
+            raw_events,
+            raw_event_history: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
     pub(crate) fn same_instance(&self, other: &Self) -> bool {
         self.commands.same_channel(&other.commands)
     }
