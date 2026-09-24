@@ -645,6 +645,7 @@ fn route_child_event(
                 }
                 mux.retire_session(id);
             }
+            endpoint.mux.pause_raw_notifications(id);
         }
         return;
     }
@@ -658,29 +659,8 @@ fn route_child_event(
     if routes_guard.contains_key(id) {
         return;
     }
-    let native_channel = if let Some(channel) = endpoint.mux.raw_channel(id) {
-        channel
-    } else {
-        let Ok(native_transport) = endpoint.mux.open_session(id.to_owned()) else {
-            return;
-        };
-        let channel = Channel::new(
-            Box::new(native_transport),
-            Box::new(NativeChildHandler {
-                parent_session_id: id.to_owned(),
-                endpoint: Arc::downgrade(endpoint),
-                mux: mux.clone(),
-                routes: routes.clone(),
-            }),
-        );
-        let task = tokio::spawn({
-            let channel = channel.clone();
-            async move { channel.run().await }
-        });
-        endpoint
-            .mux
-            .adopt_raw_channel(id.to_owned(), channel.clone(), task);
-        channel
+    let Ok(native_channel) = endpoint.mux.ensure_raw_channel(id) else {
+        return;
     };
     let Ok(client_transport) = mux.open_session(id.to_owned()) else {
         return;
@@ -702,6 +682,33 @@ fn route_child_event(
             channel: client_channel,
             tasks: vec![client_task],
         },
+    );
+}
+
+fn activate_child_notifications(
+    method: &str,
+    params: &Value,
+    endpoint: &Arc<TargetEndpoint>,
+    mux: &CdpSessionMux,
+    routes: &ChildRoutes,
+) {
+    if method != "Target.attachedToTarget" {
+        return;
+    }
+    let Some(id) = params.get("sessionId").and_then(Value::as_str) else {
+        return;
+    };
+    if !routes.lock().unwrap().contains_key(id) {
+        return;
+    }
+    endpoint.mux.forward_raw_notifications(
+        id,
+        Arc::new(NativeChildHandler {
+            parent_session_id: id.to_owned(),
+            endpoint: Arc::downgrade(endpoint),
+            mux: mux.clone(),
+            routes: routes.clone(),
+        }),
     );
 }
 
@@ -770,8 +777,9 @@ impl RequestHandler for NativeChildHandler {
             .get(&self.parent_session_id)
             .map(|route| route.channel.clone());
         if let Some(downstream) = downstream {
-            let _ = downstream.notify(&method, params).await;
+            let _ = downstream.notify(&method, params.clone()).await;
         }
+        activate_child_notifications(&method, &params, &endpoint, &self.mux, &self.routes);
     }
 }
 
@@ -1009,7 +1017,14 @@ impl VirtualRootState {
                         &child_mux,
                         &child_routes,
                     );
-                    let _ = channel.notify(&method, params).await;
+                    let _ = channel.notify(&method, params.clone()).await;
+                    activate_child_notifications(
+                        &method,
+                        &params,
+                        &child_endpoint,
+                        &child_mux,
+                        &child_routes,
+                    );
                 }
             }
         }));
@@ -1998,8 +2013,7 @@ mod tests {
         reopened.close();
     }
 
-    #[tokio::test]
-    async fn native_child_notifications_and_requests_follow_the_page_session() {
+    async fn exercise_native_child_routes(raw_first: bool) {
         let harness = Harness::start(vec![host_target("renderer-a", 10)]);
         harness.call("Target.getTargets", json!({})).await;
         let page_id = harness
@@ -2017,6 +2031,8 @@ mod tests {
             let page = page.clone();
             async move { page.run().await }
         });
+        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        let raw = raw_first.then(|| endpoint.open_raw_session("native-child".into()).unwrap());
         let transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
         transport.notify(
             "Target.attachedToTarget",
@@ -2060,8 +2076,7 @@ mod tests {
             child.call("Runtime.evaluate", json!({})).await.unwrap()["sessionId"],
             "native-child"
         );
-        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
-        let raw = endpoint.open_raw_session("native-child".into()).unwrap();
+        let raw = raw.unwrap_or_else(|| endpoint.open_raw_session("native-child".into()).unwrap());
         assert_eq!(
             raw.request(
                 "Runtime.evaluate",
@@ -2131,6 +2146,16 @@ mod tests {
             page.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
             "Runtime.evaluate"
         );
+    }
+
+    #[tokio::test]
+    async fn native_child_notifications_and_requests_follow_the_page_session() {
+        exercise_native_child_routes(false).await;
+    }
+
+    #[tokio::test]
+    async fn native_child_route_preserves_notifications_when_raw_opens_first() {
+        exercise_native_child_routes(true).await;
     }
 
     #[tokio::test]
