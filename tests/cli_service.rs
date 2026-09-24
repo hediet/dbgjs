@@ -2373,11 +2373,10 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 selector,
             ],
         );
-        let attach = run_in(
+        let attach = run_json(
             &cli,
             &service,
             &state_file,
-            &std::env::current_dir().unwrap(),
             &[
                 "target",
                 "attach",
@@ -2387,8 +2386,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 selector,
             ],
         );
-        assert!(!attach.0.success());
-        assert!(String::from_utf8_lossy(&attach.2).contains("target ownership conflict"));
+        assert_eq!(attach["outcome"], "reused", "{attach}");
         let result = run_json(
             &cli,
             &service,
