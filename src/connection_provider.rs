@@ -1653,7 +1653,7 @@ pub enum ConnectionProviderError {
 }
 
 #[cfg(test)]
-mod raw_session_tests {
+pub(crate) mod raw_session_tests {
     use super::*;
     use crate::cdp_transport::ManagedCdpTransport;
     use crate::session_transport::CdpEnvelope;
@@ -1683,7 +1683,7 @@ mod raw_session_tests {
         async fn close(&self) {}
     }
 
-    async fn runtime(generation: u64) -> Arc<ConnectionRuntime> {
+    pub(crate) async fn runtime(generation: u64) -> Arc<ConnectionRuntime> {
         let transport = Arc::new(IdleTransport(Arc::new(Mutex::new(None))));
         let cdp = Arc::new(CdpConnection::connect_transport(transport).await.unwrap());
         let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
