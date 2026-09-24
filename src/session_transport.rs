@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
-use linkrpc::connection::channel::{Channel, RejectingHandler};
+use linkrpc::connection::channel::{Channel, RejectingHandler, RequestHandler};
 use linkrpc::prelude::{
     JsonRpcError, JsonRpcMessage, MessageTransport, MultiplexedTransport, MuxChannel, MuxCodec,
     MuxError, TransportError, error_codes,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 pub type SessionId = String;
@@ -149,28 +149,7 @@ impl CdpSessionMux {
 
     fn open_raw_session(&self, id: String) -> Result<Arc<RawCdpSession>, OpenSessionError> {
         let mut routes = self.raw_routes.lock().unwrap();
-        if self.disposed.load(Ordering::SeqCst) {
-            return Err(MuxError::Disposed);
-        }
-        let route = if let Some(route) = routes.get(&id) {
-            route.clone()
-        } else {
-            let channel = Channel::new(
-                Box::new(self.open_session(id.clone())?),
-                Box::new(RejectingHandler),
-            );
-            let task = tokio::spawn({
-                let channel = channel.clone();
-                async move { channel.run().await }
-            });
-            let route = Arc::new(RawSessionRoute {
-                channel,
-                task,
-                active: AtomicBool::new(false),
-            });
-            routes.insert(id.clone(), route.clone());
-            route
-        };
+        let route = self.ensure_raw_route(&mut routes, &id)?;
         if route.active.swap(true, Ordering::SeqCst) {
             return Err(MuxError::AlreadyUsed(id));
         }
@@ -183,15 +162,96 @@ impl CdpSessionMux {
 
     /// Shares an already-routed native child channel with raw CDP callers.
     pub fn raw_channel(&self, id: &str) -> Option<Channel> {
-        self.raw_routes.lock().unwrap().get(id).map(|route| route.channel.clone())
+        self.raw_routes
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|route| route.channel.clone())
     }
 
-    pub fn adopt_raw_channel(&self, id: String, channel: Channel, task: JoinHandle<()>) {
-        self.raw_routes.lock().unwrap().insert(id, Arc::new(RawSessionRoute {
+    pub fn ensure_raw_channel(&self, id: &str) -> Result<Channel, OpenSessionError> {
+        let mut routes = self.raw_routes.lock().unwrap();
+        Ok(self.ensure_raw_route(&mut routes, id)?.channel.clone())
+    }
+
+    pub fn forward_raw_notifications(&self, id: &str, handler: Arc<dyn RequestHandler>) {
+        if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
+            let _ = route
+                .notifications
+                .send(RawNotification::Listener(Some(handler)));
+        }
+    }
+
+    pub fn pause_raw_notifications(&self, id: &str) {
+        if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
+            let _ = route.notifications.send(RawNotification::Listener(None));
+        }
+    }
+
+    fn ensure_raw_route(
+        &self,
+        routes: &mut HashMap<String, Arc<RawSessionRoute>>,
+        id: &str,
+    ) -> Result<Arc<RawSessionRoute>, OpenSessionError> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(MuxError::Disposed);
+        }
+        if let Some(route) = routes.get(id) {
+            return Ok(route.clone());
+        }
+        let (notifications, mut receiver) = mpsc::unbounded_channel();
+        let channel = Channel::new(
+            Box::new(self.open_session(id.to_owned())?),
+            Box::new(RawNotificationHandler {
+                notifications: notifications.clone(),
+            }),
+        );
+        let task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let notification_task = tokio::spawn(async move {
+            let mut listener: Option<Arc<dyn RequestHandler>> = None;
+            let mut pending = VecDeque::new();
+            let mut detached = false;
+            while let Some(notification) = receiver.recv().await {
+                match notification {
+                    RawNotification::Listener(next) => {
+                        listener = next;
+                        if let Some(handler) = &listener {
+                            detached = false;
+                            while let Some((method, params)) = pending.pop_front() {
+                                handler.handle_notification(method, params).await;
+                            }
+                        } else {
+                            pending.clear();
+                            detached = true;
+                        }
+                    }
+                    RawNotification::Event(method, params) => {
+                        if let Some(handler) = &listener {
+                            handler.handle_notification(method, params).await;
+                        } else if !detached {
+                            // Buffer only the initial attach handoff, not stale events from
+                            // a detached session whose native ID may later be reused.
+                            if pending.len() == 256 {
+                                pending.pop_front();
+                            }
+                            pending.push_back((method, params));
+                        }
+                    }
+                }
+            }
+        });
+        let route = Arc::new(RawSessionRoute {
             channel,
             task,
+            notification_task,
+            notifications,
             active: AtomicBool::new(false),
-        }));
+        });
+        routes.insert(id.to_owned(), route.clone());
+        Ok(route)
     }
 
     pub async fn run(&self) {
@@ -217,12 +277,37 @@ pub struct CdpSessionTransport {
 struct RawSessionRoute {
     channel: Channel,
     task: JoinHandle<()>,
+    notification_task: JoinHandle<()>,
+    notifications: mpsc::UnboundedSender<RawNotification>,
     active: AtomicBool,
 }
 
 impl Drop for RawSessionRoute {
     fn drop(&mut self) {
         self.task.abort();
+        self.notification_task.abort();
+    }
+}
+
+enum RawNotification {
+    Listener(Option<Arc<dyn RequestHandler>>),
+    Event(String, Value),
+}
+
+struct RawNotificationHandler {
+    notifications: mpsc::UnboundedSender<RawNotification>,
+}
+
+#[async_trait]
+impl RequestHandler for RawNotificationHandler {
+    async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        RejectingHandler.handle_request(method, params).await
+    }
+
+    async fn handle_notification(&self, method: String, params: Value) {
+        let _ = self
+            .notifications
+            .send(RawNotification::Event(method, params));
     }
 }
 
@@ -245,7 +330,10 @@ impl RawCdpSession {
     ) -> Result<Value, JsonRpcError> {
         let mut closed = self.closed.subscribe();
         if *closed.borrow() {
-            return Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "raw CDP session detached; attach again"));
+            return Err(JsonRpcError::new(
+                error_codes::PEER_DISCONNECTED,
+                "raw CDP session detached; attach again",
+            ));
         }
         tokio::select! {
             biased;
@@ -447,38 +535,78 @@ mod tests {
         let first = RawCdpSession::open(&mux, "native".into()).unwrap();
         let pending = tokio::spawn({
             let first = first.clone();
-            async move { first.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(2)).await }
+            async move {
+                first
+                    .request(
+                        "Runtime.evaluate",
+                        json!({}),
+                        std::time::Duration::from_secs(2),
+                    )
+                    .await
+            }
         });
         let old = browser_raw.recv().await.unwrap();
-        let JsonRpcMessage::Request(old) = old.message else { panic!("expected first call") };
+        let JsonRpcMessage::Request(old) = old.message else {
+            panic!("expected first call")
+        };
         mux.retire_session("native");
         first.close();
-        assert_eq!(pending.await.unwrap().unwrap_err().code, error_codes::PEER_DISCONNECTED);
+        assert_eq!(
+            pending.await.unwrap().unwrap_err().code,
+            error_codes::PEER_DISCONNECTED
+        );
 
         let second = RawCdpSession::open(&mux, "native".into()).unwrap();
         let next = tokio::spawn({
             let second = second.clone();
-            async move { second.request("Runtime.enable", json!({}), std::time::Duration::from_secs(2)).await }
+            async move {
+                second
+                    .request(
+                        "Runtime.enable",
+                        json!({}),
+                        std::time::Duration::from_secs(2),
+                    )
+                    .await
+            }
         });
         let new = browser_raw.recv().await.unwrap();
-        let JsonRpcMessage::Request(new) = new.message else { panic!("expected second call") };
+        let JsonRpcMessage::Request(new) = new.message else {
+            panic!("expected second call")
+        };
         assert_ne!(old.id, new.id);
-        browser_raw.send(CdpEnvelope {
-            session_id: Some("native".into()),
-            message: JsonRpcMessage::Response(JsonRpcResponse {
-                id: Some(old.id),
-                payload: ResponsePayload::Result(json!({"stale": true})),
-            }),
-        }).await.unwrap();
-        browser_raw.send(CdpEnvelope {
-            session_id: Some("native".into()),
-            message: JsonRpcMessage::Response(JsonRpcResponse {
-                id: Some(new.id),
-                payload: ResponsePayload::Result(json!({"ok": true})),
-            }),
-        }).await.unwrap();
+        browser_raw
+            .send(CdpEnvelope {
+                session_id: Some("native".into()),
+                message: JsonRpcMessage::Response(JsonRpcResponse {
+                    id: Some(old.id),
+                    payload: ResponsePayload::Result(json!({"stale": true})),
+                }),
+            })
+            .await
+            .unwrap();
+        browser_raw
+            .send(CdpEnvelope {
+                session_id: Some("native".into()),
+                message: JsonRpcMessage::Response(JsonRpcResponse {
+                    id: Some(new.id),
+                    payload: ResponsePayload::Result(json!({"ok": true})),
+                }),
+            })
+            .await
+            .unwrap();
         assert_eq!(next.await.unwrap().unwrap(), json!({"ok": true}));
-        assert_eq!(first.request("Runtime.enable", json!({}), std::time::Duration::from_millis(20)).await.unwrap_err().code, error_codes::PEER_DISCONNECTED);
+        assert_eq!(
+            first
+                .request(
+                    "Runtime.enable",
+                    json!({}),
+                    std::time::Duration::from_millis(20)
+                )
+                .await
+                .unwrap_err()
+                .code,
+            error_codes::PEER_DISCONNECTED
+        );
         second.close();
         mux.dispose();
     }
