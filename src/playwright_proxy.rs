@@ -1521,10 +1521,14 @@ mod tests {
 
     #[tokio::test]
     async fn immediate_upstream_failure_reaches_claiming_client() {
+        let upstream = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let endpoint = format!("ws://{}", upstream.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = upstream.accept().await.unwrap();
+            drop(stream);
+        });
         let proxy = start(
-            PlaywrightCdpSource::BrowserRoot {
-                endpoint: "ws://127.0.0.1:1".to_owned(),
-            },
+            PlaywrightCdpSource::BrowserRoot { endpoint },
             page(),
             "fixture-token".to_owned(),
         )
@@ -1540,6 +1544,7 @@ mod tests {
             panic!("setup failure should close with a reason: {message:?}");
         };
         assert!(frame.reason.contains("upstream"), "{frame:?}");
+        server.await.unwrap();
         proxy.completion.await.unwrap();
     }
 
