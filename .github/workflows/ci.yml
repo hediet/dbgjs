@@ -121,6 +121,11 @@ jobs:
         run: cargo test --locked --workspace
       - name: Test bounded Playwright helper phases
         run: node --test tests/playwright-page-helper.test.mjs
+      - name: Test isolated Electron process-tree webview
+        if: runner.os == 'Windows'
+        env:
+          DBGJS_TEST_BIN_DIR: target/debug
+        run: npx playwright test tests/playwright/electron-process-tree.spec.mjs
       - name: Test offline recordings
         run: npm run test:offline
       - name: Test generated TypeScript heap streaming against Rust daemon

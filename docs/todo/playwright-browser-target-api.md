@@ -121,6 +121,11 @@ routing tests, the Chromium selected-page E2E (including OOPIFs), and the Window
 isolated VS Code discovery E2E. The latter verifies a synthetic Electron renderer
 target using real Playwright title, URL, utility-world locator, and auxiliary CDP
 session detach operations, comparing them with raw CDP in the same connection.
+The dedicated Electron process-tree fixture is configured for hosted Windows x64 and
+ARM64 runners without a user's VS Code installation. It creates a cross-origin
+OOPIF with a same-origin inner document and a sibling, then exercises projected
+renderer identity, frame evaluation/input, raw child-session routing, explicit
+managed attachment, and child replacement without affecting the parent or sibling.
 
 ## Deferred choices
 

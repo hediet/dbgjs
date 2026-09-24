@@ -151,6 +151,8 @@ async fn run_target_relay(
             handle: handle.clone(),
             replay_channel: replay_channel.clone(),
             replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            nested_replay: None,
+            replayed_children: AtomicBool::new(false),
         }),
     );
     let _ = replay_channel.set(root_channel.clone());
@@ -508,6 +510,8 @@ impl ContextRelayState {
                     handle: handle.clone(),
                     replay_channel: replay_channel.clone(),
                     replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+                    nested_replay: Some((Arc::downgrade(self), connection_id.to_owned())),
+                    replayed_children: AtomicBool::new(false),
                 }),
             );
             let _ = replay_channel.set(session_channel.clone());
@@ -986,6 +990,8 @@ struct TargetForwardingHandler {
     handle: TargetDebuggerHandle,
     replay_channel: Arc<OnceLock<Channel>>,
     replayed_domains: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    nested_replay: Option<(std::sync::Weak<ContextRelayState>, String)>,
+    replayed_children: AtomicBool,
 }
 
 struct RelayNestedSession {
@@ -1008,22 +1014,65 @@ impl RequestHandler for NestedSessionForwardingHandler {
 impl RequestHandler for TargetForwardingHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
         let replay_domain = method.strip_suffix(".enable").map(str::to_owned);
-        let history_before_request = replay_domain.as_ref().map(|_| {
+        let replay_children = method == "Target.setAutoAttach"
+            && params.get("autoAttach").and_then(Value::as_bool) == Some(true)
+            && !self.replayed_children.swap(true, Ordering::Relaxed);
+        if method == "Target.setAutoAttach"
+            && params.get("autoAttach").and_then(Value::as_bool) == Some(false)
+        {
+            self.replayed_children.store(false, Ordering::Relaxed);
+        }
+        let history_before_request = (replay_domain.is_some() || replay_children).then(|| {
             let history = self.handle.raw_event_history();
             let length = history.lock().unwrap().len();
             (history, length)
         });
-        let result = self.handle.raw_cdp_request(method.clone(), params).await?;
-        if let (Some(domain), Some((history, length))) = (replay_domain, history_before_request)
+        let result = match self.handle.raw_cdp_request(method.clone(), params).await {
+            Ok(result) => result,
+            Err(error) => {
+                if replay_children {
+                    self.replayed_children.store(false, Ordering::Relaxed);
+                }
+                return Err(error);
+            }
+        };
+        if let (Some(domain), Some((history, length))) = (&replay_domain, &history_before_request)
             && self.replayed_domains.lock().unwrap().insert(domain.clone())
         {
-            let events = history.lock().unwrap()[..length].to_vec();
+            let events = history.lock().unwrap()[..*length].to_vec();
             if let Some(channel) = self.replay_channel.get() {
                 for event in events
                     .into_iter()
                     .filter(|event| event.method.starts_with(&format!("{domain}.")))
                 {
                     let _ = channel.notify(&event.method, event.params).await;
+                }
+            }
+        }
+        if replay_children
+            && let Some((weak_state, connection_id)) = &self.nested_replay
+            && let Some(state) = weak_state.upgrade()
+            && let Some((history, length)) = history_before_request
+        {
+            let mut active = std::collections::BTreeMap::new();
+            for event in history.lock().unwrap()[..length].iter() {
+                let Some(id) = event.params.get("sessionId").and_then(Value::as_str) else {
+                    continue;
+                };
+                match event.method.as_str() {
+                    "Target.attachedToTarget" => {
+                        active.insert(id.to_owned(), event.params.clone());
+                    }
+                    "Target.detachedFromTarget" => {
+                        active.remove(id);
+                    }
+                    _ => {}
+                }
+            }
+            for (id, params) in active {
+                state.ensure_nested_session(connection_id, &id).await;
+                if let Some(channel) = self.replay_channel.get() {
+                    let _ = channel.notify("Target.attachedToTarget", params).await;
                 }
             }
         }

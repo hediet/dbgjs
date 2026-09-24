@@ -12,12 +12,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
 use linkrpc::connection::channel::{Channel, RequestHandler};
 use linkrpc::prelude::{
-    CallCtx, InterfaceHandler, JsonRpcError, MessageTransport, RpcCallError, TransportError, error_codes,
+    CallCtx, InterfaceHandler, JsonRpcError, MessageTransport, RpcCallError, TransportError,
+    error_codes,
 };
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc, watch};
@@ -152,6 +153,7 @@ pub struct TargetEndpoint {
     mux: CdpSessionMux,
     channel: Channel,
     notifications: Arc<EndpointNotifications>,
+    child_notifications: Arc<std::sync::Mutex<BTreeMap<String, Arc<EndpointNotifications>>>>,
     owns_transport: bool,
     parent_client: Option<CdpClient<Channel>>,
     owned_session_id: Option<String>,
@@ -183,6 +185,7 @@ impl TargetEndpoint {
             mux,
             channel,
             notifications,
+            child_notifications: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             owns_transport: true,
             parent_client: None,
             owned_session_id: None,
@@ -200,25 +203,48 @@ impl TargetEndpoint {
             .await
             .map_err(|error| format!("Target.attachToTarget failed: {error:?}"))?;
         let session_id = attached.session_id;
-        let session = self
-            .mux
-            .open_session(session_id.clone())
-            .map_err(|error| error.to_string())?;
         let notifications = Arc::new(EndpointNotifications::default());
-        let channel = Channel::new(
-            Box::new(session),
-            Box::new(EndpointHandler {
-                notifications: notifications.clone(),
-            }),
-        );
-        let channel_task = tokio::spawn({
-            let channel = channel.clone();
-            async move { channel.run().await }
-        });
+        let mut existing = self.mux.raw_channel(&session_id);
+        if existing.is_none() {
+            // Native attachment events can precede the command reply but reach the
+            // process-tree route on a different task; let it claim the one CDP channel.
+            for _ in 0..400 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                existing = self.mux.raw_channel(&session_id);
+                if existing.is_some() {
+                    break;
+                }
+            }
+        }
+        let (channel, tasks) = if let Some(channel) = existing {
+            self.child_notifications
+                .lock()
+                .unwrap()
+                .insert(session_id.clone(), notifications.clone());
+            (channel, vec![])
+        } else {
+            let session = self
+                .mux
+                .open_session(session_id.clone())
+                .map_err(|error| error.to_string())?;
+            let channel = Channel::new(
+                Box::new(session),
+                Box::new(EndpointHandler {
+                    notifications: notifications.clone(),
+                }),
+            );
+            let task = tokio::spawn({
+                let channel = channel.clone();
+                async move { channel.run().await }
+            });
+            (channel, vec![task])
+        };
         let (closed, _) = watch::channel(None);
         let native_id = session_id.clone();
         let closed_on_detach = closed.clone();
         let mux_on_detach = self.mux.clone();
+        let notifications_on_detach = self.child_notifications.clone();
+        let child_notifications = self.child_notifications.clone();
         let detach_task = tokio::spawn(async move {
             while let Some((method, params)) = parent_events.recv().await {
                 if method == "Target.detachedFromTarget"
@@ -228,6 +254,7 @@ impl TargetEndpoint {
                         "native CDP session '{native_id}' detached; reattach the target"
                     )));
                     mux_on_detach.retire_session(&native_id);
+                    notifications_on_detach.lock().unwrap().remove(&native_id);
                     return;
                 }
             }
@@ -237,11 +264,12 @@ impl TargetEndpoint {
             mux: self.mux.clone(),
             channel,
             notifications,
+            child_notifications,
             owns_transport: false,
             parent_client: Some(self.client()),
             owned_session_id: Some(session_id),
             closed,
-            tasks: std::sync::Mutex::new(vec![channel_task, detach_task]),
+            tasks: std::sync::Mutex::new(tasks.into_iter().chain([detach_task]).collect()),
         }))
     }
 
@@ -287,15 +315,21 @@ impl TargetEndpoint {
 
     pub async fn close(&self) {
         let was_closed = self.close_reason().await.is_some();
-        self.closed.send_replace(Some("CDP target endpoint closed; reattach the target".to_owned()));
+        self.closed.send_replace(Some(
+            "CDP target endpoint closed; reattach the target".to_owned(),
+        ));
         if let Some(session_id) = &self.owned_session_id {
             if !was_closed && let Some(parent) = &self.parent_client {
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(2),
-                    parent.target().detach_from_target(Some(session_id.clone()), None),
-                ).await;
+                    parent
+                        .target()
+                        .detach_from_target(Some(session_id.clone()), None),
+                )
+                .await;
             }
             self.mux.retire_session(session_id);
+            self.child_notifications.lock().unwrap().remove(session_id);
         } else if self.owns_transport {
             self.transport.close().await;
             self.mux.dispose();
@@ -368,7 +402,11 @@ impl VirtualBrowserRoot {
             inbound: Mutex::new(server_inbound),
         }));
         let (closed_attachment_tx, mut closed_attachment_rx) = mpsc::unbounded_channel();
-        let state = Arc::new(VirtualRootState::new(source, mux.clone(), closed_attachment_tx));
+        let state = Arc::new(VirtualRootState::new(
+            source,
+            mux.clone(),
+            closed_attachment_tx,
+        ));
         let root_channel = Channel::new(
             Box::new(mux.open_root().map_err(|error| error.to_string())?),
             Box::new(RootHandler::new(state.clone())),
@@ -391,11 +429,19 @@ impl VirtualBrowserRoot {
             let state = state.clone();
             async move {
                 while let Some(closed) = closed_attachment_rx.recv().await {
-                    let target_id = state.sessions.lock().unwrap().get(&closed.session_id)
+                    let target_id = state
+                        .sessions
+                        .lock()
+                        .unwrap()
+                        .get(&closed.session_id)
                         .filter(|session| Arc::ptr_eq(&session.endpoint, &closed.endpoint))
                         .map(|session| session.target_id.clone());
                     if let Some(target_id) = target_id {
-                        state.closed_targets.lock().unwrap().insert(target_id, closed.reason);
+                        state
+                            .closed_targets
+                            .lock()
+                            .unwrap()
+                            .insert(target_id, closed.reason);
                         state.detach(Some(&closed.session_id), None).await;
                     }
                 }
@@ -446,7 +492,11 @@ impl VirtualBrowserRoot {
     }
 
     pub fn target_endpoint(&self, target_id: &str) -> Option<Arc<TargetEndpoint>> {
-        self.state.sessions.lock().unwrap().values()
+        self.state
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
             .find(|session| session.target_id == target_id)
             .map(|session| session.endpoint.clone())
     }
@@ -458,7 +508,12 @@ impl VirtualBrowserRoot {
     }
 
     pub fn closed_target_reason(&self, target_id: &str) -> Option<String> {
-        self.state.closed_targets.lock().unwrap().get(target_id).cloned()
+        self.state
+            .closed_targets
+            .lock()
+            .unwrap()
+            .get(target_id)
+            .cloned()
     }
 
     /// Attaches to one target, in-process. CDP's `Target.attachToTarget` has no way to express
@@ -539,6 +594,187 @@ struct RootSession {
     tasks: Vec<JoinHandle<()>>,
 }
 
+struct ChildRoute {
+    parent_session_id: String,
+    channel: Channel,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+type ChildRoutes = Arc<std::sync::Mutex<BTreeMap<String, ChildRoute>>>;
+
+fn retire_child_routes(mux: &CdpSessionMux, routes: &ChildRoutes, parent_session_id: &str) {
+    let mut pending = vec![parent_session_id.to_owned()];
+    while let Some(parent) = pending.pop() {
+        let removed = {
+            let mut routes = routes.lock().unwrap();
+            let children = routes
+                .iter()
+                .filter(|(_, route)| route.parent_session_id == parent)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>();
+            for child in &children {
+                if let Some(route) = routes.remove(child) {
+                    for task in route.tasks {
+                        task.abort();
+                    }
+                }
+            }
+            children
+        };
+        for child in removed {
+            mux.retire_session(&child);
+            pending.push(child);
+        }
+    }
+}
+
+fn route_child_event(
+    method: &str,
+    params: &Value,
+    parent_session_id: &str,
+    endpoint: &Arc<TargetEndpoint>,
+    mux: &CdpSessionMux,
+    routes: &ChildRoutes,
+) {
+    if method == "Target.detachedFromTarget" {
+        if let Some(id) = params.get("sessionId").and_then(Value::as_str) {
+            retire_child_routes(mux, routes, id);
+            if let Some(route) = routes.lock().unwrap().remove(id) {
+                for task in route.tasks {
+                    task.abort();
+                }
+                mux.retire_session(id);
+            }
+        }
+        return;
+    }
+    if method != "Target.attachedToTarget" {
+        return;
+    }
+    let Some(id) = params.get("sessionId").and_then(Value::as_str) else {
+        return;
+    };
+    let mut routes_guard = routes.lock().unwrap();
+    if routes_guard.contains_key(id) {
+        return;
+    }
+    let native_channel = if let Some(channel) = endpoint.mux.raw_channel(id) {
+        channel
+    } else {
+        let Ok(native_transport) = endpoint.mux.open_session(id.to_owned()) else {
+            return;
+        };
+        let channel = Channel::new(
+            Box::new(native_transport),
+            Box::new(NativeChildHandler {
+                parent_session_id: id.to_owned(),
+                endpoint: Arc::downgrade(endpoint),
+                mux: mux.clone(),
+                routes: routes.clone(),
+            }),
+        );
+        let task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        endpoint
+            .mux
+            .adopt_raw_channel(id.to_owned(), channel.clone(), task);
+        channel
+    };
+    let Ok(client_transport) = mux.open_session(id.to_owned()) else {
+        return;
+    };
+    let client_channel = Channel::new(
+        Box::new(client_transport),
+        Box::new(ChildRequestHandler {
+            native_channel: native_channel.clone(),
+        }),
+    );
+    let client_task = tokio::spawn({
+        let channel = client_channel.clone();
+        async move { channel.run().await }
+    });
+    routes_guard.insert(
+        id.to_owned(),
+        ChildRoute {
+            parent_session_id: parent_session_id.to_owned(),
+            channel: client_channel,
+            tasks: vec![client_task],
+        },
+    );
+}
+
+struct ChildRequestHandler {
+    native_channel: Channel,
+}
+
+#[async_trait]
+impl RequestHandler for ChildRequestHandler {
+    async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            self.native_channel.call(&method, params),
+        )
+        .await
+        .map_err(|_| {
+            JsonRpcError::new(
+                error_codes::REQUEST_TIMEOUT,
+                "native child CDP request exceeded its deadline",
+            )
+        })?
+    }
+}
+
+struct NativeChildHandler {
+    parent_session_id: String,
+    endpoint: Weak<TargetEndpoint>,
+    mux: CdpSessionMux,
+    routes: ChildRoutes,
+}
+
+#[async_trait]
+impl RequestHandler for NativeChildHandler {
+    async fn handle_request(&self, method: String, _params: Value) -> Result<Value, JsonRpcError> {
+        Err(JsonRpcError::new(
+            error_codes::METHOD_NOT_FOUND,
+            format!("unexpected request from a native child: {method}"),
+        ))
+    }
+
+    async fn handle_notification(&self, method: String, params: Value) {
+        let Some(endpoint) = self.endpoint.upgrade() else {
+            return;
+        };
+        route_child_event(
+            &method,
+            &params,
+            &self.parent_session_id,
+            &endpoint,
+            &self.mux,
+            &self.routes,
+        );
+        if let Some(notifications) = endpoint
+            .child_notifications
+            .lock()
+            .unwrap()
+            .get(&self.parent_session_id)
+            .cloned()
+        {
+            notifications.publish(method.clone(), params.clone());
+        }
+        let downstream = self
+            .routes
+            .lock()
+            .unwrap()
+            .get(&self.parent_session_id)
+            .map(|route| route.channel.clone());
+        if let Some(downstream) = downstream {
+            let _ = downstream.notify(&method, params).await;
+        }
+    }
+}
+
 struct ClosedAttachment {
     session_id: String,
     endpoint: Arc<TargetEndpoint>,
@@ -553,6 +789,7 @@ struct VirtualRootState {
     closed_targets: std::sync::Mutex<BTreeMap<String, String>>,
     revisions: watch::Sender<u64>,
     sessions: std::sync::Mutex<BTreeMap<String, RootSession>>,
+    child_routes: ChildRoutes,
     closed_attachment_tx: mpsc::UnboundedSender<ClosedAttachment>,
     discover: AtomicBool,
     auto_attach: AtomicBool,
@@ -575,6 +812,7 @@ impl VirtualRootState {
             closed_targets: std::sync::Mutex::new(BTreeMap::new()),
             revisions,
             sessions: std::sync::Mutex::new(BTreeMap::new()),
+            child_routes: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
             closed_attachment_tx,
             discover: AtomicBool::new(false),
             auto_attach: AtomicBool::new(false),
@@ -617,7 +855,11 @@ impl VirtualRootState {
     async fn refresh_known(&self) -> Vec<HostTarget> {
         let listed = self.source.list_targets().await;
         let mut known = self.known.lock().unwrap();
-        let attached = self.sessions.lock().unwrap().values()
+        let attached = self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
             .map(|session| session.target_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
         let replacement = listed
@@ -653,26 +895,29 @@ impl VirtualRootState {
     async fn apply_source_event(&self, event: TargetSourceEvent) {
         match event {
             TargetSourceEvent::Upserted(mut target) => {
-                let (is_new, changed) = {
-                    let mut known = self.known.lock().unwrap();
-                    match known.get(target.target_id()) {
-                        Some(previous) => {
-                            target.snapshot.attached |= self.sessions.lock().unwrap().values()
-                                .any(|session| session.target_id == target.snapshot.target_id);
-                            let changed = previous != &target;
-                            known.insert(target.snapshot.target_id.clone(), target.clone());
-                            if changed {
-                                self.advance_revision();
+                let (is_new, changed) =
+                    {
+                        let mut known = self.known.lock().unwrap();
+                        match known.get(target.target_id()) {
+                            Some(previous) => {
+                                target.snapshot.attached |=
+                                    self.sessions.lock().unwrap().values().any(|session| {
+                                        session.target_id == target.snapshot.target_id
+                                    });
+                                let changed = previous != &target;
+                                known.insert(target.snapshot.target_id.clone(), target.clone());
+                                if changed {
+                                    self.advance_revision();
+                                }
+                                (false, changed)
                             }
-                            (false, changed)
+                            None => {
+                                known.insert(target.snapshot.target_id.clone(), target.clone());
+                                self.advance_revision();
+                                (true, true)
+                            }
                         }
-                        None => {
-                            known.insert(target.snapshot.target_id.clone(), target.clone());
-                            self.advance_revision();
-                            (true, true)
-                        }
-                    }
-                };
+                    };
                 if self.discover.load(Ordering::Relaxed) && changed {
                     if is_new {
                         let _ = self
@@ -748,10 +993,22 @@ impl VirtualRootState {
             async move { channel.run().await }
         })];
         let mut notifications = attachment.endpoint.subscribe();
+        let child_routes = self.child_routes.clone();
+        let child_mux = self.mux.clone();
+        let child_endpoint = attachment.endpoint.clone();
+        let parent_session_id = session_id.clone();
         tasks.push(tokio::spawn({
             let channel = session_channel.clone();
             async move {
                 while let Some((method, params)) = notifications.recv().await {
+                    route_child_event(
+                        &method,
+                        &params,
+                        &parent_session_id,
+                        &child_endpoint,
+                        &child_mux,
+                        &child_routes,
+                    );
                     let _ = channel.notify(&method, params).await;
                 }
             }
@@ -818,6 +1075,7 @@ impl VirtualRootState {
         let Some(session) = self.sessions.lock().unwrap().remove(&session_id) else {
             return;
         };
+        retire_child_routes(&self.mux, &self.child_routes, &session_id);
         for task in session.tasks {
             task.abort();
         }
@@ -861,6 +1119,16 @@ impl VirtualRootState {
     }
 
     async fn shutdown(&self) {
+        let parents = self
+            .sessions
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for parent in parents {
+            retire_child_routes(&self.mux, &self.child_routes, &parent);
+        }
         for (_, session) in std::mem::take(&mut *self.sessions.lock().unwrap()) {
             for task in session.tasks {
                 task.abort();
@@ -1027,8 +1295,8 @@ mod tests {
     use linkrpc::prelude::{JsonRpcMessage, JsonRpcNotification, JsonRpcResponse};
     use linkrpc::protocol::jsonrpc::ResponsePayload;
     use serde_json::json;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::AtomicBool;
 
     /// A target endpoint that answers every request with the method it received, so session
     /// routing can be asserted without a real debuggee.
@@ -1058,13 +1326,19 @@ mod tests {
         }
 
         fn notify(&self, method: &str, params: Value) {
-            self.outbound.send(CdpEnvelope {
-                session_id: None,
-                message: JsonRpcMessage::Notification(JsonRpcNotification {
-                    method: method.to_owned(),
-                    params: Some(params),
-                }),
-            }).unwrap();
+            self.notify_session(None, method, params);
+        }
+
+        fn notify_session(&self, session_id: Option<&str>, method: &str, params: Value) {
+            self.outbound
+                .send(CdpEnvelope {
+                    session_id: session_id.map(str::to_owned),
+                    message: JsonRpcMessage::Notification(JsonRpcNotification {
+                        method: method.to_owned(),
+                        params: Some(params),
+                    }),
+                })
+                .unwrap();
         }
     }
 
@@ -1195,7 +1469,10 @@ mod tests {
                 .attached
                 .push(target_id.to_owned());
             let transport = EchoTransport::new();
-            self.endpoints.lock().unwrap().insert(target_id.to_owned(), transport.clone());
+            self.endpoints
+                .lock()
+                .unwrap()
+                .insert(target_id.to_owned(), transport.clone());
             Ok(TargetAttachment {
                 endpoint: TargetEndpoint::open(transport)?,
                 stole_external_owner: force,
@@ -1487,19 +1764,35 @@ mod tests {
 
     #[tokio::test]
     async fn dead_child_attachment_retires_without_closing_host_or_sibling() {
-        let harness = Harness::start(vec![host_target("renderer-a", 10), host_target("renderer-b", 20)]);
+        let harness = Harness::start(vec![
+            host_target("renderer-a", 10),
+            host_target("renderer-b", 20),
+        ]);
         harness.call("Target.getTargets", json!({})).await;
-        let a = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await;
-        let b = harness.call("Target.attachToTarget", json!({"targetId":"renderer-b"})).await;
+        let a = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await;
+        let b = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-b"}))
+            .await;
         let a_id = a["sessionId"].as_str().unwrap().to_owned();
         let b_id = b["sessionId"].as_str().unwrap().to_owned();
         let old_endpoint = harness.root.target_endpoint("renderer-a").unwrap();
-        let a_channel = Channel::new(Box::new(harness.mux.open_session(a_id.clone()).unwrap()), Box::new(RejectingHandler));
-        let b_channel = Channel::new(Box::new(harness.mux.open_session(b_id.clone()).unwrap()), Box::new(RejectingHandler));
+        let a_channel = Channel::new(
+            Box::new(harness.mux.open_session(a_id.clone()).unwrap()),
+            Box::new(RejectingHandler),
+        );
+        let b_channel = Channel::new(
+            Box::new(harness.mux.open_session(b_id.clone()).unwrap()),
+            Box::new(RejectingHandler),
+        );
         for channel in [a_channel.clone(), b_channel.clone()] {
             tokio::spawn(async move { channel.run().await });
         }
-        assert_eq!(a_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        assert_eq!(
+            a_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
         let a_transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
         a_transport.unresponsive.store(true, Ordering::Relaxed);
         let pending = tokio::spawn({
@@ -1510,82 +1803,364 @@ mod tests {
         a_transport.lose();
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
-                if !harness.root.refresh_targets().await.targets.iter().find(|t| t.target_id() == "renderer-a").unwrap().snapshot.attached {
+                if !harness
+                    .root
+                    .refresh_targets()
+                    .await
+                    .targets
+                    .iter()
+                    .find(|t| t.target_id() == "renderer-a")
+                    .unwrap()
+                    .snapshot
+                    .attached
+                {
                     break;
                 }
                 tokio::task::yield_now().await;
             }
-        }).await.expect("dead child must cease being advertised as attached");
-        assert_eq!(b_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
-        assert_eq!(harness.call("Browser.getVersion", json!({})).await["product"], "Process 4242");
-        assert!(harness.events.events.lock().unwrap().iter().any(|(method, params)| {
-            method == "Target.detachedFromTarget" && params["sessionId"] == a_id
-        }));
+        })
+        .await
+        .expect("dead child must cease being advertised as attached");
+        assert_eq!(
+            b_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+        assert_eq!(
+            harness.call("Browser.getVersion", json!({})).await["product"],
+            "Process 4242"
+        );
+        assert!(
+            harness
+                .events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, params)| {
+                    method == "Target.detachedFromTarget" && params["sessionId"] == a_id
+                })
+        );
         harness.mux.retire_session(&a_id);
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), pending).await.is_ok(),
-            "requests pending on the dead child must settle promptly");
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(50), a_channel.call("Runtime.evaluate", json!({}))).await.is_ok(),
-            "dead child requests must settle promptly");
-        let fresh = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), pending)
+                .await
+                .is_ok(),
+            "requests pending on the dead child must settle promptly"
+        );
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                a_channel.call("Runtime.evaluate", json!({}))
+            )
+            .await
+            .is_ok(),
+            "dead child requests must settle promptly"
+        );
+        let fresh = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await;
         let fresh_id = fresh["sessionId"].as_str().unwrap().to_owned();
-        let fresh_channel = Channel::new(Box::new(harness.mux.open_session(fresh_id).unwrap()), Box::new(RejectingHandler));
-        tokio::spawn({ let channel = fresh_channel.clone(); async move { channel.run().await } });
-        assert_eq!(fresh_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
-        harness.root.state.closed_attachment_tx.send(ClosedAttachment {
-            session_id: a_id,
-            endpoint: old_endpoint,
-            reason: "late old endpoint close".into(),
-        }).unwrap();
+        let fresh_channel = Channel::new(
+            Box::new(harness.mux.open_session(fresh_id).unwrap()),
+            Box::new(RejectingHandler),
+        );
+        tokio::spawn({
+            let channel = fresh_channel.clone();
+            async move { channel.run().await }
+        });
+        assert_eq!(
+            fresh_channel
+                .call("Runtime.evaluate", json!({}))
+                .await
+                .unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+        harness
+            .root
+            .state
+            .closed_attachment_tx
+            .send(ClosedAttachment {
+                session_id: a_id,
+                endpoint: old_endpoint,
+                reason: "late old endpoint close".into(),
+            })
+            .unwrap();
         harness.settle().await;
-        assert_eq!(fresh_channel.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
-        assert!(harness.root.observe_targets().targets.iter().find(|t| t.target_id() == "renderer-a").unwrap().snapshot.attached);
+        assert_eq!(
+            fresh_channel
+                .call("Runtime.evaluate", json!({}))
+                .await
+                .unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+        assert!(
+            harness
+                .root
+                .observe_targets()
+                .targets
+                .iter()
+                .find(|t| t.target_id() == "renderer-a")
+                .unwrap()
+                .snapshot
+                .attached
+        );
     }
 
     #[tokio::test]
     async fn raw_native_session_uses_its_own_endpoint_for_repeated_and_concurrent_requests() {
         let harness = Harness::start(vec![host_target("renderer-a", 10)]);
         harness.call("Target.getTargets", json!({})).await;
-        let virtual_id = harness.call("Target.attachToTarget", json!({"targetId":"renderer-a"})).await["sessionId"].as_str().unwrap().to_owned();
-        let parent = Channel::new(Box::new(harness.mux.open_session(virtual_id).unwrap()), Box::new(RejectingHandler));
-        tokio::spawn({ let parent = parent.clone(); async move { parent.run().await } });
-        let attach = parent.call("Target.attachToTarget", json!({"targetId":"iframe", "flatten":true})).await.unwrap();
+        let virtual_id = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let parent = Channel::new(
+            Box::new(harness.mux.open_session(virtual_id).unwrap()),
+            Box::new(RejectingHandler),
+        );
+        tokio::spawn({
+            let parent = parent.clone();
+            async move { parent.run().await }
+        });
+        let attach = parent
+            .call(
+                "Target.attachToTarget",
+                json!({"targetId":"iframe", "flatten":true}),
+            )
+            .await
+            .unwrap();
         let native_id = attach["sessionId"].as_str().unwrap().to_owned();
         let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
         let native = endpoint.open_raw_session(native_id.clone()).unwrap();
         for _ in 0..3 {
-            let result = native.request("Runtime.evaluate", json!({"expression":"1+1"}), std::time::Duration::from_secs(1)).await.unwrap();
+            let result = native
+                .request(
+                    "Runtime.evaluate",
+                    json!({"expression":"1+1"}),
+                    std::time::Duration::from_secs(1),
+                )
+                .await
+                .unwrap();
             assert_eq!(result["echo"], "Runtime.evaluate");
             assert_eq!(result["sessionId"], native_id);
         }
         let (first, second) = tokio::join!(
-            native.request("Runtime.evaluate", json!({"expression":"2"}), std::time::Duration::from_secs(1)),
-            native.request("Runtime.evaluate", json!({"expression":"3"}), std::time::Duration::from_secs(1)),
+            native.request(
+                "Runtime.evaluate",
+                json!({"expression":"2"}),
+                std::time::Duration::from_secs(1)
+            ),
+            native.request(
+                "Runtime.evaluate",
+                json!({"expression":"3"}),
+                std::time::Duration::from_secs(1)
+            ),
         );
         assert_eq!(first.unwrap()["sessionId"], native_id);
         assert_eq!(second.unwrap()["sessionId"], native_id);
         native.close();
-        assert!(native.request("Runtime.evaluate", json!({}), std::time::Duration::from_millis(20)).await.is_err());
-        parent.call("Target.detachFromTarget", json!({"sessionId":native_id})).await.unwrap();
-        let reattached = parent.call("Target.attachToTarget", json!({"targetId":"iframe", "flatten":true})).await.unwrap();
+        assert!(
+            native
+                .request(
+                    "Runtime.evaluate",
+                    json!({}),
+                    std::time::Duration::from_millis(20)
+                )
+                .await
+                .is_err()
+        );
+        parent
+            .call("Target.detachFromTarget", json!({"sessionId":native_id}))
+            .await
+            .unwrap();
+        let reattached = parent
+            .call(
+                "Target.attachToTarget",
+                json!({"targetId":"iframe", "flatten":true}),
+            )
+            .await
+            .unwrap();
         assert_eq!(reattached["sessionId"], native_id);
         let reopened = endpoint.open_raw_session(native_id.clone()).unwrap();
-        assert_eq!(reopened.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["sessionId"], native_id);
+        assert_eq!(
+            reopened
+                .request(
+                    "Runtime.evaluate",
+                    json!({}),
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap()["sessionId"],
+            native_id
+        );
         reopened.close();
     }
 
     #[tokio::test]
+    async fn native_child_notifications_and_requests_follow_the_page_session() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10)]);
+        harness.call("Target.getTargets", json!({})).await;
+        let page_id = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let events = Arc::new(EventCollector::default());
+        let page = Channel::new(
+            Box::new(harness.mux.open_session(page_id.clone()).unwrap()),
+            Box::new(SharedCollector(events.clone())),
+        );
+        tokio::spawn({
+            let page = page.clone();
+            async move { page.run().await }
+        });
+        let transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
+        transport.notify(
+            "Target.attachedToTarget",
+            json!({
+                "sessionId": "native-child",
+                "targetInfo": {
+                    "targetId": "frame-a", "type": "iframe", "url": "http://example.test/frame",
+                    "title": "Frame", "attached": true
+                },
+                "waitingForDebugger": false
+            }),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if events
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(method, params)| {
+                        method == "Target.attachedToTarget" && params["sessionId"] == "native-child"
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("native child attached event must reach its page");
+        let child_events = Arc::new(EventCollector::default());
+        let child = Channel::new(
+            Box::new(harness.mux.open_session("native-child".into()).unwrap()),
+            Box::new(SharedCollector(child_events.clone())),
+        );
+        tokio::spawn({
+            let child = child.clone();
+            async move { child.run().await }
+        });
+        assert_eq!(
+            child.call("Runtime.evaluate", json!({})).await.unwrap()["sessionId"],
+            "native-child"
+        );
+        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        let raw = endpoint.open_raw_session("native-child".into()).unwrap();
+        assert_eq!(
+            raw.request(
+                "Runtime.evaluate",
+                json!({}),
+                std::time::Duration::from_secs(1),
+            )
+            .await
+            .unwrap()["sessionId"],
+            "native-child"
+        );
+        transport.notify_session(
+            Some("native-child"),
+            "Runtime.executionContextCreated",
+            json!({"context":{"id":1}}),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if child_events
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(method, _)| method == "Runtime.executionContextCreated")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("native child events must reach their own session");
+
+        transport.notify(
+            "Target.detachedFromTarget",
+            json!({"sessionId":"native-child","targetId":"frame-a"}),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if events
+                    .events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(method, params)| {
+                        method == "Target.detachedFromTarget"
+                            && params["sessionId"] == "native-child"
+                    })
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("native child detachment must reach its page");
+        assert!(
+            !harness
+                .root
+                .state
+                .child_routes
+                .lock()
+                .unwrap()
+                .contains_key("native-child")
+        );
+        raw.close();
+        assert_eq!(
+            page.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+    }
+
+    #[tokio::test]
     async fn identical_native_ids_on_distinct_endpoints_never_cross_route() {
-        let harness = Harness::start(vec![host_target("renderer-a", 10), host_target("renderer-b", 20)]);
+        let harness = Harness::start(vec![
+            host_target("renderer-a", 10),
+            host_target("renderer-b", 20),
+        ]);
         harness.call("Target.getTargets", json!({})).await;
         for target in ["renderer-a", "renderer-b"] {
-            harness.call("Target.attachToTarget", json!({"targetId":target})).await;
+            harness
+                .call("Target.attachToTarget", json!({"targetId":target}))
+                .await;
         }
         let a = harness.root.target_endpoint("renderer-a").unwrap();
         let b = harness.root.target_endpoint("renderer-b").unwrap();
         let a_session = a.open_raw_session("native-child".to_owned()).unwrap();
         let b_session = b.open_raw_session("native-child".to_owned()).unwrap();
         a_session.close();
-        assert_eq!(b_session.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["echo"], "Runtime.evaluate");
+        assert_eq!(
+            b_session
+                .request(
+                    "Runtime.evaluate",
+                    json!({}),
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap()["echo"],
+            "Runtime.evaluate"
+        );
     }
 
     #[tokio::test]
@@ -1593,23 +2168,53 @@ mod tests {
         let transport = EchoTransport::new();
         let parent = TargetEndpoint::open(transport.clone()).unwrap();
         let child = parent.attach_child("iframe").await.unwrap();
-        assert_eq!(child.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
-        transport.notify("Target.detachedFromTarget", json!({"sessionId":"native-child"}));
-        let reason = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait_closed()).await.unwrap();
+        assert_eq!(
+            child.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+        transport.notify(
+            "Target.detachedFromTarget",
+            json!({"sessionId":"native-child"}),
+        );
+        let reason = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait_closed())
+            .await
+            .unwrap();
         assert!(reason.contains("native-child"), "{reason}");
-        assert_eq!(parent.call("Runtime.evaluate", json!({})).await.unwrap()["echo"], "Runtime.evaluate");
+        assert_eq!(
+            parent.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
     }
 
     #[tokio::test]
     async fn timed_out_raw_request_does_not_retire_other_sessions_or_lock_channel() {
         let transport = EchoTransport::new();
         let endpoint = TargetEndpoint::open(transport.clone()).unwrap();
-        let child = endpoint.open_raw_session("native-child".to_owned()).unwrap();
+        let child = endpoint
+            .open_raw_session("native-child".to_owned())
+            .unwrap();
         transport.unresponsive.store(true, Ordering::Relaxed);
-        let error = child.request("Runtime.evaluate", json!({}), std::time::Duration::from_millis(20)).await.unwrap_err();
+        let error = child
+            .request(
+                "Runtime.evaluate",
+                json!({}),
+                std::time::Duration::from_millis(20),
+            )
+            .await
+            .unwrap_err();
         assert_eq!(error.code, error_codes::REQUEST_TIMEOUT);
         transport.unresponsive.store(false, Ordering::Relaxed);
-        assert_eq!(child.request("Runtime.evaluate", json!({}), std::time::Duration::from_secs(1)).await.unwrap()["echo"], "Runtime.evaluate");
+        assert_eq!(
+            child
+                .request(
+                    "Runtime.evaluate",
+                    json!({}),
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap()["echo"],
+            "Runtime.evaluate"
+        );
     }
 
     #[tokio::test]
