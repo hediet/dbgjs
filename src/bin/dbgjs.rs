@@ -331,6 +331,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
+            let deadline = tokio::time::Instant::now() + PLAYWRIGHT_EXECUTION_TIMEOUT;
             let client = ensure_service(&state_file).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
@@ -346,12 +347,57 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })?
                 .generation;
-            let proxy = rpc(client
-                .relay
-                .open_playwright_proxy(scope.target_ref(), generation)
-                .await)?;
-            let result = run_playwright_program(&proxy.websocket_url, &program).await;
-            let _ = client.relay.close_playwright_proxy(proxy.id).await;
+            let proxy = tokio::time::timeout_at(
+                deadline - Duration::from_secs(3),
+                client
+                    .relay
+                    .open_playwright_proxy(scope.target_ref(), generation),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Playwright proxy opening exceeded its deadline",
+                )
+            })?;
+            let proxy = rpc(proxy)?;
+            let result =
+                run_playwright_program(&proxy.websocket_url, &program, &scope.target, deadline)
+                    .await;
+            let cleanup_deadline = std::cmp::min(
+                deadline,
+                tokio::time::Instant::now() + Duration::from_secs(2),
+            );
+            let cleanup = tokio::time::timeout_at(
+                cleanup_deadline,
+                client.relay.close_playwright_proxy(proxy.id),
+            )
+            .await;
+            match cleanup {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => {
+                    return Err(io::Error::other(format!(
+                        "Playwright proxy cleanup failed after {}: {error}",
+                        if result.is_ok() {
+                            "program completed"
+                        } else {
+                            "program failure"
+                        }
+                    ))
+                    .into());
+                }
+                Err(_) => {
+                    return Err(io::Error::other(format!(
+                        "Playwright proxy cleanup exceeded its 2-second deadline after {}",
+                        if result.is_ok() {
+                            "program completed"
+                        } else {
+                            "program failure"
+                        }
+                    ))
+                    .into());
+                }
+            }
             if let Some(value) = result? {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             }
@@ -6588,7 +6634,20 @@ struct PlaywrightProgramResult {
 async fn run_playwright_program(
     endpoint: &str,
     program: &str,
+    target_id: &str,
+    deadline: tokio::time::Instant,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let helper_budget = remaining
+        .saturating_sub(Duration::from_secs(3))
+        .min(Duration::from_secs(27));
+    if helper_budget.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Playwright starting exceeded its deadline",
+        )
+        .into());
+    }
     let playwright_package = dbgjs::connection_provider::find_playwright_package()?;
     let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
     let mut child = TokioCommand::new(&node)
@@ -6597,6 +6656,11 @@ async fn run_playwright_program(
         .arg(PLAYWRIGHT_PAGE_HELPER)
         .env("DBGJS_PLAYWRIGHT_ENDPOINT", endpoint)
         .env("DBGJS_PLAYWRIGHT_PACKAGE", playwright_package)
+        .env("DBGJS_PLAYWRIGHT_PROGRESS", "1")
+        .env(
+            "DBGJS_PLAYWRIGHT_TIMEOUT_MS",
+            helper_budget.as_millis().to_string(),
+        )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -6642,12 +6706,13 @@ async fn run_playwright_program(
         TimedOut,
         OutputExceeded,
     }
+    let started = tokio::time::Instant::now();
     let completion = {
         let wait = child.wait();
         tokio::pin!(wait);
         tokio::select! {
             status = &mut wait => Completion::Exited(status),
-            _ = tokio::time::sleep(PLAYWRIGHT_EXECUTION_TIMEOUT) => Completion::TimedOut,
+            _ = tokio::time::sleep_until(deadline - Duration::from_secs(2)) => Completion::TimedOut,
             Some(_) = overflow_receiver.recv() => Completion::OutputExceeded,
         }
     };
@@ -6656,18 +6721,17 @@ async fn run_playwright_program(
         Completion::TimedOut => {
             let _ = child.start_kill();
             let _ = child.wait().await;
+            writer.abort();
+            stdout_reader.abort();
             let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
-            let detail = String::from_utf8_lossy(&stderr);
+            let (phase, _, _) = playwright_progress(&stderr);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "Playwright program exceeded the {}-second limit{}",
+                    "Playwright {phase} exceeded the {}-second limit (elapsed {} ms, target {})",
                     PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs(),
-                    if detail.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; stderr: {detail}")
-                    }
+                    started.elapsed().as_millis(),
+                    target_id,
                 ),
             )
             .into());
@@ -6675,6 +6739,9 @@ async fn run_playwright_program(
         Completion::OutputExceeded => {
             let _ = child.start_kill();
             let _ = child.wait().await;
+            writer.abort();
+            stdout_reader.abort();
+            stderr_reader.abort();
             return Err(
                 io::Error::other("Playwright program output exceeded its size limit").into(),
             );
@@ -6683,12 +6750,48 @@ async fn run_playwright_program(
     let write_result = writer.await.map_err(io::Error::other)?;
     let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
     let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
+    let (_, _, stderr) = playwright_progress(&stderr);
     let result = parse_playwright_output(status, &stdout, &stderr)?;
     write_result?;
     if !stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&stderr));
     }
     Ok(result)
+}
+
+fn playwright_progress(stderr: &[u8]) -> (&'static str, u64, Vec<u8>) {
+    const PREFIX: &str = "DBGJS_PLAYWRIGHT_PROGRESS:";
+    let mut phase = "starting";
+    let mut elapsed_ms = 0;
+    let mut output = Vec::with_capacity(stderr.len());
+    for line in stderr.split_inclusive(|byte| *byte == b'\n') {
+        let text = std::str::from_utf8(line).unwrap_or("");
+        let progress = text
+            .strip_prefix(PREFIX)
+            .and_then(|value| serde_json::from_str::<serde_json::Value>(value.trim_end()).ok());
+        if let Some(progress) = progress {
+            if let (Some(next), Some(elapsed)) =
+                (progress["phase"].as_str(), progress["elapsedMs"].as_u64())
+            {
+                if matches!(
+                    next,
+                    "starting" | "connecting" | "initializing" | "executing" | "closing"
+                ) {
+                    phase = match next {
+                        "starting" => "starting",
+                        "connecting" => "connecting",
+                        "initializing" => "initializing",
+                        "executing" => "executing",
+                        _ => "closing",
+                    };
+                    elapsed_ms = elapsed;
+                    continue;
+                }
+            }
+        }
+        output.extend_from_slice(line);
+    }
+    (phase, elapsed_ms, output)
 }
 
 fn parse_playwright_output(
@@ -8363,6 +8466,18 @@ mod tests {
         assert!(super::parse_playwright_output(
             status, br#"{"ok":false,"error":"script failed"}"#, b"",
         ).unwrap_err().to_string().contains("script failed"));
+    }
+
+    #[test]
+    fn playwright_progress_does_not_pollute_program_console_or_disclose_values() {
+        let (phase, elapsed, console) = super::playwright_progress(
+            b"DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"initializing\",\"elapsedMs\":12}\n\
+              user output\n\
+              DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"executing\",\"elapsedMs\":20}\n",
+        );
+        assert_eq!(phase, "executing");
+        assert_eq!(elapsed, 20);
+        assert_eq!(console, b"user output\n");
     }
 
     #[test]
