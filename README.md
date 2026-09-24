@@ -152,6 +152,23 @@ https://main.vscode-cdn.net/sourcemaps/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/
 ... (3 more lines; full output in the recording)
 ````
 
+`source grep` limits displayed output to 8192 UTF-8 bytes and individual
+source excerpts to 256 bytes by default. Excerpts of minified lines are
+centered on the match; line/column and match length remain absolute in
+`--json`, alongside `textTruncated`, `excerptStartColumn`,
+`contextTruncated`, `outputTruncated`, and `outputOmittedMatches` (independent
+of `omittedMatches` from `--max-results`). Use
+`source show <path> --line <line>` to inspect the complete source.
+`--max-results` separately controls
+match count; `--max-output-bytes` and `--max-line-bytes` adjust display
+limits. Skipped map/source diagnostics have unknown relevance to a path-filtered
+search, so a summary warns about incompleteness; use `--verbose-diagnostics`
+and a larger output budget for details. Searches time out after 30 seconds by
+default (override with `--timeout-ms`).
+Breakpoint failures similarly summarize ordinary nonmatching scripts and bound
+human-readable diagnostics. Use `--json` for complete breakpoint assessments
+or `source explain <path>` to inspect source candidates.
+
 ## Source-mapped breakpoints and live inspection
 
 Set a breakpoint in authored TypeScript. dbgjs resolves it to the generated

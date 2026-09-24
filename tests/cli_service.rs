@@ -225,6 +225,53 @@ process.stdin.on('end', () => process.exit(0));
 "#;
 
 #[test]
+fn cli_source_grep_limits_real_minified_runtime_output() {
+    let mut node = Command::new("node")
+        .args(["-e", "const vm=require('node:vm');vm.runInThisContext('globalThis.wideText=\"'+ 'x'.repeat(24000)+'DBGJS_OUTPUT_BUDGET_NEEDLE'+'y'.repeat(24000)+'\";', {filename:'dbgjs-wide-source.js'});const inspector=require('node:inspector');inspector.open(0,'127.0.0.1',false);console.log(inspector.url());setInterval(()=>{},1000)"])
+        .stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().expect("node inspector fixture is required");
+    let mut endpoint = String::new();
+    BufReader::new(node.stdout.take().unwrap()).read_line(&mut endpoint).unwrap();
+    let _node = ChildCleanup(node);
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts")
+        .join(format!("grep-budget-{}-{}", std::process::id(), unique_suffix()));
+    fs::create_dir_all(&root).unwrap();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let command = |args: &[&str]| run_json_in(&cli, &service, &state_file, &root, args);
+    command(&["context", "create", ":wide-source", "Wide", "--set"]);
+    command(&["connection", "add", "--node-inspector", endpoint.trim(),
+        "--connection", "node", "--connect"]);
+    command(&["target", "attach", "--target", "$node-root:node"]);
+    let grep = &["source", "grep", "DBGJS_OUTPUT_BUDGET_NEEDLE",
+        "--path", "dbgjs-wide-source.js", "--max-results", "1", "--context-lines", "0"];
+    let (status, stdout, stderr) = run_human_in(&cli, &service, &state_file, &root, grep);
+    assert_success(grep, status, &stdout, &stderr);
+    assert!(stdout.len() < 8192, "human output was {} bytes", stdout.len());
+    let text = String::from_utf8(stdout).unwrap();
+    assert!(text.contains("DBGJS_OUTPUT_BUDGET_NEEDLE"), "{text}");
+    assert!(text.contains("Source excerpts truncated"), "{text}");
+    let (status, json_stdout, stderr) = run_in(&cli, &service, &state_file, &root, grep);
+    assert_success(grep, status, &json_stdout, &stderr);
+    assert!(json_stdout.len() <= 8192, "machine output was {} bytes", json_stdout.len());
+    let snapshot: Value = serde_json::from_slice(&json_stdout).unwrap();
+    assert!(snapshot["outputTruncated"] == true);
+    let matched = &snapshot["matches"][0];
+    assert_eq!(matched["line"], 1);
+    assert!(matched["column"].as_u64().unwrap() > 24000);
+    assert_eq!(matched["matchLength"], "DBGJS_OUTPUT_BUDGET_NEEDLE".len());
+    assert!(matched["textTruncated"] == true);
+    assert!(matched["excerptStartColumn"].as_u64().unwrap() > 23000);
+    command(&["connection", "disconnect", "--connection", "node"]);
+    command(&["service", "stop"]);
+    cleanup_persistent_state(&state_file);
+    let _ = fs::remove_dir_all(root);
+    cleanup.disarm();
+}
+
+#[test]
 fn cli_log_reports_empty_capture_retention_and_reconnect() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("artifacts")

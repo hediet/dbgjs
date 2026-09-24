@@ -1767,14 +1767,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?)?;
         }
         [source, grep, arguments @ ..] if source == "source" && grep == "grep" => {
-            let options = parse_source_grep_options(arguments)?;
+            let (options, max_output_bytes, max_line_bytes, verbose_diagnostics) =
+                parse_source_grep_cli_options(arguments)?;
             let client = ensure_service(&state_file).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            output.print(&rpc(client
+            let snapshot = rpc(client
                 .sources
-                .grep_sources(context_id, options)
-                .await)?)?;
+                .grep_sources(context_id, options.clone())
+                .await)?;
+            output.print_source_search(
+                &snapshot, max_output_bytes, max_line_bytes, verbose_diagnostics,
+                options.path.as_deref(),
+            )?;
         }
         [source, explain, arguments @ ..] if source == "source" && explain == "explain" => {
             let path = parse_source_path_arguments(arguments, "source explain")?;
@@ -3757,7 +3762,7 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
     let mut case_sensitive = true;
     let mut max_results = 200_u32;
     let mut context_lines = 0_u32;
-    let mut timeout_ms = None;
+    let mut timeout_ms = Some(30_000);
     let mut view = SourceViewPreference::Policy;
     let mut index = 0;
     while index < values.len() {
@@ -3819,6 +3824,37 @@ fn parse_source_grep_options(values: &[String]) -> Result<SourceSearchOptions, i
         timeout_ms,
         view,
     })
+}
+
+fn parse_source_grep_cli_options(
+    values: &[String],
+) -> Result<(SourceSearchOptions, usize, usize, bool), io::Error> {
+    let mut search_values = Vec::new();
+    let mut max_output_bytes = 8192;
+    let mut max_line_bytes = 256;
+    let mut verbose_diagnostics = false;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--max-output-bytes" | "--max-line-bytes" => {
+                let flag = values[index].as_str();
+                index += 1;
+                let size = parse_positive_u32(
+                    flag, required_source_option(values, index, flag)?,
+                )? as usize;
+                if (flag == "--max-output-bytes" && size < 1024)
+                    || (flag == "--max-line-bytes" && size < 64) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{flag} is too small")));
+                }
+                if flag == "--max-output-bytes" { max_output_bytes = size; }
+                else { max_line_bytes = size; }
+            }
+            "--verbose-diagnostics" => verbose_diagnostics = true,
+            _ => search_values.push(values[index].clone()),
+        }
+        index += 1;
+    }
+    Ok((parse_source_grep_options(&search_values)?, max_output_bytes, max_line_bytes, verbose_diagnostics))
 }
 
 fn parse_source_formatting_mode(value: &str) -> Result<SourceFormattingMode, io::Error> {
@@ -6792,7 +6828,7 @@ commands:
   dbgjs source tree <loaded|source-mapped|formatted|resolved> [--max-lines <count>] [--all] [--no-trim] [--context <id>]
   dbgjs source graph [--uncompacted] [--context <id>]
   dbgjs source show <path> [--line <line>] [--context-lines <lines>] [--view <original|formatted>] [--context <id>]
-  dbgjs source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--view <original|formatted>] [--context <id>]
+  dbgjs source grep <pattern> [--path <substring>] [--regex] [--ignore-case] [--max-results <count>] [--context-lines <lines>] [--timeout-ms <ms>] [--max-output-bytes <bytes>] [--max-line-bytes <bytes>] [--verbose-diagnostics] [--view <original|formatted>] [--context <id>]
   dbgjs source map <path> <line> <column> [--context <id>]
   dbgjs source cache evict [--context <id>]
   dbgjs source export <destination> [--context <id>]
@@ -6887,6 +6923,7 @@ mod tests {
         parse_mutation_options, parse_node_options, parse_process_attach_options,
         parse_process_list_options, parse_promise_list_options, parse_raw_cdp_options,
         parse_screenshot_capture_options, parse_source_formatting_rule, parse_source_grep_options,
+        parse_source_grep_cli_options,
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
         png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
@@ -8654,6 +8691,16 @@ mod tests {
         assert_eq!(options.context_lines, 2);
         assert_eq!(options.timeout_ms, Some(1500));
         assert_eq!(options.view, SourceViewPreference::Formatted);
+        let (options, budget, line, verbose) = parse_source_grep_cli_options(&arguments(&[
+            "needle", "--max-output-bytes", "2048", "--max-line-bytes", "128",
+            "--verbose-diagnostics", "--path", "needle.js",
+        ])).unwrap();
+        assert_eq!(options.path.as_deref(), Some("needle.js"));
+        assert_eq!(options.timeout_ms, Some(30_000));
+        assert_eq!((budget, line, verbose), (2048, 128, true));
+        assert!(parse_source_grep_cli_options(&arguments(&[
+            "needle", "--max-output-bytes", "50",
+        ])).is_err());
     }
 
     #[test]

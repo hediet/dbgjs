@@ -671,14 +671,20 @@ impl SourceApi for DebuggerService {
                 text: hit.text,
                 before_context: hit.before_context,
                 after_context: hit.after_context,
+                excerpt_start_column: None,
+                text_truncated: false,
+                context_truncated: false,
             })
             .collect::<Vec<_>>();
         Ok(SourceSearchSnapshot {
             omitted_matches: result.total_matches.saturating_sub(matches.len() as u64),
+            output_omitted_matches: 0,
             matches,
             searched_sources: result.searched_sources,
             searched_contents: result.searched_contents,
             skipped_sources,
+            output_truncated: false,
+            omitted_diagnostics: 0,
             skipped,
         })
     }

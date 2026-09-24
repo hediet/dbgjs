@@ -721,6 +721,12 @@ pub struct SourceMatchSnapshot {
     pub text: String,
     pub before_context: Vec<String>,
     pub after_context: Vec<String>,
+    #[serde(default)]
+    pub excerpt_start_column: Option<u32>,
+    #[serde(default)]
+    pub text_truncated: bool,
+    #[serde(default)]
+    pub context_truncated: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -743,11 +749,17 @@ pub struct SourceSearchOptions {
 pub struct SourceSearchSnapshot {
     pub matches: Vec<SourceMatchSnapshot>,
     pub omitted_matches: u64,
+    #[serde(default)]
+    pub output_omitted_matches: u64,
     pub searched_sources: u32,
     pub searched_contents: u32,
     pub skipped_sources: u32,
     #[serde(default)]
     pub skipped: Vec<SourceSearchSkip>,
+    #[serde(default)]
+    pub output_truncated: bool,
+    #[serde(default)]
+    pub omitted_diagnostics: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
