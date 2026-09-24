@@ -138,6 +138,26 @@ pub struct TargetListOutput {
 }
 
 impl OutputFormat {
+    pub fn print_source_search(
+        &self,
+        snapshot: &SourceSearchSnapshot,
+        max_output_bytes: usize,
+        max_line_bytes: usize,
+        verbose_diagnostics: bool,
+        path: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let bounded = bounded_source_search_snapshot(
+            snapshot, max_output_bytes, max_line_bytes, verbose_diagnostics, path,
+        )?;
+        match self {
+            Self::Human => print!("{}", render_source_search_with_limits(
+                &bounded, max_output_bytes, max_line_bytes, verbose_diagnostics,
+            )),
+            Self::Json => println!("{}", serde_json::to_string(&bounded)?),
+        }
+        Ok(())
+    }
+
     pub fn print_heap_map_supplied(&self, capture: &str, script: &str) -> Result<(), serde_json::Error> {
         match self {
             Self::Json => println!("{}", serde_json::to_string(&serde_json::json!({
@@ -768,21 +788,133 @@ impl HumanOutput for SourceSearchSnapshot {
 }
 
 fn render_source_search(snapshot: &SourceSearchSnapshot) -> String {
+    render_source_search_with_limits(snapshot, 8192, 256, false)
+}
+
+fn source_excerpt(text: &str, center: usize, max_bytes: usize) -> (String, usize, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_owned(), 0, false);
+    }
+    let width = max_bytes.saturating_sub(6);
+    let mut start = center
+        .saturating_sub(width / 2)
+        .min(text.len().saturating_sub(width));
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = (start + width).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut excerpt = String::new();
+    if start > 0 {
+        excerpt.push('…');
+    }
+    excerpt.push_str(&text[start..end]);
+    if end < text.len() {
+        excerpt.push('…');
+    }
+    (excerpt, start, true)
+}
+
+fn bounded_source_search_snapshot(
+    snapshot: &SourceSearchSnapshot,
+    max_output_bytes: usize,
+    max_line_bytes: usize,
+    verbose_diagnostics: bool,
+    path: Option<&str>,
+) -> Result<SourceSearchSnapshot, Box<dyn std::error::Error>> {
+    let mut bounded = snapshot.clone();
+    for item in &mut bounded.matches {
+        let center = item.column.saturating_sub(1) as usize + item.match_length as usize / 2;
+        let (text, start, truncated) = source_excerpt(&item.text, center, max_line_bytes);
+        item.text = text;
+        item.text_truncated = truncated;
+        item.excerpt_start_column = truncated.then_some(
+            start.saturating_add(1).min(u32::MAX as usize) as u32,
+        );
+        for context in item.before_context.iter_mut().chain(&mut item.after_context) {
+            let (excerpt, _, clipped) = source_excerpt(context, 0, max_line_bytes);
+            *context = excerpt;
+            item.context_truncated |= clipped;
+        }
+    }
+    if !verbose_diagnostics {
+        bounded
+            .skipped
+            .sort_by_key(|skip| !path.is_some_and(|selector| skip.path.contains(selector)));
+        bounded
+            .skipped
+            .dedup_by(|a, b| a.path == b.path && a.kind == b.kind && a.reason == b.reason);
+        bounded.skipped.truncate(3);
+    }
+    bounded.omitted_diagnostics = snapshot.skipped_sources.saturating_sub(bounded.skipped.len() as u32);
+    bounded.output_truncated = bounded.matches.iter().any(|item| item.text_truncated || item.context_truncated)
+        || bounded.omitted_diagnostics > 0;
+    for skip in &mut bounded.skipped {
+        let (reason, _, truncated) = source_excerpt(&skip.reason, 0, max_line_bytes);
+        if !verbose_diagnostics && truncated {
+            skip.reason = reason;
+            bounded.output_truncated = true;
+        }
+    }
+    while serde_json::to_vec(&bounded)?.len().saturating_add(1) > max_output_bytes {
+        if bounded.skipped.pop().is_some() {
+            bounded.omitted_diagnostics += 1;
+        } else if bounded.matches.pop().is_some() {
+            bounded.output_omitted_matches += 1;
+        } else {
+            return Err(format!("--max-output-bytes {max_output_bytes} is too small for source search metadata").into());
+        }
+        bounded.output_truncated = true;
+    }
+    Ok(bounded)
+}
+
+fn render_source_search_with_limits(
+    snapshot: &SourceSearchSnapshot,
+    max_output_bytes: usize,
+    max_line_bytes: usize,
+    verbose_diagnostics: bool,
+) -> String {
     let mut output = String::new();
+    let mut omitted_output = 0;
     for item in &snapshot.matches {
-        writeln!(output, "{}:{}:{}", item.path, item.line, item.column).unwrap();
+        let mut block = String::new();
+        let length = if item.text_truncated || item.text.len() > max_line_bytes {
+            format!(" (match length {} bytes)", item.match_length)
+        } else {
+            String::new()
+        };
+        writeln!(block, "{}:{}:{}{}", item.path, item.line, item.column, length).unwrap();
         let first_context_line = item.line.saturating_sub(item.before_context.len() as u32);
         let width = (item.line + item.after_context.len() as u32).to_string().len();
         for (index, text) in item.before_context.iter().enumerate() {
             let line = first_context_line + index as u32;
-            writeln!(output, "    {line:>width$} | {text}").unwrap();
+            let (excerpt, _, _) = source_excerpt(text, 0, max_line_bytes);
+            writeln!(block, "    {line:>width$} | {excerpt}").unwrap();
         }
-        writeln!(output, "  > {:>width$} | {}", item.line, item.text).unwrap();
+        let center = if item.text_truncated {
+            0
+        } else {
+            item.column.saturating_sub(1) as usize + item.match_length as usize / 2
+        };
+        let (excerpt, _, _) = source_excerpt(&item.text, center, max_line_bytes);
+        writeln!(block, "  > {:>width$} | {}", item.line, excerpt).unwrap();
         for (index, text) in item.after_context.iter().enumerate() {
             let line = item.line + index as u32 + 1;
-            writeln!(output, "    {line:>width$} | {text}").unwrap();
+            let (excerpt, _, _) = source_excerpt(text, 0, max_line_bytes);
+            writeln!(block, "    {line:>width$} | {excerpt}").unwrap();
         }
-        output.push('\n');
+        block.push('\n');
+        if output.len() + block.len() + 512 <= max_output_bytes {
+            output.push_str(&block);
+        } else {
+            omitted_output += 1;
+        }
+    }
+    if omitted_output > 0 {
+        writeln!(output, "... {omitted_output} displayed match(es) omitted by --max-output-bytes").unwrap();
     }
     if snapshot.omitted_matches > 0 {
         writeln!(
@@ -791,6 +923,10 @@ fn render_source_search(snapshot: &SourceSearchSnapshot) -> String {
             snapshot.omitted_matches
         )
         .unwrap();
+    }
+    if snapshot.output_omitted_matches > 0 {
+        writeln!(output, "... {} matches omitted by --max-output-bytes; increase the budget or narrow --path",
+            snapshot.output_omitted_matches).unwrap();
     }
     if let Some(message) = source_search_incomplete_message(snapshot) {
         writeln!(output, "{message}").unwrap();
@@ -801,13 +937,37 @@ fn render_source_search(snapshot: &SourceSearchSnapshot) -> String {
         snapshot.searched_sources, snapshot.skipped_sources
     )
     .unwrap();
-    for source in &snapshot.skipped {
+    if snapshot.skipped_sources > 0 && snapshot.searched_sources > 0 {
+        writeln!(output, "Search may be incomplete: skipped sources may affect the requested path (a failed map's relevance is unknown). Use --verbose-diagnostics for details.").unwrap();
+    }
+    let max_diagnostics = if verbose_diagnostics { usize::MAX } else { 3 };
+    for source in snapshot.skipped.iter().take(max_diagnostics) {
+        let (path, _, _) = source_excerpt(&source.path, 0, max_line_bytes);
+        let (reason, _, _) = source_excerpt(&source.reason, 0, max_line_bytes);
         writeln!(
             output,
             "Skipped {} ({}): {}",
-            source.path, source.kind, source.reason
+            path, source.kind, reason
         )
         .unwrap();
+    }
+    let omitted_diagnostics = snapshot.omitted_diagnostics
+        + snapshot.skipped.len().saturating_sub(max_diagnostics) as u32;
+    if omitted_diagnostics > 0 {
+        writeln!(output, "... {omitted_diagnostics} additional diagnostics omitted; use --verbose-diagnostics").unwrap();
+    }
+    if snapshot.matches.iter().any(|item| item.text_truncated || item.context_truncated || item.text.len() > max_line_bytes
+        || item.before_context.iter().chain(&item.after_context).any(|line| line.len() > max_line_bytes)) {
+        output.push_str("Source excerpts truncated; use source show <path> --line <line> for the complete source.\n");
+    }
+    if output.len() > max_output_bytes {
+        let footer = "\nOutput truncated by --max-output-bytes; narrow --path or increase the budget.\n";
+        let mut end = max_output_bytes.saturating_sub(footer.len());
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        output.truncate(end);
+        output.push_str(footer);
     }
     output
 }
@@ -4284,6 +4444,35 @@ fn target_breakpoint_status(status: &TargetBreakpointStatus) -> String {
     }
 }
 
+fn breakpoint_diagnostic_lines(diagnostics: &[String]) -> Vec<String> {
+    let ordinary_nonmatches = diagnostics.iter()
+        .filter(|diagnostic| diagnostic.contains("none matching"))
+        .count();
+    let mut relevant = BTreeSet::new();
+    for diagnostic in diagnostics {
+        if !diagnostic.contains("none matching") {
+            relevant.insert(diagnostic.as_str());
+        }
+    }
+    let mut lines = Vec::new();
+    if ordinary_nonmatches > 0 {
+        lines.push(format!(
+            "{ordinary_nonmatches} loaded script(s) exposed no matching source; ordinary nonmatches omitted"
+        ));
+    }
+    for diagnostic in relevant.iter().take(3) {
+        let (excerpt, _, truncated) = source_excerpt(diagnostic, 0, 240);
+        lines.push(if truncated { format!("{excerpt} [truncated]") } else { excerpt });
+    }
+    let omitted = relevant.len().saturating_sub(3);
+    if omitted > 0 || ordinary_nonmatches > 0 || diagnostics.iter().any(|line| line.len() > 240) {
+        lines.push(format!(
+            "{omitted} additional distinct diagnostic(s) omitted; use --json for complete details or source explain <path> for source candidates"
+        ));
+    }
+    lines
+}
+
 fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &str) {
     match reason {
         BreakpointPendingReason::WaitingForTarget => {
@@ -4294,7 +4483,7 @@ fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &st
         }
         BreakpointPendingReason::SourceNotFound { diagnostics } => {
             println!("{indent}source not found in loaded scripts");
-            for diagnostic in diagnostics {
+            for diagnostic in breakpoint_diagnostic_lines(diagnostics) {
                 println!("{indent}- {diagnostic}");
             }
         }
@@ -4315,7 +4504,7 @@ fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &st
         }
         BreakpointPendingReason::Unmapped { diagnostics } => {
             println!("{indent}source matched, but the requested location is unmapped");
-            for diagnostic in diagnostics {
+            for diagnostic in breakpoint_diagnostic_lines(diagnostics) {
                 println!("{indent}- {diagnostic}");
             }
         }
@@ -4341,7 +4530,7 @@ fn print_target_breakpoint_explanation(
         }
         TargetBreakpointStatus::SourceNotFound { diagnostics }
         | TargetBreakpointStatus::Unmapped { diagnostics } => {
-            for diagnostic in diagnostics {
+            for diagnostic in breakpoint_diagnostic_lines(diagnostics) {
                 println!("      {diagnostic}");
             }
         }
@@ -4395,7 +4584,7 @@ mod tests {
     use super::{
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
-        aggregate_coverage_entries, coverage_entries, effective_file_metrics,
+        aggregate_coverage_entries, bounded_source_search_snapshot, breakpoint_diagnostic_lines, coverage_entries, effective_file_metrics,
         eval_truncation_guidance, heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
         page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
@@ -4624,6 +4813,9 @@ mod tests {
             text: text.to_owned(),
             before_context: Vec::new(),
             after_context: Vec::new(),
+            excerpt_start_column: None,
+            text_truncated: false,
+            context_truncated: false,
         }
     }
 
@@ -4631,10 +4823,13 @@ mod tests {
         SourceSearchSnapshot {
             matches,
             omitted_matches: 0,
+            output_omitted_matches: 0,
             searched_sources: 1,
             searched_contents: 1,
             skipped_sources: 0,
             skipped: Vec::new(),
+            output_truncated: false,
+            omitted_diagnostics: 0,
         }
     }
 
@@ -4670,6 +4865,119 @@ mod tests {
                 "1 source(s) searched, 0 skipped\n",
             )
         );
+    }
+
+    #[test]
+    fn source_search_bounds_long_lines_around_unicode_match() {
+        let text = format!("{}💡{}NEEDLE{}", "x".repeat(24000), "中".repeat(3), "y".repeat(24000));
+        let column = text.find("NEEDLE").unwrap() as u32 + 1;
+        let mut item = source_search_match("wide.js", 1, column, &text);
+        item.before_context = vec!["a".repeat(24000)];
+        item.after_context = vec!["b".repeat(24000)];
+        let rendered = render_source_search(&source_search_snapshot(vec![item]));
+        assert!(rendered.len() < 4096, "output was {} bytes", rendered.len());
+        assert!(rendered.contains("NEEDLE"));
+        assert!(rendered.contains(&format!("wide.js:1:{column}")));
+        assert!(rendered.contains("source show"));
+    }
+
+    #[test]
+    fn source_search_summarizes_repeated_unknown_map_failures() {
+        let mut snapshot = source_search_snapshot(vec![source_search_match("app.ts", 1, 1, "hit")]);
+        snapshot.skipped = (0..87).map(|i| SourceSearchSkip {
+            path: format!("unrelated-{i}.js.map"),
+            kind: "sourceMap".into(),
+            connection_id: None,
+            target_id: None,
+            reason: format!("404 on unrelated-{i}.js.map"),
+        }).collect();
+        snapshot.skipped_sources = snapshot.skipped.len() as u32;
+        let rendered = render_source_search(&snapshot);
+        assert!(rendered.len() < 2048, "diagnostics were {} bytes", rendered.len());
+        assert!(rendered.contains("incomplete"));
+        assert!(rendered.contains("87 skipped"));
+        assert!(rendered.contains("--verbose-diagnostics"));
+    }
+
+    #[test]
+    fn source_search_json_budget_preserves_locations_and_truncation_metadata() {
+        let text = format!("NEEDLE{}中{}", "x".repeat(48000), "y".repeat(48000));
+        let mut start = source_search_match("first.js", 1, 1, &text);
+        start.match_length = 6;
+        start.before_context = vec!["中".repeat(24000)];
+        let end_text = format!("{}NEEDLE", "x".repeat(48000));
+        let mut end = source_search_match("last.js", 2, end_text.find("NEEDLE").unwrap() as u32 + 1, &end_text);
+        end.match_length = 6;
+        let snapshot = source_search_snapshot(vec![start, end]);
+        let bounded = bounded_source_search_snapshot(&snapshot, 8192, 256, false, None).unwrap();
+        let encoded = serde_json::to_vec(&bounded).unwrap();
+        assert!(encoded.len() + 1 <= 8192);
+        assert_eq!(bounded.matches.len(), 2);
+        assert!(bounded.matches[0].text.starts_with("NEEDLE"));
+        assert!(bounded.matches[0].context_truncated);
+        assert!(bounded.matches[1].excerpt_start_column.unwrap() > 47000);
+        assert!(bounded.matches[1].text.contains("NEEDLE"));
+        assert_eq!(bounded.matches[1].column, snapshot.matches[1].column);
+        assert!(bounded.matches[1].text_truncated);
+        assert!(bounded.output_truncated);
+        let many = source_search_snapshot((0..50)
+            .map(|_| source_search_match("wide.js", 1, 1, "NEEDLE")).collect());
+        let small = bounded_source_search_snapshot(&many, 1024, 256, false, None).unwrap();
+        assert!(small.output_omitted_matches > 0);
+        assert_eq!(small.omitted_matches, 0, "--max-results must remain independent");
+        assert!(serde_json::to_vec(&small).unwrap().len() + 1 <= 1024);
+    }
+
+    #[test]
+    fn source_search_budget_preserves_full_diagnostics_on_explicit_opt_in() {
+        let mut snapshot = source_search_snapshot(Vec::new());
+        snapshot.skipped = (0..7).map(|i| SourceSearchSkip {
+            path: format!("bad-{i}.map"),
+            kind: "sourceMap".into(),
+            connection_id: None,
+            target_id: None,
+            reason: "404".into(),
+        }).collect();
+        snapshot.skipped_sources = 7;
+        let compact = bounded_source_search_snapshot(&snapshot, 8192, 256, false, Some("file.js")).unwrap();
+        assert_eq!(compact.skipped.len(), 3);
+        assert_eq!(compact.omitted_diagnostics, 4);
+        let verbose = bounded_source_search_snapshot(&snapshot, 8192, 256, true, None).unwrap();
+        assert_eq!(verbose.skipped.len(), 7);
+        assert_eq!(verbose.omitted_diagnostics, 0);
+    }
+
+    #[test]
+    fn source_search_budget_preserves_matches_before_skipped_diagnostics() {
+        let mut snapshot = source_search_snapshot(vec![source_search_match("match.ts", 1, 1, "hit")]);
+        snapshot.skipped = (0..5).map(|i| SourceSearchSkip {
+            path: format!("unrelated-{i}-{}.map", "x".repeat(260)),
+            kind: "sourceMap".into(),
+            connection_id: None,
+            target_id: None,
+            reason: "network failure".into(),
+        }).collect();
+        snapshot.skipped_sources = 5;
+        let bounded = bounded_source_search_snapshot(&snapshot, 1024, 256, false, None).unwrap();
+        assert_eq!(bounded.matches.len(), 1);
+        assert_eq!(bounded.output_omitted_matches, 0);
+        assert!(bounded.omitted_diagnostics > 2);
+        assert!(serde_json::to_vec(&bounded).unwrap().len() + 1 <= 1024);
+    }
+
+    #[test]
+    fn breakpoint_diagnostics_summarize_ordinary_nonmatches_and_keep_actionable_notes() {
+        let mut diagnostics: Vec<String> = (0..87).map(|i|
+            format!("script {i} exposes 1 source(s), none matching the requested authored URL")
+        ).collect();
+        diagnostics.extend((0..10).map(|_| "source alias resolved to ./src/chat.ts".to_owned()));
+        diagnostics.push("map acquisition failed: ".to_owned() + &"x".repeat(24000));
+        let lines = breakpoint_diagnostic_lines(&diagnostics);
+        let rendered = lines.join("\n");
+        assert!(rendered.len() < 1024, "breakpoint diagnostics were {} bytes", rendered.len());
+        assert!(rendered.contains("87 loaded script"));
+        assert!(rendered.contains("source alias resolved"));
+        assert!(rendered.contains("--json"));
     }
 
     #[test]
@@ -4729,6 +5037,7 @@ mod tests {
                 "\n",
                 "... 4 additional matches omitted; increase --max-results\n",
                 "1 source(s) searched, 1 skipped\n",
+                "Search may be incomplete: skipped sources may affect the requested path (a failed map's relevance is unknown). Use --verbose-diagnostics for details.\n",
                 "Skipped broken.js.map (sourceMap): invalid source map JSON\n",
             )
         );
@@ -4743,6 +5052,7 @@ mod tests {
         let snapshot = SourceSearchSnapshot {
             matches: Vec::new(),
             omitted_matches: 0,
+            output_omitted_matches: 0,
             searched_sources: 0,
             searched_contents: 0,
             skipped_sources: 1,
@@ -4753,6 +5063,8 @@ mod tests {
                 target_id: Some("target".to_owned()),
                 reason: "script was collected".to_owned(),
             }],
+            output_truncated: false,
+            omitted_diagnostics: 0,
         };
 
         assert_eq!(
