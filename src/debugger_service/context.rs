@@ -699,6 +699,7 @@ impl ContextApi for DebuggerService {
         if line == 0 || column == 0 {
             return Err(invalid_params("breakpoint lines and columns are one-based"));
         }
+        self.reject_target_logpoint_collision(&context_id, &breakpoint_id, true, None).await?;
         let runtime_breakpoint = TargetBreakpointSpec {
             id: breakpoint_id.clone(),
             source_url: source_path.clone(),
@@ -775,6 +776,18 @@ impl ContextApi for DebuggerService {
     ) -> Result<ContextSnapshot, JsonRpcError> {
         validate_breakpoint_id(&breakpoint_id)?;
         validate_breakpoint_spec(&specification)?;
+        {
+            let state = self.state.lock().await;
+            if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
+                return Ok(existing);
+            }
+        }
+        self.reject_target_logpoint_collision(
+            &context_id,
+            &breakpoint_id,
+            specification.enabled,
+            specification.target_selector.as_deref(),
+        ).await?;
         let runtime_breakpoint = TargetBreakpointSpec {
             id: breakpoint_id.clone(),
             source_url: specification.source_path.clone(),
@@ -895,5 +908,35 @@ impl ContextApi for DebuggerService {
                 .map_err(target_debugger_rpc_error)?;
         }
         Ok(result)
+    }
+}
+
+impl DebuggerService {
+    async fn reject_target_logpoint_collision(
+        &self,
+        context_id: &str,
+        breakpoint_id: &str,
+        enabled: bool,
+        target_selector: Option<&str>,
+    ) -> Result<(), JsonRpcError> {
+        if !breakpoint_id.starts_with("log:") || !enabled {
+            return Ok(());
+        }
+        let debuggers = {
+            let state = self.state.lock().await;
+            state.target_debuggers.iter()
+                .filter(|((candidate, _, target_id), _)| candidate == context_id
+                    && breakpoint_applies_to_target(enabled, target_selector, target_id))
+                .map(|(_, debugger)| debugger.clone())
+                .collect::<Vec<_>>()
+        };
+        for debugger in debuggers {
+            if debugger.owns_logpoint(breakpoint_id.to_owned()).await.map_err(target_debugger_rpc_error)? {
+                return Err(invalid_params(format!(
+                    "breakpoint {breakpoint_id} belongs to a target logpoint"
+                )));
+            }
+        }
+        Ok(())
     }
 }

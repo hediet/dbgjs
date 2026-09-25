@@ -5333,6 +5333,7 @@ fn target_debugger_rpc_error(error: TargetDebuggerError) -> JsonRpcError {
     let code = match error {
         TargetDebuggerError::InvalidBreakpointPosition
         | TargetDebuggerError::BreakpointOwnedByContext(_)
+        | TargetDebuggerError::BreakpointOwnedByTarget(_)
         | TargetDebuggerError::StalePause(_)
         | TargetDebuggerError::FrameNotFound(_)
         | TargetDebuggerError::ScopeNotFound(_)

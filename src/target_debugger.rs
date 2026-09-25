@@ -207,9 +207,8 @@ impl TargetDebuggerHandle {
         breakpoints: Vec<TargetBreakpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
         self.command(|response| TargetCommand::SetBreakpoints {
-            context_revision,
+            lifetime: BreakpointLifetime::ContextIntent(context_revision),
             breakpoints,
-            target_logpoints: false,
             response,
         })
         .await
@@ -220,9 +219,8 @@ impl TargetDebuggerHandle {
         breakpoints: Vec<TargetBreakpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, TargetDebuggerError> {
         self.command(|response| TargetCommand::SetBreakpoints {
-            context_revision: u64::MAX,
+            lifetime: BreakpointLifetime::TargetGeneration,
             breakpoints,
-            target_logpoints: true,
             response,
         })
         .await
@@ -254,6 +252,18 @@ impl TargetDebuggerHandle {
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub(crate) async fn owns_logpoint(
+        &self,
+        breakpoint_id: String,
+    ) -> Result<bool, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::OwnsLogpoint { breakpoint_id, response })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)
     }
 
     pub fn session_id(&self) -> &str {
@@ -974,11 +984,71 @@ impl TargetDebuggerHandle {
 
 type CommandResponse = oneshot::Sender<Result<TargetDebuggerSnapshot, TargetDebuggerError>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BreakpointLifetime {
+    ContextIntent(u64),
+    TargetGeneration,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BreakpointOwnership {
+    // Retain the context watermark even while a target-local binding occupies this ID.
+    context_revision: Option<u64>,
+    owner: Option<BreakpointOwner>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BreakpointOwner {
+    Context,
+    TargetGeneration,
+}
+
+impl BreakpointOwnership {
+    fn accepts(self, lifetime: BreakpointLifetime, id: &str) -> Result<bool, TargetDebuggerError> {
+        match lifetime {
+            BreakpointLifetime::ContextIntent(revision) => {
+                if self.context_revision.is_some_and(|current| current > revision) {
+                    return Ok(false);
+                }
+                if self.owner == Some(BreakpointOwner::TargetGeneration) {
+                    return Err(TargetDebuggerError::BreakpointOwnedByTarget(id.to_owned()));
+                }
+            }
+            BreakpointLifetime::TargetGeneration => {
+                if self.owner == Some(BreakpointOwner::Context) {
+                    return Err(TargetDebuggerError::BreakpointOwnedByContext(id.to_owned()));
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn installed(mut self, lifetime: BreakpointLifetime) -> Self {
+        match lifetime {
+            BreakpointLifetime::ContextIntent(revision) => {
+                self.context_revision = Some(revision);
+                self.owner = Some(BreakpointOwner::Context);
+            }
+            BreakpointLifetime::TargetGeneration => {
+                self.owner = Some(BreakpointOwner::TargetGeneration)
+            }
+        }
+        self
+    }
+
+    fn context_removed(mut self, revision: u64) -> Self {
+        self.context_revision = Some(revision);
+        if self.owner == Some(BreakpointOwner::Context) {
+            self.owner = None;
+        }
+        self
+    }
+}
+
 enum TargetCommand {
     SetBreakpoints {
-        context_revision: u64,
+        lifetime: BreakpointLifetime,
         breakpoints: Vec<TargetBreakpointSpec>,
-        target_logpoints: bool,
         response: CommandResponse,
     },
     RemoveBreakpoint {
@@ -989,6 +1059,10 @@ enum TargetCommand {
     RemoveLogpoint {
         breakpoint_id: String,
         response: oneshot::Sender<Result<crate::service_api::LogpointRemovalResult, TargetDebuggerError>>,
+    },
+    OwnsLogpoint {
+        breakpoint_id: String,
+        response: oneshot::Sender<bool>,
     },
     ReleaseIfWaiting {
         response: CommandResponse,
@@ -1197,8 +1271,7 @@ async fn run_target(
     snapshots: watch::Sender<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
 ) {
-    let mut breakpoint_revisions = BTreeMap::<String, u64>::new();
-    let mut target_logpoints = BTreeSet::<String>::new();
+    let mut breakpoint_owners = BTreeMap::<String, BreakpointOwnership>::new();
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
@@ -1221,42 +1294,34 @@ async fn run_target(
         };
         match next {
             Next::Command(Some(TargetCommand::SetBreakpoints {
-                context_revision,
+                lifetime,
                 breakpoints,
-                target_logpoints: target_owned,
                 response,
             })) => {
                 let result = async {
-                    let breakpoints_ids = breakpoints.iter()
-                        .map(|breakpoint| breakpoint.id.clone())
-                        .collect::<Vec<_>>();
-                    if target_owned {
-                        for breakpoint in &breakpoints {
-                            if breakpoint_spec(
-                                driver.state(),
-                                &BreakpointKey {
-                                    client_id: context_id.clone(),
-                                    breakpoint_id: breakpoint.id.clone(),
-                                },
-                            ).is_some() && !target_logpoints.contains(&breakpoint.id) {
-                                return Err(TargetDebuggerError::BreakpointOwnedByContext(
-                                    breakpoint.id.clone(),
-                                ));
+                    let applicable = breakpoints
+                        .into_iter()
+                        .filter_map(|breakpoint| {
+                            let owned = breakpoint_owners
+                                .get(&breakpoint.id)
+                                .copied()
+                                .unwrap_or_default();
+                            match owned.accepts(lifetime, &breakpoint.id) {
+                                Ok(true) => Some(Ok(breakpoint)),
+                                Ok(false) => None,
+                                Err(error) => Some(Err(error)),
                             }
-                        }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if matches!(lifetime, BreakpointLifetime::TargetGeneration)
+                        && !applicable.is_empty()
+                    {
                         driver.ensure_logpoint_binding().await.map_err(|error| {
                             TargetDebuggerError::LogpointTransport(error.message)
                         })?;
                     }
                     let mut applied = Vec::new();
-                    for breakpoint in breakpoints {
-                        if breakpoint_revisions
-                            .get(&breakpoint.id)
-                            .is_some_and(|current| *current > context_revision)
-                        {
-                            continue;
-                        }
-                        let previous_revision = breakpoint_revisions.get(&breakpoint.id).copied();
+                    for breakpoint in &applicable {
                         let previous = breakpoint_spec(
                             driver.state(),
                             &BreakpointKey {
@@ -1264,14 +1329,12 @@ async fn run_target(
                                 breakpoint_id: breakpoint.id.clone(),
                             },
                         );
-                        breakpoint_revisions.insert(breakpoint.id.clone(), context_revision);
-                        let breakpoint_id = breakpoint.id.clone();
-                        applied.push((breakpoint_id.clone(), previous, previous_revision));
+                        applied.push((breakpoint.id.clone(), previous));
                         if let Err(install) =
-                            apply_breakpoint(&mut driver, &context_id, breakpoint).await
+                            apply_breakpoint(&mut driver, &context_id, breakpoint.clone()).await
                         {
                             let mut rollback_failures = Vec::new();
-                            for (applied_id, prior, prior_revision) in applied.into_iter().rev() {
+                            for (applied_id, prior) in applied.into_iter().rev() {
                                 let rollback = match prior {
                                     Some(prior) => {
                                         apply_breakpoint(&mut driver, &context_id, prior).await
@@ -1281,24 +1344,8 @@ async fn run_target(
                                             .await
                                     }
                                 };
-                                match prior_revision {
-                                    Some(revision) => {
-                                        breakpoint_revisions.insert(applied_id.clone(), revision);
-                                    }
-                                    None => {
-                                        breakpoint_revisions.remove(&applied_id);
-                                    }
-                                }
                                 if let Err(rollback) = rollback {
                                     rollback_failures.push(format!("{applied_id}: {rollback}"));
-                                }
-                            }
-                            match previous_revision {
-                                Some(revision) => {
-                                    breakpoint_revisions.insert(breakpoint_id, revision);
-                                }
-                                None => {
-                                    breakpoint_revisions.remove(&breakpoint_id);
                                 }
                             }
                             return if rollback_failures.is_empty() {
@@ -1311,12 +1358,17 @@ async fn run_target(
                             };
                         }
                     }
-                    if target_owned {
-                        let ids = breakpoints_ids.iter()
+                    for breakpoint in &applicable {
+                        let owner = breakpoint_owners.entry(breakpoint.id.clone()).or_default();
+                        *owner = owner.installed(lifetime);
+                    }
+                    if matches!(lifetime, BreakpointLifetime::TargetGeneration) {
+                        let ids = applicable
+                            .iter()
+                            .map(|breakpoint| &breakpoint.id)
                             .filter_map(|id| id.strip_prefix("log:").map(str::to_owned))
                             .collect::<Vec<_>>();
                         driver.register_logpoints(&ids);
-                        target_logpoints.extend(breakpoints_ids);
                     }
                     Ok(snapshot_from_driver(
                         &context_id,
@@ -1356,12 +1408,16 @@ async fn run_target(
                 response,
             })) => {
                 let result = async {
-                    if breakpoint_revisions
-                        .get(&breakpoint_id)
-                        .is_none_or(|current| *current <= context_revision)
+                    let owner = breakpoint_owners.get(&breakpoint_id).copied().unwrap_or_default();
+                    if owner
+                        .context_revision
+                        .is_none_or(|current| current <= context_revision)
                     {
-                        remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
-                        breakpoint_revisions.insert(breakpoint_id, context_revision);
+                        if owner.owner != Some(BreakpointOwner::TargetGeneration) {
+                            remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
+                        }
+                        breakpoint_owners
+                            .insert(breakpoint_id, owner.context_removed(context_revision));
                     }
                     Ok(snapshot_from_driver(
                         &context_id,
@@ -1391,7 +1447,9 @@ async fn run_target(
                         &session_key,
                         &driver,
                     );
-                    let owned = target_logpoints.contains(&breakpoint_id);
+                    let owned = breakpoint_owners.get(&breakpoint_id).is_some_and(|state| {
+                        state.owner == Some(BreakpointOwner::TargetGeneration)
+                    });
                     let existing = previous
                         .breakpoints
                         .iter()
@@ -1402,8 +1460,10 @@ async fn run_target(
                     });
                     if owned {
                         remove_breakpoint(&mut driver, &context_id, &breakpoint_id).await?;
-                        breakpoint_revisions.remove(&breakpoint_id);
-                        target_logpoints.remove(&breakpoint_id);
+                        let owner = breakpoint_owners
+                            .get_mut(&breakpoint_id)
+                            .expect("owned breakpoint");
+                        owner.owner = None;
                         if let Some(id) = breakpoint_id.strip_prefix("log:") {
                             driver.unregister_logpoint(id);
                         }
@@ -1426,6 +1486,11 @@ async fn run_target(
                     publish_snapshot(&snapshots, &pause_events, result.target.clone());
                 }
                 let _ = response.send(result);
+            }
+            Next::Command(Some(TargetCommand::OwnsLogpoint { breakpoint_id, response })) => {
+                let _ = response.send(breakpoint_owners.get(&breakpoint_id).is_some_and(|state| {
+                    state.owner == Some(BreakpointOwner::TargetGeneration)
+                }));
             }
             Next::Command(Some(TargetCommand::ReleaseIfWaiting { response })) => {
                 let result = release_waiting_target(&mut driver, &session_key)
@@ -6408,6 +6473,8 @@ pub enum TargetDebuggerError {
     LogpointTransport(String),
     #[error("breakpoint {0} belongs to the context, not a target logpoint")]
     BreakpointOwnedByContext(String),
+    #[error("breakpoint {0} belongs to a target logpoint, not the context")]
+    BreakpointOwnedByTarget(String),
     #[error("the debugger session is no longer available")]
     SessionMissing,
     #[error("pause epoch {0} is stale")]
@@ -6537,6 +6604,7 @@ mod coverage_finalization_regression_tests;
 
 #[cfg(test)]
 mod tests {
+    use super::{BreakpointLifetime, BreakpointOwner, BreakpointOwnership};
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
@@ -6571,6 +6639,34 @@ mod tests {
     use crate::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[test]
+    fn breakpoint_lifetimes_keep_context_revisions_separate_from_target_generation() {
+        let context = BreakpointLifetime::ContextIntent;
+        let target = BreakpointLifetime::TargetGeneration;
+        let id = "log:collision";
+        let mut owner = BreakpointOwnership::default();
+        owner = owner.installed(context(5));
+        assert!(owner.accepts(target, id).is_err());
+        assert!(!owner.accepts(context(4), id).unwrap());
+        owner = owner.context_removed(6);
+        owner = owner.installed(target);
+        assert_eq!(owner.owner, Some(BreakpointOwner::TargetGeneration));
+        assert!(owner.accepts(context(7), id).is_err());
+        owner = owner.context_removed(7);
+        assert_eq!(owner.owner, Some(BreakpointOwner::TargetGeneration));
+        assert!(!owner.accepts(context(6), id).unwrap());
+        owner.owner = None;
+        assert!(!owner.accepts(context(6), id).unwrap());
+        owner = owner.installed(context(8));
+        assert!(owner.accepts(target, id).is_err());
+        owner = owner.context_removed(9);
+        assert!(owner.accepts(target, id).unwrap());
+        owner = owner.installed(target);
+        assert_eq!(owner.context_revision, Some(9));
+        assert!(owner.accepts(context(u64::MAX), id).is_err(),
+            "even the largest context revision must not override target instrumentation");
+    }
 
     #[tokio::test]
     async fn heap_progress_forwarding_is_command_scoped_and_flushes_final_update() {

@@ -438,6 +438,17 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
     ]);
     assert_eq!(updated["breakpoints"][0]["status"]["kind"], "installed");
     assert_eq!(updated["breakpoints"][0]["applications"].as_array().unwrap().len(), 1);
+    let context_collision = run_in(&cli, &service, &state_file, &root, &[
+        "breakpoint", "set", "log:probe", "file:///dbgjs-test/logpoint.js",
+        "1", "--column", "22",
+    ]);
+    assert!(!context_collision.0.success(), "context breakpoint must not replace a target logpoint");
+    assert!(!run(&["context", "show"])["breakpoints"].as_array().unwrap()
+        .iter().any(|breakpoint| breakpoint["id"] == "log:probe"),
+        "rejected context intent must not be persisted");
+    let live = run(&["target", "show", "--connection", "node"]);
+    let live = live.get("target").unwrap_or(&live);
+    assert_eq!(live["breakpoints"][0]["id"], "log:probe");
     let wrong_delete = run_in(
         &cli,
         &service,
@@ -468,6 +479,23 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
     let repeated = run(&["target", "logpoint", "delete", "probe", "--connection", "node"]);
     assert_eq!(repeated["existed"], false);
     assert_eq!(repeated["removedBindings"], 0);
+    let partial_batch = run_in(&cli, &service, &state_file, &root, &[
+        "target", "logpoints",
+        "first", "file:///dbgjs-test/logpoint.js", "1", "22", "1",
+        "second", "file:///dbgjs-test/logpoint.js", "1", "22", "2",
+        "--connection", "node",
+    ]);
+    assert!(!partial_batch.0.success(), "the second physical binding must fail");
+    let rolled_back = run(&["target", "show", "--connection", "node"]);
+    let rolled_back = rolled_back.get("target").unwrap_or(&rolled_back);
+    assert!(rolled_back["breakpoints"].as_array().unwrap().is_empty(),
+        "a failed batch must remove its first installed binding: {rolled_back}");
+    let stats = run(&["log", "--connection", "node"]);
+    assert!(stats["capture"]["logpoints"].as_array().is_none_or(Vec::is_empty),
+        "a failed batch must not register statistics: {stats}");
+    run(&["target", "logpoint", "first", "file:///dbgjs-test/logpoint.js",
+        "1", "22", "1", "--connection", "node"]);
+    assert_eq!(run(&["target", "logpoint", "delete", "first", "--connection", "node"])["existed"], true);
     run(&["breakpoint", "set", "log:owned", "file:///dbgjs-test/logpoint.js", "1", "--column", "22"]);
     let context_owned = run(&["target", "show", "--connection", "node"]);
     assert!(context_owned.to_string().contains("\"log:owned\""));
@@ -482,6 +510,16 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
     ]);
     assert!(!overwrite.0.success(), "target logpoint must not overwrite context-owned breakpoint");
     assert!(String::from_utf8_lossy(&overwrite.2).contains("belongs to the context"));
+    let batch = run_in(&cli, &service, &state_file, &root, &[
+        "target", "logpoints",
+        "new", "file:///dbgjs-test/logpoint.js", "1", "22", "1",
+        "owned", "file:///dbgjs-test/logpoint.js", "1", "22", "1",
+        "--connection", "node",
+    ]);
+    assert!(!batch.0.success(), "a colliding batch must not install earlier logpoints");
+    let stats = run(&["log", "--connection", "node"]);
+    assert!(stats["capture"]["logpoints"].as_array().is_none_or(Vec::is_empty),
+        "rejected batch must not register logpoint statistics: {stats}");
     let still_owned = run(&["target", "show", "--connection", "node"]);
     let still_owned = still_owned.get("target").unwrap_or(&still_owned);
     assert!(still_owned["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:owned"));
@@ -492,6 +530,23 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
     assert!(reused["breakpoints"].as_array().unwrap().iter().any(|b| b["id"] == "log:probe"),
         "deleting a target logpoint must not permanently tombstone its ID");
     run(&["breakpoint", "delete", "log:probe"]);
+    run(&["target", "logpoint", "transient", "file:///dbgjs-test/logpoint.js",
+        "1", "22", "1", "--connection", "node"]);
+    run(&["breakpoint", "set", "log:persistent", "file:///dbgjs-test/logpoint.js",
+        "2", "--column", "1"]);
+    run(&["connection", "disconnect", "--connection", "node"]);
+    run(&["connection", "connect", "--connection", "node"]);
+    run(&["target", "attach", "--connection", "node"]);
+    let reconnected = run(&["target", "show", "--connection", "node"]);
+    let reconnected = reconnected.get("target").unwrap_or(&reconnected);
+    let ids = reconnected["breakpoints"].as_array().unwrap().iter()
+        .map(|breakpoint| breakpoint["id"].as_str().unwrap()).collect::<Vec<_>>();
+    assert!(ids.contains(&"log:persistent"), "context intent must replay on reconnect: {ids:?}");
+    assert!(!ids.contains(&"log:transient"), "target generation instrumentation must expire: {ids:?}");
+    let logs = run(&["log", "--connection", "node"]);
+    assert!(logs["capture"]["logpoints"].as_array().is_none_or(Vec::is_empty),
+        "expired target-generation statistics must not leak: {logs}");
+    run(&["breakpoint", "delete", "log:persistent"]);
     run(&["connection", "disconnect", "--connection", "node"]);
     run(&["service", "stop"]);
     wait_until_removed(&state_file);
