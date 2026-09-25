@@ -202,7 +202,14 @@ impl CaptureApi for DebuggerService {
             snapshot = crate::target_debugger::exclude_coverage(snapshot, &baseline);
         }
         snapshot.capture_id = Some(name);
-        crate::capture_projection::project_stored_coverage(&mut snapshot);
+        let (prepared, diagnostics) = crate::capture_projection::prepare_view_sources(
+            snapshot.sources.iter().filter_map(|source| {
+                source.provenance.as_ref().map(|provenance| (source.script_id.as_str(), provenance))
+            }),
+            true,
+        ).await;
+        snapshot.projection_diagnostics.extend(diagnostics);
+        crate::capture_projection::project_stored_coverage_with_sources(&mut snapshot, &prepared);
         let diagnostics = snapshot.projection_diagnostics.clone();
         crate::coverage_filter::filter_coverage(
             &mut snapshot,
@@ -250,7 +257,16 @@ impl CaptureApi for DebuggerService {
             )).into());
         };
         snapshot.capture_id = name;
-        crate::capture_projection::project_stored_cpu(&mut snapshot, source_path.as_deref())
+        let (prepared, diagnostics) = if snapshot.samples.is_empty() && !snapshot.functions.is_empty() {
+            (Default::default(), Vec::new())
+        } else {
+            crate::capture_projection::prepare_view_sources(
+                snapshot.script_provenance.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+                false,
+            ).await
+        };
+        snapshot.projection_diagnostics.extend(diagnostics);
+        crate::capture_projection::project_stored_cpu_with_sources(&mut snapshot, source_path.as_deref(), &prepared)
             .map_err(target_debugger_rpc_error)?;
         Ok(snapshot)
     }

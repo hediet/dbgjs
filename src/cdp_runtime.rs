@@ -1629,7 +1629,7 @@ fn to_u32(field: &'static str, value: i64) -> Result<u32, CdpRuntimeEventError> 
     u32::try_from(value).map_err(|_| CdpRuntimeEventError::InvalidPosition { field, value })
 }
 
-fn decode_source_map_data_url(url: &str) -> Result<Vec<u8>, CdpRuntimeError> {
+pub(crate) fn decode_source_map_data_url(url: &str) -> Result<Vec<u8>, CdpRuntimeError> {
     let data = url
         .strip_prefix("data:")
         .ok_or_else(|| CdpRuntimeError::InvalidSourceMapDataUrl(url.to_owned()))?;
@@ -1711,8 +1711,32 @@ pub(crate) fn read_source_map_cache_for_view(
     read_source_map_cache_file(&path)
 }
 
+pub(crate) const MAX_VIEW_SOURCE_MAP_BYTES: usize = 32 * 1024 * 1024;
+
+pub(crate) async fn cache_source_map_for_view(
+    script_hash: &str,
+    resolved_url: &str,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let map = SourceMapData::new(bytes);
+    if !map.is_supported() {
+        return Err(format!("{resolved_url}: unsupported source map"));
+    }
+    let path = source_map_cache_path(script_hash, resolved_url)
+        .ok_or_else(|| "source map cache directory unavailable".to_owned())?;
+    write_source_map_cache(&path, &map)
+        .await
+        .map_err(|error| format!("failed to cache {resolved_url}: {error}"))
+}
+
 fn read_source_map_cache_file(path: &Path) -> Option<Vec<u8>> {
+    if std::fs::metadata(path).ok()?.len() > (MAX_VIEW_SOURCE_MAP_BYTES + 128) as u64 {
+        return None;
+    }
     let cached = std::fs::read(path).ok()?;
+    if cached.len() > MAX_VIEW_SOURCE_MAP_BYTES + 128 {
+        return None;
+    }
     decode_source_map_cache(cached).map(|map| map.to_vec())
 }
 

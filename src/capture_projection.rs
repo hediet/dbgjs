@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use reqwest::redirect::Policy;
 use sha2::{Digest, Sha256};
 use sourcemap::{DecodedMap, SourceMap, decode_slice};
 
@@ -15,6 +17,10 @@ struct AvailableMap {
     map_url: String,
     map: SourceMap,
 }
+
+const MAX_VIEW_RESOURCE_BYTES: usize = crate::cdp_runtime::MAX_VIEW_SOURCE_MAP_BYTES;
+
+pub(crate) type PreparedViewSources = BTreeMap<(String, String), VerifiedLocalSources>;
 
 pub(crate) struct VerifiedLocalSources {
     pub generated: String,
@@ -80,6 +86,22 @@ pub(crate) fn recover_source_map_for_view(
     generated_sha256: Option<&str>,
     script_hash: &str,
 ) -> Result<(Vec<u8>, String), String> {
+    let generated = if map_ref.is_none() {
+        generated_sha256.and_then(|hash| load_verified_generated_file(url, Some(hash)).ok())
+    } else {
+        None
+    };
+    let map_ref = map_ref.or_else(|| generated.as_deref().and_then(source_mapping_reference));
+    if let Some(reference) = map_ref.filter(|reference| reference.starts_with("data:"))
+        && generated.is_some()
+    {
+        if reference.len() > MAX_VIEW_RESOURCE_BYTES {
+            return Err(format!("{url}: inline source map exceeds view resource limit; raw measurements retained"));
+        }
+        return crate::cdp_runtime::decode_source_map_data_url(reference)
+            .map(|bytes| (bytes, url.to_owned()))
+            .map_err(|error| format!("{url}: inline source map unavailable ({error}); raw measurements retained"));
+    }
     let local_error = if let Some(hash) = generated_sha256 {
         match load_verified_local_sources(url, map_ref, Some(hash)) {
             Ok(sources) => return Ok((sources.map_bytes, sources.map_url)),
@@ -101,6 +123,7 @@ fn load_map(
     provenance: Option<&CaptureScriptProvenance>,
     url: &str,
     needs_generated_source: bool,
+    prepared: Option<&VerifiedLocalSources>,
 ) -> Result<AvailableMap, String> {
     let Some(provenance) = provenance else {
         return Err(format!(
@@ -112,20 +135,34 @@ fn load_map(
             "{url}: captured script URL differs from measurement; raw measurements retained"
         ));
     }
-    let (map_bytes, map_url) = recover_source_map_for_view(
-        url,
-        provenance.source_map_url.as_deref(),
-        provenance.source_sha256.as_deref(),
-        provenance.source_sha256.as_deref().unwrap_or_default(),
-    )?;
-    let generated = if needs_generated_source {
-        load_verified_generated_file(url, provenance.source_sha256.as_deref())?
+    let (generated, map_url, map_bytes) = if let Some(sources) = prepared {
+        (sources.generated.clone(), sources.map_url.clone(), sources.map_bytes.clone())
     } else {
-        String::new()
+        let local_generated = local_file(url)
+            .map(|_| load_verified_generated_file(url, provenance.source_sha256.as_deref()))
+            .transpose()?;
+        let map_ref = provenance
+            .source_map_url
+            .as_deref()
+            .or_else(|| local_generated.as_deref().and_then(source_mapping_reference));
+        let (map_bytes, map_url) = recover_map_for_view(
+            url,
+            map_ref,
+            provenance.source_sha256.as_deref(),
+        )?;
+        let generated = if needs_generated_source {
+            local_generated.ok_or_else(|| format!("{url}: generated source is unavailable locally; raw measurements retained"))?
+        } else {
+            String::new()
+        };
+        (generated, map_url, map_bytes)
     };
-    let map = match decode_slice(&map_bytes).map_err(|error| error.to_string())? {
+    let map = match decode_slice(&map_bytes)
+        .map_err(|error| format!("{url}: source map could not be decoded ({error}); raw measurements retained"))?
+    {
         DecodedMap::Regular(map) => map,
-        DecodedMap::Index(index) => index.flatten().map_err(|error| error.to_string())?,
+        DecodedMap::Index(index) => index.flatten()
+            .map_err(|error| format!("{url}: source map could not be flattened ({error}); raw measurements retained"))?,
         DecodedMap::Hermes(_) => {
             return Err(format!(
                 "{url}: unsupported Hermes source map; raw measurements retained"
@@ -154,6 +191,128 @@ fn load_map(
     })
 }
 
+fn recover_map_for_view(
+    url: &str,
+    map_ref: Option<&str>,
+    hash: Option<&str>,
+) -> Result<(Vec<u8>, String), String> {
+    if let Some(reference) = map_ref.filter(|reference| reference.starts_with("data:")) {
+        if reference.len() > MAX_VIEW_RESOURCE_BYTES {
+            return Err(format!("{url}: inline source map exceeds view resource limit; raw measurements retained"));
+        }
+        let bytes = crate::cdp_runtime::decode_source_map_data_url(reference)
+            .map_err(|error| format!("{url}: inline source map unavailable ({error}); raw measurements retained"))?;
+        return Ok((bytes, url.to_owned()));
+    }
+    recover_source_map_for_view(url, map_ref, hash, hash.unwrap_or_default())
+}
+
+fn source_mapping_reference(source: &str) -> Option<&str> {
+    source.lines().rev().find_map(|line| {
+        let line = line.trim();
+        ["//# sourceMappingURL=", "//@ sourceMappingURL=", "/*# sourceMappingURL="]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+            .map(|reference| reference.trim_end_matches("*/").trim())
+            .filter(|reference| !reference.is_empty())
+    })
+}
+
+async fn fetch_view_resource(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("{url}: only HTTP(S) view resources can be fetched"));
+    }
+    let mut response = client
+        .get(parsed)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| format!("{url}: view resource unavailable ({error})"))?;
+    if response.status().is_redirection() {
+        return Err(format!("{url}: view resource redirected; raw measurements retained"));
+    }
+    if response.content_length().is_some_and(|length| length > MAX_VIEW_RESOURCE_BYTES as u64) {
+        return Err(format!("{url}: view resource exceeds {MAX_VIEW_RESOURCE_BYTES} bytes"));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_VIEW_RESOURCE_BYTES {
+            return Err(format!("{url}: view resource exceeds {MAX_VIEW_RESOURCE_BYTES} bytes"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+async fn fetch_verified_view_sources(
+    client: &reqwest::Client,
+    provenance: &CaptureScriptProvenance,
+) -> Result<VerifiedLocalSources, String> {
+    let url = &provenance.url;
+    let generated = if local_file(url).is_some() {
+        load_verified_generated_file(url, provenance.source_sha256.as_deref())?
+    } else {
+        let expected = provenance.source_sha256.as_deref()
+            .ok_or_else(|| format!("{url}: generated source identity unavailable; raw measurements retained"))?;
+        let bytes = fetch_view_resource(client, url).await?;
+        if format!("{:x}", Sha256::digest(&bytes)) != expected {
+            return Err(format!("{url}: generated source identity changed; raw measurements retained"));
+        }
+        String::from_utf8(bytes)
+            .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))?
+    };
+    let map_ref = provenance.source_map_url.as_deref()
+        .or_else(|| source_mapping_reference(&generated));
+    let (map_bytes, map_url) = if map_ref.is_some_and(|reference| reference.starts_with("data:")) {
+        recover_map_for_view(url, map_ref, provenance.source_sha256.as_deref())?
+    } else if let Ok(cached) = recover_map_for_view(url, map_ref, provenance.source_sha256.as_deref()) {
+        cached
+    } else {
+        let map_url = resolved_map_url(url, map_ref)?;
+        let bytes = fetch_view_resource(client, &map_url).await?;
+        if let Some(hash) = provenance.source_sha256.as_deref()
+            && let Err(error) = crate::cdp_runtime::cache_source_map_for_view(hash, &map_url, bytes.clone()).await
+        {
+            eprintln!("{error}");
+        }
+        (bytes, map_url)
+    };
+    Ok(VerifiedLocalSources { generated, map_url, map_bytes })
+}
+
+pub(crate) async fn prepare_view_sources<'a>(
+    scripts: impl Iterator<Item = (&'a str, &'a CaptureScriptProvenance)>,
+    needs_generated_source: bool,
+) -> (PreparedViewSources, Vec<String>) {
+    let mut prepared = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .redirect(Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return (prepared, vec![format!("view HTTP client unavailable: {error}")]),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    for (id, provenance) in scripts {
+        let key = (id.to_owned(), provenance.url.clone());
+        if prepared.contains_key(&key) || load_map(Some(provenance), &provenance.url, needs_generated_source, None).is_ok() {
+            continue;
+        }
+        match tokio::time::timeout_at(deadline, fetch_verified_view_sources(&client, provenance)).await {
+            Ok(Ok(sources)) => { prepared.insert(key, sources); }
+            Ok(Err(error)) => diagnostics.push(format!("{error}; raw measurements retained")),
+            Err(_) => {
+                diagnostics.push(format!("{}: view reconstruction timed out; raw measurements retained", provenance.url));
+                break;
+            }
+        }
+    }
+    (prepared, diagnostics)
+}
+
 fn load_verified_generated_file(url: &str, source_sha256: Option<&str>) -> Result<String, String> {
     if source_sha256.is_none() {
         return Err(format!(
@@ -163,9 +322,15 @@ fn load_verified_generated_file(url: &str, source_sha256: Option<&str>) -> Resul
     let source = local_file(url).ok_or_else(|| {
         format!("{url}: generated source is unavailable locally; raw measurements retained")
     })?;
+    if fs::metadata(&source).is_ok_and(|metadata| metadata.len() > MAX_VIEW_RESOURCE_BYTES as u64) {
+        return Err(format!("{url}: generated source exceeds view resource limit; raw measurements retained"));
+    }
     let bytes = fs::read(&source).map_err(|error| {
         format!("{url}: generated source unavailable ({error}); raw measurements retained")
     })?;
+    if bytes.len() > MAX_VIEW_RESOURCE_BYTES {
+        return Err(format!("{url}: generated source exceeds view resource limit; raw measurements retained"));
+    }
     let actual = format!("{:x}", Sha256::digest(&bytes));
     if source_sha256 != Some(actual.as_str()) {
         return Err(format!(
@@ -201,9 +366,15 @@ pub(crate) fn load_verified_local_sources(
             "{url}: source map {map_url} is outside generated script directory; raw measurements retained"
         ));
     }
+    if fs::metadata(&map_path).is_ok_and(|metadata| metadata.len() > MAX_VIEW_RESOURCE_BYTES as u64) {
+        return Err(format!("{url}: source map exceeds view resource limit; raw measurements retained"));
+    }
     let map_bytes = fs::read(map_path).map_err(|error| {
         format!("{url}: source map {map_url} unavailable ({error}); raw measurements retained")
     })?;
+    if map_bytes.len() > MAX_VIEW_RESOURCE_BYTES {
+        return Err(format!("{url}: source map exceeds view resource limit; raw measurements retained"));
+    }
     Ok(VerifiedLocalSources {
         generated,
         map_url,
@@ -253,7 +424,15 @@ impl AvailableMap {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn project_stored_coverage(snapshot: &mut CoverageSnapshot) {
+    project_stored_coverage_with_sources(snapshot, &BTreeMap::new());
+}
+
+pub(crate) fn project_stored_coverage_with_sources(
+    snapshot: &mut CoverageSnapshot,
+    prepared: &PreparedViewSources,
+) {
     for source in &mut snapshot.sources {
         let Some(provenance) = source.provenance.as_ref() else {
             continue;
@@ -264,7 +443,7 @@ pub(crate) fn project_stored_coverage(snapshot: &mut CoverageSnapshot) {
                     crate::target_debugger::effective_coverage_ranges(&function.ranges);
             }
         }
-        match load_map(Some(provenance), &source.generated_url, true) {
+        match load_map(Some(provenance), &source.generated_url, true, prepared.get(&(source.script_id.clone(), source.generated_url.clone()))) {
             Ok(map) => {
                 for function in &mut source.functions {
                     function.generated_location = map
@@ -314,9 +493,18 @@ pub(crate) fn project_stored_coverage(snapshot: &mut CoverageSnapshot) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn project_stored_cpu(
     snapshot: &mut CpuProfileSnapshot,
     source_path: Option<&str>,
+) -> Result<(), crate::target_debugger::TargetDebuggerError> {
+    project_stored_cpu_with_sources(snapshot, source_path, &BTreeMap::new())
+}
+
+pub(crate) fn project_stored_cpu_with_sources(
+    snapshot: &mut CpuProfileSnapshot,
+    source_path: Option<&str>,
+    prepared: &PreparedViewSources,
 ) -> Result<(), crate::target_debugger::TargetDebuggerError> {
     if snapshot.samples.is_empty() && !snapshot.functions.is_empty() {
         // Legacy snapshots may have derived functions but no raw sample stream.
@@ -343,7 +531,7 @@ pub(crate) fn project_stored_cpu(
         if frame.script_id.is_empty() || maps.contains_key(&frame.script_id) {
             continue;
         }
-        let result = load_map(snapshot.script_provenance.get(&frame.script_id), &frame.url, false);
+        let result = load_map(snapshot.script_provenance.get(&frame.script_id), &frame.url, false, prepared.get(&(frame.script_id.clone(), frame.url.clone())));
         if let Err(message) = &result {
             if node.authored_location.is_none() {
                 snapshot.projection_diagnostics.push(message.clone());
@@ -685,6 +873,217 @@ mod tests {
     }
 
     #[test]
+    fn omitted_inline_map_is_recovered_from_verified_generated_file_at_view_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let map = fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/capture_projection/bundle.js.map"),
+        )
+        .unwrap();
+        let source = format!(
+            "a\nb\n//# sourceMappingURL=data:application/json;base64,{}\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, map.as_bytes())
+        );
+        let path = directory.path().join("bundle.js");
+        fs::write(&path, &source).unwrap();
+        let mut snapshot = coverage();
+        let url = url::Url::from_file_path(path).unwrap().to_string();
+        snapshot.sources[0].generated_url = url.clone();
+        let provenance = snapshot.sources[0].provenance.as_mut().unwrap();
+        provenance.url = url;
+        provenance.source_map_url = None;
+        provenance.source_sha256 = Some(format!("{:x}", Sha256::digest(source.as_bytes())));
+        let (recovered, map_url) = recover_source_map_for_view(
+            &provenance.url, None, provenance.source_sha256.as_deref(), "",
+        ).unwrap();
+        assert_eq!(recovered, map.as_bytes());
+        assert_eq!(map_url, provenance.url);
+        let raw = serde_json::to_vec(&snapshot).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("base64,"));
+        project_stored_coverage(&mut snapshot);
+        assert!(snapshot.sources[0].functions[0].authored_location.is_some());
+    }
+
+    #[tokio::test]
+    async fn cold_http_view_fetches_verified_source_and_map_without_capture_requests() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let generated = b"a\nb\n".to_vec();
+        let map = fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/capture_projection/bundle.js.map"),
+        )
+        .unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = hits.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let size = stream.read(&mut request).await.unwrap();
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let missing = request[..size].starts_with(b"GET /missing.js.map ");
+                let oversized = request[..size].starts_with(b"GET /oversized.js.map ");
+                let body: &[u8] = if request[..size].starts_with(b"GET /bundle.js.map ") {
+                    &map
+                } else if missing || oversized {
+                    &[]
+                } else {
+                    &generated
+                };
+                stream.write_all(
+                    format!("HTTP/1.1 {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        if missing { "404 Not Found" } else { "200 OK" },
+                        if oversized { MAX_VIEW_RESOURCE_BYTES + 1 } else { body.len() },
+                    ).as_bytes(),
+                ).await.unwrap();
+                stream.write_all(body).await.unwrap();
+            }
+        });
+        let mut profile = cpu();
+        let url = format!("{base}/bundle.js");
+        for node in &mut profile.nodes {
+            if node.call_frame.script_id == "1" {
+                node.call_frame.url = url.clone();
+            }
+        }
+        let provenance = profile.script_provenance.get_mut("1").unwrap();
+        provenance.url = url;
+        provenance.source_map_url = Some("bundle.js.map".into());
+        let payload = serde_json::to_vec(&profile).unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let (prepared, diagnostics) = prepare_view_sources(
+            profile.script_provenance.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+            false,
+        ).await;
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        project_stored_cpu_with_sources(&mut profile, None, &prepared).unwrap();
+        assert!(profile.nodes[1].authored_location.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        let mut second: CpuProfileSnapshot = serde_json::from_slice(&payload).unwrap();
+        let (prepared, diagnostics) = prepare_view_sources(
+            second.script_provenance.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+            false,
+        ).await;
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        project_stored_cpu_with_sources(&mut second, None, &prepared).unwrap();
+        assert!(second.nodes[1].authored_location.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        let mut coverage = coverage();
+        coverage.sources[0].generated_url = format!("{base}/bundle.js");
+        coverage.sources[0].provenance.as_mut().unwrap().url = coverage.sources[0].generated_url.clone();
+        coverage.sources[0].provenance.as_mut().unwrap().source_map_url = Some("bundle.js.map".into());
+        let (prepared, diagnostics) = prepare_view_sources(
+            coverage.sources.iter().filter_map(|source| source.provenance.as_ref()
+                .map(|provenance| (source.script_id.as_str(), provenance))),
+            true,
+        ).await;
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        project_stored_coverage_with_sources(&mut coverage, &prepared);
+        assert!(coverage.sources[0].functions[0].authored_location.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        for (reference, expected) in [
+            ("missing.js.map", "404"),
+            ("oversized.js.map", "exceeds"),
+        ] {
+            let mut missing: CpuProfileSnapshot = serde_json::from_slice(&payload).unwrap();
+            missing.script_provenance.get_mut("1").unwrap().source_map_url = Some(reference.into());
+            let (prepared, errors) = prepare_view_sources(
+                missing.script_provenance.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+                false,
+            ).await;
+            assert!(prepared.is_empty());
+            assert!(errors.iter().any(|error| error.contains(expected)), "{errors:?}");
+            missing.projection_diagnostics.extend(errors);
+            project_stored_cpu_with_sources(&mut missing, None, &prepared).unwrap();
+            assert!(missing.nodes[1].authored_location.is_none());
+            assert_eq!(missing.samples, vec![2, 3]);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 7);
+        let mut mismatched: CpuProfileSnapshot = serde_json::from_slice(&payload).unwrap();
+        mismatched.script_provenance.get_mut("1").unwrap().source_sha256 = Some("0".repeat(64));
+        let (prepared, errors) = prepare_view_sources(
+            mismatched.script_provenance.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+            false,
+        ).await;
+        assert!(prepared.is_empty());
+        assert!(errors.iter().any(|error| error.contains("identity changed")), "{errors:?}");
+        assert_eq!(hits.load(Ordering::SeqCst), 8);
+        let cache_path = crate::cdp_runtime::source_map_cache_path_for_test(
+            coverage.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
+            &format!("{base}/bundle.js.map"),
+        );
+        fs::remove_file(&cache_path).unwrap();
+        let _ = fs::remove_file(cache_path.with_extension("access"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn file_script_recovers_remote_map_and_rejects_changed_source_before_request() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let map_url = format!("http://{}/cdn-map.js.map", listener.local_addr().unwrap());
+        let map = fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/capture_projection/bundle.js.map"),
+        )
+        .unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = hits.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                stream.read(&mut request).await.unwrap();
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                stream.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    map.len()
+                ).as_bytes()).await.unwrap();
+                stream.write_all(&map).await.unwrap();
+            }
+        });
+        let mut snapshot = coverage();
+        let provenance = snapshot.sources[0].provenance.as_mut().unwrap();
+        provenance.source_map_url = Some(map_url.clone());
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let (prepared, errors) = prepare_view_sources(
+            snapshot.sources.iter().filter_map(|source| source.provenance.as_ref()
+                .map(|provenance| (source.script_id.as_str(), provenance))),
+            true,
+        ).await;
+        assert!(errors.is_empty(), "{errors:?}");
+        project_stored_coverage_with_sources(&mut snapshot, &prepared);
+        assert!(snapshot.sources[0].functions[0].authored_location.is_some());
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let mut changed = coverage();
+        changed.sources[0].provenance.as_mut().unwrap().source_map_url = Some(map_url.clone());
+        changed.sources[0].provenance.as_mut().unwrap().source_sha256 = Some("0".repeat(64));
+        let (prepared, errors) = prepare_view_sources(
+            changed.sources.iter().filter_map(|source| source.provenance.as_ref()
+                .map(|provenance| (source.script_id.as_str(), provenance))),
+            true,
+        ).await;
+        changed.projection_diagnostics.extend(errors);
+        project_stored_coverage_with_sources(&mut changed, &prepared);
+        assert!(changed.sources[0].functions[0].authored_location.is_none());
+        assert!(changed.projection_diagnostics.iter().any(|error| error.contains("identity")));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        let path = crate::cdp_runtime::source_map_cache_path_for_test(
+            snapshot.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
+            &map_url,
+        );
+        fs::remove_file(&path).unwrap();
+        let _ = fs::remove_file(path.with_extension("access"));
+        server.abort();
+    }
+
+    #[test]
     fn legacy_cpu_functions_without_raw_samples_remain_readable() {
         let mut profile = cpu();
         project_stored_cpu(&mut profile, None).unwrap();
@@ -704,7 +1103,7 @@ mod tests {
     #[test]
     fn generated_offsets_use_utf16_columns_and_reject_half_surrogates() {
         let provenance = fixture();
-        let mut map = load_map(Some(&provenance), &provenance.url, true).unwrap();
+        let mut map = load_map(Some(&provenance), &provenance.url, true, None).unwrap();
         map.generated = "😀a".into();
         map.checkpoints = vec![(0, 0, 0, 0), (2, 4, 0, 2)];
         assert_eq!(map.generated_position(1), None);

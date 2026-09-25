@@ -151,11 +151,16 @@ Capture persists cumulative raw ranges and cheap script provenance; mapping,
 exclusion and path filtering happen when viewing. When original generated source
 or its map is unavailable or has changed, the raw ranges remain available with
 explicit projection diagnostics rather than an empty authored result.
+At view time, verified local files, cached maps, and bounded HTTP(S) source/map
+requests can reconstruct authored locations without attaching to the target.
+An omitted inline map can be recovered from the `sourceMappingURL` directive
+when the generated source is available and matches its captured SHA-256.
 Inline `data:` and oversized script/map URLs are omitted from capture
 provenance so URLs cannot smuggle source or map bytes into raw payloads.
 The legacy `raw` take option now produces the same raw capture in either mode;
-`noCache` applies only to live source acquisition, not stored views, which read
-the current local files without retaining source-map data in capture payloads.
+`noCache` applies only to live source acquisition, not stored views. Stored
+views reuse the verified source-map cache when available and may populate it
+after fetching a map; capture payloads never contain source or map bytes.
 
 {{example:coverage-start,coverage-baseline,coverage-type,coverage-stop,coverage-show}}
 
