@@ -317,6 +317,9 @@ Self       Total      Samples  Function
 
 Capture the heap and find classes by authored name, even in minified code.
 Instance IDs let you inspect objects and follow references within that capture.
+Stored graph selections, references, paths, dominators, aggregates, and diffs
+continue working after the target detaches or the service restarts. Live object
+inspection is separate and still requires an attached target.
 Heap capture stores the original snapshot and lightweight script identity (URL,
 hash, map URL and execution provenance), not copies of source files or maps.
 Authored names are resolved when viewing if a map is available; otherwise the

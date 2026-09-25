@@ -7953,6 +7953,111 @@ mod tests {
     }
 
     #[test]
+    fn stored_heap_graph_is_queryable_after_restart_without_target() {
+        use crate::service_api::{
+            HeapAggregateBy, HeapEdgePolicy, HeapMappingSnapshot, HeapMappingStatus,
+            HeapNodeSelector, HeapPathOptions, HeapReferenceDirection, HeapScriptSnapshot,
+            TargetRef,
+        };
+        let root = std::env::current_dir().unwrap().join("target")
+            .join(format!("offline-heap-graph-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let heap_path = root.join("capture.heapsnapshot");
+        let raw = r#"{"snapshot":{"meta":{"node_fields":["type","name","id","self_size","edge_count"],"node_types":[["hidden","object"],"string","number","number","number"],"edge_fields":["type","name_or_index","to_node"],"edge_types":[["property"],"string_or_number","node"],"location_fields":["object_index","script_id","line","column"]},"node_count":2,"edge_count":1},"nodes":[0,0,1,0,1,1,1,7,16,0],"edges":[0,2,5],"locations":[5,7,0,0],"strings":["root","a","child"]}"#;
+        fs::write(&heap_path, raw).unwrap();
+        let second_path = root.join("second.heapsnapshot");
+        fs::write(&second_path, raw).unwrap();
+        let mut state = ServiceState::default();
+        let mut first = heap_capture("test", "heap", "target-a", "runtime", &heap_path);
+        first.heap_mapping = Some(HeapMappingSnapshot {
+            connection_generation: 1,
+            scripts: vec![HeapScriptSnapshot {
+                script_id: "7".into(),
+                url: "https://example.test/app.js".into(),
+                hash: "capture-hash".into(),
+                source_map_url: Some("https://example.test/app.js.map".into()),
+                source_map: None,
+                generated_source: None,
+                mapping_status: HeapMappingStatus::NotAttempted,
+                diagnostic: None,
+                provenance: Default::default(),
+            }],
+            hydration_duration_micros: 0,
+        });
+        state.captures.insert(("test".into(), "heap".into()), first);
+        state.captures.insert(("test".into(), "second".into()),
+            heap_capture("test", "second", "target-a", "runtime", &second_path));
+        let writer = service_with_state(persistence_path.clone(), state);
+        writer.persist(&writer.state.blocking_lock()).unwrap();
+        drop(writer);
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path).unwrap();
+        let target = TargetRef {
+            connection: crate::service_api::ConnectionRef {
+                context_id: "test".into(),
+                connection_id: "runtime".into(),
+            },
+            target_id: "target-a".into(),
+        };
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let nodes = restored.select_heap_nodes(
+                &CallCtx::default(), target.clone(), "heap".into(),
+                HeapNodeSelector { heap_object_id: Some("7".into()), ..Default::default() },
+                None, false,
+            ).await.unwrap();
+            assert_eq!(nodes.nodes.len(), 1);
+            assert_eq!(nodes.nodes[0].heap_object_id, "7");
+            assert_eq!(nodes.nodes[0].source.locations[0].position.resolved.source_url,
+                "https://example.test/app.js");
+            assert!(nodes.nodes[0].source.locations[0].position.diagnostic
+                .as_deref().unwrap().contains("unavailable"));
+            let refs = restored.get_heap_references(
+                &CallCtx::default(), target.clone(), "heap#1".into(),
+                HeapReferenceDirection::Outgoing, HeapEdgePolicy::All, 10, None,
+            ).await.unwrap();
+            assert_eq!(refs.references.len(), 1);
+            assert_eq!(refs.references[0].target, "heap#7");
+            let path = restored.get_heap_path(
+                &CallCtx::default(), target.clone(), "heap#1".into(), "heap#7".into(),
+                HeapPathOptions::default(), None,
+            ).await.unwrap().unwrap();
+            assert_eq!(path.steps.len(), 1);
+            let incompatible = restored.get_heap_path(
+                &CallCtx::default(), target.clone(), "heap#1".into(),
+                "second#7".into(), HeapPathOptions::default(), None,
+            ).await.unwrap_err();
+            assert!(incompatible.to_string().contains("incompatible"));
+            let dominators = restored.get_heap_dominator_chain(
+                &CallCtx::default(), target.clone(), "heap#7".into(), None,
+            ).await.unwrap();
+            assert_eq!(dominators.node.heap_object_id, "7");
+            let aggregate = restored.aggregate_heap_snapshot(
+                &CallCtx::default(), target.clone(), "heap".into(),
+                HeapAggregateBy::NodeType, 10, None,
+            ).await.unwrap();
+            assert!(!aggregate.entries.is_empty());
+            let diff = restored.diff_heap_snapshots(
+                &CallCtx::default(), target.clone(), "heap".into(), "second".into(),
+                HeapAggregateBy::NodeType, 10, None,
+            ).await.unwrap();
+            assert!(diff.entries.is_empty());
+            let promises = restored.select_promises(
+                &CallCtx::default(), target.clone(), "heap".into(), None, 10, 80,
+            ).await.unwrap();
+            assert_eq!(promises.total_promises, 0);
+            let _classes = restored.get_heap_classes(
+                &CallCtx::default(), target, "heap".into(), None, false,
+            ).await.unwrap();
+            assert!(restored.state.lock().await.target_debuggers.is_empty());
+        });
+        assert_eq!(fs::read(&heap_path).unwrap(), raw.as_bytes());
+        assert_eq!(fs::read(&second_path).unwrap(), raw.as_bytes());
+        drop(restored);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn schema_five_validates_payload_integrity_and_kind_on_restart() {
         let root = std::env::current_dir()
             .unwrap()

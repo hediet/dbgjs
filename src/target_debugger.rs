@@ -2895,6 +2895,261 @@ struct StoredHeapCapture {
     source_resolver: Arc<std::sync::Mutex<crate::heap_locations::HeapSourceResolver>>,
 }
 
+pub(crate) struct StoredHeapGraph {
+    capture_id: String,
+    capture: StoredHeapCapture,
+    graph: HeapGraph,
+    parse_duration: Duration,
+}
+
+impl StoredHeapGraph {
+    pub(crate) fn open(
+        path: &Path,
+        capture_id: String,
+        mapping: Option<HeapMappingSnapshot>,
+    ) -> Result<Self, TargetDebuggerError> {
+        let started = Instant::now();
+        let graph = parse_heap_graph(
+            File::open(path).map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?,
+        )
+        .map_err(|error| TargetDebuggerError::HeapSnapshot(error.to_string()))?;
+        Ok(Self {
+            capture_id,
+            capture: StoredHeapCapture {
+                path: path.to_path_buf(),
+                timing: HeapSnapshotTiming::default(),
+                mapping: mapping.unwrap_or(HeapMappingSnapshot {
+                    connection_generation: 0,
+                    scripts: Vec::new(),
+                    hydration_duration_micros: 0,
+                }),
+                source_resolver: Default::default(),
+            },
+            graph,
+            parse_duration: started.elapsed(),
+        })
+    }
+
+    pub(crate) fn select(
+        &self,
+        selector: HeapNodeSelector,
+        max_string_length: Option<u32>,
+        include_dominators: bool,
+    ) -> Result<HeapNodeSelectionSnapshot, TargetDebuggerError> {
+        let heap_object_id = selector
+            .heap_object_id.as_deref().map(parse_heap_object_id).transpose()?;
+        if selector.name.is_some() && selector.name_regex.is_some() {
+            return Err(TargetDebuggerError::InvalidHeapSelector(
+                "--name and --name-regex are mutually exclusive".into(),
+            ));
+        }
+        if selector.string_contains.is_some() && selector.string_regex.is_some() {
+            return Err(TargetDebuggerError::InvalidHeapSelector(
+                "stringContains and stringRegex are mutually exclusive".into(),
+            ));
+        }
+        let name_regex = selector.name_regex.as_deref().map(regex::Regex::new)
+            .transpose().map_err(|error| TargetDebuggerError::InvalidHeapSelector(error.to_string()))?;
+        let string_regex = selector.string_regex.as_deref().map(regex::Regex::new)
+            .transpose().map_err(|error| TargetDebuggerError::InvalidHeapSelector(error.to_string()))?;
+        let mut graph_selector = NodeSelector::new();
+        if let Some(id) = heap_object_id {
+            graph_selector = graph_selector.heap_object_id(id);
+        }
+        if let Some(kind) = selector.node_type.as_deref() {
+            graph_selector = graph_selector.node_type(kind);
+        }
+        if let Some(name) = selector.name.as_deref() {
+            graph_selector = graph_selector.raw_name(TextMatcher::Exact(name));
+        } else if let Some(regex) = name_regex.as_ref() {
+            graph_selector = graph_selector.raw_name(TextMatcher::Regex(regex));
+        }
+        if let Some(value) = selector.string_contains.as_deref() {
+            graph_selector = graph_selector.string_value(TextMatcher::Contains(value));
+        } else if let Some(regex) = string_regex.as_ref() {
+            graph_selector = graph_selector.string_value(TextMatcher::Regex(regex));
+        }
+        if let Some(size) = selector.min_shallow_size {
+            graph_selector = graph_selector.min_shallow_size(size);
+        }
+        if let Some(size) = selector.max_shallow_size {
+            graph_selector = graph_selector.max_shallow_size(size);
+        }
+        if let Some(limit) = selector.limit {
+            graph_selector = graph_selector.limit(limit as usize);
+        }
+        let selection = self.graph.select_with_stats(&graph_selector);
+        let dominators = include_dominators.then(|| self.graph.dominators())
+            .transpose().map_err(heap_analysis_error)?;
+        let nodes = selection.nodes.into_iter().map(|node| {
+            heap_node_snapshot(&self.graph, &self.capture_id, node, max_string_length,
+                dominators, Some(&self.capture))
+        }).collect::<Result<Vec<_>, _>>()?;
+        Ok(HeapNodeSelectionSnapshot {
+            capture_id: self.capture_id.clone(),
+            total_nodes: self.graph.node_count() as u64,
+            total_edges: self.graph.edge_count() as u64,
+            nodes,
+            incomplete_string_count: selection.incomplete_string_count,
+            graph_parse_duration_micros: self.parse_duration.as_micros() as u64,
+            used_cached_graph: false,
+        })
+    }
+
+    fn node(&self, node: NodeIndex, max_string_length: Option<u32>,
+        dominators: Option<&crate::heap_graph::DominatorAnalysis>,
+    ) -> Result<HeapNodeSnapshot, TargetDebuggerError> {
+        heap_node_snapshot(&self.graph, &self.capture_id, node, max_string_length,
+            dominators, Some(&self.capture))
+    }
+
+    fn reference_node(&self, reference: &str) -> Result<NodeIndex, TargetDebuggerError> {
+        let (capture, id) = parse_heap_reference(reference)?;
+        if capture != self.capture_id {
+            return Err(TargetDebuggerError::IncompatibleHeapCaptures {
+                older: self.capture_id.clone(),
+                newer: capture,
+            });
+        }
+        heap_node_by_id(&self.graph, id)
+    }
+
+    pub(crate) fn promises(&self, state: Option<PromiseState>, limit: u32,
+        max_preview_length: u32,
+    ) -> Result<PromiseSelectionSnapshot, TargetDebuggerError> {
+        let (promises, total_promises) = inspect_heap_promises(
+            &self.graph, &self.capture_id, state, limit, max_preview_length)
+            .map_err(heap_analysis_error)?;
+        Ok(PromiseSelectionSnapshot {
+            capture_id: self.capture_id.clone(),
+            omitted_promise_count: total_promises.saturating_sub(promises.len() as u64),
+            total_promises,
+            promises,
+            graph_parse_duration_micros: self.parse_duration.as_micros() as u64,
+            used_cached_graph: false,
+        })
+    }
+
+    pub(crate) fn references(&self, reference: &str, direction: HeapReferenceDirection,
+        edge_policy: HeapEdgePolicy, limit: u32, max_string_length: Option<u32>,
+    ) -> Result<HeapReferencesSnapshot, TargetDebuggerError> {
+        let node = self.reference_node(reference)?;
+        let mut references = Vec::new();
+        if matches!(direction, HeapReferenceDirection::Outgoing | HeapReferenceDirection::Both) {
+            references.extend(self.graph.outgoing_references(node).map_err(heap_analysis_error)?
+                .filter(|edge| edge_policy == HeapEdgePolicy::All || edge.edge_type != "weak"));
+        }
+        if matches!(direction, HeapReferenceDirection::Incoming | HeapReferenceDirection::Both) {
+            references.extend(self.graph.incoming_references(node).map_err(heap_analysis_error)?
+                .filter(|edge| edge_policy == HeapEdgePolicy::All || edge.edge_type != "weak"));
+        }
+        references.sort_by_key(|edge| edge.edge.0);
+        let omitted_reference_count = references.len().saturating_sub(limit as usize) as u64;
+        references.truncate(limit as usize);
+        let references = references.into_iter().map(|edge| {
+            heap_reference_snapshot(&self.graph, &self.capture_id, edge, Some(&self.capture))
+        }).collect::<Result<Vec<_>, _>>()?;
+        Ok(HeapReferencesSnapshot {
+            capture_id: self.capture_id.clone(),
+            node: self.node(node, max_string_length, None)?,
+            direction,
+            edge_policy,
+            references,
+            omitted_reference_count,
+        })
+    }
+
+    pub(crate) fn path(&self, from: String, to: String, options: HeapPathOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<Option<HeapPathSnapshot>, TargetDebuggerError> {
+        let from_node = self.reference_node(&from)?;
+        let to_node = self.reference_node(&to)?;
+        self.graph.shortest_path(from_node, to_node, PathOptions {
+            direction: heap_path_direction(options.direction),
+            edge_policy: heap_edge_policy(options.edge_policy),
+            cost: heap_path_cost(options.cost),
+        }).map_err(heap_analysis_error)?.map(|path| {
+            let nodes = path.nodes.into_iter().map(|node| self.node(node, max_string_length, None))
+                .collect::<Result<Vec<_>, _>>()?;
+            let steps = path.steps.into_iter().map(|step| {
+                heap_path_step_snapshot(&self.graph, &self.capture_id, step)
+            }).collect::<Result<Vec<_>, _>>()?;
+            Ok(HeapPathSnapshot {
+                capture_id: self.capture_id.clone(), from, to, cost: path.cost, nodes, steps,
+            })
+        }).transpose()
+    }
+
+    pub(crate) fn dominators(&self, reference: &str, max_string_length: Option<u32>,
+    ) -> Result<HeapDominatorSnapshot, TargetDebuggerError> {
+        let node = self.reference_node(reference)?;
+        let analysis = self.graph.dominators().map_err(heap_analysis_error)?;
+        let mut chain = Vec::new();
+        let mut current = node;
+        while let Some(parent) = analysis.immediate_dominator(current) {
+            chain.push(self.node(parent, max_string_length, Some(analysis))?);
+            current = parent;
+        }
+        Ok(HeapDominatorSnapshot {
+            capture_id: self.capture_id.clone(),
+            node: self.node(node, max_string_length, Some(analysis))?,
+            chain,
+        })
+    }
+
+    pub(crate) fn aggregate(&self, by: HeapAggregateBy, limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapAggregateSnapshot, TargetDebuggerError> {
+        let aggregate = self.graph.aggregate(heap_aggregate_by(by));
+        let mut entries = aggregate.groups.into_iter()
+            .filter(|(_, value)| value.count != 0 || value.shallow_size != 0)
+            .map(|(key, value)| {
+                let (key, key_truncated) = bounded_heap_text(&key, max_string_length);
+                Ok(HeapAggregateEntrySnapshot {
+                    key, key_truncated, count: value.count,
+                    shallow_size: u64::try_from(value.shallow_size).map_err(|_| {
+                        TargetDebuggerError::HeapAnalysis("aggregate shallow size exceeds u64".into())
+                    })?,
+                })
+            }).collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+        entries.sort_by_key(|entry| std::cmp::Reverse((entry.shallow_size, entry.count)));
+        let omitted_entry_count = entries.len().saturating_sub(limit as usize) as u64;
+        entries.truncate(limit as usize);
+        Ok(HeapAggregateSnapshot {
+            capture_id: self.capture_id.clone(), by, entries, omitted_entry_count,
+            incomplete_string_count: aggregate.incomplete_string_count,
+        })
+    }
+
+    pub(crate) fn diff(&self, newer: &Self, by: HeapAggregateBy, limit: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapDiffSnapshot, TargetDebuggerError> {
+        let diff = self.graph.diff(&newer.graph, heap_aggregate_by(by));
+        let mut entries = diff.groups.into_iter()
+            .filter(|(_, value)| value.count != 0 || value.shallow_size != 0)
+            .map(|(key, value)| {
+                let (key, key_truncated) = bounded_heap_text(&key, max_string_length);
+                Ok(HeapDiffEntrySnapshot {
+                    key, key_truncated,
+                    count_delta: i64::try_from(value.count).map_err(|_| {
+                        TargetDebuggerError::HeapAnalysis("aggregate count delta exceeds i64".into())
+                    })?,
+                    shallow_size_delta: i64::try_from(value.shallow_size).map_err(|_| {
+                        TargetDebuggerError::HeapAnalysis("aggregate shallow size delta exceeds i64".into())
+                    })?,
+                })
+            }).collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.shallow_size_delta.unsigned_abs()));
+        entries.truncate(limit as usize);
+        Ok(HeapDiffSnapshot {
+            older_capture_id: self.capture_id.clone(),
+            newer_capture_id: newer.capture_id.clone(), by, entries,
+            older_incomplete_string_count: diff.older_incomplete_string_count,
+            newer_incomplete_string_count: diff.newer_incomplete_string_count,
+        })
+    }
+}
+
 async fn load_heap_graph(
     capture_id: &str,
     captures: &BTreeMap<String, StoredHeapCapture>,

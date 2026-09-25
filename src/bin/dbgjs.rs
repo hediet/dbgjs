@@ -871,8 +871,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [promise, list, options @ ..] if promise == "promise" && list == "list" => {
             let options = parse_promise_list_options(options)?;
             let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let scope = resolve_offline_scope(
+                &client,
+                &load_selection(&selection_file)?,
+                &scope_options,
+            )
+            .await?;
             let promises = rpc(client
                 .heap
                 .select_promises(
