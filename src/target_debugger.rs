@@ -3746,6 +3746,52 @@ pub fn stored_heap_classes(
     Ok(snapshot)
 }
 
+pub(crate) fn recover_heap_mapping_for_view(
+    mapping: Option<HeapMappingSnapshot>,
+) -> Option<HeapMappingSnapshot> {
+    let mut mapping = mapping?;
+    for index in 0..mapping.scripts.len() {
+        let script = &mapping.scripts[index];
+        if script.source_map.is_some() || script.source_map_url.is_none() {
+            continue;
+        }
+        let recovered = crate::capture_projection::recover_source_map_for_view(
+            &script.url,
+            script.source_map_url.as_deref(),
+            Some(&script.hash),
+            &script.hash,
+        );
+        let (bytes, map_url) = match recovered {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                mapping.scripts[index].mapping_status = HeapMappingStatus::MapLoadingFailed;
+                mapping.scripts[index].diagnostic = Some(error);
+                continue;
+            }
+        };
+        let source_map = match String::from_utf8(bytes) {
+            Ok(source_map) => source_map,
+            Err(error) => {
+                mapping.scripts[index].mapping_status = HeapMappingStatus::MapLoadingFailed;
+                mapping.scripts[index].diagnostic =
+                    Some(format!("source map is not UTF-8: {error}"));
+                continue;
+            }
+        };
+        let supply = HeapSourceMapSupply {
+            script_id: mapping.scripts[index].script_id.clone(),
+            script_hash: mapping.scripts[index].hash.clone(),
+            source_map_url: map_url,
+            source_map,
+        };
+        if let Err(error) = supply_heap_source_map(&mut mapping, supply) {
+            mapping.scripts[index].mapping_status = HeapMappingStatus::MapLoadingFailed;
+            mapping.scripts[index].diagnostic = Some(error.to_string());
+        }
+    }
+    Some(mapping)
+}
+
 fn project_heap_classes(
     capture_id: String,
     groups: &[HeapConstructorGroup],

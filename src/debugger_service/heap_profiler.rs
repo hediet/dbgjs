@@ -41,6 +41,7 @@ impl DebuggerService {
         &self,
         target: &TargetRef,
         capture_id: &str,
+        enrich_source: bool,
         analyze: impl FnOnce(crate::target_debugger::StoredHeapGraph)
             -> Result<T, TargetDebuggerError> + Send + 'static,
     ) -> Result<Option<T>, HeapProfilerError> {
@@ -49,6 +50,11 @@ impl DebuggerService {
             return Ok(None);
         };
         tokio::task::spawn_blocking(move || {
+            let mapping = if enrich_source {
+                crate::target_debugger::recover_heap_mapping_for_view(mapping)
+            } else {
+                mapping
+            };
             let graph = crate::target_debugger::StoredHeapGraph::open(
                 Path::new(&path), name, mapping)?;
             analyze(graph)
@@ -295,6 +301,7 @@ impl HeapProfilerApi for DebuggerService {
             self.stored_heap_capture(&target_ref, &capture_id).await?
         {
             return tokio::task::spawn_blocking(move || {
+                let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping);
                 stored_heap_classes(Path::new(&path), name, filter.as_deref(), mapping.as_ref())
             })
             .await
@@ -325,7 +332,7 @@ impl HeapProfilerApi for DebuggerService {
         limit: u32,
         max_preview_length: u32,
     ) -> Result<PromiseSelectionSnapshot, HeapProfilerError> {
-        if let Some(result) = self.with_stored_heap_graph(&target_ref, &capture_id,
+        if let Some(result) = self.with_stored_heap_graph(&target_ref, &capture_id, false,
             move |graph| graph.promises(state, limit, max_preview_length)).await? {
             return Ok(result);
         }
@@ -354,7 +361,7 @@ impl HeapProfilerApi for DebuggerService {
         include_dominators: bool,
     ) -> Result<HeapNodeSelectionSnapshot, HeapProfilerError> {
         if self.stored_heap_capture(&target_ref, &capture_id).await?.is_some() {
-            return self.with_stored_heap_graph(&target_ref, &capture_id,
+            return self.with_stored_heap_graph(&target_ref, &capture_id, true,
                 move |graph| graph.select(selector, max_string_length, include_dominators))
                 .await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
         }
@@ -386,7 +393,7 @@ impl HeapProfilerApi for DebuggerService {
         if let Some((name, _)) = reference.rsplit_once('#') {
             let capture_id = name.to_owned();
             if self.stored_heap_capture(&target_ref, &capture_id).await?.is_some() {
-                return self.with_stored_heap_graph(&target_ref, &capture_id, move |graph| {
+                return self.with_stored_heap_graph(&target_ref, &capture_id, true, move |graph| {
                     graph.references(&reference, direction, edge_policy, limit, max_string_length)
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
@@ -418,7 +425,7 @@ impl HeapProfilerApi for DebuggerService {
         if let Some((name, _)) = from.rsplit_once('#') {
             let capture_id = name.to_owned();
             if self.stored_heap_capture(&target_ref, &capture_id).await?.is_some() {
-                return self.with_stored_heap_graph(&target_ref, &capture_id, move |graph| {
+                return self.with_stored_heap_graph(&target_ref, &capture_id, true, move |graph| {
                     graph.path(from, to, options, max_string_length)
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
@@ -448,7 +455,7 @@ impl HeapProfilerApi for DebuggerService {
         if let Some((name, _)) = reference.rsplit_once('#') {
             let capture_id = name.to_owned();
             if self.stored_heap_capture(&target_ref, &capture_id).await?.is_some() {
-                return self.with_stored_heap_graph(&target_ref, &capture_id, move |graph| {
+                return self.with_stored_heap_graph(&target_ref, &capture_id, true, move |graph| {
                     graph.dominators(&reference, max_string_length)
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
@@ -477,7 +484,7 @@ impl HeapProfilerApi for DebuggerService {
         limit: u32,
         max_string_length: Option<u32>,
     ) -> Result<HeapAggregateSnapshot, HeapProfilerError> {
-        if let Some(result) = self.with_stored_heap_graph(&target_ref, &capture_id,
+        if let Some(result) = self.with_stored_heap_graph(&target_ref, &capture_id, false,
             move |graph| graph.aggregate(by, limit, max_string_length)).await? {
             return Ok(result);
         }

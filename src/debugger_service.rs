@@ -8058,6 +8058,101 @@ mod tests {
     }
 
     #[test]
+    fn stored_heap_view_recovers_available_map_without_changing_raw_capture() {
+        use crate::service_api::{
+            HeapMappingSnapshot, HeapMappingStatus, HeapNodeSelector, HeapScriptSnapshot,
+            TargetRef,
+        };
+        let root = std::env::current_dir().unwrap().join("target")
+            .join(format!("lazy-heap-map-{}", random_instance_id().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let persistence_path = root.join("service.json");
+        let heap_path = root.join("capture.heapsnapshot");
+        let map_path = root.join("app.js.map");
+        let raw = r#"{"snapshot":{"meta":{"node_fields":["type","name","id","self_size","edge_count"],"node_types":[["hidden","object"],"string","number","number","number"],"edge_fields":["type","name_or_index","to_node"],"edge_types":[["property"],"string_or_number","node"],"location_fields":["object_index","script_id","line","column"]},"node_count":2,"edge_count":1},"nodes":[0,0,1,0,1,1,1,7,16,0],"edges":[0,2,5],"locations":[5,7,0,0],"strings":["root","a","child"]}"#;
+        fs::write(&heap_path, raw).unwrap();
+        fs::write(root.join("app.js"), "class a {}").unwrap();
+        fs::write(&map_path, r#"{"version":3,"file":"app.js","sources":["original.ts"],"sourcesContent":["class Original {}"],"names":[],"mappings":"AAAA"}"#).unwrap();
+        let mut capture = heap_capture("test", "heap", "target-a", "runtime", &heap_path);
+        capture.heap_mapping = Some(HeapMappingSnapshot {
+            connection_generation: 1,
+            hydration_duration_micros: 0,
+            scripts: vec![HeapScriptSnapshot {
+                script_id: "7".into(),
+                url: url::Url::from_file_path(root.join("app.js")).unwrap().to_string(),
+                hash: format!("{:x}", Sha256::digest(b"class a {}")),
+                provenance: Default::default(),
+                source_map_url: Some(url::Url::from_file_path(&map_path).unwrap().to_string()),
+                generated_source: None,
+                source_map: None,
+                mapping_status: HeapMappingStatus::NotAttempted,
+                diagnostic: None,
+            }],
+        });
+        let mut state = ServiceState::default();
+        state.captures.insert(("test".into(), "heap".into()), capture);
+        let writer = service_with_state(persistence_path.clone(), state);
+        writer.persist(&writer.state.blocking_lock()).unwrap();
+        drop(writer);
+        let (shutdown, _) = watch::channel(false);
+        let restored = DebuggerService::load(shutdown, persistence_path).unwrap();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let classes = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(classes.classes[0].name, "Original");
+            let nodes = restored.select_heap_nodes(
+                &CallCtx::default(),
+                TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "test".into(), connection_id: "runtime".into(),
+                    },
+                    target_id: "target-a".into(),
+                },
+                "heap".into(),
+                HeapNodeSelector { heap_object_id: Some("7".into()), ..Default::default() },
+                None,
+                false,
+            ).await.unwrap();
+            assert_eq!(
+                nodes.nodes[0].source.locations[0].position.resolved.source_url,
+                url::Url::from_file_path(root.join("original.ts")).unwrap().to_string()
+            );
+            fs::remove_file(&map_path).unwrap();
+            let unavailable = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(unavailable.classes[0].name, "a");
+            assert_eq!(unavailable.analysis.mapping_status, HeapMappingStatus::MapLoadingFailed);
+            assert!(unavailable.analysis.script_mappings[0].diagnostic.as_ref().unwrap()
+                .contains("raw measurements retained"));
+            let generated = restored.select_heap_nodes(
+                &CallCtx::default(),
+                TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "test".into(), connection_id: "runtime".into(),
+                    },
+                    target_id: "target-a".into(),
+                },
+                "heap".into(),
+                HeapNodeSelector { heap_object_id: Some("7".into()), ..Default::default() },
+                None,
+                false,
+            ).await.unwrap();
+            assert_eq!(
+                generated.nodes[0].source.locations[0].position.resolved.source_url,
+                url::Url::from_file_path(root.join("app.js")).unwrap().to_string()
+            );
+            assert!(restored.state.lock().await.captures
+                [&("test".to_owned(), "heap".to_owned())]
+                .heap_mapping.as_ref().unwrap().scripts[0].source_map.is_none());
+        });
+        assert_eq!(fs::read(&heap_path).unwrap(), raw.as_bytes());
+        drop(restored);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn schema_five_validates_payload_integrity_and_kind_on_restart() {
         let root = std::env::current_dir()
             .unwrap()

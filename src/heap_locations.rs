@@ -137,7 +137,11 @@ impl HeapSourceResolver {
                 resolved
             }
             Err(error) => {
-                let mut resolved = unresolved_position(script_id, position, error.clone());
+                let mut resolved = unresolved_position(
+                    script_id,
+                    position,
+                    script.diagnostic.as_ref().unwrap_or(error).clone(),
+                );
                 resolved.generated.source_url = script.url.clone();
                 resolved.resolved = resolved.generated.clone();
                 resolved

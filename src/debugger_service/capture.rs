@@ -306,6 +306,7 @@ impl CaptureApi for DebuggerService {
         };
         let capture_for_task = capture_name.clone();
         tokio::task::spawn_blocking(move || {
+            let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping);
             stored_heap_classes(
                 Path::new(&path),
                 capture_for_task,
