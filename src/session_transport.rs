@@ -205,6 +205,20 @@ impl CdpSessionMux {
             .map(|route| route.failure.subscribe())
     }
 
+    pub(crate) fn mark_synthetic_detach(&self, id: &str) {
+        if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
+            route.synthetic_detach_pending.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn take_synthetic_detach(&self, id: &str) -> bool {
+        self.raw_routes
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|route| route.synthetic_detach_pending.swap(false, Ordering::SeqCst))
+    }
+
     pub(crate) async fn request_raw_child(
         &self,
         id: &str,
@@ -342,6 +356,7 @@ impl CdpSessionMux {
             active: AtomicBool::new(false),
             unresolved_calls: AtomicUsize::new(0),
             unresolved_call_limit: self.unresolved_call_limit.load(Ordering::SeqCst),
+            synthetic_detach_pending: AtomicBool::new(false),
         });
         routes.insert(id.to_owned(), route.clone());
         Ok(route)
@@ -378,6 +393,7 @@ struct RawSessionRoute {
     // bound on calls whose response (or canceled future) can no longer be accounted for.
     unresolved_calls: AtomicUsize,
     unresolved_call_limit: usize,
+    synthetic_detach_pending: AtomicBool,
 }
 
 impl RawSessionRoute {
