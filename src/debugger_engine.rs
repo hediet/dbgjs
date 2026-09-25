@@ -2249,19 +2249,42 @@ fn friendly_source_path(value: &str) -> String {
 }
 
 fn comparable_file_path(value: &str) -> Option<String> {
-    let path = if Path::new(value).is_absolute() {
-        PathBuf::from(value)
-    } else {
-        let url = url::Url::parse(value).ok()?;
-        if url.scheme() != "file" {
-            return None;
-        }
-        url.to_file_path().ok()?
-    };
+    let path = local_script_file_path(value)?;
     let normalized = path.to_string_lossy().replace('\\', "/");
     #[cfg(windows)]
     let normalized = normalized.to_ascii_lowercase();
     Some(normalized)
+}
+
+pub(crate) fn local_script_file_path(value: &str) -> Option<PathBuf> {
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Some(path.to_owned());
+    }
+    let url = url::Url::parse(value).ok()?;
+    match url.scheme() {
+        "file" => url.to_file_path().ok(),
+        "vscode-file" if url.host_str() == Some("vscode-app") => {
+            let decoded = percent_encoding::percent_decode_str(url.path())
+                .decode_utf8()
+                .ok()?;
+            #[cfg(windows)]
+            let decoded = decoded
+                .strip_prefix('/')
+                .filter(|path| path.as_bytes().get(1) == Some(&b':'))
+                .unwrap_or(&decoded);
+            #[cfg(not(windows))]
+            if decoded.as_bytes().get(2) == Some(&b':') {
+                return None;
+            }
+            #[cfg(windows)]
+            let path = PathBuf::from(decoded);
+            #[cfg(not(windows))]
+            let path = PathBuf::from(decoded.as_ref());
+            path.is_absolute().then_some(path)
+        }
+        _ => None,
+    }
 }
 
 fn bind_physical(

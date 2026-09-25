@@ -35,13 +35,7 @@ pub(crate) struct CachedSourceMap {
 }
 
 fn local_file(url: &str) -> Option<PathBuf> {
-    if let Ok(url) = url::Url::parse(url) {
-        return (url.scheme() == "file")
-            .then(|| url.to_file_path().ok())
-            .flatten();
-    }
-    let path = PathBuf::from(url);
-    path.is_absolute().then_some(path)
+    crate::debugger_engine::local_script_file_path(url)
 }
 
 fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> {
@@ -53,8 +47,19 @@ fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> 
             "{url}: inline source map was not persisted; raw measurements retained"
         ));
     }
-    if url::Url::parse(url).is_err() && PathBuf::from(map_ref).is_absolute() {
+    if !map_ref.contains("://") && local_file(map_ref).is_some() {
         return Ok(map_ref.to_owned());
+    }
+    if let Ok(absolute) = url::Url::parse(map_ref)
+        && absolute.scheme().len() > 1
+    {
+        return Ok(absolute.to_string());
+    }
+    if !url.contains("://") && let Some(source) = local_file(url) {
+        return source
+            .parent()
+            .map(|directory| directory.join(map_ref).to_string_lossy().into_owned())
+            .ok_or_else(|| format!("{url}: source map URL {map_ref} cannot be resolved"));
     }
     url::Url::parse(map_ref)
         .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
@@ -587,6 +592,50 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn vscode_app_file_urls_and_native_paths_resolve_only_on_the_host_platform() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("generated script.js");
+        fs::write(&path, b"work();").unwrap();
+        let file_url = url::Url::from_file_path(&path).unwrap();
+        let vscode_url = format!("vscode-file://vscode-app{}", file_url.path());
+        assert_eq!(local_file(&vscode_url).as_deref(), Some(path.as_path()));
+        assert_eq!(local_file(file_url.as_str()).as_deref(), Some(path.as_path()));
+        assert_eq!(local_file(path.to_str().unwrap()).as_deref(), Some(path.as_path()));
+        assert_eq!(
+            resolved_map_url(path.to_str().unwrap(), Some("https://cdn.example/app.js.map")).unwrap(),
+            "https://cdn.example/app.js.map"
+        );
+        assert_eq!(
+            resolved_map_url(
+                "vscode-file://vscode-app/d:/workspace/workbench.js",
+                Some("workbench.js.map")
+            ).unwrap(),
+            "vscode-file://vscode-app/d:/workspace/workbench.js.map"
+        );
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                local_file("vscode-file://vscode-app/d:/workspace/workbench.js"),
+                Some(PathBuf::from(r"d:\workspace\workbench.js"))
+            );
+            assert_eq!(
+                local_file(r"d:\workspace\preload.js"),
+                Some(PathBuf::from(r"d:\workspace\preload.js"))
+            );
+            assert_eq!(
+                resolved_map_url(r"d:\workspace\preload.js", Some("preload.js.map")).unwrap(),
+                r"d:\workspace\preload.js.map"
+            );
+            assert_eq!(
+                resolved_map_url(r"d:\workspace\preload.js", Some("https://cdn.example/preload.js.map")).unwrap(),
+                "https://cdn.example/preload.js.map"
+            );
+        }
+        #[cfg(not(windows))]
+        assert!(local_file("vscode-file://vscode-app/d:/workspace/workbench.js").is_none());
+    }
+
     fn fixture() -> CaptureScriptProvenance {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/capture_projection/bundle.js");
@@ -1049,7 +1098,11 @@ mod tests {
             }
         });
         let mut snapshot = coverage();
+        let generated_url = url::Url::parse(&snapshot.sources[0].generated_url).unwrap();
+        let vscode_url = format!("vscode-file://vscode-app{}", generated_url.path());
+        snapshot.sources[0].generated_url = vscode_url.clone();
         let provenance = snapshot.sources[0].provenance.as_mut().unwrap();
+        provenance.url = vscode_url.clone();
         provenance.source_map_url = Some(map_url.clone());
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         let (prepared, errors) = prepare_view_sources(
@@ -1062,6 +1115,8 @@ mod tests {
         assert!(snapshot.sources[0].functions[0].authored_location.is_some());
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         let mut changed = coverage();
+        changed.sources[0].generated_url = vscode_url.clone();
+        changed.sources[0].provenance.as_mut().unwrap().url = vscode_url;
         changed.sources[0].provenance.as_mut().unwrap().source_map_url = Some(map_url.clone());
         changed.sources[0].provenance.as_mut().unwrap().source_sha256 = Some("0".repeat(64));
         let (prepared, errors) = prepare_view_sources(

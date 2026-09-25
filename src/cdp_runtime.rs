@@ -1828,6 +1828,21 @@ async fn cleanup_source_map_cache(directory: &Path) {
         if !metadata.is_file() {
             continue;
         }
+        if path.extension().is_some_and(|extension| extension == "tmp") {
+            let stale = now
+                .duration_since(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH))
+                .is_ok_and(|age| age > Duration::from_secs(60 * 60));
+            if stale
+                && let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != ErrorKind::NotFound
+            {
+                eprintln!(
+                    "failed to remove stale source-map cache entry {}: {error}",
+                    path.display()
+                );
+            }
+            continue;
+        }
         let access_path = path.with_extension("access");
         let modified = tokio::fs::metadata(&access_path)
             .await
@@ -1835,8 +1850,7 @@ async fn cleanup_source_map_cache(directory: &Path) {
             .or_else(|_| metadata.modified())
             .unwrap_or(SystemTime::UNIX_EPOCH);
         let expired = now.duration_since(modified).is_ok_and(|age| age > MAX_AGE);
-        let temporary = path.extension().is_some_and(|extension| extension == "tmp");
-        if expired || temporary {
+        if expired {
             if let Err(error) = tokio::fs::remove_file(&path).await
                 && error.kind() != ErrorKind::NotFound
             {
@@ -2138,6 +2152,15 @@ mod tests {
         std::fs::write(&path, cached).unwrap();
         assert!(read_source_map_cache_file(&path).is_none());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cache_cleanup_preserves_in_progress_temporary_map_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let temporary = directory.path().join("source.123.tmp");
+        tokio::fs::write(&temporary, b"in-progress").await.unwrap();
+        cleanup_source_map_cache(directory.path()).await;
+        assert_eq!(tokio::fs::read(&temporary).await.unwrap(), b"in-progress");
     }
 
     #[tokio::test]
