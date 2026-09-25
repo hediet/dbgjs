@@ -2689,6 +2689,11 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "$node-root:runtime-b",
         ],
     );
+    run_json(
+        &cli, &service, &state_file,
+        &["target", "attach", "--context", &context,
+          "--target", "$node-root:runtime-b", "--set"],
+    );
     let capture_directory = persistent_state_file(&state_file).with_extension("captures");
     let heap_files = heap_capture_files(&capture_directory);
     assert_eq!(heap_files.len(), 1, "{heap_files:?}");
@@ -2903,6 +2908,14 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         .unwrap();
     assert_eq!(heap["targetId"], "$node-root:runtime-b");
     assert_eq!(heap["connectionId"], "runtime-b");
+    let partial_scope_nodes = run_json(
+        &cli, &service, &state_file,
+        &[
+            "heap", "select", "offline-heap", "--type", "object", "--limit", "1",
+            "--context", &context,
+        ],
+    );
+    assert_eq!(partial_scope_nodes["nodes"].as_array().unwrap().len(), 1);
     let offline_nodes = run_json(
         &cli, &service, &state_file,
         &[

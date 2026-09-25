@@ -3003,15 +3003,18 @@ impl StoredHeapGraph {
             dominators, Some(&self.capture))
     }
 
-    fn reference_node(&self, reference: &str) -> Result<NodeIndex, TargetDebuggerError> {
+    fn reference_node(&self, reference: &str) -> Result<(NodeIndex, String), TargetDebuggerError> {
         let (capture, id) = parse_heap_reference(reference)?;
-        if capture != self.capture_id {
+        if capture != self.capture_id && capture != "." {
             return Err(TargetDebuggerError::IncompatibleHeapCaptures {
                 older: self.capture_id.clone(),
                 newer: capture,
             });
         }
-        heap_node_by_id(&self.graph, id)
+        Ok((
+            heap_node_by_id(&self.graph, id)?,
+            heap_node_reference(&self.capture_id, id),
+        ))
     }
 
     pub(crate) fn promises(&self, state: Option<PromiseState>, limit: u32,
@@ -3033,7 +3036,7 @@ impl StoredHeapGraph {
     pub(crate) fn references(&self, reference: &str, direction: HeapReferenceDirection,
         edge_policy: HeapEdgePolicy, limit: u32, max_string_length: Option<u32>,
     ) -> Result<HeapReferencesSnapshot, TargetDebuggerError> {
-        let node = self.reference_node(reference)?;
+        let (node, _) = self.reference_node(reference)?;
         let mut references = Vec::new();
         if matches!(direction, HeapReferenceDirection::Outgoing | HeapReferenceDirection::Both) {
             references.extend(self.graph.outgoing_references(node).map_err(heap_analysis_error)?
@@ -3062,8 +3065,8 @@ impl StoredHeapGraph {
     pub(crate) fn path(&self, from: String, to: String, options: HeapPathOptions,
         max_string_length: Option<u32>,
     ) -> Result<Option<HeapPathSnapshot>, TargetDebuggerError> {
-        let from_node = self.reference_node(&from)?;
-        let to_node = self.reference_node(&to)?;
+        let (from_node, from) = self.reference_node(&from)?;
+        let (to_node, to) = self.reference_node(&to)?;
         self.graph.shortest_path(from_node, to_node, PathOptions {
             direction: heap_path_direction(options.direction),
             edge_policy: heap_edge_policy(options.edge_policy),
@@ -3082,7 +3085,7 @@ impl StoredHeapGraph {
 
     pub(crate) fn dominators(&self, reference: &str, max_string_length: Option<u32>,
     ) -> Result<HeapDominatorSnapshot, TargetDebuggerError> {
-        let node = self.reference_node(reference)?;
+        let (node, _) = self.reference_node(reference)?;
         let analysis = self.graph.dominators().map_err(heap_analysis_error)?;
         let mut chain = Vec::new();
         let mut current = node;

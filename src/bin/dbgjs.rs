@@ -3303,30 +3303,21 @@ async fn resolve_offline_scope(
     selection: &CliSelection,
     options: &ScopeOptions,
 ) -> Result<ResolvedScope, Box<dyn std::error::Error>> {
-    if let (Some(context), Some(connection), Some(target)) = (
-        options.context.clone(),
-        options.connection.clone(),
-        options.target.clone(),
-    ) {
+    let context = options.context.as_ref().or(selection.context.as_ref());
+    let matching_context = context == selection.context.as_ref();
+    let connection = options.connection.as_ref().or_else(|| {
+        matching_context.then_some(selection.connection.as_ref()).flatten()
+    });
+    let matching_connection = connection == selection.connection.as_ref();
+    let target = options.target.as_ref().or_else(|| {
+        (matching_context && matching_connection)
+            .then_some(selection.target.as_ref()).flatten()
+    });
+    if let (Some(context), Some(connection), Some(target)) = (context, connection, target) {
         return Ok(ResolvedScope {
-            context,
-            connection,
-            target,
-        });
-    }
-    if options.context.is_none()
-        && options.connection.is_none()
-        && options.target.is_none()
-        && let (Some(context), Some(connection), Some(target)) = (
-            selection.context.clone(),
-            selection.connection.clone(),
-            selection.target.clone(),
-        )
-    {
-        return Ok(ResolvedScope {
-            context,
-            connection,
-            target,
+            context: context.clone(),
+            connection: connection.clone(),
+            target: target.clone(),
         });
     }
     resolve_scope(client, selection, options).await

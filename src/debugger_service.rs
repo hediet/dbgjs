@@ -8018,11 +8018,26 @@ mod tests {
             ).await.unwrap();
             assert_eq!(refs.references.len(), 1);
             assert_eq!(refs.references[0].target, "heap#7");
+            let latest_refs = restored.get_heap_references(
+                &CallCtx::default(), target.clone(), ".#1".into(),
+                HeapReferenceDirection::Outgoing, HeapEdgePolicy::All, 10, None,
+            ).await.unwrap();
+            assert_eq!(latest_refs.capture_id, "heap");
             let path = restored.get_heap_path(
                 &CallCtx::default(), target.clone(), "heap#1".into(), "heap#7".into(),
                 HeapPathOptions::default(), None,
             ).await.unwrap().unwrap();
             assert_eq!(path.steps.len(), 1);
+            let latest_path = restored.get_heap_path(
+                &CallCtx::default(), target.clone(), ".#1".into(), ".#7".into(),
+                HeapPathOptions::default(), None,
+            ).await.unwrap().unwrap();
+            assert_eq!((&*latest_path.from, &*latest_path.to), ("heap#1", "heap#7"));
+            let cross_capture = restored.get_heap_path(
+                &CallCtx::default(), target.clone(), ".#1".into(), "second#7".into(),
+                HeapPathOptions::default(), None,
+            ).await.unwrap_err();
+            assert!(cross_capture.to_string().contains("incompatible"));
             let incompatible = restored.get_heap_path(
                 &CallCtx::default(), target.clone(), "heap#1".into(),
                 "second#7".into(), HeapPathOptions::default(), None,
@@ -8032,6 +8047,10 @@ mod tests {
                 &CallCtx::default(), target.clone(), "heap#7".into(), None,
             ).await.unwrap();
             assert_eq!(dominators.node.heap_object_id, "7");
+            let latest_dominators = restored.get_heap_dominator_chain(
+                &CallCtx::default(), target.clone(), ".#7".into(), None,
+            ).await.unwrap();
+            assert_eq!(latest_dominators.capture_id, "heap");
             let aggregate = restored.aggregate_heap_snapshot(
                 &CallCtx::default(), target.clone(), "heap".into(),
                 HeapAggregateBy::NodeType, 10, None,
