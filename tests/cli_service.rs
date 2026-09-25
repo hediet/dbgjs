@@ -2903,6 +2903,24 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         .unwrap();
     assert_eq!(heap["targetId"], "$node-root:runtime-b");
     assert_eq!(heap["connectionId"], "runtime-b");
+    let offline_nodes = run_json(
+        &cli, &service, &state_file,
+        &[
+            "heap", "select", "offline-heap", "--type", "object", "--limit", "1",
+            "--context", &context, "--connection", "runtime-b",
+            "--target", "$node-root:runtime-b",
+        ],
+    );
+    assert_eq!(offline_nodes["nodes"].as_array().unwrap().len(), 1);
+    let offline_promises = run_json(
+        &cli, &service, &state_file,
+        &[
+            "promise", "list", "offline-heap", "--limit", "1",
+            "--context", &context, "--connection", "runtime-b",
+            "--target", "$node-root:runtime-b",
+        ],
+    );
+    assert_eq!(offline_promises["captureId"], "offline-heap");
     run_json(
         &cli,
         &service,
