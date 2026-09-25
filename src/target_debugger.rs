@@ -2183,8 +2183,7 @@ async fn run_target(
             })) => {
                 let capture_id = capture_id.unwrap_or_else(|| ".".to_owned());
                 let path = temporary_heap_snapshot_path();
-                let mapping =
-                    capture_heap_mapping(&mut driver, &session_key, connection_generation).await;
+                let mapping = capture_heap_mapping(&driver, &session_key, connection_generation);
                 let result = take_heap_snapshot(
                     &driver,
                     path.clone(),
@@ -3330,109 +3329,45 @@ struct ProjectedHeapClass {
     instances: Vec<crate::heap_snapshot::HeapInstanceRecord>,
 }
 
-async fn capture_heap_mapping(
-    driver: &mut DebuggerDriver,
+fn capture_heap_mapping(
+    driver: &DebuggerDriver,
     session: &SessionKey,
     connection_generation: u64,
 ) -> HeapMappingSnapshot {
-    let started = Instant::now();
-    let keys = driver
+    let scripts = driver
         .state()
         .scripts
-        .keys()
-        .filter(|key| &key.session == session)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut errors = BTreeMap::new();
-    for key in &keys {
-        let Some(script) = driver.state().scripts.get(key) else {
-            continue;
-        };
-        let previous = captured_heap_script(key, script, None);
-        let retry = previous.mapping_status == HeapMappingStatus::MapLoadingFailed
-            || (script.captured_source.is_some()
-                && script.source_map_url.is_some()
-                && previous.source_map.is_none());
-        if retry || script.captured_source.is_none() {
-            if retry {
-                driver.set_source_map_cache_enabled(false);
-            }
-            let input = if retry {
-                Input::RefreshScriptSource {
-                    script: key.clone(),
-                }
-            } else {
-                Input::RequestScriptSource {
-                    script: key.clone(),
-                }
-            };
-            let result = driver.apply(input).await;
-            if retry {
-                driver.set_source_map_cache_enabled(true);
-            }
-            if let Err(error) = result {
-                errors.insert(key.clone(), error.to_string());
-            }
-        }
-    }
-    let scripts = keys
         .iter()
-        .filter_map(|key| {
-            let script = driver.state().scripts.get(key)?;
-            Some(captured_heap_script(key, script, errors.get(key).cloned()))
-        })
+        .filter(|(key, _)| &key.session == session)
+        .map(|(key, script)| captured_heap_script(key, script))
         .collect();
     HeapMappingSnapshot {
         connection_generation,
         scripts,
-        hydration_duration_micros: started.elapsed().as_micros() as u64,
+        hydration_duration_micros: 0,
     }
 }
 
 fn captured_heap_script(
     key: &ScriptKey,
     script: &crate::debugger_engine::ScriptState,
-    acquisition_error: Option<String>,
 ) -> HeapScriptSnapshot {
-    let fetched = script.captured_source.as_ref();
-    let source_map = fetched
-        .and_then(|source| source.source_map.as_ref())
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
-    let diagnostic = acquisition_error
-        .or_else(|| fetched.and_then(|source| source.source_map_error.clone()))
-        .or_else(|| match &script.source {
-            ScriptSourceState::Failed(error) => Some(error.clone()),
-            _ => None,
-        });
-    let mapping_status = if diagnostic.is_some() {
-        HeapMappingStatus::MapLoadingFailed
-    } else if source_map.is_some() {
-        HeapMappingStatus::Mapped
-    } else if script.source_map_url.is_none() {
+    let mapping_status = if script.source_map_url.is_none() {
         HeapMappingStatus::NoMapSupplied
     } else {
         HeapMappingStatus::NotAttempted
     };
-    let mut captured = HeapScriptSnapshot {
+    HeapScriptSnapshot {
         script_id: key.script_id.clone(),
         url: script.url.clone(),
         hash: script.hash.clone(),
         provenance: script.provenance.clone(),
-        source_map_url: fetched
-            .and_then(|source| source.source_map_url.clone())
-            .or_else(|| script.source_map_url.clone()),
-        generated_source: fetched.map(|source| source.content.to_string()),
-        source_map,
+        source_map_url: script.source_map_url.clone(),
+        generated_source: None,
+        source_map: None,
         mapping_status,
-        diagnostic,
-    };
-    if let Some(map) = &captured.source_map {
-        if let Err(error) = heap_source_view(&captured, map) {
-            captured.mapping_status = HeapMappingStatus::MapLoadingFailed;
-            captured.diagnostic = Some(error);
-        }
+        diagnostic: None,
     }
-    captured
 }
 
 fn heap_source_view(script: &HeapScriptSnapshot, map: &str) -> Result<ResolvedSourceView, String> {
@@ -3578,7 +3513,14 @@ fn project_heap_classes(
             hash: script.hash.clone(),
             provenance: script.provenance.clone(),
             status: script.mapping_status.clone(),
-            diagnostic: script.diagnostic.clone(),
+            diagnostic: script.diagnostic.clone().or_else(|| {
+                (script.source_map.is_none() && script.source_map_url.is_some()).then(|| {
+                    format!(
+                        "source map '{}' unavailable for this view; generated location retained",
+                        script.source_map_url.as_deref().unwrap_or_default()
+                    )
+                })
+            }),
         };
         if let Some(map) = &script.source_map {
             match heap_source_view(script, map) {
@@ -6711,7 +6653,7 @@ mod tests {
         heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
         window_highlighted_line,
     };
-    use super::{project_heap_classes, supply_heap_source_map};
+    use super::{captured_heap_script, project_heap_classes, supply_heap_source_map};
     use crate::cdp::{RuntimePropertyDescriptor, RuntimeRemoteObject, RuntimeRemoteObjectType};
     use crate::cdp_runtime::CdpConnection;
     use crate::content_store::ContentStore;
@@ -8120,6 +8062,7 @@ mod tests {
             script.source_map = None;
             script.mapping_status = HeapMappingStatus::NoMapSupplied;
         }
+
         let absent = project_heap_classes("absent".into(), &groups, None, Some(&mapping)).unwrap();
         assert_eq!(
             absent.analysis.mapping_status,
@@ -8140,6 +8083,65 @@ mod tests {
                 .unwrap()
                 .contains("invalid source map")
         );
+    }
+
+    #[test]
+    fn heap_capture_records_only_cheap_script_provenance() {
+        let key = ScriptKey {
+            session: SessionKey {
+                connection_generation: 7,
+                session_id: "session".into(),
+            },
+            script_id: "42".into(),
+        };
+        let script = ScriptState {
+            url: "https://example.test/bundle.js".into(),
+            hash: "hash".into(),
+            source_map_url: Some("bundle.js.map".into()),
+            version: 1,
+            source: ScriptSourceState::Unresolved,
+            provenance: Default::default(),
+            captured_source: Some(crate::debugger_engine::CapturedScriptSource {
+                content: Arc::from("large generated source"),
+                source_map: Some(crate::source_view::SourceMapData::new(
+                    br#"{"version":3,"sources":[],"mappings":""}"#.as_slice(),
+                )),
+                source_map_url: Some("bundle.js.map".into()),
+                source_map_error: None,
+            }),
+        };
+        let captured = captured_heap_script(&key, &script);
+        assert_eq!(captured.script_id, "42");
+        assert_eq!(captured.url, script.url);
+        assert_eq!(captured.hash, script.hash);
+        assert_eq!(captured.source_map_url.as_deref(), Some("bundle.js.map"));
+        assert!(captured.generated_source.is_none());
+        assert!(captured.source_map.is_none());
+        assert_eq!(captured.mapping_status, HeapMappingStatus::NotAttempted);
+        let mapping = HeapMappingSnapshot {
+            connection_generation: 7,
+            hydration_duration_micros: 0,
+            scripts: vec![captured],
+        };
+        let viewed = project_heap_classes(
+            "cheap".into(),
+            &[HeapConstructorGroup {
+                script_id: 42,
+                line: 0,
+                column: 0,
+                generated_name: "a".into(),
+                instance_count: 1,
+                shallow_size: 16,
+                instances: Vec::new(),
+            }],
+            None,
+            Some(&mapping),
+        )
+        .unwrap();
+        assert_eq!(viewed.analysis.mapping_status, HeapMappingStatus::NotAttempted);
+        assert_eq!(viewed.analysis.script_mappings[0].status, HeapMappingStatus::NotAttempted);
+        assert!(viewed.analysis.script_mappings[0]
+            .diagnostic.as_deref().unwrap().contains("unavailable"));
     }
 
     #[test]

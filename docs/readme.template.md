@@ -179,6 +179,11 @@ maps, or report why authored mapping is unavailable.
 
 Capture the heap and find classes by authored name, even in minified code.
 Instance IDs let you inspect objects and follow references within that capture.
+Heap capture stores the original snapshot and lightweight script identity (URL,
+hash, map URL and execution provenance), not copies of source files or maps.
+Authored names are resolved when viewing if a map is available; otherwise the
+generated name remains visible with an unavailable-map diagnostic. You can
+explicitly supply a matching map for an existing stored capture.
 
 {{example:heap-capture,heap-classes}}
 

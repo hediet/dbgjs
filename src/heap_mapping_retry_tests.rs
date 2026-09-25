@@ -77,12 +77,12 @@ impl ManagedCdpTransport for RetryTransport {
 }
 
 #[tokio::test]
-async fn heap_new_capture_retries_transient_map_failure_without_changing_old_capture() {
+async fn heap_capture_does_not_fetch_transiently_unavailable_map() {
     verify_map_retry(false).await;
 }
 
 #[tokio::test]
-async fn heap_new_capture_retries_invalid_map_without_changing_old_capture() {
+async fn heap_capture_does_not_parse_invalid_remote_map() {
     verify_map_retry(true).await;
 }
 
@@ -151,26 +151,26 @@ async fn verify_map_retry(invalid_first_map: bool) {
         Arc::new(ContextSourceModel::new()),
         "heap-retry",
     );
-    let mut driver = DebuggerDriver::new(
+    let driver = DebuggerDriver::new(
         Arc::new(state),
         connection.take_root_debugger_session().unwrap(),
         sources,
     );
-    let first = capture_heap_mapping(&mut driver, &session, 1).await;
+    let first = capture_heap_mapping(&driver, &session, 1);
     assert_eq!(
         first.scripts[0].mapping_status,
-        HeapMappingStatus::MapLoadingFailed
+        HeapMappingStatus::NotAttempted
     );
     assert!(matches!(
         driver.state().scripts[&script].source,
-        ScriptSourceState::Resolved(_)
+        ScriptSourceState::Unresolved
     ));
     let stored_first = serde_json::to_vec(&first).unwrap();
-    let second = capture_heap_mapping(&mut driver, &session, 1).await;
-    assert_eq!(second.scripts[0].mapping_status, HeapMappingStatus::Mapped);
-    assert_eq!(driver.source_map_cache_stats().bypasses, 1);
-    assert_eq!(transport.map_requests.load(Ordering::SeqCst), 2);
-    assert_eq!(transport.source_requests.load(Ordering::SeqCst), 2);
+    let second = capture_heap_mapping(&driver, &session, 1);
+    assert_eq!(second.scripts[0].mapping_status, HeapMappingStatus::NotAttempted);
+    assert_eq!(driver.source_map_cache_stats().bypasses, 0);
+    assert_eq!(transport.map_requests.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.source_requests.load(Ordering::SeqCst), 0);
     assert_eq!(first.scripts[0].hash, second.scripts[0].hash);
     assert_eq!(serde_json::to_vec(&first).unwrap(), stored_first);
     let groups = vec![HeapConstructorGroup {
@@ -186,12 +186,11 @@ async fn verify_map_retry(invalid_first_map: bool) {
     let old = project_heap_classes("first".into(), &groups, None, Some(&first_reloaded)).unwrap();
     let new = project_heap_classes("second".into(), &groups, None, Some(&second)).unwrap();
     assert_eq!(old.classes[0].name, "a");
-    assert_eq!(
-        old.analysis.mapping_status,
-        HeapMappingStatus::MapLoadingFailed
-    );
-    assert_eq!(new.classes[0].name, "Original");
-    capture_heap_mapping(&mut driver, &session, 1).await;
-    assert_eq!(transport.map_requests.load(Ordering::SeqCst), 2);
+    assert_eq!(old.analysis.mapping_status, HeapMappingStatus::NotAttempted);
+    assert_eq!(new.classes[0].name, "a");
+    assert!(old.analysis.script_mappings[0].diagnostic
+        .as_deref().unwrap().contains("unavailable"));
+    capture_heap_mapping(&driver, &session, 1);
+    assert_eq!(transport.map_requests.load(Ordering::SeqCst), 0);
     connection.close().await;
 }

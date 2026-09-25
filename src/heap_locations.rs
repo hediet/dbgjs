@@ -147,6 +147,13 @@ impl HeapSourceResolver {
 }
 
 fn stored_source_view(script: &HeapScriptSnapshot) -> Result<ResolvedSourceView, String> {
+    if script.source_map.is_none() {
+        if let Some(url) = &script.source_map_url {
+            return Err(format!(
+                "source map '{url}' unavailable for this view; generated location retained"
+            ));
+        }
+    }
     if let Some(map) = &script.source_map {
         sourcemap::decode_slice(map.as_bytes())
             .map_err(|error| format!("invalid source map: {error}"))?;
@@ -253,6 +260,19 @@ mod tests {
             .unwrap();
         assert_eq!(source.locations[0].position.resolved.source_url, "script:7");
         assert!(source.locations[0].position.diagnostic.is_some());
+        let mut unavailable = mapping();
+        unavailable.scripts[0].source_map = None;
+        unavailable.scripts[0].generated_source = None;
+        unavailable.scripts[0].mapping_status = HeapMappingStatus::NotAttempted;
+        let source = HeapSourceResolver::default()
+            .inspect(&graph, &unavailable, NodeIndex(1))
+            .unwrap();
+        assert_eq!(
+            source.locations[0].position.resolved.source_url,
+            unavailable.scripts[0].url
+        );
+        assert!(source.locations[0].position.diagnostic
+            .as_deref().unwrap().contains("unavailable"));
         let mut invalid = mapping();
         invalid.scripts[0].source_map = Some("{invalid".into());
         let source = HeapSourceResolver::default()
