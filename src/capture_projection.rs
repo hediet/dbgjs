@@ -100,6 +100,7 @@ pub(crate) fn recover_source_map_for_view(
 fn load_map(
     provenance: Option<&CaptureScriptProvenance>,
     url: &str,
+    needs_generated_source: bool,
 ) -> Result<AvailableMap, String> {
     let Some(provenance) = provenance else {
         return Err(format!(
@@ -111,12 +112,18 @@ fn load_map(
             "{url}: captured script URL differs from measurement; raw measurements retained"
         ));
     }
-    let sources = load_verified_local_sources(
+    let (map_bytes, map_url) = recover_source_map_for_view(
         url,
         provenance.source_map_url.as_deref(),
         provenance.source_sha256.as_deref(),
+        provenance.source_sha256.as_deref().unwrap_or_default(),
     )?;
-    let map = match decode_slice(&sources.map_bytes).map_err(|error| error.to_string())? {
+    let generated = if needs_generated_source {
+        load_verified_generated_file(url, provenance.source_sha256.as_deref())?
+    } else {
+        String::new()
+    };
+    let map = match decode_slice(&map_bytes).map_err(|error| error.to_string())? {
         DecodedMap::Regular(map) => map,
         DecodedMap::Index(index) => index.flatten().map_err(|error| error.to_string())?,
         DecodedMap::Hermes(_) => {
@@ -125,9 +132,6 @@ fn load_map(
             ));
         }
     };
-    let VerifiedLocalSources {
-        generated, map_url, ..
-    } = sources;
     let mut checkpoints = vec![(0, 0, 0, 0)];
     let (mut units, mut line, mut column) = (0_u32, 0_u32, 0_u32);
     for (byte, ch) in generated.char_indices() {
@@ -150,11 +154,12 @@ fn load_map(
     })
 }
 
-pub(crate) fn load_verified_local_sources(
-    url: &str,
-    map_ref: Option<&str>,
-    source_sha256: Option<&str>,
-) -> Result<VerifiedLocalSources, String> {
+fn load_verified_generated_file(url: &str, source_sha256: Option<&str>) -> Result<String, String> {
+    if source_sha256.is_none() {
+        return Err(format!(
+            "{url}: generated source identity unavailable; raw measurements retained"
+        ));
+    }
     let source = local_file(url).ok_or_else(|| {
         format!("{url}: generated source is unavailable locally; raw measurements retained")
     })?;
@@ -167,8 +172,19 @@ pub(crate) fn load_verified_local_sources(
             "{url}: generated source identity unavailable or changed; raw measurements retained"
         ));
     }
-    let generated = String::from_utf8(bytes)
-        .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))?;
+    String::from_utf8(bytes)
+        .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))
+}
+
+pub(crate) fn load_verified_local_sources(
+    url: &str,
+    map_ref: Option<&str>,
+    source_sha256: Option<&str>,
+) -> Result<VerifiedLocalSources, String> {
+    let generated = load_verified_generated_file(url, source_sha256)?;
+    let source = local_file(url).ok_or_else(|| {
+        format!("{url}: generated source is unavailable locally; raw measurements retained")
+    })?;
     let map_url = resolved_map_url(url, map_ref)?;
     let path = local_file(&map_url).ok_or_else(|| {
         format!("{url}: source map {map_url} is unavailable locally; raw measurements retained")
@@ -248,7 +264,7 @@ pub(crate) fn project_stored_coverage(snapshot: &mut CoverageSnapshot) {
                     crate::target_debugger::effective_coverage_ranges(&function.ranges);
             }
         }
-        match load_map(Some(provenance), &source.generated_url) {
+        match load_map(Some(provenance), &source.generated_url, true) {
             Ok(map) => {
                 for function in &mut source.functions {
                     function.generated_location = map
@@ -327,7 +343,7 @@ pub(crate) fn project_stored_cpu(
         if frame.script_id.is_empty() || maps.contains_key(&frame.script_id) {
             continue;
         }
-        let result = load_map(snapshot.script_provenance.get(&frame.script_id), &frame.url);
+        let result = load_map(snapshot.script_provenance.get(&frame.script_id), &frame.url, false);
         if let Err(message) = &result {
             if node.authored_location.is_none() {
                 snapshot.projection_diagnostics.push(message.clone());
@@ -624,6 +640,51 @@ mod tests {
     }
 
     #[test]
+    fn cached_map_projects_cpu_without_generated_file_and_coverage_with_verified_file() {
+        let mut profile = cpu();
+        let mut coverage = coverage();
+        let provenance = coverage.sources[0].provenance.as_mut().unwrap();
+        let map_url = format!("cached-view-{}.map", std::process::id());
+        provenance.source_map_url = Some(map_url.clone());
+        let cpu_provenance = profile.script_provenance.get_mut("1").unwrap();
+        cpu_provenance.source_map_url = Some(map_url);
+        cpu_provenance.url = "https://example.invalid/app.js".into();
+        for node in &mut profile.nodes {
+            if node.call_frame.script_id == "1" {
+                node.call_frame.url = cpu_provenance.url.clone();
+            }
+        }
+        let source_map = fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/capture_projection/bundle.js.map"),
+        )
+        .unwrap();
+        let cached = format!("dbgjs-source-map-v1\n{:x}\n", Sha256::digest(&source_map));
+        let cpu_map_url = format!("https://example.invalid/cached-view-{}.map", std::process::id());
+        let cpu_path = crate::cdp_runtime::source_map_cache_path_for_test(
+            cpu_provenance.source_sha256.as_deref().unwrap(),
+            &cpu_map_url,
+        );
+        let coverage_map_url = resolved_map_url(&provenance.url, provenance.source_map_url.as_deref()).unwrap();
+        let coverage_path = crate::cdp_runtime::source_map_cache_path_for_test(
+            provenance.source_sha256.as_deref().unwrap(),
+            &coverage_map_url,
+        );
+        for path in [&cpu_path, &coverage_path] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut bytes = cached.as_bytes().to_vec();
+            bytes.extend_from_slice(&source_map);
+            fs::write(path, bytes).unwrap();
+        }
+        project_stored_cpu(&mut profile, None).unwrap();
+        project_stored_coverage(&mut coverage);
+        fs::remove_file(cpu_path).unwrap();
+        fs::remove_file(coverage_path).unwrap();
+        assert!(profile.nodes[1].authored_location.is_some());
+        assert!(coverage.sources[0].functions[0].authored_location.is_some());
+    }
+
+    #[test]
     fn legacy_cpu_functions_without_raw_samples_remain_readable() {
         let mut profile = cpu();
         project_stored_cpu(&mut profile, None).unwrap();
@@ -643,7 +704,7 @@ mod tests {
     #[test]
     fn generated_offsets_use_utf16_columns_and_reject_half_surrogates() {
         let provenance = fixture();
-        let mut map = load_map(Some(&provenance), &provenance.url).unwrap();
+        let mut map = load_map(Some(&provenance), &provenance.url, true).unwrap();
         map.generated = "😀a".into();
         map.checkpoints = vec![(0, 0, 0, 0), (2, 4, 0, 2)];
         assert_eq!(map.generated_position(1), None);

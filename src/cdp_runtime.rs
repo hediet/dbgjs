@@ -1698,6 +1698,11 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
     Some(directory.join(format!("{:x}.map", hasher.finalize())))
 }
 
+#[cfg(test)]
+pub(crate) fn source_map_cache_path_for_test(script_hash: &str, resolved_url: &str) -> PathBuf {
+    source_map_cache_path(script_hash, resolved_url).expect("test cache directory")
+}
+
 pub(crate) fn read_source_map_cache_for_view(
     script_hash: &str,
     resolved_url: &str,
