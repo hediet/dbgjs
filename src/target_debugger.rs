@@ -2067,13 +2067,12 @@ async fn run_target(
                         recording.sampling_interval_micros,
                         stopped.profile,
                     )?;
-                    for node in &snapshot.nodes {
-                        let key = ScriptKey { session: session_key.clone(), script_id: node.call_frame.script_id.clone() };
-                        if let Some(script) = driver.state().scripts.get(&key)
-                            && cheap_capture_url(&script.url) == node.call_frame.url {
-                            snapshot.script_provenance.insert(node.call_frame.script_id.clone(), capture_script_provenance(script));
-                        }
-                    }
+                    snapshot.script_provenance = capture_cpu_script_provenance(&snapshot.nodes, |script_id, url| {
+                        let key = ScriptKey { session: session_key.clone(), script_id: script_id.to_owned() };
+                        driver.state().scripts.get(&key)
+                            .filter(|script| cheap_capture_url(&script.url) == url)
+                            .map(|script| capture_script_provenance(script))
+                    });
                     cpu_profiles.insert(capture_id.clone(), snapshot.clone());
                     if capture_id != "." {
                         let mut latest = snapshot.clone();
@@ -3852,6 +3851,25 @@ fn capture_script_provenance(script: &crate::debugger_engine::ScriptState) -> Ca
                     .then(|| script.hash.to_ascii_lowercase())
             }),
     }
+}
+
+fn capture_cpu_script_provenance(
+    nodes: &[CpuProfileNodeSnapshot],
+    mut capture: impl FnMut(&str, &str) -> Option<CaptureScriptProvenance>,
+) -> BTreeMap<String, CaptureScriptProvenance> {
+    let mut provenance = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for node in nodes {
+        if provenance.contains_key(&node.call_frame.script_id)
+            || !seen.insert((node.call_frame.script_id.clone(), node.call_frame.url.clone()))
+        {
+            continue;
+        }
+        if let Some(script) = capture(&node.call_frame.script_id, &node.call_frame.url) {
+            provenance.insert(node.call_frame.script_id.clone(), script);
+        }
+    }
+    provenance
 }
 
 fn is_inline_source_url(url: &str) -> bool {
@@ -6687,6 +6705,7 @@ mod tests {
     use super::{
         TargetDebuggerError, TargetDebuggerHandle, aggregate_cpu_profile, bounded_heap_text,
         bounded_projection_function, breakpoint_wait_failure, callback_aware_breadcrumb,
+        capture_cpu_script_provenance,
         complete_source_search_batch, cpu_profile_sample_durations, cpu_profile_snapshot,
         effective_coverage_ranges, evaluated_remote_from_envelope, forward_heap_snapshot_progress,
         heap_class_display_name, predicate_matches, publish_snapshot, snapshot, source_excerpt,
@@ -6704,11 +6723,12 @@ mod tests {
     };
     use crate::heap_snapshot::HeapConstructorGroup;
     use crate::service_api::{
-        BreakpointApplicationStatus, CoverageRangeSnapshot, CpuProfileCallFrameSnapshot,
+        BreakpointApplicationStatus, CaptureScriptProvenance, CoverageRangeSnapshot, CpuProfileCallFrameSnapshot,
         CpuProfileNodeSnapshot, CpuProfileSnapshot, SourceExcerpt, SourceLocation,
         TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetWaitPredicate,
         ValueInspectionOptions, ValueSelector, ValueSnapshot,
     };
+    use sha2::{Digest, Sha256};
     use crate::service_api::{
         HeapMappingSnapshot, HeapMappingStatus, HeapScriptSnapshot, HeapSourceMapSupply,
         ScriptProvenance,
@@ -7915,6 +7935,39 @@ mod tests {
         assert_eq!(snapshot.time_deltas_micros, vec![12]);
         assert!(snapshot.functions.is_empty());
         assert!(aggregate_cpu_profile(&mut snapshot.clone()).is_err());
+    }
+
+    #[test]
+    fn cpu_capture_builds_provenance_once_per_distinct_script() {
+        let nodes = (0..500)
+            .map(|id| profile_node(id, "work", Vec::new()))
+            .collect::<Vec<_>>();
+        let mut builds = 0;
+        let provenance = capture_cpu_script_provenance(&nodes, |script_id, url| {
+            builds += 1;
+            assert_eq!(script_id, "1");
+            assert_eq!(url, "app.js");
+            Some(CaptureScriptProvenance {
+                url: url.to_owned(),
+                source_map_url: None,
+                source_sha256: Some(format!("{:x}", Sha256::digest(b"already available source"))),
+            })
+        });
+        assert_eq!(builds, 1);
+        assert_eq!(provenance.len(), 1);
+        let mut mismatched = profile_node(1000, "work", Vec::new());
+        mismatched.call_frame.url = "other.js".into();
+        let mut builds = 0;
+        let provenance = capture_cpu_script_provenance(&[mismatched, nodes[0].clone()], |_, url| {
+            builds += 1;
+            (url == "app.js").then(|| CaptureScriptProvenance {
+                url: url.to_owned(),
+                source_map_url: None,
+                source_sha256: None,
+            })
+        });
+        assert_eq!(builds, 2);
+        assert_eq!(provenance["1"].url, "app.js");
     }
 
     #[test]
