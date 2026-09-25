@@ -151,6 +151,8 @@ Capture persists cumulative raw ranges and cheap script provenance; mapping,
 exclusion and path filtering happen when viewing. When original generated source
 or its map is unavailable or has changed, the raw ranges remain available with
 explicit projection diagnostics rather than an empty authored result.
+Inline `data:` and oversized script/map URLs are omitted from capture
+provenance so URLs cannot smuggle source or map bytes into raw payloads.
 The legacy `raw` take option now produces the same raw capture in either mode;
 `noCache` applies only to live source acquisition, not stored views, which read
 the current local files without retaining source-map data in capture payloads.

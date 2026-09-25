@@ -2070,7 +2070,7 @@ async fn run_target(
                     for node in &snapshot.nodes {
                         let key = ScriptKey { session: session_key.clone(), script_id: node.call_frame.script_id.clone() };
                         if let Some(script) = driver.state().scripts.get(&key)
-                            && script.url == node.call_frame.url {
+                            && cheap_capture_url(&script.url) == node.call_frame.url {
                             snapshot.script_provenance.insert(node.call_frame.script_id.clone(), capture_script_provenance(script));
                         }
                     }
@@ -3840,13 +3840,28 @@ async fn capture_coverage(
 
 fn capture_script_provenance(script: &crate::debugger_engine::ScriptState) -> CaptureScriptProvenance {
     CaptureScriptProvenance {
-        url: script.url.clone(),
+        url: cheap_capture_url(&script.url),
         source_map_url: script.captured_source.as_ref()
             .and_then(|captured| captured.source_map_url.clone())
             .or_else(|| script.source_map_url.clone())
-            .filter(|url| !url.starts_with("data:")),
+            .filter(|url| url.len() <= 2048 && !is_inline_source_url(url)),
         source_sha256: script.captured_source.as_ref()
             .map(|captured| format!("{:x}", Sha256::digest(captured.content.as_bytes()))),
+    }
+}
+
+fn is_inline_source_url(url: &str) -> bool {
+    url.get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+}
+
+fn cheap_capture_url(url: &str) -> String {
+    if is_inline_source_url(url) {
+        "<inline-script-url>".to_owned()
+    } else if url.len() > 2048 {
+        "<oversized-script-url>".to_owned()
+    } else {
+        url.to_owned()
     }
 }
 
@@ -3854,7 +3869,7 @@ fn attach_coverage_provenance(driver: &DebuggerDriver, session: &SessionKey, sna
     for source in &mut snapshot.sources {
         let key = ScriptKey { session: session.clone(), script_id: source.script_id.clone() };
         if let Some(script) = driver.state().scripts.get(&key)
-            && script.url == source.generated_url {
+            && cheap_capture_url(&script.url) == source.generated_url {
             source.provenance = Some(capture_script_provenance(script));
         }
     }
@@ -4347,7 +4362,7 @@ fn cpu_profile_snapshot(
             call_frame: CpuProfileCallFrameSnapshot {
                 function_name: node.call_frame.function_name,
                 script_id: node.call_frame.script_id,
-                url: node.call_frame.url,
+                url: cheap_capture_url(&node.call_frame.url),
                 line_number: node.call_frame.line_number,
                 column_number: node.call_frame.column_number,
             },
@@ -4684,7 +4699,7 @@ impl CoverageRecording {
         }
 
         let accumulated = self.scripts.entry(script.script_id).or_default();
-        accumulated.url = script.url;
+        accumulated.url = cheap_capture_url(&script.url);
         for function in script.functions {
             let root = function
                 .ranges

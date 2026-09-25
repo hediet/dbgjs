@@ -16,6 +16,7 @@ const GENERATED: &str = "function work() { return 1; }";
 struct CoverageTransport {
     requests: std::sync::Mutex<Vec<String>>,
     stop_failures: std::sync::atomic::AtomicUsize,
+    script_url: String,
     inbound: tokio::sync::Mutex<mpsc::UnboundedReceiver<CdpEnvelope>>,
     outbound: mpsc::UnboundedSender<CdpEnvelope>,
 }
@@ -32,7 +33,7 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for CoverageTransport {
                 "timestamp": 1,
                 "result": [{
                     "scriptId": "1",
-                    "url": "coverage-test://unit/generated.js",
+                    "url": &self.script_url,
                     "functions": [{
                         "functionName": "work",
                         "isBlockCoverage": false,
@@ -63,7 +64,7 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for CoverageTransport {
                         "callFrame": {
                             "functionName": "work",
                             "scriptId": "1",
-                            "url": "coverage-test://unit/generated.js",
+                            "url": &self.script_url,
                             "lineNumber": 0,
                             "columnNumber": 0
                         }
@@ -116,10 +117,24 @@ async fn coverage_driver_with_source(
     mapped: bool,
     available_source: Option<&str>,
 ) -> (DebuggerDriver, SessionKey, Arc<CoverageTransport>) {
+    coverage_driver_with_url(
+        mapped,
+        available_source,
+        "coverage-test://unit/generated.js",
+    )
+    .await
+}
+
+async fn coverage_driver_with_url(
+    mapped: bool,
+    available_source: Option<&str>,
+    script_url: &str,
+) -> (DebuggerDriver, SessionKey, Arc<CoverageTransport>) {
     let (outbound, inbound) = mpsc::unbounded_channel();
     let transport = Arc::new(CoverageTransport {
         requests: Default::default(),
         stop_failures: Default::default(),
+        script_url: script_url.to_owned(),
         inbound: tokio::sync::Mutex::new(inbound),
         outbound,
     });
@@ -157,7 +172,7 @@ async fn coverage_driver_with_source(
                 script_id: "1".into(),
             },
             Arc::new(ScriptState {
-                url: "coverage-test://unit/generated.js".into(),
+                url: script_url.to_owned(),
                 hash: "coverage-regression".into(),
                 source_map_url: Some(format!(
                     "data:application/json;base64,{}",
@@ -279,6 +294,73 @@ async fn raw_cpu_stop_only_requests_profile_and_does_not_serialize_source_or_map
             .any(|part| part == b"UNPERSISTED_SOURCE_BYTES_")
     );
     assert!(snapshot.script_provenance["1"].source_map_url.is_none());
+}
+
+#[tokio::test]
+async fn raw_profiler_captures_never_persist_inline_script_url_source_bytes() {
+    let script_url = format!(
+        "data:text/javascript,{}",
+        "UNPERSISTED_INLINE_SCRIPT_BYTES_".repeat(10_000)
+    );
+    let (mut driver, session, transport) = coverage_driver_with_url(true, None, &script_url).await;
+    let mut recording = CoverageRecording::default();
+    let coverage = capture_coverage(
+        &mut driver,
+        &session,
+        &mut recording,
+        Some("inline-script".into()),
+        false,
+    )
+    .await
+    .unwrap();
+    let profile = driver.client().profiler().stop().await.unwrap();
+    let cpu = cpu_profile_snapshot("inline-cpu".into(), None, profile.profile).unwrap();
+    assert_eq!(coverage.sources[0].script_id, "1");
+    assert_eq!(cpu.nodes[0].call_frame.script_id, "1");
+    assert_eq!(cpu.samples, [1]);
+    for bytes in [
+        serde_json::to_vec(&coverage).unwrap(),
+        serde_json::to_vec(&cpu).unwrap(),
+    ] {
+        assert!(
+            bytes.len() < 2_000,
+            "raw payload contains inline source: {} bytes",
+            bytes.len()
+        );
+        assert!(
+            !bytes
+                .windows(b"UNPERSISTED_INLINE_SCRIPT_BYTES_".len())
+                .any(|part| part == b"UNPERSISTED_INLINE_SCRIPT_BYTES_")
+        );
+    }
+    assert_eq!(
+        *transport.requests.lock().unwrap(),
+        ["Profiler.takePreciseCoverage", "Profiler.stop"]
+    );
+}
+
+#[tokio::test]
+async fn captured_provenance_omits_oversized_non_inline_urls() {
+    let (driver, session, _) = coverage_driver(true).await;
+    let key = ScriptKey {
+        session,
+        script_id: "1".into(),
+    };
+    let mut script = driver.state().scripts[&key].as_ref().clone();
+    script.url = format!(
+        "https://example.test/script?{}",
+        "SECRET_SOURCE_BYTES_".repeat(500)
+    );
+    script.source_map_url = Some(format!(
+        "https://example.test/script.map?{}",
+        "SECRET_MAP_BYTES_".repeat(500)
+    ));
+    let provenance = capture_script_provenance(&script);
+    assert_eq!(provenance.url, "<oversized-script-url>");
+    assert!(provenance.source_map_url.is_none());
+    let serialized = serde_json::to_string(&provenance).unwrap();
+    assert!(!serialized.contains("SECRET_SOURCE_BYTES_"));
+    assert!(!serialized.contains("SECRET_MAP_BYTES_"));
 }
 
 #[tokio::test]
