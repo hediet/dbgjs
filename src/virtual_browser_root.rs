@@ -635,7 +635,7 @@ fn route_child_event(
     endpoint: &Arc<TargetEndpoint>,
     mux: &CdpSessionMux,
     routes: &ChildRoutes,
-) {
+) -> Result<(), String> {
     if method == "Target.detachedFromTarget" {
         if let Some(id) = params.get("sessionId").and_then(Value::as_str) {
             retire_child_routes(mux, routes, id);
@@ -647,27 +647,30 @@ fn route_child_event(
             }
             endpoint.mux.pause_raw_notifications(id);
         }
-        return;
+        return Ok(());
     }
     if method != "Target.attachedToTarget" {
-        return;
+        return Ok(());
     }
     let Some(id) = params.get("sessionId").and_then(Value::as_str) else {
-        return;
+        return Err("native child attach omitted sessionId".to_owned());
     };
     let mut routes_guard = routes.lock().unwrap();
     if routes_guard.contains_key(id) {
-        return;
+        return Ok(());
     }
-    let Ok(native_channel) = endpoint.mux.ensure_raw_channel(id) else {
-        return;
-    };
+    let native_channel = endpoint
+        .mux
+        .ensure_raw_channel(id)
+        .map_err(|error| error.to_string())?;
     let Some(mut failure) = endpoint.mux.raw_route_failure(id) else {
-        return;
+        return Err(format!(
+            "native child route '{id}' closed before activation"
+        ));
     };
-    let Ok(client_transport) = mux.open_session(id.to_owned()) else {
-        return;
-    };
+    let client_transport = mux
+        .open_session(id.to_owned())
+        .map_err(|error| error.to_string())?;
     let client_channel = Channel::new(
         Box::new(client_transport),
         Box::new(ChildRequestHandler {
@@ -716,6 +719,45 @@ fn route_child_event(
             tasks: vec![client_task, failure_task],
         },
     );
+    Ok(())
+}
+
+async fn routed_child_event(
+    method: String,
+    params: Value,
+    parent_session_id: &str,
+    endpoint: &Arc<TargetEndpoint>,
+    mux: &CdpSessionMux,
+    routes: &ChildRoutes,
+) -> Option<(String, Value)> {
+    let Err(error) = route_child_event(&method, &params, parent_session_id, endpoint, mux, routes)
+    else {
+        return Some((method, params));
+    };
+    let Some(id) = params.get("sessionId").and_then(Value::as_str) else {
+        eprintln!("cannot route native child attachment: {error}");
+        return None;
+    };
+    eprintln!("cannot route native child attachment '{id}': {error}; detaching it");
+    let detached = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        endpoint
+            .client()
+            .target()
+            .detach_from_target(Some(id.to_owned()), None),
+    )
+    .await;
+    if !matches!(detached, Ok(Ok(_))) {
+        eprintln!("failed to detach unroutable native child '{id}': {detached:?}");
+    }
+    let mut detached = serde_json::json!({
+        "sessionId": id,
+        "reason": format!("native child routing failed: {error}; reconnect the target")
+    });
+    if let Some(target_id) = params.pointer("/targetInfo/targetId") {
+        detached["targetId"] = target_id.clone();
+    }
+    Some(("Target.detachedFromTarget".to_owned(), detached))
 }
 
 fn activate_child_notifications(
@@ -786,14 +828,18 @@ impl RequestHandler for NativeChildHandler {
         let Some(endpoint) = self.endpoint.upgrade() else {
             return;
         };
-        route_child_event(
-            &method,
-            &params,
+        let Some((method, params)) = routed_child_event(
+            method,
+            params,
             &self.parent_session_id,
             &endpoint,
             &self.mux,
             &self.routes,
-        );
+        )
+        .await
+        else {
+            return;
+        };
         if let Some(notifications) = endpoint
             .child_notifications
             .lock()
@@ -1042,14 +1088,18 @@ impl VirtualRootState {
             let channel = session_channel.clone();
             async move {
                 while let Some((method, params)) = notifications.recv().await {
-                    route_child_event(
-                        &method,
-                        &params,
+                    let Some((method, params)) = routed_child_event(
+                        method,
+                        params,
                         &parent_session_id,
                         &child_endpoint,
                         &child_mux,
                         &child_routes,
-                    );
+                    )
+                    .await
+                    else {
+                        continue;
+                    };
                     let _ = channel.notify(&method, params.clone()).await;
                     activate_child_notifications(
                         &method,
@@ -1354,6 +1404,7 @@ mod tests {
         close_reason: Arc<Mutex<Option<String>>>,
         closed: watch::Sender<bool>,
         unresponsive: AtomicBool,
+        requests: StdMutex<Vec<String>>,
     }
 
     impl EchoTransport {
@@ -1366,6 +1417,7 @@ mod tests {
                 close_reason: Arc::new(Mutex::new(None)),
                 closed,
                 unresponsive: AtomicBool::new(false),
+                requests: StdMutex::new(Vec::new()),
             })
         }
 
@@ -1399,6 +1451,7 @@ mod tests {
             let JsonRpcMessage::Request(request) = message.message else {
                 return Ok(());
             };
+            self.requests.lock().unwrap().push(request.method.clone());
             if self.unresponsive.load(Ordering::Relaxed) {
                 return Ok(());
             }
@@ -2270,6 +2323,95 @@ mod tests {
         );
         assert_eq!(
             endpoint.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_child_capacity_failure_rolls_back_without_advertising_dead_session() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10)]);
+        harness.call("Target.getTargets", json!({})).await;
+        let page_id = harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let page_events = Arc::new(EventCollector::default());
+        let page = Channel::new(
+            Box::new(harness.mux.open_session(page_id).unwrap()),
+            Box::new(SharedCollector(page_events.clone())),
+        );
+        tokio::spawn({
+            let page = page.clone();
+            async move { page.run().await }
+        });
+        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        for index in 0..4096 {
+            let id = format!("retired-{index}");
+            endpoint.open_raw_session(id.clone()).unwrap().close();
+            endpoint.mux.retire_session(&id);
+        }
+        let transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
+        transport.notify("Target.attachedToTarget", json!({
+            "sessionId": "native-full",
+            "targetInfo": {"targetId":"frame-a","type":"iframe","url":"","title":"","attached":true},
+            "waitingForDebugger": false
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !transport
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|method| method == "Target.detachFromTarget")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("failed route must detach native attachment");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !page_events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, params)| {
+                    method == "Target.detachedFromTarget" && params["sessionId"] == "native-full"
+                })
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("parent must receive explicit route-failure recovery");
+        assert!(
+            !page_events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, params)| {
+                    method == "Target.attachedToTarget" && params["sessionId"] == "native-full"
+                })
+        );
+        assert!(
+            page_events
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, params)| {
+                    method == "Target.detachedFromTarget"
+                        && params["sessionId"] == "native-full"
+                        && params["reason"]
+                            .as_str()
+                            .is_some_and(|reason| reason.contains("reconnect"))
+                })
+        );
+        assert_eq!(
+            page.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
             "Runtime.evaluate"
         );
     }
