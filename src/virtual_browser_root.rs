@@ -662,6 +662,9 @@ fn route_child_event(
     let Ok(native_channel) = endpoint.mux.ensure_raw_channel(id) else {
         return;
     };
+    let Some(mut failure) = endpoint.mux.raw_route_failure(id) else {
+        return;
+    };
     let Ok(client_transport) = mux.open_session(id.to_owned()) else {
         return;
     };
@@ -675,12 +678,42 @@ fn route_child_event(
         let channel = client_channel.clone();
         async move { channel.run().await }
     });
+    let failure_task = tokio::spawn({
+        let native_id = id.to_owned();
+        let mux = mux.clone();
+        let routes = routes.clone();
+        let endpoint = Arc::downgrade(endpoint);
+        async move {
+            while failure.borrow().is_none() {
+                if failure.changed().await.is_err() {
+                    return;
+                }
+            }
+            eprintln!(
+                "native child CDP session '{native_id}' lost notifications; reconnect its target"
+            );
+            retire_child_routes(&mux, &routes, &native_id);
+            if let Some(route) = routes.lock().unwrap().remove(&native_id) {
+                for task in route.tasks {
+                    task.abort();
+                }
+                mux.retire_session(&native_id);
+            }
+            if let Some(endpoint) = endpoint.upgrade() {
+                endpoint
+                    .child_notifications
+                    .lock()
+                    .unwrap()
+                    .remove(&native_id);
+            }
+        }
+    });
     routes_guard.insert(
         id.to_owned(),
         ChildRoute {
             parent_session_id: parent_session_id.to_owned(),
             channel: client_channel,
-            tasks: vec![client_task],
+            tasks: vec![client_task, failure_task],
         },
     );
 }
@@ -2156,6 +2189,89 @@ mod tests {
     #[tokio::test]
     async fn native_child_route_preserves_notifications_when_raw_opens_first() {
         exercise_native_child_routes(true).await;
+    }
+
+    struct BlockedNativeHandler;
+
+    #[async_trait]
+    impl RequestHandler for BlockedNativeHandler {
+        async fn handle_request(&self, _: String, _: Value) -> Result<Value, JsonRpcError> {
+            panic!("unexpected native request")
+        }
+
+        async fn handle_notification(&self, _: String, _: Value) {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn native_child_notification_loss_retires_only_child_route() {
+        let harness = Harness::start(vec![host_target("renderer-a", 10)]);
+        harness.call("Target.getTargets", json!({})).await;
+        harness
+            .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
+            .await;
+        let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        let transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
+        transport.notify("Target.attachedToTarget", json!({
+            "sessionId": "native-child",
+            "targetInfo": {"targetId":"frame-a","type":"iframe","url":"","title":"","attached":true},
+            "waitingForDebugger": false
+        }));
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !harness
+                .root
+                .state
+                .child_routes
+                .lock()
+                .unwrap()
+                .contains_key("native-child")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        harness.settle().await;
+        endpoint
+            .mux
+            .forward_raw_notifications("native-child", Arc::new(BlockedNativeHandler));
+        for index in 0..300 {
+            transport.notify_session(
+                Some("native-child"),
+                "Runtime.executionContextCreated",
+                json!({"index":index}),
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while endpoint.mux.raw_channel("native-child").is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("slow consumer must fail its native notification route");
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            while harness
+                .root
+                .state
+                .child_routes
+                .lock()
+                .unwrap()
+                .contains_key("native-child")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("failed native route must retire its downstream child");
+        assert_eq!(
+            harness.call("Browser.getVersion", json!({})).await["product"],
+            "Process 4242"
+        );
+        assert_eq!(
+            endpoint.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
+            "Runtime.evaluate"
+        );
     }
 
     #[tokio::test]

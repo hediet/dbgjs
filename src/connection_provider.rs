@@ -760,6 +760,25 @@ impl ConnectionRuntime {
         sessions.insert(key.clone(), RawAttachment { session: session.clone(), endpoint });
         drop(sessions);
 
+        let failure_owner = Arc::downgrade(self);
+        let failure_key = key.clone();
+        let failed_session = session.clone();
+        tokio::spawn(async move {
+            if let Some(reason) = failed_session.wait_failed().await {
+                eprintln!(
+                    "raw CDP session '{}' failed: {reason}; reconnect before reusing this native ID",
+                    failure_key.1
+                );
+                if let Some(owner) = failure_owner.upgrade() {
+                    owner.retire_raw_session_if_same(
+                        &failure_key.0,
+                        &failure_key.1,
+                        &failed_session,
+                    );
+                }
+            }
+        });
+
         let owner = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
@@ -844,7 +863,7 @@ impl ConnectionRuntime {
             let attachment = sessions.get(&(target_id.to_owned(), session_id.to_owned()))
                 .ok_or_else(|| JsonRpcError::new(
                     error_codes::INVALID_PARAMS,
-                    format!("unknown or detached raw CDP session '{session_id}' for target '{target_id}'; run Target.attachToTarget again"),
+                    format!("unknown or detached raw CDP session '{session_id}' for target '{target_id}'; attach again, or reconnect if its native route failed"),
                 ))?;
             (attachment.session.clone(), attachment.endpoint.clone())
         };
@@ -1810,6 +1829,47 @@ pub(crate) mod raw_session_tests {
             runtime.has_raw_session("sibling", "other-native"),
             "losing one attachment's lifecycle must not retire a healthy sibling"
         );
+        runtime.close().await;
+    }
+
+    #[tokio::test]
+    async fn failed_raw_route_does_not_leave_an_unreattachable_live_attachment() {
+        let runtime = runtime(1).await;
+        let (events, _) = broadcast::channel(8);
+        runtime.register_raw_session("owner", "native", events.subscribe()).unwrap();
+        let session = runtime
+            .raw_sessions
+            .lock()
+            .unwrap()
+            .get(&("owner".into(), "native".into()))
+            .unwrap()
+            .session
+            .clone();
+        for _ in 0..256 {
+            assert_eq!(
+                session
+                    .request("Runtime.enable", Value::Null, Duration::ZERO)
+                    .await
+                    .unwrap_err()
+                    .code,
+                error_codes::REQUEST_TIMEOUT
+            );
+        }
+        assert_eq!(
+            session.request("Runtime.enable", Value::Null, Duration::ZERO)
+                .await.unwrap_err().code,
+            error_codes::PEER_DISCONNECTED
+        );
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while runtime.has_raw_session("owner", "native") {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("failed route must retire the registered attachment");
+        assert!(runtime.raw_session_request("owner", "native", "Runtime.enable", Value::Null)
+            .await.unwrap_err().message.contains("reconnect"));
+        let reopen = runtime.register_raw_session("owner", "native", events.subscribe())
+            .unwrap_err();
+        assert!(reopen.contains("reconnect"), "{reopen}");
         runtime.close().await;
     }
 }

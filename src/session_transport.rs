@@ -156,9 +156,6 @@ impl CdpSessionMux {
     fn open_raw_session(&self, id: String) -> Result<Arc<RawCdpSession>, OpenSessionError> {
         let mut routes = self.raw_routes.lock().unwrap();
         let route = self.ensure_raw_route(&mut routes, &id)?;
-        if route.failure.borrow().is_some() {
-            return Err(MuxError::AlreadyUsed(id));
-        }
         if route.active.swap(true, Ordering::SeqCst) {
             return Err(MuxError::AlreadyUsed(id));
         }
@@ -184,6 +181,14 @@ impl CdpSessionMux {
         Ok(self.ensure_raw_route(&mut routes, id)?.channel.clone())
     }
 
+    pub(crate) fn raw_route_failure(&self, id: &str) -> Option<watch::Receiver<Option<String>>> {
+        self.raw_routes
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|route| route.failure.subscribe())
+    }
+
     pub fn forward_raw_notifications(&self, id: &str, handler: Arc<dyn RequestHandler>) {
         if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
             route.send_notification(RawNotification::Listener(Some(handler)));
@@ -207,7 +212,7 @@ impl CdpSessionMux {
         if let Some(route) = routes.get(id) {
             if route.failure.borrow().is_some() {
                 return Err(MuxError::AlreadyUsed(format!(
-                    "raw CDP route '{id}' lost notifications; reconnect and attach again"
+                    "raw CDP route '{id}' failed; reconnect before using this native ID again"
                 )));
             }
             return Ok(route.clone());
@@ -394,6 +399,24 @@ pub struct RawCdpSession {
 impl RawCdpSession {
     pub fn open(mux: &CdpSessionMux, id: String) -> Result<Arc<Self>, OpenSessionError> {
         mux.open_raw_session(id)
+    }
+
+    /// Resolves when the route becomes unsafe to use, or returns `None` on normal detach.
+    pub async fn wait_failed(&self) -> Option<String> {
+        let mut failure = self.route.failure.subscribe();
+        let mut closed = self.closed.subscribe();
+        loop {
+            if let Some(reason) = failure.borrow().clone() {
+                return Some(reason);
+            }
+            if *closed.borrow() {
+                return None;
+            }
+            tokio::select! {
+                _ = failure.changed() => {}
+                _ = closed.changed() => {}
+            }
+        }
     }
 
     pub async fn request(
