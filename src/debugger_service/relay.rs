@@ -98,7 +98,7 @@ impl RelayApi for DebuggerService {
                 relay_cancellation.send_replace(true);
             }
         });
-        let (closed_sender, closed_receiver) = watch::channel(false);
+        let (closed_sender, closed_receiver) = watch::channel(None);
         {
             let mut state = self.state.lock().await;
             let is_current = state
@@ -139,10 +139,22 @@ impl RelayApi for DebuggerService {
         let service = self.clone();
         let cleanup_id = id.clone();
         tokio::spawn(async move {
-            let _ = completion.await;
+            let result = completion
+                .await
+                .unwrap_or_else(|_| Err("proxy task ended without a result".into()));
             relay_cancel.send_replace(true);
-            let _ = relay_completion.await;
-            closed_sender.send_replace(true);
+            let result = match tokio::time::timeout(Duration::from_secs(2), relay_completion).await
+            {
+                Ok(Ok(())) => result,
+                _ => Err(match result {
+                    Ok(()) => "context relay cleanup exceeded its deadline".to_owned(),
+                    Err(error) => format!("{error}; context relay cleanup exceeded its deadline"),
+                }),
+            };
+            closed_sender.send_replace(Some(result.clone()));
+            if result.is_err() {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
             service
                 .state
                 .lock()
@@ -165,11 +177,21 @@ impl RelayApi for DebuggerService {
         let registration = self.state.lock().await.playwright_proxies.remove(&proxy_id);
         if let Some(mut registration) = registration {
             registration.cancel.send_replace(true);
-            while !*registration.closed.borrow_and_update() {
-                if registration.closed.changed().await.is_err() {
-                    break;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Some(result) = registration.closed.borrow_and_update().clone() {
+                        break result;
+                    }
+                    registration
+                        .closed
+                        .changed()
+                        .await
+                        .map_err(|_| "proxy task ended without a result".to_owned())?;
                 }
-            }
+            })
+            .await
+            .map_err(|_| internal_error("Playwright proxy cleanup exceeded its deadline"))?
+            .map_err(|error| internal_error(format!("Playwright proxy failed: {error}")))?;
             Ok(true)
         } else {
             Ok(false)

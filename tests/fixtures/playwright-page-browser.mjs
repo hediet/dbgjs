@@ -30,6 +30,9 @@ export const chromium = {
 				if (process.env.DBGJS_FIXTURE_PHASE === "closing") {
 					await stall();
 				}
+				if (process.env.DBGJS_FIXTURE_PHASE === "closing-error") {
+					throw new Error(`fixture closing failed at ${endpoint}`);
+				}
 			},
 		};
 	},

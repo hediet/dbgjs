@@ -11,7 +11,11 @@ const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
 const started = performance.now();
 const deadline = started + timeoutMs;
 
-main().catch((error) => finish({ ok: false, error: formatError(error) }, 1));
+main().catch((error) => finish({
+	ok: false,
+	error: formatError(error),
+	failure: failureDetails(error),
+}, 1));
 
 async function main() {
 	const { chromium, endpoint, program } = await runPhase("starting", async () => {
@@ -77,10 +81,11 @@ async function main() {
 		try {
 			await runPhase("closing", () => browser.close());
 		} catch (error) {
-			throw new Error(
-				`Playwright closing failed after ${executionError ? "program failure" : "program completed"}: ${error.message}`,
-				{ cause: executionError },
-			);
+			if (executionError) {
+				executionError.cleanup = error;
+				throw executionError;
+			}
+			throw error;
 		}
 	}
 	if (executionError) throw executionError;
@@ -93,23 +98,43 @@ async function runPhase(phase, operation, reserveMs = 0) {
 		process.stderr.write(`DBGJS_PLAYWRIGHT_PROGRESS:${JSON.stringify({ phase, elapsedMs })}\n`);
 	}
 	const remaining = Math.max(0, deadline - performance.now() - reserveMs);
-	if (remaining === 0) throw new Error(`Playwright ${phase} exceeded its deadline after ${elapsedMs} ms`);
+	if (remaining === 0) throw new PhaseError(phase, "timeout", `Playwright ${phase} exceeded its deadline after ${elapsedMs} ms`);
 	let timer;
 	try {
 		return await Promise.race([
 			Promise.resolve().then(operation),
 			new Promise((_, reject) => {
 				timer = setTimeout(
-					() => reject(new Error(
+					() => reject(new PhaseError(phase, "timeout",
 						`Playwright ${phase} exceeded its deadline after ${Math.round(performance.now() - started)} ms`,
 					)),
 					remaining,
 				);
 			}),
 		]);
+	} catch (error) {
+		throw error instanceof PhaseError ? error : new PhaseError(phase, "failed", error.message ?? String(error), { cause: error });
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+class PhaseError extends Error {
+	constructor(phase, kind, message, options) {
+		super(message, options);
+		this.phase = phase;
+		this.kind = kind;
+	}
+}
+
+function failureDetails(error) {
+	const detail = {
+		phase: error.phase ?? "starting",
+		kind: error.kind ?? "failed",
+		message: redactEndpoint(error.message ?? String(error)),
+	};
+	if (error.cleanup) detail.cleanup = failureDetails(error.cleanup);
+	return detail;
 }
 
 function assertJsonValue(value, path, seen) {
@@ -158,6 +183,7 @@ function formatError(error) {
 		text += `\nCaused by: ${cause instanceof Error ? cause.stack ?? cause.message : String(cause)}`;
 		cause = cause instanceof Error ? cause.cause : undefined;
 	}
+	if (error.cleanup) text += `\nCleanup failed: ${formatError(error.cleanup)}`;
 	return redactEndpoint(text);
 }
 

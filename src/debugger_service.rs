@@ -900,7 +900,7 @@ struct PlaywrightProxyRegistration {
     target_id: String,
     generation: u64,
     cancel: watch::Sender<bool>,
-    closed: watch::Receiver<bool>,
+    closed: watch::Receiver<Option<Result<(), String>>>,
 }
 
 /// Tracks one open `dbgjs context relay` or `dbgjs target relay`. Its mere presence for a
@@ -7489,6 +7489,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closing_playwright_proxy_returns_its_sanitized_failure() {
+        let mut state = ServiceState::default();
+        let (cancel, _) = watch::channel(false);
+        let (_, closed) =
+            watch::channel(Some(Err("upstream connection or CDP transport failed".into())));
+        state.playwright_proxies.insert(
+            "proxy".into(),
+            PlaywrightProxyRegistration {
+                context_id: "test".into(),
+                connection_id: "runtime".into(),
+                target_id: "selected".into(),
+                generation: 1,
+                cancel,
+                closed,
+            },
+        );
+        let service = service_with_state(PathBuf::from("unused-playwright-state.json"), state);
+        let error = service
+            .close_playwright_proxy(&CallCtx::default(), "proxy".into())
+            .await
+            .unwrap_err()
+            .message;
+        assert!(error.contains("upstream connection or CDP transport failed"), "{error}");
+    }
+
+    #[tokio::test]
     async fn failed_context_persistence_does_not_cancel_playwright_proxies() {
         let root = std::env::current_dir()
             .unwrap()
@@ -7520,7 +7546,7 @@ mod tests {
             heap_capture("test", "kept", "target-a", "runtime", &capture_path),
         );
         let (cancel, cancelled) = watch::channel(false);
-        let (_, closed) = watch::channel(false);
+        let (_, closed) = watch::channel(None);
         state.playwright_proxies.insert(
             "proxy".into(),
             PlaywrightProxyRegistration {

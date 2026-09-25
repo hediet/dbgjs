@@ -54,6 +54,25 @@ test("cleanup failure after a successful program is attributed to closing", () =
 	assert.doesNotMatch(output.result.error, /executing.*failed/);
 });
 
+test("program failure is retained when closing also fails", () => {
+	const output = runProgram('throw new Error("primary fixture failure")', "closing-error", 450);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /primary fixture failure/);
+	assert.match(output.result.error, /fixture closing failed/);
+	assert.equal(output.result.failure.phase, "executing");
+	assert.equal(output.result.failure.cleanup.phase, "closing");
+	assert.doesNotMatch(JSON.stringify(output.result), /mock:playwright-page/);
+});
+
+test("closing is bounded even when execution consumed its budget", () => {
+	const output = runProgram('await new Promise(() => setInterval(() => {}, 1000))', "closing", 450);
+	assert.equal(output.status, 1);
+	assert.match(output.result.error, /executing.*deadline/);
+	assert.match(output.result.error, /closing.*deadline/);
+	assert.equal(output.result.failure.phase, "executing");
+	assert.equal(output.result.failure.cleanup.kind, "timeout");
+});
+
 test("immediate proxy setup errors reach the caller without waiting for the deadline", () => {
 	const output = runProgram("return 1", "connection-error", 300);
 	assert.equal(output.status, 1);

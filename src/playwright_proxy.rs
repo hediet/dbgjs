@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::protocol::{
@@ -22,7 +23,9 @@ use crate::cdp::TargetAttachToTargetParams;
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(1);
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const SESSION_TIMEOUT: Duration = Duration::from_secs(24);
+pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+pub const CLEANUP_RESERVE: Duration = Duration::from_secs(3);
+const SESSION_TIMEOUT: Duration = OPERATION_TIMEOUT.saturating_sub(CLEANUP_RESERVE);
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -48,7 +51,7 @@ impl PlaywrightPageScope {
 pub struct PlaywrightProxy {
     pub websocket_url: String,
     pub cancel: watch::Sender<bool>,
-    pub completion: oneshot::Receiver<()>,
+    pub completion: oneshot::Receiver<Result<(), String>>,
 }
 
 pub async fn start(
@@ -56,27 +59,41 @@ pub async fn start(
     page: PlaywrightPageScope,
     token: String,
 ) -> Result<PlaywrightProxy, PlaywrightProxyError> {
+    start_with_timeout(source, page, token, SESSION_TIMEOUT).await
+}
+
+async fn start_with_timeout(
+    source: PlaywrightCdpSource,
+    page: PlaywrightPageScope,
+    token: String,
+    operation_timeout: Duration,
+) -> Result<PlaywrightProxy, PlaywrightProxyError> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let address = listener.local_addr()?;
     let path = format!("/session/{token}");
     let websocket_url = format!("ws://127.0.0.1:{}{path}", address.port());
     let (cancel, cancel_receiver) = watch::channel(false);
     let (completion_sender, completion) = oneshot::channel();
-    let capability_deadline = Instant::now() + SESSION_TIMEOUT;
+    let capability_deadline = Instant::now() + operation_timeout;
     tokio::spawn(async move {
-        if let Err(error) = run(
-            listener,
-            source,
-            page,
-            path,
-            cancel_receiver,
+        let result = tokio::time::timeout_at(
             capability_deadline,
+            run(
+                listener,
+                source,
+                page,
+                path,
+                cancel_receiver,
+                capability_deadline,
+            ),
         )
-        .await
-        {
-            eprintln!("Playwright CDP proxy failed: {}", safe_proxy_error(&error));
-        }
-        let _ = completion_sender.send(());
+        .await;
+        let result = match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => Err(safe_proxy_error(&error)),
+            Err(_) => Err(safe_proxy_error(&PlaywrightProxyError::CapabilityTimeout)),
+        };
+        let _ = completion_sender.send(result);
     });
     Ok(PlaywrightProxy {
         websocket_url,
@@ -377,20 +394,35 @@ async fn bridge(
                 }).filter(|method| method.len() <= 80 && method.bytes().all(|byte|
                     byte.is_ascii_alphanumeric() || byte == b'.'
                 )).next().unwrap_or("protocol initialization");
-                let _ = client_sender.send(Message::Close(Some(CloseFrame {
-                    code: CloseCode::Error,
-                    reason: format!("Playwright proxy deadline during {last_method}").into(),
-                }))).await;
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    client_sender.send(Message::Close(Some(CloseFrame {
+                        code: CloseCode::Error,
+                        reason: format!("Playwright proxy deadline during {last_method}").into(),
+                    }))),
+                )
+                .await;
                 return Err(PlaywrightProxyError::CapabilityTimeout);
             },
             _ = cancel.changed() => return Ok(()),
             message = client_receiver.next() => {
                 let Some(message) = message else { return Ok(()); };
-                let message = message?;
+                let message = match message {
+                    Ok(message) => message,
+                    Err(WebSocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error.into()),
+                };
                 if let Message::Close(frame) = message {
                     let close = Message::Close(frame);
-                    upstream_sender.send(close.clone()).await?;
-                    client_sender.send(close).await?;
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        upstream_sender.send(close.clone()),
+                    )
+                    .await;
+                    let _ = tokio::time::timeout(Duration::from_secs(1), client_sender.send(close))
+                        .await;
                     return Ok(());
                 }
                 let summary = cdp_message_summary(&message);
@@ -1545,7 +1577,35 @@ mod tests {
         };
         assert!(frame.reason.contains("upstream"), "{frame:?}");
         server.await.unwrap();
-        proxy.completion.await.unwrap();
+        let error = proxy.completion.await.unwrap().unwrap_err();
+        assert!(
+            error.contains("upstream connection or CDP transport failed"),
+            "{error}"
+        );
+        assert!(!error.contains(&proxy.websocket_url), "{error}");
+    }
+
+    #[tokio::test]
+    async fn operation_ceiling_bounds_an_unclaimed_proxy() {
+        let proxy = start_with_timeout(
+            PlaywrightCdpSource::BrowserRoot {
+                endpoint: "ws://127.0.0.1:9".into(),
+            },
+            page(),
+            "fixture-token".into(),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+        let error = timeout(Duration::from_secs(1), proxy.completion)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.contains("capability exceeded its deadline"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -2583,6 +2643,7 @@ mod tests {
         timeout(Duration::from_secs(2), proxy.completion)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
         upstream.await.unwrap();
     }
@@ -2602,6 +2663,7 @@ mod tests {
         timeout(Duration::from_secs(2), proxy.completion)
             .await
             .unwrap()
+            .unwrap()
             .unwrap();
         upstream.await.unwrap();
     }
@@ -2616,6 +2678,7 @@ mod tests {
         proxy.cancel.send_replace(true);
         timeout(Duration::from_millis(500), proxy.completion)
             .await
+            .unwrap()
             .unwrap()
             .unwrap();
         upstream.abort();

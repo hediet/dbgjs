@@ -16,6 +16,7 @@ use dbgjs::context_identity::{
 };
 use dbgjs::coverage_filter::CoveragePathFilter;
 use dbgjs::local_rpc::{connect_existing, default_state_file, ensure_service};
+use dbgjs::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
 use dbgjs::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
 };
@@ -52,7 +53,6 @@ const DEFAULT_VALUE_PROPERTY_LIMIT: u32 = 20;
 const PLAYWRIGHT_PROGRAM_LIMIT: usize = 1024 * 1024;
 const PLAYWRIGHT_OUTPUT_LIMIT: usize = 1024 * 1024 + 4096;
 const PLAYWRIGHT_ERROR_LIMIT: usize = 64 * 1024;
-const PLAYWRIGHT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.mjs");
 const COVERAGE_HINT_DELAY: Duration = Duration::from_secs(20);
 
@@ -332,10 +332,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
             let deadline = tokio::time::Instant::now() + PLAYWRIGHT_EXECUTION_TIMEOUT;
-            let client = ensure_service(&state_file).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let context = rpc(client.contexts.get_context(scope.context.clone()).await)?;
+            let client =
+                tokio::time::timeout_at(deadline - CLEANUP_RESERVE, ensure_service(&state_file))
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Playwright starting exceeded its deadline",
+                        )
+                    })??;
+            let scope = tokio::time::timeout_at(
+                deadline - CLEANUP_RESERVE,
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Playwright selecting a page exceeded its deadline",
+                )
+            })??;
+            let context = rpc(tokio::time::timeout_at(
+                deadline - CLEANUP_RESERVE,
+                client.contexts.get_context(scope.context.clone()),
+            )
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Playwright selecting a page exceeded its deadline",
+                )
+            })?)?;
             let generation = context
                 .connections
                 .iter()
@@ -348,7 +375,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?
                 .generation;
             let proxy = tokio::time::timeout_at(
-                deadline - Duration::from_secs(3),
+                deadline - CLEANUP_RESERVE,
                 client
                     .relay
                     .open_playwright_proxy(scope.target_ref(), generation),
@@ -373,32 +400,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 client.relay.close_playwright_proxy(proxy.id),
             )
             .await;
-            match cleanup {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => {
-                    return Err(io::Error::other(format!(
-                        "Playwright proxy cleanup failed after {}: {error}",
-                        if result.is_ok() {
-                            "program completed"
-                        } else {
-                            "program failure"
-                        }
-                    ))
-                    .into());
-                }
-                Err(_) => {
-                    return Err(io::Error::other(format!(
-                        "Playwright proxy cleanup exceeded its 2-second deadline after {}",
-                        if result.is_ok() {
-                            "program completed"
-                        } else {
-                            "program failure"
-                        }
-                    ))
-                    .into());
-                }
-            }
-            if let Some(value) = result? {
+            let cleanup_error = match cleanup {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("Playwright proxy cleanup failed: {error}")),
+                Err(_) => Some("Playwright proxy cleanup exceeded its deadline".to_owned()),
+            };
+            if let Some(value) = playwright_result_with_cleanup(result, cleanup_error)? {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             }
         }
@@ -6675,6 +6682,19 @@ struct PlaywrightProgramResult {
     error: Option<String>,
 }
 
+fn playwright_result_with_cleanup<T>(
+    result: Result<T, Box<dyn std::error::Error>>,
+    cleanup_error: Option<String>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    match (result, cleanup_error) {
+        (Err(primary), Some(cleanup)) => {
+            Err(io::Error::other(format!("{primary}; additionally, {cleanup}")).into())
+        }
+        (Ok(_), Some(cleanup)) => Err(io::Error::other(cleanup).into()),
+        (result, None) => result,
+    }
+}
+
 async fn run_playwright_program(
     endpoint: &str,
     program: &str,
@@ -6683,8 +6703,8 @@ async fn run_playwright_program(
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
     let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
     let helper_budget = remaining
-        .saturating_sub(Duration::from_secs(3))
-        .min(Duration::from_secs(27));
+        .saturating_sub(CLEANUP_RESERVE)
+        .min(PLAYWRIGHT_EXECUTION_TIMEOUT.saturating_sub(CLEANUP_RESERVE));
     if helper_budget.is_zero() {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
@@ -6764,10 +6784,13 @@ async fn run_playwright_program(
         Completion::Exited(status) => status?,
         Completion::TimedOut => {
             let _ = child.start_kill();
-            let _ = child.wait().await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
             writer.abort();
             stdout_reader.abort();
-            let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
+            let stderr = match tokio::time::timeout(Duration::from_secs(1), stderr_reader).await {
+                Ok(Ok(Ok((stderr, _)))) => stderr,
+                _ => Vec::new(),
+            };
             let (phase, _, _) = playwright_progress(&stderr);
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -6782,7 +6805,7 @@ async fn run_playwright_program(
         }
         Completion::OutputExceeded => {
             let _ = child.start_kill();
-            let _ = child.wait().await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
             writer.abort();
             stdout_reader.abort();
             stderr_reader.abort();
@@ -6795,7 +6818,12 @@ async fn run_playwright_program(
     let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
     let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
     let (_, _, stderr) = playwright_progress(&stderr);
-    let result = parse_playwright_output(status, &stdout, &stderr)?;
+    let result = parse_playwright_output(status, &stdout, &stderr).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            error.to_string().replace(endpoint, "<playwright-endpoint>"),
+        )
+    })?;
     write_result?;
     if !stderr.is_empty() {
         eprint!("{}", String::from_utf8_lossy(&stderr));
@@ -8523,6 +8551,18 @@ mod tests {
         assert_eq!(phase, "executing");
         assert_eq!(elapsed, 20);
         assert_eq!(console, b"user output\n");
+    }
+
+    #[test]
+    fn playwright_cleanup_preserves_the_program_failure() {
+        let failure = super::playwright_result_with_cleanup::<()>(
+            Err(std::io::Error::other("program failed").into()),
+            Some("proxy failed".into()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(failure.contains("program failed"), "{failure}");
+        assert!(failure.contains("proxy failed"), "{failure}");
     }
 
     #[test]
