@@ -25,9 +25,6 @@ jobs:
             platform: win32-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,6 +41,7 @@ jobs:
           run-id: ${{ inputs.ci_run_id }}
           github-token: ${{ github.token }}
       - name: Extract existing binaries and report provenance
+        shell: bash
         env:
           BINARY_RUN_ID: ${{ inputs.ci_run_id }}
         run: |
