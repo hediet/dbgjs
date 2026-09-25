@@ -8197,7 +8197,9 @@ mod tests {
                     let mut request = [0; 4096];
                     let count = stream.read(&mut request).await.unwrap();
                     let map = br#"{"version":3,"file":"app.js","sources":["original.ts"],"sourcesContent":["class Original {}"],"names":[],"mappings":"AAAA"}"#;
-                    let body: &[u8] = if request[..count].starts_with(b"GET /app.js.map ") {
+                    let body: &[u8] = if request[..count].starts_with(b"GET /app.js.map ")
+                        || request[..count].starts_with(b"GET /cdn-map.js.map ")
+                    {
                         map
                     } else {
                         b"class a {}"
@@ -8266,6 +8268,21 @@ mod tests {
             ).await.unwrap();
             assert_eq!(unverified.classes[0].name, "a");
             assert_eq!(hits.load(Ordering::SeqCst), 3);
+            fs::write(root.join("app.js"), "class a {}").unwrap();
+            {
+                let mut state = restored.state.lock().await;
+                let script = &mut state.captures
+                    .get_mut(&("test".to_owned(), "heap".to_owned()))
+                    .unwrap().heap_mapping.as_mut().unwrap().scripts[0];
+                script.url = url::Url::from_file_path(root.join("app.js")).unwrap().to_string();
+                script.hash = format!("{:x}", Sha256::digest(b"class a {}"));
+                script.source_map_url = Some(format!("{base}/cdn-map.js.map"));
+            }
+            let cdn = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(cdn.classes[0].name, "Original");
+            assert_eq!(hits.load(Ordering::SeqCst), 4);
             server.abort();
             assert!(restored.state.lock().await.captures
                 [&("test".to_owned(), "heap".to_owned())]
