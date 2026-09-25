@@ -22,6 +22,12 @@ pub(crate) struct VerifiedLocalSources {
     pub map_bytes: Vec<u8>,
 }
 
+#[derive(Debug)]
+pub(crate) struct CachedSourceMap {
+    pub map_url: String,
+    pub map_bytes: Vec<u8>,
+}
+
 fn local_file(url: &str) -> Option<PathBuf> {
     if let Ok(url) = url::Url::parse(url) {
         return (url.scheme() == "file")
@@ -30,6 +36,39 @@ fn local_file(url: &str) -> Option<PathBuf> {
     }
     let path = PathBuf::from(url);
     path.is_absolute().then_some(path)
+}
+
+fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> {
+    let map_ref = map_ref.ok_or_else(|| {
+        format!("{url}: source map reference unavailable; raw measurements retained")
+    })?;
+    if map_ref.starts_with("data:") {
+        return Err(format!(
+            "{url}: inline source map was not persisted; raw measurements retained"
+        ));
+    }
+    url::Url::parse(map_ref)
+        .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
+        .map(|url| url.to_string())
+        .map_err(|_| format!("{url}: source map URL {map_ref} cannot be resolved"))
+}
+
+pub(crate) fn load_cached_source_map(
+    generated_url: &str,
+    map_ref: Option<&str>,
+    script_hash: &str,
+) -> Result<CachedSourceMap, String> {
+    if script_hash.is_empty() {
+        return Err(format!(
+            "{generated_url}: script identity unavailable; raw measurements retained"
+        ));
+    }
+    let map_url = resolved_map_url(generated_url, map_ref)?;
+    let map_bytes = crate::cdp_runtime::read_source_map_cache_for_view(script_hash, &map_url)
+        .ok_or_else(|| format!(
+            "{generated_url}: verified source map cache entry for {map_url} is unavailable; raw measurements retained"
+        ))?;
+    Ok(CachedSourceMap { map_url, map_bytes })
 }
 
 fn load_map(
@@ -104,18 +143,7 @@ pub(crate) fn load_verified_local_sources(
     }
     let generated = String::from_utf8(bytes)
         .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))?;
-    let map_ref = map_ref.ok_or_else(|| {
-        format!("{url}: source map reference unavailable; raw measurements retained")
-    })?;
-    if map_ref.starts_with("data:") {
-        return Err(format!(
-            "{url}: inline source map was not persisted; raw measurements retained"
-        ));
-    }
-    let map_url = url::Url::parse(map_ref)
-        .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
-        .map(|url| url.to_string())
-        .unwrap_or_else(|_| map_ref.to_owned());
+    let map_url = resolved_map_url(url, map_ref)?;
     let path = local_file(&map_url).ok_or_else(|| {
         format!("{url}: source map {map_url} is unavailable locally; raw measurements retained")
     })?;
@@ -344,6 +372,20 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.contains("inline source map"));
+        assert!(
+            load_cached_source_map(&provenance.url, provenance.source_map_url.as_deref(), "")
+                .unwrap_err()
+                .contains("script identity unavailable")
+        );
+        assert!(
+            load_cached_source_map(
+                &provenance.url,
+                Some("data:application/json,{}"),
+                "cdp-hash"
+            )
+            .unwrap_err()
+            .contains("inline source map")
+        );
     }
 
     fn coverage() -> CoverageSnapshot {

@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use linkrpc::connection::channel::{Channel, RequestHandler};
-use linkrpc::prelude::{JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, RpcCallError, TransportError};
+use linkrpc::prelude::{
+    JsonRpcError, JsonRpcMessage, MessageTransport, MuxError, RpcCallError, TransportError,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -204,7 +206,10 @@ impl CdpConnection {
         self.mux.retire_session(session_id);
     }
 
-    pub fn open_raw_session(&self, session_id: String) -> Result<Arc<RawCdpSession>, CdpRuntimeError> {
+    pub fn open_raw_session(
+        &self,
+        session_id: String,
+    ) -> Result<Arc<RawCdpSession>, CdpRuntimeError> {
         RawCdpSession::open(&self.mux, session_id).map_err(CdpRuntimeError::OpenSession)
     }
 
@@ -239,7 +244,10 @@ pub enum RootCdpEvent {
     TargetCreated(TargetTargetCreatedParams),
     TargetChanged(TargetTargetInfoChangedParams),
     TargetDestroyed(TargetTargetDestroyedParams),
-    TargetDetached { session_id: String, target_id: Option<String> },
+    TargetDetached {
+        session_id: String,
+        target_id: Option<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -280,7 +288,10 @@ impl crate::cdp::target_events::TargetEventsService for RootCdpEventHandler {
         target_id: Option<crate::cdp::TargetTargetId>,
     ) -> Result<(), RpcCallError> {
         self.mux.retire_session(&session_id);
-        let _ = self.sender.send(Ok(RootCdpEvent::TargetDetached { session_id, target_id }));
+        let _ = self.sender.send(Ok(RootCdpEvent::TargetDetached {
+            session_id,
+            target_id,
+        }));
         Ok(())
     }
     async fn target_created(
@@ -655,7 +666,8 @@ impl CdpDebuggerSession {
                         // CDP rejects the same requested offset twice, but distinct earlier
                         // offsets can resolve to the same executable location.
                         for column in (physical.position.column.saturating_sub(32)
-                            ..physical.position.column).rev()
+                            ..physical.position.column)
+                            .rev()
                         {
                             let mut location = DebuggerLocation::new(
                                 physical.script.script_id.clone(),
@@ -1686,6 +1698,19 @@ fn source_map_cache_path(script_hash: &str, resolved_url: &str) -> Option<PathBu
     Some(directory.join(format!("{:x}.map", hasher.finalize())))
 }
 
+pub(crate) fn read_source_map_cache_for_view(
+    script_hash: &str,
+    resolved_url: &str,
+) -> Option<Vec<u8>> {
+    let path = source_map_cache_path(script_hash, resolved_url)?;
+    read_source_map_cache_file(&path)
+}
+
+fn read_source_map_cache_file(path: &Path) -> Option<Vec<u8>> {
+    let cached = std::fs::read(path).ok()?;
+    decode_source_map_cache(cached).map(|map| map.to_vec())
+}
+
 async fn write_source_map_cache(
     path: &Path,
     source_map: &SourceMapData,
@@ -2064,6 +2089,26 @@ mod tests {
         cached.extend(format!("{:x}\n", Sha256::digest(invalid)).as_bytes());
         cached.extend(invalid);
         assert!(decode_source_map_cache(cached).is_none());
+    }
+
+    #[test]
+    fn stored_view_reads_only_integrity_checked_existing_map_cache() {
+        let directory = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("view-map-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("script.map");
+        let source_map = br#"{"version":3,"sources":["source.ts"],"names":[],"mappings":"AAAA"}"#;
+        let mut cached =
+            format!("dbgjs-source-map-v1\n{:x}\n", Sha256::digest(source_map)).into_bytes();
+        cached.extend_from_slice(source_map);
+        std::fs::write(&path, &cached).unwrap();
+        assert_eq!(read_source_map_cache_file(&path), Some(source_map.to_vec()));
+        *cached.last_mut().unwrap() ^= 1;
+        std::fs::write(&path, cached).unwrap();
+        assert!(read_source_map_cache_file(&path).is_none());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
