@@ -1798,11 +1798,18 @@ pub(crate) mod raw_session_tests {
             }).unwrap();
         }
         runtime.register_raw_session("owner", "native", receiver).unwrap();
+        runtime
+            .register_raw_session("sibling", "other-native", events.subscribe())
+            .unwrap();
         tokio::time::timeout(Duration::from_millis(100), async {
             while runtime.has_raw_session("owner", "native") {
                 tokio::task::yield_now().await;
             }
         }).await.expect("lost lifecycle notifications require explicit retirement and reattach");
+        assert!(
+            runtime.has_raw_session("sibling", "other-native"),
+            "losing one attachment's lifecycle must not retire a healthy sibling"
+        );
         runtime.close().await;
     }
 }
