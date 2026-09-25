@@ -64,6 +64,29 @@ test("program failure is retained when closing also fails", () => {
 	assert.doesNotMatch(JSON.stringify(output.result), /mock:playwright-page/);
 });
 
+for (const [expression, message] of [
+	["null", "null"],
+	["undefined", "undefined"],
+	['"fixture string failure"', "fixture string failure"],
+]) {
+	for (const phase of [undefined, "closing-error"]) {
+		test(`throw ${expression} reports executing${phase ? " and closing" : ""}`, () => {
+			const output = runProgram(`throw ${expression}`, phase);
+			assert.equal(output.status, 1);
+			assert.equal(output.result.failure.phase, "executing");
+			assert.equal(output.result.failure.kind, "failed");
+			assert.equal(output.result.failure.message, message);
+			assert.match(output.result.error, new RegExp(message));
+			if (phase) {
+				assert.equal(output.result.failure.cleanup.phase, "closing");
+				assert.match(output.result.error, /fixture closing failed/);
+			} else {
+				assert.equal(output.result.failure.cleanup, undefined);
+			}
+		});
+	}
+}
+
 test("closing is bounded even when execution consumed its budget", () => {
 	const output = runProgram('await new Promise(() => setInterval(() => {}, 1000))', "closing", 450);
 	assert.equal(output.status, 1);

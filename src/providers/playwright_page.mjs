@@ -113,7 +113,7 @@ async function runPhase(phase, operation, reserveMs = 0) {
 			}),
 		]);
 	} catch (error) {
-		throw error instanceof PhaseError ? error : new PhaseError(phase, "failed", error.message ?? String(error), { cause: error });
+		throw error instanceof PhaseError ? error : new PhaseError(phase, "failed", error?.message ?? String(error), { cause: error });
 	} finally {
 		clearTimeout(timer);
 	}
