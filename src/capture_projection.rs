@@ -16,6 +16,12 @@ struct AvailableMap {
     map: SourceMap,
 }
 
+pub(crate) struct VerifiedLocalSources {
+    pub generated: String,
+    pub map_url: String,
+    pub map_bytes: Vec<u8>,
+}
+
 fn local_file(url: &str) -> Option<PathBuf> {
     if let Ok(url) = url::Url::parse(url) {
         return (url.scheme() == "file")
@@ -40,20 +46,23 @@ fn load_map(
             "{url}: captured script URL differs from measurement; raw measurements retained"
         ));
     }
-    let source = local_file(url).ok_or_else(|| {
-        format!("{url}: generated source is unavailable locally; raw measurements retained")
-    })?;
-    let bytes = fs::read(&source).map_err(|error| {
-        format!("{url}: generated source unavailable ({error}); raw measurements retained")
-    })?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if provenance.source_sha256.as_deref() != Some(actual.as_str()) {
-        return Err(format!(
-            "{url}: generated source identity unavailable or changed; raw measurements retained"
-        ));
-    }
-    let generated = String::from_utf8(bytes)
-        .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))?;
+    let sources = load_verified_local_sources(
+        url,
+        provenance.source_map_url.as_deref(),
+        provenance.source_sha256.as_deref(),
+    )?;
+    let map = match decode_slice(&sources.map_bytes).map_err(|error| error.to_string())? {
+        DecodedMap::Regular(map) => map,
+        DecodedMap::Index(index) => index.flatten().map_err(|error| error.to_string())?,
+        DecodedMap::Hermes(_) => {
+            return Err(format!(
+                "{url}: unsupported Hermes source map; raw measurements retained"
+            ));
+        }
+    };
+    let VerifiedLocalSources {
+        generated, map_url, ..
+    } = sources;
     let mut checkpoints = vec![(0, 0, 0, 0)];
     let (mut units, mut line, mut column) = (0_u32, 0_u32, 0_u32);
     for (byte, ch) in generated.char_indices() {
@@ -68,9 +77,41 @@ fn load_map(
             column += ch.len_utf16() as u32;
         }
     }
-    let map_ref = provenance.source_map_url.as_deref().ok_or_else(|| {
+    Ok(AvailableMap {
+        generated,
+        checkpoints,
+        map_url,
+        map,
+    })
+}
+
+pub(crate) fn load_verified_local_sources(
+    url: &str,
+    map_ref: Option<&str>,
+    source_sha256: Option<&str>,
+) -> Result<VerifiedLocalSources, String> {
+    let source = local_file(url).ok_or_else(|| {
+        format!("{url}: generated source is unavailable locally; raw measurements retained")
+    })?;
+    let bytes = fs::read(&source).map_err(|error| {
+        format!("{url}: generated source unavailable ({error}); raw measurements retained")
+    })?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if source_sha256 != Some(actual.as_str()) {
+        return Err(format!(
+            "{url}: generated source identity unavailable or changed; raw measurements retained"
+        ));
+    }
+    let generated = String::from_utf8(bytes)
+        .map_err(|_| format!("{url}: generated source is not UTF-8; raw measurements retained"))?;
+    let map_ref = map_ref.ok_or_else(|| {
         format!("{url}: source map reference unavailable; raw measurements retained")
     })?;
+    if map_ref.starts_with("data:") {
+        return Err(format!(
+            "{url}: inline source map was not persisted; raw measurements retained"
+        ));
+    }
     let map_url = url::Url::parse(map_ref)
         .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
         .map(|url| url.to_string())
@@ -81,20 +122,10 @@ fn load_map(
     let map_bytes = fs::read(path).map_err(|error| {
         format!("{url}: source map {map_url} unavailable ({error}); raw measurements retained")
     })?;
-    let map = match decode_slice(&map_bytes).map_err(|error| error.to_string())? {
-        DecodedMap::Regular(map) => map,
-        DecodedMap::Index(index) => index.flatten().map_err(|error| error.to_string())?,
-        DecodedMap::Hermes(_) => {
-            return Err(format!(
-                "{url}: unsupported Hermes source map; raw measurements retained"
-            ));
-        }
-    };
-    Ok(AvailableMap {
+    Ok(VerifiedLocalSources {
         generated,
-        checkpoints,
         map_url,
-        map,
+        map_bytes,
     })
 }
 
@@ -294,6 +325,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn shared_local_loader_returns_verified_view_inputs_without_persisting_inline_maps() {
+        let provenance = fixture();
+        let source = load_verified_local_sources(
+            &provenance.url,
+            provenance.source_map_url.as_deref(),
+            provenance.source_sha256.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(source.generated, "a\nb\n");
+        assert!(source.map_bytes.starts_with(b"{\"version\":3"));
+        let error = load_verified_local_sources(
+            &provenance.url,
+            Some("data:application/json,{}"),
+            provenance.source_sha256.as_deref(),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("inline source map"));
+    }
+
     fn coverage() -> CoverageSnapshot {
         let provenance = fixture();
         serde_json::from_value(json!({
@@ -393,7 +445,11 @@ mod tests {
                 .count(),
             1
         );
-        let work = authored.functions.iter().find(|f| f.name == "work").unwrap();
+        let work = authored
+            .functions
+            .iter()
+            .find(|f| f.name == "work")
+            .unwrap();
         assert_eq!(work.self_time_micros, 30);
         assert_eq!(work.sample_count, 2);
         let mut selected = raw.clone();
