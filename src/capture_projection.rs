@@ -314,7 +314,8 @@ mod tests {
     }
 
     fn cpu() -> CpuProfileSnapshot {
-        let provenance = fixture();
+        let mut provenance = fixture();
+        provenance.source_map_url = Some("same-source.js.map".into());
         serde_json::from_value(json!({
             "captureId": "cpu", "samplingIntervalMicros": null,
             "startTimeMicros": 0.0, "endTimeMicros": 30.0,
@@ -390,27 +391,29 @@ mod tests {
                 .iter()
                 .filter(|f| f.name == "work")
                 .count(),
-            2
-        );
-        let mut selected = raw.clone();
-        let selected_source = fixture().url.replace("bundle.js", "src/a.ts");
-        project_stored_cpu(&mut selected, Some(&selected_source)).unwrap();
-        assert_eq!(
-            selected
-                .functions
-                .iter()
-                .filter(|f| f.name == "work")
-                .count(),
-            2
-        );
-        assert_eq!(
-            selected
-                .functions
-                .iter()
-                .filter(|f| f.name == "work")
-                .filter(|f| f.authored_location.is_some())
-                .count(),
             1
+        );
+        let work = authored.functions.iter().find(|f| f.name == "work").unwrap();
+        assert_eq!(work.self_time_micros, 30);
+        assert_eq!(work.sample_count, 2);
+        let mut selected = raw.clone();
+        project_stored_cpu(&mut selected, Some("file:///not-selected")).unwrap();
+        assert_eq!(
+            selected
+                .functions
+                .iter()
+                .filter(|f| f.name == "work")
+                .count(),
+            2
+        );
+        assert_eq!(
+            selected
+                .functions
+                .iter()
+                .filter(|f| f.name == "work")
+                .filter(|f| f.authored_location.is_none())
+                .count(),
+            2
         );
         assert_eq!(serde_json::to_vec(&raw).unwrap(), payload);
         assert_eq!(authored.samples, raw.samples);
