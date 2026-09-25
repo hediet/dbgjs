@@ -25,7 +25,11 @@
       "kind": "number",
       "preview": "41",
       "truncated": false,
-      "reference": null
+      "reference": null,
+      "source": {
+        "locations": [],
+        "diagnostics": []
+      }
     }
   },
   {
@@ -67,7 +71,11 @@
       "kind": "number",
       "preview": "40",
       "truncated": false,
-      "reference": null
+      "reference": null,
+      "source": {
+        "locations": [],
+        "diagnostics": []
+      }
     }
   },
   {
@@ -76,7 +84,11 @@
       "kind": "number",
       "preview": "41",
       "truncated": false,
-      "reference": null
+      "reference": null,
+      "source": {
+        "locations": [],
+        "diagnostics": []
+      }
     }
   }
 ]
