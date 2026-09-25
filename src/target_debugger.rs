@@ -3872,10 +3872,16 @@ fn cheap_capture_url(url: &str) -> String {
 fn attach_coverage_provenance(driver: &DebuggerDriver, session: &SessionKey, snapshot: &mut CoverageSnapshot) {
     for source in &mut snapshot.sources {
         let key = ScriptKey { session: session.clone(), script_id: source.script_id.clone() };
-        if let Some(script) = driver.state().scripts.get(&key)
+        source.provenance = Some(if let Some(script) = driver.state().scripts.get(&key)
             && cheap_capture_url(&script.url) == source.generated_url {
-            source.provenance = Some(capture_script_provenance(script));
-        }
+            capture_script_provenance(script)
+        } else {
+            CaptureScriptProvenance {
+                url: source.generated_url.clone(),
+                source_map_url: None,
+                source_sha256: None,
+            }
+        });
     }
 }
 

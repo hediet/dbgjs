@@ -450,17 +450,23 @@ async fn non_raw_coverage_delegates_effective_ranges_to_view() {
     assert_eq!(function.ranges[0].count, 1);
     assert!(function.authored_location.is_none());
     assert!(function.generated_location.is_none());
+    assert!(snapshot.sources[0].provenance.is_some());
+    let mut viewed = snapshot.clone();
+    crate::capture_projection::project_stored_coverage(&mut viewed);
+    assert_eq!(viewed.sources[0].functions[0].effective_ranges.len(), 1);
+    assert!(!viewed.projection_diagnostics.is_empty());
 }
 
 #[tokio::test]
 async fn stopped_raw_coverage_survives_unavailable_view_projection() {
-    let (driver, _session, transport) = coverage_driver(false).await;
+    let (driver, session, transport) = coverage_driver(false).await;
     let mut recording = Some(CoverageRecording::default());
     let completed = finish_coverage_recording(&driver, &mut recording)
         .await
         .unwrap();
     assert!(recording.is_none());
-    let raw = completed.snapshot();
+    let mut raw = completed.snapshot();
+    attach_coverage_provenance(&driver, &session, &mut raw);
     let payload = serde_json::to_vec(&raw).unwrap();
     let mut viewed = raw.clone();
     crate::capture_projection::project_stored_coverage(&mut viewed);

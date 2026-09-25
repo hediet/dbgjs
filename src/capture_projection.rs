@@ -239,13 +239,16 @@ impl AvailableMap {
 
 pub(crate) fn project_stored_coverage(snapshot: &mut CoverageSnapshot) {
     for source in &mut snapshot.sources {
+        let Some(provenance) = source.provenance.as_ref() else {
+            continue;
+        };
         for function in &mut source.functions {
             if function.effective_ranges.is_empty() {
                 function.effective_ranges =
                     crate::target_debugger::effective_coverage_ranges(&function.ranges);
             }
         }
-        match load_map(source.provenance.as_ref(), &source.generated_url) {
+        match load_map(Some(provenance), &source.generated_url) {
             Ok(map) => {
                 for function in &mut source.functions {
                     function.generated_location = map
