@@ -8059,6 +8059,7 @@ mod tests {
 
     #[test]
     fn stored_heap_view_recovers_available_map_without_changing_raw_capture() {
+        use base64::Engine;
         use crate::service_api::{
             HeapMappingSnapshot, HeapMappingStatus, HeapNodeSelector, HeapScriptSnapshot,
             TargetRef,
@@ -8143,6 +8144,28 @@ mod tests {
                 generated.nodes[0].source.locations[0].position.resolved.source_url,
                 url::Url::from_file_path(root.join("app.js")).unwrap().to_string()
             );
+            let inline = format!(
+                "class a {{}}\n//# sourceMappingURL=data:application/json;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(
+                    br#"{"version":3,"file":"app.js","sources":["original.ts"],"sourcesContent":["class Original {}"],"names":[],"mappings":"AAAA"}"#
+                )
+            );
+            fs::write(root.join("app.js"), &inline).unwrap();
+            {
+                let mut state = restored.state.lock().await;
+                let script = &mut state.captures
+                    .get_mut(&("test".to_owned(), "heap".to_owned()))
+                    .unwrap().heap_mapping.as_mut().unwrap().scripts[0];
+                script.hash = format!("{:x}", Sha256::digest(inline.as_bytes()));
+                script.source_map_url = None;
+                script.diagnostic = Some(
+                    "inline or oversized source/map URL omitted from capture; generated location retained".into()
+                );
+            }
+            let recovered_inline = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(recovered_inline.classes[0].name, "Original");
             assert!(restored.state.lock().await.captures
                 [&("test".to_owned(), "heap".to_owned())]
                 .heap_mapping.as_ref().unwrap().scripts[0].source_map.is_none());

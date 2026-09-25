@@ -3752,7 +3752,12 @@ pub(crate) fn recover_heap_mapping_for_view(
     let mut mapping = mapping?;
     for index in 0..mapping.scripts.len() {
         let script = &mapping.scripts[index];
-        if script.source_map.is_some() || script.source_map_url.is_none() {
+        let omitted_map_reference = script.diagnostic.as_deref().is_some_and(|diagnostic| {
+            diagnostic.starts_with("inline or oversized source/map URL omitted")
+        });
+        if script.source_map.is_some()
+            || (script.source_map_url.is_none() && !omitted_map_reference)
+        {
             continue;
         }
         let recovered = crate::capture_projection::recover_source_map_for_view(
