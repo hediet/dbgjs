@@ -151,7 +151,19 @@ pub(crate) fn load_verified_local_sources(
     let path = local_file(&map_url).ok_or_else(|| {
         format!("{url}: source map {map_url} is unavailable locally; raw measurements retained")
     })?;
-    let map_bytes = fs::read(path).map_err(|error| {
+    let generated_directory = fs::canonicalize(&source)
+        .map_err(|error| format!("{url}: generated source path unavailable ({error})"))?
+        .parent()
+        .ok_or_else(|| format!("{url}: generated source has no parent directory"))?
+        .to_owned();
+    let map_path = fs::canonicalize(&path)
+        .map_err(|error| format!("{url}: source map {map_url} unavailable ({error})"))?;
+    if !map_path.starts_with(&generated_directory) {
+        return Err(format!(
+            "{url}: source map {map_url} is outside generated script directory; raw measurements retained"
+        ));
+    }
+    let map_bytes = fs::read(map_path).map_err(|error| {
         format!("{url}: source map {map_url} unavailable ({error}); raw measurements retained")
     })?;
     Ok(VerifiedLocalSources {
@@ -379,6 +391,21 @@ mod tests {
         assert_eq!(
             resolved_map_url("/project/bundle.js", Some("/project/bundle.js.map")).unwrap(),
             "/project/bundle.js.map"
+        );
+        let unrelated =
+            url::Url::from_file_path(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+                .unwrap()
+                .to_string();
+        let error = load_verified_local_sources(
+            &provenance.url,
+            Some(&unrelated),
+            provenance.source_sha256.as_deref(),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error.contains("outside generated script directory"),
+            "{error}"
         );
         assert!(
             load_cached_source_map(&provenance.url, provenance.source_map_url.as_deref(), "")
