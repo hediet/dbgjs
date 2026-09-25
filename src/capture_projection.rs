@@ -23,6 +23,7 @@ pub(crate) struct VerifiedLocalSources {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct CachedSourceMap {
     pub map_url: String,
     pub map_bytes: Vec<u8>,
@@ -46,6 +47,9 @@ fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> 
         return Err(format!(
             "{url}: inline source map was not persisted; raw measurements retained"
         ));
+    }
+    if url::Url::parse(url).is_err() && PathBuf::from(map_ref).is_absolute() {
+        return Ok(map_ref.to_owned());
     }
     url::Url::parse(map_ref)
         .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
@@ -372,6 +376,10 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.contains("inline source map"));
+        assert_eq!(
+            resolved_map_url("/project/bundle.js", Some("/project/bundle.js.map")).unwrap(),
+            "/project/bundle.js.map"
+        );
         assert!(
             load_cached_source_map(&provenance.url, provenance.source_map_url.as_deref(), "")
                 .unwrap_err()
