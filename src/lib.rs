@@ -6,6 +6,7 @@ pub mod context_identity;
 pub mod context_relay;
 pub mod context_source_model;
 pub mod coverage_filter;
+mod capture_projection;
 pub use cdp_protocol as cdp;
 pub mod cdp_runtime;
 pub mod cdp_transport;

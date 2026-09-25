@@ -102,10 +102,6 @@ impl CpuProfilerApi for DebuggerService {
                 return Err(error);
             }
         };
-        let snapshot = debugger
-            .get_cpu_profile(name.clone(), None, false, true)
-            .await
-            .unwrap_or(snapshot);
         self.store_capture(
             &reservation.reservation,
             CapturePayload::CpuProfile(snapshot.clone()),

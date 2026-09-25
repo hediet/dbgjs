@@ -147,6 +147,13 @@ breakpoint, waiting for the pause, and resuming.
 Record function and block execution, then exclude a background capture when
 viewing the source-mapped tree. The stored capture stays intact; `--exclude` is
 a query option, not a recording option. `HL` means hit lines; `RL` means run lines.
+Capture persists cumulative raw ranges and cheap script provenance; mapping,
+exclusion and path filtering happen when viewing. When original generated source
+or its map is unavailable or has changed, the raw ranges remain available with
+explicit projection diagnostics rather than an empty authored result.
+The legacy `raw` take option now produces the same raw capture in either mode;
+`noCache` applies only to live source acquisition, not stored views, which read
+the current local files without retaining source-map data in capture payloads.
 
 {{example:coverage-start,coverage-baseline,coverage-type,coverage-stop,coverage-show}}
 
@@ -155,6 +162,9 @@ a query option, not a recording option. `HL` means hit lines; `RL` means run lin
 Record a V8 sampling profile, then inspect the hottest functions with authored
 locations. Filter to editor code instead of unrelated runtime activity.
 These are real sample measurements, not a fixed ranking.
+Raw nodes, sample IDs and signed time deltas are stored without capture-time
+aggregation. Views rebuild function groups from the available source files and
+maps, or report why authored mapping is unavailable.
 
 {{example:profile-start,profile-type,profile-stop,profile-show}}
 

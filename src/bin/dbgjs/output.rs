@@ -328,8 +328,14 @@ impl OutputFormat {
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         let filtered = if options.path.is_some() || options.path_glob.is_some() {
             let mut filtered = value.clone();
-            filter.apply(&mut filtered)
-                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            filter.apply(&mut filtered).map_err(|error| {
+                let details = if value.projection_diagnostics.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Projection unavailable: {}", value.projection_diagnostics.join("; "))
+                };
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{error}{details}"))
+            })?;
             Some(filtered)
         } else {
             None
@@ -3107,6 +3113,9 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
     if let Some(capture_id) = &snapshot.capture_id {
         println!("Capture {capture_id}");
     }
+    for diagnostic in &snapshot.projection_diagnostics {
+        println!("Projection unavailable: {diagnostic}");
+    }
     if snapshot.sources.is_empty() {
         println!("No executed functions captured.");
         return;
@@ -3119,6 +3128,9 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
 }
 
 fn print_cpu_profile_human(snapshot: &CpuProfileSnapshot, options: CpuProfileOutputOptions<'_>) {
+    for diagnostic in &snapshot.projection_diagnostics {
+        println!("Projection unavailable: {diagnostic}");
+    }
     let sampled_micros = snapshot
         .nodes
         .iter()
@@ -6141,10 +6153,12 @@ mod tests {
             capture_id: None,
             timestamp_micros: 0,
             analysis: None,
+            projection_diagnostics: Vec::new(),
             sources: vec![CoverageSourceSnapshot {
                 script_id: "1".to_owned(),
                 generated_url: "bundle.js".to_owned(),
                 associated_authored_source: None,
+                provenance: None,
                 functions: vec![CoverageFunctionSnapshot {
                     name: "example".to_owned(),
                     block_coverage: true,
@@ -6225,10 +6239,12 @@ mod tests {
             capture_id: None,
             timestamp_micros: 0,
             analysis: None,
+            projection_diagnostics: Vec::new(),
             sources: vec![CoverageSourceSnapshot {
                 script_id: "1".to_owned(),
                 generated_url: "bundle.js".to_owned(),
                 associated_authored_source: None,
+                provenance: None,
                 functions: vec![CoverageFunctionSnapshot {
                     name: "example".to_owned(),
                     block_coverage: true,

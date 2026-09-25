@@ -1384,6 +1384,16 @@ pub struct CoverageSnapshot {
     pub sources: Vec<CoverageSourceSnapshot>,
     #[serde(default)]
     pub analysis: Option<CoverageAnalysisSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projection_diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureScriptProvenance {
+    pub url: String,
+    pub source_map_url: Option<String>,
+    pub source_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1402,6 +1412,8 @@ pub struct CoverageSourceSnapshot {
     pub generated_url: String,
     pub associated_authored_source: Option<String>,
     pub functions: Vec<CoverageFunctionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<CaptureScriptProvenance>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1444,6 +1456,10 @@ pub struct CpuProfileSnapshot {
     pub functions: Vec<CpuProfileFunctionSnapshot>,
     #[serde(default)]
     pub analysis: Option<CpuProfileAnalysisSnapshot>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_provenance: BTreeMap<String, CaptureScriptProvenance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projection_diagnostics: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

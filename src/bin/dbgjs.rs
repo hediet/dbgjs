@@ -3773,7 +3773,6 @@ struct CpuProfileShowOptions {
     view: CpuProfileView,
     sort: CpuProfileSort,
     max_lines: usize,
-    no_cache: bool,
 }
 
 struct CpuProfileExportOptions {
@@ -5016,7 +5015,6 @@ async fn show_stored_cpu_profile(
     scope: &ScopeOptions,
     options: CpuProfileShowOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = options.no_cache;
     let profile = rpc(client
         .captures
         .get_stored_cpu_profile(
@@ -5136,7 +5134,7 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
             "--no-cache" => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "--no-cache is not supported for stored coverage: captures are immutable; take a new capture without --raw to enrich it",
+                    "--no-cache is not supported for stored coverage: views read current available local source maps without a persistent capture cache",
                 ));
             }
             "--no-trim" => trim_width = false,
@@ -5377,7 +5375,6 @@ fn parse_cpu_profile_show_options(values: &[String]) -> Result<CpuProfileShowOpt
     let mut view = CpuProfileView::Functions;
     let mut sort = CpuProfileSort::SelfTime;
     let mut max_lines = 80_usize;
-    let mut no_cache = false;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -5457,7 +5454,12 @@ fn parse_cpu_profile_show_options(values: &[String]) -> Result<CpuProfileShowOpt
                     ));
                 }
             }
-            "--no-cache" => no_cache = true,
+            "--no-cache" => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "--no-cache is not supported for stored CPU profiles: views read current available local source maps without a persistent capture cache",
+                ));
+            }
             option if option.starts_with("--") => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -5480,7 +5482,6 @@ fn parse_cpu_profile_show_options(values: &[String]) -> Result<CpuProfileShowOpt
         view,
         sort,
         max_lines,
-        no_cache,
     })
 }
 
@@ -7118,7 +7119,7 @@ commands:
     explicit --target/--connection filters narrow history before selection; stored reads ignore live target selection
   dbgjs profile start [--sampling-interval <duration>] [target scope]
   dbgjs profile stop [--id <name>] [target scope]
-  dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--no-cache] [--context <id>]
+  dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--context <id>]
   dbgjs profile export [<name>] --output <path> [--context <id>]
   dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
   dbgjs capture list [--context <id>]
@@ -8608,6 +8609,18 @@ mod tests {
         assert!(
             parse_coverage_capture_options(&arguments(&["--exclude", "a", "--exclude", "b"]))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn stored_profile_rejects_unsupported_cache_bypass() {
+        let error = super::parse_cpu_profile_show_options(&arguments(&["--no-cache"]))
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("not supported for stored CPU profiles")
         );
     }
 

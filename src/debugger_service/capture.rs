@@ -202,12 +202,21 @@ impl CaptureApi for DebuggerService {
             snapshot = crate::target_debugger::exclude_coverage(snapshot, &baseline);
         }
         snapshot.capture_id = Some(name);
+        crate::capture_projection::project_stored_coverage(&mut snapshot);
+        let diagnostics = snapshot.projection_diagnostics.clone();
         crate::coverage_filter::filter_coverage(
             &mut snapshot,
             source_path.as_deref(),
             path_glob.as_deref(),
         )
-        .map_err(invalid_params)?;
+        .map_err(|error| {
+            let details = if diagnostics.is_empty() {
+                String::new()
+            } else {
+                format!(" Projection unavailable: {}", diagnostics.join("; "))
+            };
+            invalid_params(&format!("{error}{details}"))
+        })?;
         Ok(snapshot)
     }
 
@@ -216,7 +225,7 @@ impl CaptureApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
         capture_name: String,
-        _source_path: Option<String>,
+        source_path: Option<String>,
         target_id: Option<String>,
         connection_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, CaptureError> {
@@ -241,10 +250,8 @@ impl CaptureApi for DebuggerService {
             )).into());
         };
         snapshot.capture_id = name;
-        if snapshot.functions.is_empty() && !snapshot.nodes.is_empty() {
-            crate::target_debugger::aggregate_cpu_profile(&mut snapshot)
-                .map_err(target_debugger_rpc_error)?;
-        }
+        crate::capture_projection::project_stored_cpu(&mut snapshot, source_path.as_deref())
+            .map_err(target_debugger_rpc_error)?;
         Ok(snapshot)
     }
 

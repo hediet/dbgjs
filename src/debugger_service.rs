@@ -6134,6 +6134,7 @@ mod tests {
             timestamp_micros,
             sources: Vec::new(),
             analysis: None,
+            projection_diagnostics: Vec::new(),
         })
     }
 
@@ -6543,6 +6544,8 @@ mod tests {
             time_deltas_micros: Vec::new(),
             functions: Vec::new(),
             analysis: None,
+            script_provenance: BTreeMap::new(),
+            projection_diagnostics: Vec::new(),
         };
 
         assert!(
@@ -6812,6 +6815,8 @@ mod tests {
                     time_deltas_micros: Vec::new(),
                     functions: Vec::new(),
                     analysis: None,
+                    script_provenance: BTreeMap::new(),
+                    projection_diagnostics: Vec::new(),
                 })
             } else {
                 empty_coverage(1)
@@ -6876,6 +6881,7 @@ mod tests {
                     generated_url: generated_url.into(),
                     associated_authored_source: associated_authored_source.map(str::to_owned),
                     functions: Vec::new(),
+                    provenance: None,
                 }
             };
         let snapshot = CoverageSnapshot {
@@ -6888,6 +6894,7 @@ mod tests {
                 source("4", "src", None),
             ],
             analysis: None,
+            projection_diagnostics: Vec::new(),
         };
         state.captures.insert(
             ("test".into(), "coverage".into()),
@@ -6904,6 +6911,11 @@ mod tests {
             ),
         );
         let service = service_with_state(persistence_path, state);
+        let payload = {
+            let state = service.state.lock().await;
+            let capture = &state.captures[&("test".into(), "coverage".into())];
+            fs::read(capture.payload_path()).unwrap()
+        };
 
         let filtered = service
             .get_stored_coverage(
@@ -6927,6 +6939,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["1", "2", "4"]
         );
+        let selected = service
+            .get_stored_coverage(
+                &CallCtx::default(), "test".into(), "coverage".into(),
+                Some("src/nested".into()), None, None, None, None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(selected.sources.len(), 1);
+        assert_ne!(filtered.sources, selected.sources);
+        let state = service.state.lock().await;
+        assert_eq!(
+            fs::read(state.captures[&("test".into(), "coverage".into())].payload_path()).unwrap(),
+            payload,
+        );
+        drop(state);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -6965,6 +6992,8 @@ mod tests {
             time_deltas_micros: vec![250, -28, 10],
             functions: Vec::new(),
             analysis: None,
+            script_provenance: BTreeMap::new(),
+            projection_diagnostics: Vec::new(),
         };
         let mut state = ServiceState::default();
         state.captures.insert(
@@ -7024,6 +7053,7 @@ mod tests {
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
+            projection_diagnostics: Vec::new(),
         };
 
         assert!(
@@ -7223,6 +7253,7 @@ mod tests {
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
+            projection_diagnostics: Vec::new(),
         };
         assert!(
             service
@@ -7382,6 +7413,7 @@ mod tests {
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
+            projection_diagnostics: Vec::new(),
         };
         let (staging_path, final_path) =
             capture_payload_paths_for(&persistence_path, &reservation.metadata);
@@ -7945,6 +7977,7 @@ mod tests {
                 timestamp_micros: 42,
                 sources: Vec::new(),
                 analysis: None,
+                projection_diagnostics: Vec::new(),
             }),
         );
         let payload_path = capture.payload_path();
@@ -8708,6 +8741,7 @@ mod tests {
             timestamp_micros: 42,
             sources: Vec::new(),
             analysis: None,
+            projection_diagnostics: Vec::new(),
         };
         let cpu_profile = CpuProfileSnapshot {
             capture_id: "profile".into(),
@@ -8719,6 +8753,8 @@ mod tests {
             time_deltas_micros: Vec::new(),
             functions: Vec::new(),
             analysis: None,
+            script_provenance: BTreeMap::new(),
+            projection_diagnostics: Vec::new(),
         };
         let heap_metadata = CaptureSnapshot {
             context_id: "context".into(),

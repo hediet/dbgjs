@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::cdp::{
@@ -37,7 +38,7 @@ use crate::service_api::{
     BreakpointApplicationSnapshot, BreakpointApplicationStatus, BreakpointMappingSnapshot,
     BreakpointScriptAssessmentSnapshot, BreakpointScriptAssessmentStatus,
     BreakpointSourceCandidateSnapshot, CoverageAnalysisSnapshot, CoverageFunctionSnapshot,
-    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CpuProfileAnalysisSnapshot,
+    CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, CaptureScriptProvenance, CpuProfileAnalysisSnapshot,
     CpuProfileCallFrameSnapshot, CpuProfileFunctionSnapshot, CpuProfileNodeSnapshot,
     CpuProfilePositionTickSnapshot, CpuProfileSnapshot, EvaluationSnapshot,
     FrameProjectionSnapshot, FrameSnapshot, HeapAggregateBy, HeapAggregateEntrySnapshot,
@@ -1966,15 +1967,13 @@ async fn run_target(
                 let result = async {
                     if coverage.is_some() {
                         let completed = finish_coverage_recording(&driver, &mut coverage).await?;
-                        let stored = completed.snapshot();
+                        let mut stored = completed.snapshot();
+                        attach_coverage_provenance(&driver, &session_key, &mut stored);
                         completed_recordings.remove(".");
                         coverage_objects.insert(".".to_owned(), stored.clone());
                         pending_stopped_coverage = Some(stored);
                     }
-                    project_stopped_coverage(&mut pending_stopped_coverage, async |snapshot| {
-                        project_coverage(&mut driver, &session_key, snapshot, None, false).await
-                    })
-                    .await
+                    pending_stopped_coverage.take().ok_or(TargetDebuggerError::CoverageNotActive)
                 }
                 .await;
                 let _ = response.send(result);
@@ -2063,11 +2062,18 @@ async fn run_target(
                             TargetDebuggerError::CpuProfile(format!("{error:?}"))
                         })?;
                     cpu_profile = None;
-                    let snapshot = cpu_profile_snapshot(
+                    let mut snapshot = cpu_profile_snapshot(
                         capture_id.clone(),
                         recording.sampling_interval_micros,
                         stopped.profile,
                     )?;
+                    for node in &snapshot.nodes {
+                        let key = ScriptKey { session: session_key.clone(), script_id: node.call_frame.script_id.clone() };
+                        if let Some(script) = driver.state().scripts.get(&key)
+                            && script.url == node.call_frame.url {
+                            snapshot.script_provenance.insert(node.call_frame.script_id.clone(), capture_script_provenance(script));
+                        }
+                    }
                     cpu_profiles.insert(capture_id.clone(), snapshot.clone());
                     if capture_id != "." {
                         let mut latest = snapshot.clone();
@@ -3815,7 +3821,7 @@ async fn capture_coverage(
     session_key: &SessionKey,
     recording: &mut CoverageRecording,
     capture_id: Option<String>,
-    raw: bool,
+    _raw: bool,
 ) -> Result<CoverageSnapshot, TargetDebuggerError> {
     if let Some(capture_id) = &capture_id
         && recording.captures.contains_key(capture_id)
@@ -3825,13 +3831,33 @@ async fn capture_coverage(
         ));
     }
     let mut snapshot = take_coverage(driver, recording).await?;
-    if !raw {
-        project_coverage(driver, session_key, &mut snapshot, None, false).await?;
-    }
+    attach_coverage_provenance(driver, session_key, &mut snapshot);
     if let Some(capture_id) = capture_id {
         recording.captures.insert(capture_id, snapshot.clone());
     }
     Ok(snapshot)
+}
+
+fn capture_script_provenance(script: &crate::debugger_engine::ScriptState) -> CaptureScriptProvenance {
+    CaptureScriptProvenance {
+        url: script.url.clone(),
+        source_map_url: script.captured_source.as_ref()
+            .and_then(|captured| captured.source_map_url.clone())
+            .or_else(|| script.source_map_url.clone())
+            .filter(|url| !url.starts_with("data:")),
+        source_sha256: script.captured_source.as_ref()
+            .map(|captured| format!("{:x}", Sha256::digest(captured.content.as_bytes()))),
+    }
+}
+
+fn attach_coverage_provenance(driver: &DebuggerDriver, session: &SessionKey, snapshot: &mut CoverageSnapshot) {
+    for source in &mut snapshot.sources {
+        let key = ScriptKey { session: session.clone(), script_id: source.script_id.clone() };
+        if let Some(script) = driver.state().scripts.get(&key)
+            && script.url == source.generated_url {
+            source.provenance = Some(capture_script_provenance(script));
+        }
+    }
 }
 
 async fn finish_coverage_recording(
@@ -3852,23 +3878,6 @@ async fn finish_coverage_recording(
         .take()
         .ok_or(TargetDebuggerError::CoverageNotActive)?;
     Ok(completed)
-}
-
-async fn project_stopped_coverage(
-    pending: &mut Option<CoverageSnapshot>,
-    project: impl AsyncFnOnce(&mut CoverageSnapshot) -> Result<(), TargetDebuggerError>,
-) -> Result<CoverageSnapshot, TargetDebuggerError> {
-    let mut snapshot = pending
-        .as_ref()
-        .ok_or(TargetDebuggerError::CoverageNotActive)?
-        .clone();
-    project(&mut snapshot).await.map_err(|error| {
-        TargetDebuggerError::Coverage(format!(
-            "recording stopped, but projection failed; raw coverage is retained for retry: {error}"
-        ))
-    })?;
-    *pending = None;
-    Ok(snapshot)
 }
 
 async fn start_coverage(
@@ -3915,7 +3924,7 @@ async fn update_coverage(
     Ok(())
 }
 
-fn effective_coverage_ranges(ranges: &[CoverageRangeSnapshot]) -> Vec<CoverageRangeSnapshot> {
+pub(crate) fn effective_coverage_ranges(ranges: &[CoverageRangeSnapshot]) -> Vec<CoverageRangeSnapshot> {
     let mut boundaries = ranges
         .iter()
         .flat_map(|range| [range.start_offset, range.end_offset])
@@ -4361,7 +4370,7 @@ fn cpu_profile_snapshot(
             sample_count: 0,
         })
         .collect();
-    let mut snapshot = CpuProfileSnapshot {
+    let snapshot = CpuProfileSnapshot {
         capture_id,
         sampling_interval_micros,
         start_time_micros: profile.start_time,
@@ -4371,8 +4380,9 @@ fn cpu_profile_snapshot(
         time_deltas_micros,
         functions: Vec::new(),
         analysis: None,
+        script_provenance: BTreeMap::new(),
+        projection_diagnostics: Vec::new(),
     };
-    aggregate_cpu_profile(&mut snapshot)?;
     Ok(snapshot)
 }
 
@@ -4792,6 +4802,7 @@ impl CoverageRecording {
             capture_id: None,
             timestamp_micros: self.timestamp_micros,
             analysis: None,
+            projection_diagnostics: Vec::new(),
             sources: self
                 .scripts
                 .iter()
@@ -4835,6 +4846,7 @@ impl CoverageRecording {
                         generated_url: script.url.clone(),
                         associated_authored_source: None,
                         functions,
+                        provenance: None,
                     })
                 })
                 .collect(),
@@ -7837,7 +7849,9 @@ mod tests {
     #[test]
     fn cpu_profile_preserves_signed_stream_and_aggregates_chronologically() {
         let raw = raw_cpu_profile(vec![2, 3, 2, 3, 2], vec![100, -28, 0, 78, -10]);
-        let snapshot = cpu_profile_snapshot("typing-cpu".into(), Some(1_000), raw).unwrap();
+        let mut snapshot = cpu_profile_snapshot("typing-cpu".into(), Some(1_000), raw).unwrap();
+        assert!(snapshot.functions.is_empty());
+        aggregate_cpu_profile(&mut snapshot).unwrap();
 
         assert_eq!(snapshot.samples, vec![2, 3, 2, 3, 2]);
         assert_eq!(snapshot.time_deltas_micros, vec![100, -28, 0, 78, -10]);
@@ -7852,12 +7866,13 @@ mod tests {
         assert_eq!(snapshot.nodes[2].self_time_micros, 82);
         assert_eq!(snapshot.nodes[2].sample_count, 2);
 
-        let ordered = cpu_profile_snapshot(
+        let mut ordered = cpu_profile_snapshot(
             "ordered".into(),
             None,
             raw_cpu_profile(vec![3, 2, 2, 2, 3], vec![72, 0, 28, 40, 10]),
         )
         .unwrap();
+        aggregate_cpu_profile(&mut ordered).unwrap();
         assert_eq!(snapshot.nodes, ordered.nodes);
         assert_eq!(snapshot.functions, ordered.functions);
 
@@ -7868,6 +7883,16 @@ mod tests {
     }
 
     #[test]
+    fn cpu_capture_does_not_aggregate_or_reject_unprojectable_samples() {
+        let raw = raw_cpu_profile(vec![99], vec![12]);
+        let snapshot = cpu_profile_snapshot("raw".into(), None, raw).unwrap();
+        assert_eq!(snapshot.samples, vec![99]);
+        assert_eq!(snapshot.time_deltas_micros, vec![12]);
+        assert!(snapshot.functions.is_empty());
+        assert!(aggregate_cpu_profile(&mut snapshot.clone()).is_err());
+    }
+
+    #[test]
     fn cpu_profile_keeps_empty_ordered_and_equal_timestamp_samples() {
         for (samples, deltas) in [
             (vec![], vec![]),
@@ -7875,12 +7900,13 @@ mod tests {
             (vec![2, 3, 2], vec![100, 50, 25]),
             (vec![3, 2, 3], vec![0, 0, 0]),
         ] {
-            let snapshot = cpu_profile_snapshot(
+            let mut snapshot = cpu_profile_snapshot(
                 "test".into(),
                 None,
                 raw_cpu_profile(samples.clone(), deltas.clone()),
             )
             .unwrap();
+            aggregate_cpu_profile(&mut snapshot).unwrap();
             let expected = samples
                 .iter()
                 .copied()
@@ -7903,26 +7929,29 @@ mod tests {
     #[test]
     fn cpu_profile_rejects_invalid_timestamp_offsets_and_mismatched_streams() {
         for deltas in [vec![-1], vec![10, -11], vec![i64::MAX, i64::MAX, 2]] {
-            let error = cpu_profile_snapshot(
+            let mut snapshot = cpu_profile_snapshot(
                 "test".into(),
                 None,
                 raw_cpu_profile(vec![2; deltas.len()], deltas),
             )
-            .unwrap_err();
+            .unwrap();
+            let error = aggregate_cpu_profile(&mut snapshot).unwrap_err();
             assert!(error.to_string().contains("timestamp offset is outside"));
         }
         for (samples, deltas) in [(vec![2], vec![]), (vec![], vec![10])] {
-            let error = cpu_profile_snapshot("test".into(), None, raw_cpu_profile(samples, deltas))
-                .unwrap_err();
+            let mut snapshot = cpu_profile_snapshot("test".into(), None, raw_cpu_profile(samples, deltas))
+                .unwrap();
+            let error = aggregate_cpu_profile(&mut snapshot).unwrap_err();
             assert!(error.to_string().contains("samples but"));
         }
 
-        let error = cpu_profile_snapshot(
+        let mut snapshot = cpu_profile_snapshot(
             "test".into(),
             None,
             raw_cpu_profile(vec![2, 99], vec![100, 0]),
         )
-        .unwrap_err();
+        .unwrap();
+        let error = aggregate_cpu_profile(&mut snapshot).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -7946,6 +7975,8 @@ mod tests {
             time_deltas_micros: vec![100, 50],
             functions: Vec::new(),
             analysis: None,
+            script_provenance: BTreeMap::new(),
+            projection_diagnostics: Vec::new(),
         };
 
         aggregate_cpu_profile(&mut profile).unwrap();

@@ -154,7 +154,7 @@ async fn coverage_driver(mapped: bool) -> (DebuggerDriver, SessionKey, Arc<Cover
 }
 
 #[tokio::test]
-async fn named_and_unnamed_non_raw_captures_project_but_raw_captures_do_not() {
+async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option() {
     for (capture_id, raw) in [
         (None, false),
         (Some("named"), false),
@@ -174,26 +174,14 @@ async fn named_and_unnamed_non_raw_captures_project_but_raw_captures_do_not() {
         .unwrap();
         let function = &snapshot.sources[0].functions[0];
         assert!(!function.block_coverage);
-        if raw {
-            assert!(function.effective_ranges.is_empty());
-            assert!(function.authored_location.is_none());
-            assert!(function.generated_location.is_none());
-            assert_eq!(
-                *transport.requests.lock().unwrap(),
-                ["Profiler.takePreciseCoverage"]
-            );
-        } else {
-            assert_eq!(function.effective_ranges.len(), 1);
-            assert!(
-                function
-                    .authored_location
-                    .as_ref()
-                    .unwrap()
-                    .source_url
-                    .ends_with("authored.ts")
-            );
-            assert!(function.generated_location.is_some());
-        }
+        assert!(snapshot.sources[0].provenance.as_ref().unwrap().source_map_url.is_none());
+        assert!(function.effective_ranges.is_empty());
+        assert!(function.authored_location.is_none());
+        assert!(function.generated_location.is_none());
+        assert_eq!(
+            *transport.requests.lock().unwrap(),
+            ["Profiler.takePreciseCoverage"]
+        );
         if let Some(capture_id) = capture_id {
             assert_eq!(recording.captures[capture_id], snapshot);
             let requests = transport.requests.lock().unwrap().len();
@@ -214,7 +202,7 @@ async fn named_and_unnamed_non_raw_captures_project_but_raw_captures_do_not() {
 }
 
 #[tokio::test]
-async fn non_raw_coverage_has_effective_ranges_without_source_metadata() {
+async fn non_raw_coverage_delegates_effective_ranges_to_view() {
     let (mut driver, session, _) = coverage_driver(false).await;
     let snapshot = capture_coverage(
         &mut driver,
@@ -226,45 +214,27 @@ async fn non_raw_coverage_has_effective_ranges_without_source_metadata() {
     .await
     .unwrap();
     let function = &snapshot.sources[0].functions[0];
-    assert_eq!(function.effective_ranges, function.ranges);
-    assert_eq!(function.effective_ranges[0].count, 1);
+    assert!(function.effective_ranges.is_empty());
+    assert_eq!(function.ranges[0].count, 1);
     assert!(function.authored_location.is_none());
     assert!(function.generated_location.is_none());
 }
 
 #[tokio::test]
-async fn stop_precedes_projection_and_failed_projection_preserves_raw_evidence_for_retry() {
-    let (mut driver, session, transport) = coverage_driver(false).await;
+async fn stopped_raw_coverage_survives_unavailable_view_projection() {
+    let (driver, _session, transport) = coverage_driver(false).await;
     let mut recording = Some(CoverageRecording::default());
     let completed = finish_coverage_recording(&driver, &mut recording)
         .await
         .unwrap();
     assert!(recording.is_none());
     let raw = completed.snapshot();
-    let mut pending = Some(raw.clone());
-    let error = project_stopped_coverage(&mut pending, async |snapshot| {
-        assert_eq!(
-            *transport.requests.lock().unwrap(),
-            [
-                "Profiler.takePreciseCoverage",
-                "Profiler.stopPreciseCoverage"
-            ]
-        );
-        snapshot.sources.clear();
-        Err(TargetDebuggerError::Coverage("projection failed".into()))
-    })
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("recording stopped"));
-    assert!(error.to_string().contains("raw coverage is retained"));
-    assert_eq!(pending.as_ref(), Some(&raw));
-    let snapshot = project_stopped_coverage(&mut pending, async |snapshot| {
-        project_coverage(&mut driver, &session, snapshot, None, false).await
-    })
-    .await
-    .unwrap();
-    assert_eq!(snapshot.sources[0].functions[0].effective_ranges.len(), 1);
-    assert!(pending.is_none());
+    let payload = serde_json::to_vec(&raw).unwrap();
+    let mut viewed = raw.clone();
+    crate::capture_projection::project_stored_coverage(&mut viewed);
+    assert_eq!(viewed.sources[0].functions[0].effective_ranges.len(), 1);
+    assert!(!viewed.projection_diagnostics.is_empty());
+    assert_eq!(serde_json::to_vec(&raw).unwrap(), payload);
     assert_eq!(transport.requests.lock().unwrap().len(), 2);
 }
 
