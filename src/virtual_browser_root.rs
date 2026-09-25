@@ -659,7 +659,7 @@ fn route_child_event(
     if routes_guard.contains_key(id) {
         return Ok(());
     }
-    let native_channel = endpoint
+    endpoint
         .mux
         .ensure_raw_channel(id)
         .map_err(|error| error.to_string())?;
@@ -674,7 +674,8 @@ fn route_child_event(
     let client_channel = Channel::new(
         Box::new(client_transport),
         Box::new(ChildRequestHandler {
-            native_channel: native_channel.clone(),
+            native_mux: endpoint.mux.clone(),
+            native_id: id.to_owned(),
         }),
     );
     let client_task = tokio::spawn({
@@ -788,23 +789,21 @@ fn activate_child_notifications(
 }
 
 struct ChildRequestHandler {
-    native_channel: Channel,
+    native_mux: CdpSessionMux,
+    native_id: String,
 }
 
 #[async_trait]
 impl RequestHandler for ChildRequestHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            self.native_channel.call(&method, params),
-        )
-        .await
-        .map_err(|_| {
-            JsonRpcError::new(
-                error_codes::REQUEST_TIMEOUT,
-                "native child CDP request exceeded its deadline",
+        self.native_mux
+            .request_raw_child(
+                &self.native_id,
+                &method,
+                params,
+                std::time::Duration::from_secs(20),
             )
-        })?
+            .await
     }
 }
 
@@ -2414,6 +2413,47 @@ mod tests {
             page.call("Runtime.evaluate", json!({})).await.unwrap()["echo"],
             "Runtime.evaluate"
         );
+    }
+
+    #[tokio::test]
+    async fn canceled_native_child_calls_exhaust_bounded_correlation() {
+        let transport = EchoTransport::new();
+        transport.unresponsive.store(true, Ordering::Relaxed);
+        let endpoint = TargetEndpoint::open(transport.clone()).unwrap();
+        endpoint.mux.ensure_raw_channel("native-child").unwrap();
+        let handler = Arc::new(ChildRequestHandler {
+            native_mux: endpoint.mux.clone(),
+            native_id: "native-child".into(),
+        });
+        let mut calls = Vec::new();
+        for _ in 0..256 {
+            let handler = handler.clone();
+            calls.push(tokio::spawn(async move {
+                handler
+                    .handle_request("Runtime.evaluate".into(), json!({}))
+                    .await
+            }));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while transport.requests.lock().unwrap().len() < 256 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all child calls reached native transport");
+        for call in calls {
+            call.abort();
+        }
+        let error = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            handler.handle_request("Runtime.evaluate".into(), json!({})),
+        )
+        .await
+        .expect("correlation exhaustion must fail promptly")
+        .unwrap_err();
+        assert_eq!(error.code, error_codes::PEER_DISCONNECTED);
+        assert!(error.message.contains("reconnect"), "{error:?}");
+        endpoint.close().await;
     }
 
     #[tokio::test]

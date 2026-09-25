@@ -189,6 +189,28 @@ impl CdpSessionMux {
             .map(|route| route.failure.subscribe())
     }
 
+    pub(crate) async fn request_raw_child(
+        &self,
+        id: &str,
+        method: &str,
+        params: Value,
+        budget: std::time::Duration,
+    ) -> Result<Value, JsonRpcError> {
+        let route = self
+            .raw_routes
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| {
+                JsonRpcError::new(
+                    error_codes::PEER_DISCONNECTED,
+                    format!("native child route '{id}' retired; reconnect the target"),
+                )
+            })?;
+        route.request(method, params, budget).await
+    }
+
     pub fn forward_raw_notifications(&self, id: &str, handler: Arc<dyn RequestHandler>) {
         if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
             route.send_notification(RawNotification::Listener(Some(handler)));
@@ -349,6 +371,49 @@ impl RawSessionRoute {
             ));
         }
     }
+
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        budget: std::time::Duration,
+    ) -> Result<Value, JsonRpcError> {
+        let mut failure = self.failure.subscribe();
+        if let Some(reason) = failure.borrow().as_ref() {
+            return Err(JsonRpcError::new(
+                error_codes::PEER_DISCONNECTED,
+                reason.clone(),
+            ));
+        }
+        if self
+            .unresolved_calls
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < RAW_UNRESOLVED_CALL_LIMIT).then_some(count + 1)
+            })
+            .is_err()
+        {
+            self.failure.send_replace(Some(
+                "raw CDP request correlation budget exhausted; reconnect and attach again"
+                    .to_owned(),
+            ));
+            return Err(JsonRpcError::new(
+                error_codes::PEER_DISCONNECTED,
+                "raw CDP request correlation budget exhausted; reconnect and attach again",
+            ));
+        }
+        tokio::select! {
+                biased;
+                _ = failure.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, failure.borrow().as_ref().cloned().unwrap_or_else(|| "raw CDP notification route lost; reconnect and attach again".to_owned()))),
+                result = self.channel.call(method, params) => {
+                    self.unresolved_calls.fetch_sub(1, Ordering::SeqCst);
+                    result
+                },
+                _ = tokio::time::sleep(budget) => Err(JsonRpcError::new(
+                    error_codes::REQUEST_TIMEOUT,
+                    format!("raw CDP session request timed out after {} seconds", budget.as_secs()),
+                )),
+        }
+    }
 }
 
 impl Drop for RawSessionRoute {
@@ -426,48 +491,16 @@ impl RawCdpSession {
         budget: std::time::Duration,
     ) -> Result<Value, JsonRpcError> {
         let mut closed = self.closed.subscribe();
-        let mut failure = self.route.failure.subscribe();
         if *closed.borrow() {
             return Err(JsonRpcError::new(
                 error_codes::PEER_DISCONNECTED,
                 "raw CDP session detached; attach again",
             ));
         }
-        if let Some(reason) = failure.borrow().as_ref() {
-            return Err(JsonRpcError::new(
-                error_codes::PEER_DISCONNECTED,
-                reason.clone(),
-            ));
-        }
-        if self
-            .route
-            .unresolved_calls
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                (count < RAW_UNRESOLVED_CALL_LIMIT).then_some(count + 1)
-            })
-            .is_err()
-        {
-            self.route.failure.send_replace(Some(
-                "raw CDP request correlation budget exhausted; reconnect and attach again"
-                    .to_owned(),
-            ));
-            return Err(JsonRpcError::new(
-                error_codes::PEER_DISCONNECTED,
-                "raw CDP request correlation budget exhausted; reconnect and attach again",
-            ));
-        }
         tokio::select! {
             biased;
             _ = closed.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "raw CDP session detached; attach again")),
-            _ = failure.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, failure.borrow().as_ref().cloned().unwrap_or_else(|| "raw CDP notification route lost; reconnect and attach again".to_owned()))),
-            result = self.route.channel.call(method, params) => {
-                self.route.unresolved_calls.fetch_sub(1, Ordering::SeqCst);
-                result
-            },
-            _ = tokio::time::sleep(budget) => Err(JsonRpcError::new(
-                error_codes::REQUEST_TIMEOUT,
-                format!("raw CDP session request timed out after {} seconds", budget.as_secs()),
-            )),
+            result = self.route.request(method, params, budget) => result,
         }
     }
 
