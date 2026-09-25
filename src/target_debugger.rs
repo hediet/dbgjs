@@ -3703,7 +3703,11 @@ pub(crate) fn supply_heap_source_map(
                 .unwrap_or(url)
                 .to_owned()
         };
-        if basename(file) != basename(&script.url) {
+        let source_url_was_omitted = script.url == format!("script:{}", script.script_id)
+            && script.diagnostic.as_deref().is_some_and(|diagnostic| {
+                diagnostic.starts_with("inline or oversized source/map URL omitted")
+            });
+        if !source_url_was_omitted && basename(file) != basename(&script.url) {
             return Err(TargetDebuggerError::HeapAnalysis(
                 "source map file does not match the captured script URL".into(),
             ));
@@ -8416,6 +8420,18 @@ mod tests {
         assert!(!serialized_inline.windows(map_marker.len())
             .any(|part| part == map_marker.as_bytes()));
         assert!(inline_metadata.diagnostic.as_deref().unwrap().contains("omitted"));
+        let mut supplied = HeapMappingSnapshot {
+            connection_generation: 7,
+            hydration_duration_micros: 0,
+            scripts: vec![inline_metadata.clone()],
+        };
+        supply_heap_source_map(&mut supplied, HeapSourceMapSupply {
+            script_id: "42".into(),
+            script_hash: "hash".into(),
+            source_map_url: "file:///maps/app.js.map".into(),
+            source_map: r#"{"version":3,"file":"app.js","sources":["original.ts"],"names":[],"mappings":"AAAA"}"#.into(),
+        }).unwrap();
+        assert_eq!(supplied.scripts[0].mapping_status, HeapMappingStatus::Mapped);
         inline.url = format!("https://example.test/app.js?source={}", source_marker.repeat(32_768));
         inline.source_map_url =
             Some(format!("https://example.test/app.js.map?map={}", map_marker.repeat(32_768)));
