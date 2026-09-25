@@ -2613,10 +2613,28 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     );
     assert_eq!(named_coverage["captureId"], "named-coverage");
     assert!(named_coverage["sources"].as_array().unwrap().iter().any(|source| {
-        source["functions"].as_array().unwrap().iter().any(|function| {
-            function["effectiveRanges"].as_array().is_some_and(|ranges| !ranges.is_empty())
-        })
-    }), "named coverage must be enriched: {named_coverage}");
+        source["generatedUrl"] == "https://fixtures.test/late.min.js"
+            && source["provenance"]["url"] == source["generatedUrl"]
+            && source["functions"].as_array().unwrap().iter().any(|function| {
+                function["name"] == "globalThis.lateSource"
+                    && function["ranges"].as_array().is_some_and(|ranges| {
+                        ranges.iter().any(|range| range["count"].as_u64().is_some_and(|count| count > 0))
+                    })
+                    && function["effectiveRanges"].as_array().is_some_and(Vec::is_empty)
+                    && function["authoredLocation"].is_null()
+            })
+    }), "named capture must retain raw ranges and cheap provenance: {named_coverage}");
+    let named_view = run_json(
+        &cli, &service, &state_file,
+        &["coverage", "show", "named-coverage", "--context", &context],
+    );
+    assert!(named_view["sources"].as_array().unwrap().iter().any(|source| {
+        source["generatedUrl"] == "https://fixtures.test/late.min.js"
+            && source["functions"].as_array().unwrap().iter().any(|function| {
+                function["name"] == "globalThis.lateSource"
+                    && function["effectiveRanges"].as_array().is_some_and(|ranges| !ranges.is_empty())
+            })
+    }), "named coverage view must compute effective ranges: {named_view}");
     let coverage_stopped = run_human_in(
         &cli,
         &service,
@@ -2865,7 +2883,18 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         !offline_profile["functions"].as_array().unwrap().is_empty(),
         "{offline_profile}"
     );
-    assert!(offline_profile["analysis"].is_object(), "{offline_profile}");
+    assert!(
+        !offline_profile["samples"].as_array().unwrap().is_empty()
+            && !offline_profile["timeDeltasMicros"].as_array().unwrap().is_empty(),
+        "stored profile must retain raw samples: {offline_profile}"
+    );
+    assert!(
+        offline_profile["functions"].as_array().unwrap().iter().any(|function| {
+            function["sampleCount"].as_u64().is_some_and(|count| count > 0)
+                && function["selfTimeMicros"].as_u64().is_some_and(|time| time > 0)
+        }),
+        "stored view must aggregate samples into timed functions: {offline_profile}"
+    );
     let heap = captures
         .as_array()
         .unwrap()
