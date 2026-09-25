@@ -765,8 +765,22 @@ impl ConnectionRuntime {
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        eprintln!(
+                            "raw CDP session '{id}' lost {count} lifecycle events; retiring attachment, reattach required",
+                            id = key.1
+                        );
+                        if let Some(owner) = owner.upgrade() {
+                            owner.retire_raw_session_if_same(&key.0, &key.1, &session);
+                        }
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        if let Some(owner) = owner.upgrade() {
+                            owner.retire_raw_session_if_same(&key.0, &key.1, &session);
+                        }
+                        break;
+                    }
                 };
                 if event.method == "Target.detachedFromTarget"
                     && event.params.get("sessionId").and_then(Value::as_str) == Some(&key.1)
@@ -1768,6 +1782,27 @@ pub(crate) mod raw_session_tests {
         let (events, _) = broadcast::channel(8);
         assert!(runtime.register_raw_session("owner", "$cdp-root", events.subscribe()).is_err());
         assert!(!runtime.has_raw_session("owner", "$cdp-root"));
+        runtime.close().await;
+    }
+
+    #[tokio::test]
+    async fn lost_lifecycle_event_retires_raw_attachment_instead_of_keeping_stale_route() {
+        let runtime = runtime(1).await;
+        let (events, _) = broadcast::channel(1);
+        let receiver = events.subscribe();
+        for index in 0..2 {
+            events.send(crate::cdp_runtime::RawCdpEvent {
+                session: SessionKey { connection_generation: 1, session_id: "root".into() },
+                method: "Target.attachedToTarget".into(),
+                params: serde_json::json!({"index": index}),
+            }).unwrap();
+        }
+        runtime.register_raw_session("owner", "native", receiver).unwrap();
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while runtime.has_raw_session("owner", "native") {
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("lost lifecycle notifications require explicit retirement and reattach");
         runtime.close().await;
     }
 }
