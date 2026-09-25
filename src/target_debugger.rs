@@ -3846,7 +3846,11 @@ fn capture_script_provenance(script: &crate::debugger_engine::ScriptState) -> Ca
             .or_else(|| script.source_map_url.clone())
             .filter(|url| url.len() <= 2048 && !is_inline_source_url(url)),
         source_sha256: script.captured_source.as_ref()
-            .map(|captured| format!("{:x}", Sha256::digest(captured.content.as_bytes()))),
+            .map(|captured| format!("{:x}", Sha256::digest(captured.content.as_bytes())))
+            .or_else(|| {
+                (script.hash.len() == 64 && script.hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                    .then(|| script.hash.to_ascii_lowercase())
+            }),
     }
 }
 

@@ -364,6 +364,21 @@ async fn captured_provenance_omits_oversized_non_inline_urls() {
 }
 
 #[tokio::test]
+async fn captured_provenance_reuses_cdp_sha256_without_source_hydration() {
+    let (driver, session, transport) = coverage_driver(true).await;
+    let key = ScriptKey {
+        session,
+        script_id: "1".into(),
+    };
+    let mut script = driver.state().scripts[&key].as_ref().clone();
+    let digest = format!("{:x}", Sha256::digest(GENERATED.as_bytes()));
+    script.hash = digest.clone();
+    let provenance = capture_script_provenance(&script);
+    assert_eq!(provenance.source_sha256.as_deref(), Some(digest.as_str()));
+    assert!(transport.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option() {
     for (capture_id, raw) in [
         (None, false),
