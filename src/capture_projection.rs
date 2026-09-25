@@ -23,7 +23,6 @@ pub(crate) struct VerifiedLocalSources {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct CachedSourceMap {
     pub map_url: String,
     pub map_bytes: Vec<u8>,
@@ -73,6 +72,29 @@ pub(crate) fn load_cached_source_map(
             "{generated_url}: verified source map cache entry for {map_url} is unavailable; raw measurements retained"
         ))?;
     Ok(CachedSourceMap { map_url, map_bytes })
+}
+
+pub(crate) fn recover_source_map_for_view(
+    url: &str,
+    map_ref: Option<&str>,
+    generated_sha256: Option<&str>,
+    script_hash: &str,
+) -> Result<(Vec<u8>, String), String> {
+    let local_error = if let Some(hash) = generated_sha256 {
+        match load_verified_local_sources(url, map_ref, Some(hash)) {
+            Ok(sources) => return Ok((sources.map_bytes, sources.map_url)),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+    match load_cached_source_map(url, map_ref, script_hash) {
+        Ok(cached) => Ok((cached.map_bytes, cached.map_url)),
+        Err(error) => Err(match local_error {
+            Some(local_error) => format!("{local_error}; {error}"),
+            None => error,
+        }),
+    }
 }
 
 fn load_map(
@@ -407,6 +429,25 @@ mod tests {
             error.contains("outside generated script directory"),
             "{error}"
         );
+        let (map_bytes, map_url) = recover_source_map_for_view(
+            &provenance.url,
+            provenance.source_map_url.as_deref(),
+            provenance.source_sha256.as_deref(),
+            "",
+        )
+        .unwrap();
+        assert!(map_bytes.starts_with(b"{\"version\":3"));
+        assert_eq!(map_url, source.map_url);
+        let error = recover_source_map_for_view(
+            &provenance.url,
+            provenance.source_map_url.as_deref(),
+            Some("stale-generated-source-hash"),
+            "",
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("identity unavailable or changed"));
+        assert!(error.contains("script identity unavailable"));
         assert!(
             load_cached_source_map(&provenance.url, provenance.source_map_url.as_deref(), "")
                 .unwrap_err()
