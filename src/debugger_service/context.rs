@@ -699,7 +699,7 @@ impl ContextApi for DebuggerService {
         if line == 0 || column == 0 {
             return Err(invalid_params("breakpoint lines and columns are one-based"));
         }
-        let lock = self.breakpoint_intent_lock(&context_id, &breakpoint_id).await;
+        let lock = self.breakpoint_intent_lock(&context_id).await;
         let _ownership_guard = lock.lock().await;
         self.reject_target_logpoint_collision(&context_id, &breakpoint_id, true, None).await?;
         let runtime_breakpoint = TargetBreakpointSpec {
@@ -784,7 +784,7 @@ impl ContextApi for DebuggerService {
                 return Ok(existing);
             }
         }
-        let lock = self.breakpoint_intent_lock(&context_id, &breakpoint_id).await;
+        let lock = self.breakpoint_intent_lock(&context_id).await;
         let _ownership_guard = lock.lock().await;
         self.reject_target_logpoint_collision(
             &context_id,
@@ -871,6 +871,8 @@ impl ContextApi for DebuggerService {
         breakpoint_id: String,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let lock = self.breakpoint_intent_lock(&context_id).await;
+        let _ownership_guard = lock.lock().await;
         let (result, target_debuggers) = {
             let mut state = self.state.lock().await;
             if let Some(existing) = self.check_mutation_options(&state, &context_id, &options)? {
@@ -916,14 +918,10 @@ impl ContextApi for DebuggerService {
 }
 
 impl DebuggerService {
-    pub(super) async fn breakpoint_intent_lock(
-        &self,
-        context_id: &str,
-        breakpoint_id: &str,
-    ) -> Arc<Mutex<()>> {
+    pub(super) async fn breakpoint_intent_lock(&self, context_id: &str) -> Arc<Mutex<()>> {
         let mut locks = self.breakpoint_intent_locks.lock().await;
         locks.retain(|_, lock| lock.strong_count() > 0);
-        let key = (context_id.to_owned(), breakpoint_id.to_owned());
+        let key = context_id.to_owned();
         if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) {
             return lock;
         }

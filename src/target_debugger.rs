@@ -92,6 +92,7 @@ impl TargetDebuggerHandle {
     pub(crate) fn ownership_stub_for_tests(
         snapshot: TargetDebuggerSnapshot,
         owned: Arc<std::sync::atomic::AtomicBool>,
+        context_owned: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let (commands, mut receiver) = mpsc::channel(8);
         let mut stub = Self::stub_for_tests(snapshot.clone());
@@ -103,7 +104,13 @@ impl TargetDebuggerHandle {
                         let _ = response.send(owned.load(Ordering::SeqCst));
                     }
                     TargetCommand::SetBreakpoints { lifetime, breakpoints, response } => {
-                        let result = if matches!(lifetime, BreakpointLifetime::TargetGeneration) {
+                        let result = if matches!(lifetime, BreakpointLifetime::TargetGeneration)
+                            && context_owned.load(Ordering::SeqCst)
+                        {
+                            Err(TargetDebuggerError::BreakpointOwnedByContext(
+                                breakpoints[0].id.clone(),
+                            ))
+                        } else if matches!(lifetime, BreakpointLifetime::TargetGeneration) {
                             owned.store(true, Ordering::SeqCst);
                             Ok(snapshot.clone())
                         } else if owned.load(Ordering::SeqCst) {
@@ -111,6 +118,7 @@ impl TargetDebuggerHandle {
                                 breakpoints[0].id.clone(),
                             ))
                         } else {
+                            context_owned.store(true, Ordering::SeqCst);
                             Ok(snapshot.clone())
                         };
                         let _ = response.send(result);

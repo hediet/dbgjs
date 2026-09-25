@@ -93,8 +93,8 @@ use crate::target_domain::target_snapshot_from_info;
 pub struct DebuggerService {
     agent_instance_id: String,
     state: Arc<Mutex<ServiceState>>,
-    // Serializes target claims with context preflight, persistence, and runtime application per ID.
-    breakpoint_intent_locks: Arc<Mutex<BTreeMap<(String, String), std::sync::Weak<Mutex<()>>>>>,
+    // Serializes context intent, target claims, and attachment bootstrap per context.
+    breakpoint_intent_locks: Arc<Mutex<BTreeMap<String, std::sync::Weak<Mutex<()>>>>>,
     attachment_lock: Arc<Mutex<()>>,
     relay_lifecycle_lock: Arc<Mutex<()>>,
     relay_attachment_lock: Arc<Mutex<()>>,
@@ -2140,6 +2140,8 @@ impl DebuggerService {
             }
         };
 
+        let intent_lock = self.breakpoint_intent_lock(&context_id).await;
+        let _intent_guard = intent_lock.lock().await;
         let mut state = self.state.lock().await;
         let runtime_is_current = state
             .runtimes
@@ -2225,20 +2227,18 @@ impl DebuggerService {
             .collect::<Vec<_>>();
         drop(state);
 
-        for breakpoint in breakpoints {
-            if let Err(error) = debugger.set_breakpoint(context_revision, breakpoint).await {
-                let mut state = self.state.lock().await;
-                if state
-                    .target_debuggers
-                    .get(&debugger_key)
-                    .is_some_and(|current| current.same_instance(&debugger))
-                {
-                    remove_debugger_registration(&mut state, &debugger_key);
-                }
-                drop(state);
-                let _ = debug_capability.close(&opened).await;
-                return Err(target_debugger_rpc_error(error));
+        if let Err(error) = Self::seed_attached_breakpoints(&debugger, context_revision, breakpoints).await {
+            let mut state = self.state.lock().await;
+            if state
+                .target_debuggers
+                .get(&debugger_key)
+                .is_some_and(|current| current.same_instance(&debugger))
+            {
+                remove_debugger_registration(&mut state, &debugger_key);
             }
+            drop(state);
+            let _ = debug_capability.close(&opened).await;
+            return Err(target_debugger_rpc_error(error));
         }
         let snapshot = debugger.settle(Duration::from_millis(200)).await;
         for breakpoint_id in breakpoint_ids {
@@ -2251,6 +2251,17 @@ impl DebuggerService {
             outcome,
             target: snapshot,
         })
+    }
+
+    async fn seed_attached_breakpoints(
+        debugger: &TargetDebuggerHandle,
+        context_revision: u64,
+        breakpoints: Vec<TargetBreakpointSpec>,
+    ) -> Result<(), TargetDebuggerError> {
+        for breakpoint in breakpoints {
+            debugger.set_breakpoint(context_revision, breakpoint).await?;
+        }
+        Ok(())
     }
 
     /// Looks up an already-attached target's debugger handle, rejecting the call while its
@@ -5830,13 +5841,14 @@ mod tests {
                 pause: None,
             },
             owned.clone(),
+            Arc::new(AtomicBool::new(false)),
         );
         state.target_debuggers.insert(
             ("ctx".into(), "runtime".into(), "target-a".into()), debugger,
         );
         let service = service_with_state(path.clone(), state);
         service.persist(&*service.state.lock().await).unwrap();
-        let lock = service.breakpoint_intent_lock("ctx", "log:shared").await;
+        let lock = service.breakpoint_intent_lock("ctx").await;
         let held = lock.lock().await;
         let call = CallCtx::default();
         let target_ref = TargetRef {
@@ -5882,6 +5894,90 @@ mod tests {
         assert_eq!(disk.contexts["ctx"].revision, prior.revision);
         assert_eq!(disk.contexts["ctx"].breakpoints["log:shared"], prior.breakpoints["log:shared"]);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn attachment_bootstrap_seeds_context_owner_before_target_claim() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut state = ServiceState::default();
+        insert_context_with_targets(&mut state, "ctx", [(
+            "runtime", 1, vec![target("target-a", "A", "https://a.test")]
+        )]);
+        let previous = state.contexts["ctx"].clone();
+        let context = reduce_context(&previous, ContextInput::UserCommand(UserCommand::PutBreakpoint {
+            breakpoint_id: "log:shared".into(),
+            source_path: "file:///prior.js".into(),
+            line: 2,
+            column: 1,
+            enabled: true,
+            condition: None,
+            target_selector: None,
+        })).unwrap().state;
+        state.contexts.insert("ctx".into(), context.clone());
+        let target_owned = Arc::new(AtomicBool::new(false));
+        let context_owned = Arc::new(AtomicBool::new(false));
+        let debugger = TargetDebuggerHandle::ownership_stub_for_tests(
+            TargetDebuggerSnapshot {
+                context_id: "ctx".into(),
+                connection_id: "runtime".into(),
+                target_id: "target-a".into(),
+                connection_generation: 1,
+                revision: 1,
+                phase: crate::service_api::TargetDebuggerPhase::Running,
+                scripts: Vec::new(),
+                breakpoints: Vec::new(),
+                logs: Vec::new(),
+                log_capture: Default::default(),
+                pause: None,
+            },
+            target_owned.clone(),
+            context_owned.clone(),
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let intent = service.breakpoint_intent_lock("ctx").await;
+        let guard = intent.lock().await;
+        service.state.lock().await.target_debuggers.insert(
+            ("ctx".into(), "runtime".into(), "target-a".into()),
+            debugger.clone(),
+        );
+        let call = CallCtx::default();
+        let mut claim = Box::pin(service.set_logpoints(
+            &call,
+            TargetRef {
+                connection: ConnectionRef { context_id: "ctx".into(), connection_id: "runtime".into() },
+                target_id: "target-a".into(),
+            },
+            vec![LogpointSpec {
+                id: "shared".into(),
+                source_url: "file:///prior.js".into(),
+                line: 2,
+                column: 1,
+                expression: "1".into(),
+            }],
+        ));
+        assert!(poll_fn(|cx| Poll::Ready(claim.as_mut().poll(cx))).await.is_pending());
+        let breakpoint = TargetBreakpointSpec {
+            id: "log:shared".into(),
+            source_url: "file:///prior.js".into(),
+            line: 2,
+            column: 1,
+            condition: None,
+        };
+        DebuggerService::seed_attached_breakpoints(
+            &debugger, context.revision, vec![breakpoint],
+        ).await.unwrap();
+        assert!(context_owned.load(Ordering::SeqCst));
+        assert!(!target_owned.load(Ordering::SeqCst));
+        drop(guard);
+        let error = claim.await.unwrap_err();
+        assert!(format!("{error:?}").contains("belongs to the context"), "{error:?}");
+        assert!(!target_owned.load(Ordering::SeqCst));
+        let state = service.state.lock().await;
+        assert_eq!(state.contexts["ctx"].revision, context.revision);
+        assert_eq!(state.contexts["ctx"].breakpoints["log:shared"], context.breakpoints["log:shared"]);
+        assert!(state.target_debuggers.contains_key(&("ctx".into(), "runtime".into(), "target-a".into())));
     }
 
     fn heap_capture(
