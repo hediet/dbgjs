@@ -2264,6 +2264,7 @@ mod tests {
             .call("Target.attachToTarget", json!({"targetId":"renderer-a"}))
             .await;
         let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
+        endpoint.mux.set_raw_limits(4096, 8, 256);
         let transport = harness.source.endpoints.lock().unwrap()["renderer-a"].clone();
         transport.notify("Target.attachedToTarget", json!({
             "sessionId": "native-child",
@@ -2288,7 +2289,7 @@ mod tests {
         endpoint
             .mux
             .forward_raw_notifications("native-child", Arc::new(BlockedNativeHandler));
-        for index in 0..300 {
+        for index in 0..16 {
             transport.notify_session(
                 Some("native-child"),
                 "Runtime.executionContextCreated",
@@ -2346,7 +2347,8 @@ mod tests {
             async move { page.run().await }
         });
         let endpoint = harness.root.target_endpoint("renderer-a").unwrap();
-        for index in 0..4096 {
+        endpoint.mux.set_raw_limits(3, 256, 256);
+        for index in 0..3 {
             let id = format!("retired-{index}");
             endpoint.open_raw_session(id.clone()).unwrap().close();
             endpoint.mux.retire_session(&id);
@@ -2420,13 +2422,14 @@ mod tests {
         let transport = EchoTransport::new();
         transport.unresponsive.store(true, Ordering::Relaxed);
         let endpoint = TargetEndpoint::open(transport.clone()).unwrap();
+        endpoint.mux.set_raw_limits(4096, 256, 8);
         endpoint.mux.ensure_raw_channel("native-child").unwrap();
         let handler = Arc::new(ChildRequestHandler {
             native_mux: endpoint.mux.clone(),
             native_id: "native-child".into(),
         });
         let mut calls = Vec::new();
-        for _ in 0..256 {
+        for _ in 0..8 {
             let handler = handler.clone();
             calls.push(tokio::spawn(async move {
                 handler
@@ -2435,7 +2438,7 @@ mod tests {
             }));
         }
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while transport.requests.lock().unwrap().len() < 256 {
+            while transport.requests.lock().unwrap().len() < 8 {
                 tokio::task::yield_now().await;
             }
         })

@@ -98,6 +98,9 @@ pub struct CdpSessionMux {
     inner: Arc<InnerMux>,
     channels: Arc<Mutex<HashMap<String, Weak<InnerChannel>>>>,
     raw_routes: Arc<Mutex<HashMap<String, Arc<RawSessionRoute>>>>,
+    raw_route_limit: Arc<AtomicUsize>,
+    notification_limit: Arc<AtomicUsize>,
+    unresolved_call_limit: Arc<AtomicUsize>,
     disposed: Arc<AtomicBool>,
 }
 
@@ -107,8 +110,21 @@ impl CdpSessionMux {
             inner: Arc::new(MultiplexedTransport::with_codec(raw, CdpEnvelopeCodec)),
             channels: Arc::new(Mutex::new(HashMap::new())),
             raw_routes: Arc::new(Mutex::new(HashMap::new())),
+            raw_route_limit: Arc::new(AtomicUsize::new(RAW_ROUTE_LIMIT)),
+            notification_limit: Arc::new(AtomicUsize::new(RAW_NOTIFICATION_LIMIT)),
+            unresolved_call_limit: Arc::new(AtomicUsize::new(RAW_UNRESOLVED_CALL_LIMIT)),
             disposed: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_raw_limits(&self, routes: usize, notifications: usize, unresolved: usize) {
+        assert!(routes > 0 && notifications > 0 && unresolved > 0);
+        self.raw_route_limit.store(routes, Ordering::SeqCst);
+        self.notification_limit
+            .store(notifications, Ordering::SeqCst);
+        self.unresolved_call_limit
+            .store(unresolved, Ordering::SeqCst);
     }
 
     pub fn open_root(&self) -> Result<CdpSessionTransport, OpenSessionError> {
@@ -239,13 +255,15 @@ impl CdpSessionMux {
             }
             return Ok(route.clone());
         }
-        if routes.len() >= RAW_ROUTE_LIMIT {
+        let route_limit = self.raw_route_limit.load(Ordering::SeqCst);
+        if routes.len() >= route_limit {
             return Err(MuxError::AlreadyUsed(format!(
-                "raw CDP route capacity ({RAW_ROUTE_LIMIT}) reached; reconnect before attaching another native session"
+                "raw CDP route capacity ({route_limit}) reached; reconnect before attaching another native session"
             )));
         }
+        let notification_limit = self.notification_limit.load(Ordering::SeqCst);
         let (failure, _) = watch::channel(None);
-        let (notifications, mut receiver) = mpsc::channel(RAW_NOTIFICATION_LIMIT);
+        let (notifications, mut receiver) = mpsc::channel(notification_limit);
         let channel = Channel::new(
             Box::new(self.open_session(id.to_owned())?),
             Box::new(RawNotificationHandler {
@@ -302,7 +320,7 @@ impl CdpSessionMux {
                         } else if !detached {
                             // Buffer only the initial attach handoff, not stale events from
                             // a detached session whose native ID may later be reused.
-                            if pending.len() == RAW_NOTIFICATION_LIMIT {
+                            if pending.len() == notification_limit {
                                 failure_on_overflow.send_replace(Some(
                                     "raw CDP notification handoff overflow; reconnect and attach again"
                                         .to_owned(),
@@ -323,6 +341,7 @@ impl CdpSessionMux {
             failure: failure.clone(),
             active: AtomicBool::new(false),
             unresolved_calls: AtomicUsize::new(0),
+            unresolved_call_limit: self.unresolved_call_limit.load(Ordering::SeqCst),
         });
         routes.insert(id.to_owned(), route.clone());
         Ok(route)
@@ -358,6 +377,7 @@ struct RawSessionRoute {
     // linkrpc's Channel retains pending calls when their future is canceled. Keep an upper
     // bound on calls whose response (or canceled future) can no longer be accounted for.
     unresolved_calls: AtomicUsize,
+    unresolved_call_limit: usize,
 }
 
 impl RawSessionRoute {
@@ -388,7 +408,7 @@ impl RawSessionRoute {
         if self
             .unresolved_calls
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
-                (count < RAW_UNRESOLVED_CALL_LIMIT).then_some(count + 1)
+                (count < self.unresolved_call_limit).then_some(count + 1)
             })
             .is_err()
         {
