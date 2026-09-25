@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
@@ -17,6 +17,11 @@ pub type SessionId = String;
 pub type OpenSessionError = MuxError;
 
 const ROOT_CHANNEL: &str = "$cdp-root";
+// linkrpc retains every used channel ID to avoid misrouting late replies. Until it supports
+// reclaiming correlation independently, refuse new IDs rather than evicting a reusable route.
+const RAW_ROUTE_LIMIT: usize = 4096;
+const RAW_NOTIFICATION_LIMIT: usize = 256;
+const RAW_UNRESOLVED_CALL_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpEnvelope {
@@ -133,7 +138,8 @@ impl CdpSessionMux {
     pub fn retire_session(&self, session_id: &str) {
         // Native CDP may issue this same ID on a later attachment. Keep its raw channel alive
         // (and its request counter monotonic) so the mux never routes a late reply to a new call.
-        if self.raw_routes.lock().unwrap().contains_key(session_id) {
+        if let Some(route) = self.raw_routes.lock().unwrap().get(session_id) {
+            route.send_notification(RawNotification::Listener(None));
             return;
         }
         if let Some(channel) = self
@@ -150,6 +156,9 @@ impl CdpSessionMux {
     fn open_raw_session(&self, id: String) -> Result<Arc<RawCdpSession>, OpenSessionError> {
         let mut routes = self.raw_routes.lock().unwrap();
         let route = self.ensure_raw_route(&mut routes, &id)?;
+        if route.failure.borrow().is_some() {
+            return Err(MuxError::AlreadyUsed(id));
+        }
         if route.active.swap(true, Ordering::SeqCst) {
             return Err(MuxError::AlreadyUsed(id));
         }
@@ -166,6 +175,7 @@ impl CdpSessionMux {
             .lock()
             .unwrap()
             .get(id)
+            .filter(|route| route.failure.borrow().is_none())
             .map(|route| route.channel.clone())
     }
 
@@ -176,15 +186,13 @@ impl CdpSessionMux {
 
     pub fn forward_raw_notifications(&self, id: &str, handler: Arc<dyn RequestHandler>) {
         if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
-            let _ = route
-                .notifications
-                .send(RawNotification::Listener(Some(handler)));
+            route.send_notification(RawNotification::Listener(Some(handler)));
         }
     }
 
     pub fn pause_raw_notifications(&self, id: &str) {
         if let Some(route) = self.raw_routes.lock().unwrap().get(id) {
-            let _ = route.notifications.send(RawNotification::Listener(None));
+            route.send_notification(RawNotification::Listener(None));
         }
     }
 
@@ -197,31 +205,60 @@ impl CdpSessionMux {
             return Err(MuxError::Disposed);
         }
         if let Some(route) = routes.get(id) {
+            if route.failure.borrow().is_some() {
+                return Err(MuxError::AlreadyUsed(format!(
+                    "raw CDP route '{id}' lost notifications; reconnect and attach again"
+                )));
+            }
             return Ok(route.clone());
         }
-        let (notifications, mut receiver) = mpsc::unbounded_channel();
+        if routes.len() >= RAW_ROUTE_LIMIT {
+            return Err(MuxError::AlreadyUsed(format!(
+                "raw CDP route capacity ({RAW_ROUTE_LIMIT}) reached; reconnect before attaching another native session"
+            )));
+        }
+        let (failure, _) = watch::channel(None);
+        let (notifications, mut receiver) = mpsc::channel(RAW_NOTIFICATION_LIMIT);
         let channel = Channel::new(
             Box::new(self.open_session(id.to_owned())?),
             Box::new(RawNotificationHandler {
                 notifications: notifications.clone(),
+                failure: failure.clone(),
             }),
         );
         let task = tokio::spawn({
             let channel = channel.clone();
             async move { channel.run().await }
         });
+        let failure_on_overflow = failure.clone();
         let notification_task = tokio::spawn(async move {
+            let mut failure = failure_on_overflow.subscribe();
+            if failure.borrow().is_some() {
+                return;
+            }
             let mut listener: Option<Arc<dyn RequestHandler>> = None;
-            let mut pending = VecDeque::new();
+            let mut pending = VecDeque::<(String, Value)>::new();
             let mut detached = false;
-            while let Some(notification) = receiver.recv().await {
+            loop {
+                let notification = tokio::select! {
+                    biased;
+                    _ = failure.changed() => break,
+                    notification = receiver.recv() => notification,
+                };
+                let Some(notification) = notification else {
+                    break;
+                };
                 match notification {
                     RawNotification::Listener(next) => {
                         listener = next;
                         if let Some(handler) = &listener {
                             detached = false;
                             while let Some((method, params)) = pending.pop_front() {
-                                handler.handle_notification(method, params).await;
+                                tokio::select! {
+                                    biased;
+                                    _ = failure.changed() => return,
+                                    _ = handler.handle_notification(method, params) => {}
+                                }
                             }
                         } else {
                             pending.clear();
@@ -230,12 +267,20 @@ impl CdpSessionMux {
                     }
                     RawNotification::Event(method, params) => {
                         if let Some(handler) = &listener {
-                            handler.handle_notification(method, params).await;
+                            tokio::select! {
+                                biased;
+                                _ = failure.changed() => break,
+                                _ = handler.handle_notification(method, params) => {}
+                            }
                         } else if !detached {
                             // Buffer only the initial attach handoff, not stale events from
                             // a detached session whose native ID may later be reused.
-                            if pending.len() == 256 {
-                                pending.pop_front();
+                            if pending.len() == RAW_NOTIFICATION_LIMIT {
+                                failure_on_overflow.send_replace(Some(
+                                    "raw CDP notification handoff overflow; reconnect and attach again"
+                                        .to_owned(),
+                                ));
+                                break;
                             }
                             pending.push_back((method, params));
                         }
@@ -248,7 +293,9 @@ impl CdpSessionMux {
             task,
             notification_task,
             notifications,
+            failure: failure.clone(),
             active: AtomicBool::new(false),
+            unresolved_calls: AtomicUsize::new(0),
         });
         routes.insert(id.to_owned(), route.clone());
         Ok(route)
@@ -278,8 +325,25 @@ struct RawSessionRoute {
     channel: Channel,
     task: JoinHandle<()>,
     notification_task: JoinHandle<()>,
-    notifications: mpsc::UnboundedSender<RawNotification>,
+    notifications: mpsc::Sender<RawNotification>,
+    failure: watch::Sender<Option<String>>,
     active: AtomicBool,
+    // linkrpc's Channel retains pending calls when their future is canceled. Keep an upper
+    // bound on calls whose response (or canceled future) can no longer be accounted for.
+    unresolved_calls: AtomicUsize,
+}
+
+impl RawSessionRoute {
+    fn send_notification(&self, message: RawNotification) {
+        if self.failure.borrow().is_some() {
+            return;
+        }
+        if self.notifications.try_send(message).is_err() {
+            self.failure.send_replace(Some(
+                "raw CDP notification queue overflow; reconnect and attach again".to_owned(),
+            ));
+        }
+    }
 }
 
 impl Drop for RawSessionRoute {
@@ -295,7 +359,8 @@ enum RawNotification {
 }
 
 struct RawNotificationHandler {
-    notifications: mpsc::UnboundedSender<RawNotification>,
+    notifications: mpsc::Sender<RawNotification>,
+    failure: watch::Sender<Option<String>>,
 }
 
 #[async_trait]
@@ -305,9 +370,18 @@ impl RequestHandler for RawNotificationHandler {
     }
 
     async fn handle_notification(&self, method: String, params: Value) {
-        let _ = self
+        if self.failure.borrow().is_some() {
+            return;
+        }
+        if self
             .notifications
-            .send(RawNotification::Event(method, params));
+            .try_send(RawNotification::Event(method, params))
+            .is_err()
+        {
+            self.failure.send_replace(Some(
+                "raw CDP notification queue overflow; reconnect and attach again".to_owned(),
+            ));
+        }
     }
 }
 
@@ -329,16 +403,44 @@ impl RawCdpSession {
         budget: std::time::Duration,
     ) -> Result<Value, JsonRpcError> {
         let mut closed = self.closed.subscribe();
+        let mut failure = self.route.failure.subscribe();
         if *closed.borrow() {
             return Err(JsonRpcError::new(
                 error_codes::PEER_DISCONNECTED,
                 "raw CDP session detached; attach again",
             ));
         }
+        if let Some(reason) = failure.borrow().as_ref() {
+            return Err(JsonRpcError::new(
+                error_codes::PEER_DISCONNECTED,
+                reason.clone(),
+            ));
+        }
+        if self
+            .route
+            .unresolved_calls
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < RAW_UNRESOLVED_CALL_LIMIT).then_some(count + 1)
+            })
+            .is_err()
+        {
+            self.route.failure.send_replace(Some(
+                "raw CDP request correlation budget exhausted; reconnect and attach again"
+                    .to_owned(),
+            ));
+            return Err(JsonRpcError::new(
+                error_codes::PEER_DISCONNECTED,
+                "raw CDP request correlation budget exhausted; reconnect and attach again",
+            ));
+        }
         tokio::select! {
             biased;
             _ = closed.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "raw CDP session detached; attach again")),
-            result = self.route.channel.call(method, params) => result,
+            _ = failure.changed() => Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, failure.borrow().as_ref().cloned().unwrap_or_else(|| "raw CDP notification route lost; reconnect and attach again".to_owned()))),
+            result = self.route.channel.call(method, params) => {
+                self.route.unresolved_calls.fetch_sub(1, Ordering::SeqCst);
+                result
+            },
             _ = tokio::time::sleep(budget) => Err(JsonRpcError::new(
                 error_codes::REQUEST_TIMEOUT,
                 format!("raw CDP session request timed out after {} seconds", budget.as_secs()),
@@ -609,6 +711,172 @@ mod tests {
         );
         second.close();
         mux.dispose();
+    }
+
+    #[tokio::test]
+    async fn initial_handoff_overflow_fails_instead_of_discarding_lifecycle_events() {
+        let (client_raw, browser_raw) = transport_pair_of::<CdpEnvelope>();
+        let mux = CdpSessionMux::new(Arc::new(client_raw));
+        let loop_mux = mux.clone();
+        tokio::spawn(async move { loop_mux.run().await });
+        let session = RawCdpSession::open(&mux, "native".into()).unwrap();
+        for index in 0..257 {
+            browser_raw
+                .send(CdpEnvelope {
+                    session_id: Some("native".into()),
+                    message: JsonRpcMessage::Notification(linkrpc::prelude::JsonRpcNotification {
+                        method: "Target.detachedFromTarget".into(),
+                        params: Some(json!({ "index": index })),
+                    }),
+                })
+                .await
+                .unwrap();
+        }
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Err(error) = session
+                    .request(
+                        "Runtime.enable",
+                        json!({}),
+                        std::time::Duration::from_millis(10),
+                    )
+                    .await
+                {
+                    if error.code == error_codes::PEER_DISCONNECTED {
+                        break error;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.message.contains("overflow"), "{error:?}");
+        assert!(RawCdpSession::open(&mux, "native".into()).is_err());
+        assert!(mux.ensure_raw_channel("native").is_err());
+        assert!(mux.raw_channel("native").is_none());
+    }
+
+    struct SlowHandler {
+        unblock: Arc<tokio::sync::Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for SlowHandler {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl RequestHandler for SlowHandler {
+        async fn handle_request(&self, _: String, _: Value) -> Result<Value, JsonRpcError> {
+            panic!("unexpected request")
+        }
+
+        async fn handle_notification(&self, _: String, _: Value) {
+            self.unblock.notified().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_listener_overflow_fails_active_raw_calls_explicitly() {
+        let (client_raw, browser_raw) = transport_pair_of::<CdpEnvelope>();
+        let mux = CdpSessionMux::new(Arc::new(client_raw));
+        let loop_mux = mux.clone();
+        tokio::spawn(async move { loop_mux.run().await });
+        let session = RawCdpSession::open(&mux, "native".into()).unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        mux.forward_raw_notifications(
+            "native",
+            Arc::new(SlowHandler {
+                unblock: Arc::new(tokio::sync::Notify::new()),
+                dropped: dropped.clone(),
+            }),
+        );
+        for index in 0..300 {
+            browser_raw
+                .send(CdpEnvelope {
+                    session_id: Some("native".into()),
+                    message: JsonRpcMessage::Notification(linkrpc::prelude::JsonRpcNotification {
+                        method: "Target.detachedFromTarget".into(),
+                        params: Some(json!({ "index": index })),
+                    }),
+                })
+                .await
+                .unwrap();
+        }
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Err(error) = session
+                    .request(
+                        "Runtime.enable",
+                        json!({}),
+                        std::time::Duration::from_millis(10),
+                    )
+                    .await
+                {
+                    if error.code == error_codes::PEER_DISCONNECTED {
+                        break error;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(error.message.contains("overflow"), "{error:?}");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("failed route must release its blocked listener");
+    }
+
+    #[tokio::test]
+    async fn timed_out_requests_have_a_bounded_correlation_budget() {
+        let (client_raw, _browser_raw) = transport_pair_of::<CdpEnvelope>();
+        let mux = CdpSessionMux::new(Arc::new(client_raw));
+        let loop_mux = mux.clone();
+        tokio::spawn(async move { loop_mux.run().await });
+        let session = RawCdpSession::open(&mux, "native".into()).unwrap();
+        for _ in 0..256 {
+            assert_eq!(
+                session
+                    .request("Runtime.enable", json!({}), std::time::Duration::ZERO)
+                    .await
+                    .unwrap_err()
+                    .code,
+                error_codes::REQUEST_TIMEOUT
+            );
+        }
+        let error = session
+            .request("Runtime.enable", json!({}), std::time::Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, error_codes::PEER_DISCONNECTED);
+        assert!(error.message.contains("reconnect"), "{error:?}");
+        assert!(RawCdpSession::open(&mux, "native".into()).is_err());
+    }
+
+    #[tokio::test]
+    async fn churn_has_an_explicit_capacity_without_unsafe_route_eviction() {
+        const RAW_ROUTE_LIMIT: usize = 4096;
+        let (client_raw, _browser_raw) = transport_pair_of::<CdpEnvelope>();
+        let mux = CdpSessionMux::new(Arc::new(client_raw));
+        for index in 0..RAW_ROUTE_LIMIT {
+            let id = format!("native-{index}");
+            let session = RawCdpSession::open(&mux, id.clone()).unwrap();
+            session.close();
+            mux.retire_session(&id);
+        }
+        assert!(matches!(
+            RawCdpSession::open(&mux, "one-too-many".into()),
+            Err(MuxError::AlreadyUsed(_))
+        ));
+        let reused = RawCdpSession::open(&mux, "native-0".into()).unwrap();
+        reused.close();
     }
 
     #[test]
