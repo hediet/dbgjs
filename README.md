@@ -322,6 +322,8 @@ continue working after the target detaches or the service restarts. Live object
 inspection is separate and still requires an attached target.
 Heap capture stores the original snapshot and lightweight script identity (URL,
 hash, map URL and execution provenance), not copies of source files or maps.
+Inline data URLs and oversized source/map URLs are omitted to keep capture
+metadata bounded; their generated locations remain available with a diagnostic.
 Authored names are resolved when viewing if a map is available; otherwise the
 generated name remains visible with an unavailable-map diagnostic. You can
 explicitly supply a matching map for an existing stored capture.

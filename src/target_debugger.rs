@@ -3607,6 +3607,19 @@ fn captured_heap_script(
     key: &ScriptKey,
     script: &crate::debugger_engine::ScriptState,
 ) -> HeapScriptSnapshot {
+    const MAX_PROVENANCE_URL_BYTES: usize = 2048;
+    let cheap_url = |url: &str| {
+        url.len() <= MAX_PROVENANCE_URL_BYTES
+            && !url.get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+            && !url.get(..11).is_some_and(|prefix| prefix.eq_ignore_ascii_case("javascript:"))
+    };
+    let url = cheap_url(&script.url)
+        .then(|| script.url.clone())
+        .unwrap_or_else(|| format!("script:{}", key.script_id));
+    let source_map_url = script.source_map_url.as_ref()
+        .filter(|url| cheap_url(url)).cloned();
+    let omitted_source = url != script.url;
+    let omitted_map = script.source_map_url.is_some() && source_map_url.is_none();
     let mapping_status = if script.source_map_url.is_none() {
         HeapMappingStatus::NoMapSupplied
     } else {
@@ -3614,14 +3627,17 @@ fn captured_heap_script(
     };
     HeapScriptSnapshot {
         script_id: key.script_id.clone(),
-        url: script.url.clone(),
+        url,
         hash: script.hash.clone(),
         provenance: script.provenance.clone(),
-        source_map_url: script.source_map_url.clone(),
+        source_map_url,
         generated_source: None,
         source_map: None,
         mapping_status,
-        diagnostic: None,
+        diagnostic: (omitted_source || omitted_map).then(|| {
+            "inline or oversized source/map URL omitted from capture; generated location retained"
+                .to_owned()
+        }),
     }
 }
 
@@ -8386,6 +8402,26 @@ mod tests {
         assert!(large_payload.len() < 1024);
         assert!(!large_payload.windows(source_marker.len()).any(|part| part == source_marker.as_bytes()));
         assert!(!large_payload.windows(map_marker.len()).any(|part| part == map_marker.as_bytes()));
+        let mut inline = script.clone();
+        inline.url = format!("data:text/javascript,{}", source_marker.repeat(32_768));
+        inline.source_map_url = Some(format!("data:application/json,{}", map_marker.repeat(32_768)));
+        let inline_metadata = captured_heap_script(&key, &inline);
+        let serialized_inline = serde_json::to_vec(&inline_metadata).unwrap();
+        assert!(serialized_inline.len() < 1024);
+        assert_eq!(inline_metadata.url, "script:42");
+        assert!(inline_metadata.source_map_url.is_none());
+        assert_eq!(inline_metadata.mapping_status, HeapMappingStatus::NotAttempted);
+        assert!(!serialized_inline.windows(source_marker.len())
+            .any(|part| part == source_marker.as_bytes()));
+        assert!(!serialized_inline.windows(map_marker.len())
+            .any(|part| part == map_marker.as_bytes()));
+        assert!(inline_metadata.diagnostic.as_deref().unwrap().contains("omitted"));
+        inline.url = format!("https://example.test/app.js?source={}", source_marker.repeat(32_768));
+        inline.source_map_url =
+            Some(format!("https://example.test/app.js.map?map={}", map_marker.repeat(32_768)));
+        let oversized_metadata = captured_heap_script(&key, &inline);
+        assert!(serde_json::to_vec(&oversized_metadata).unwrap().len() < 1024);
+        assert!(oversized_metadata.diagnostic.as_deref().unwrap().contains("omitted"));
         let mapping = HeapMappingSnapshot {
             connection_generation: 7,
             hydration_duration_micros: 0,
