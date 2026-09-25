@@ -101,7 +101,7 @@ impl CoveragePathFilter {
     }
 }
 
-fn normalize_path(path: &str) -> String {
+pub(crate) fn normalize_path(path: &str) -> String {
     let mut path = path.replace('\\', "/");
     while let Some(remainder) = path.strip_prefix("../").or_else(|| path.strip_prefix("./")) {
         path = remainder.to_owned();

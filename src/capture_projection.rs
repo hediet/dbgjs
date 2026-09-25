@@ -13,7 +13,6 @@ use crate::service_api::{
 struct AvailableMap {
     generated: String,
     checkpoints: Vec<(u32, usize, u32, u32)>,
-    map_url: String,
     map: SourceMap,
 }
 
@@ -139,8 +138,8 @@ fn load_map(
             "{url}: captured script URL differs from measurement; raw measurements retained"
         ));
     }
-    let (generated, map_url, map_bytes) = if let Some(sources) = prepared {
-        (sources.generated.clone(), sources.map_url.clone(), sources.map_bytes.clone())
+    let (generated, map_bytes) = if let Some(sources) = prepared {
+        (sources.generated.clone(), sources.map_bytes.clone())
     } else {
         let local_generated = local_file(url)
             .map(|_| load_verified_generated_file(url, provenance.source_sha256.as_deref()))
@@ -149,7 +148,7 @@ fn load_map(
             .source_map_url
             .as_deref()
             .or_else(|| local_generated.as_deref().and_then(source_mapping_reference));
-        let (map_bytes, map_url) = recover_map_for_view(
+        let (map_bytes, _) = recover_map_for_view(
             url,
             map_ref,
             provenance.source_sha256.as_deref(),
@@ -159,7 +158,7 @@ fn load_map(
         } else {
             String::new()
         };
-        (generated, map_url, map_bytes)
+        (generated, map_bytes)
     };
     let map = match decode_slice(&map_bytes)
         .map_err(|error| format!("{url}: source map could not be decoded ({error}); raw measurements retained"))?
@@ -190,7 +189,6 @@ fn load_map(
     Ok(AvailableMap {
         generated,
         checkpoints,
-        map_url,
         map,
     })
 }
@@ -389,14 +387,9 @@ pub(crate) fn load_verified_local_sources(
 impl AvailableMap {
     fn location(&self, line: u32, column: u32) -> Option<SourceLocation> {
         let token = self.map.lookup_token(line, column)?;
-        if token.get_dst_line() != line {
-            return None;
-        }
         let source = token.get_source()?;
-        let source_url =
-            crate::source_view::canonical_source_uri(Some(&self.map_url), source).display();
         Some(SourceLocation {
-            source_url,
+            source_url: source.to_owned(),
             line: token.get_src_line().saturating_add(1),
             column: token.get_src_col().saturating_add(1),
         })
@@ -426,6 +419,11 @@ impl AvailableMap {
         let (line, column) = self.generated_position(offset)?;
         self.location(line, column)
     }
+}
+
+fn matches_source_path(location: &SourceLocation, prefix: &str) -> bool {
+    crate::coverage_filter::normalize_path(&location.source_url)
+        .starts_with(&crate::coverage_filter::normalize_path(prefix))
 }
 
 #[cfg(test)]
@@ -514,12 +512,10 @@ pub(crate) fn project_stored_cpu_with_sources(
         // Legacy snapshots may have derived functions but no raw sample stream.
         if let Some(path) = source_path {
             snapshot.functions.retain(|function| {
-                function
-                    .authored_location
-                    .as_ref()
-                    .unwrap_or(&function.generated_location)
-                    .source_url
-                    .starts_with(path)
+                matches_source_path(
+                    function.authored_location.as_ref().unwrap_or(&function.generated_location),
+                    path,
+                )
             });
             if snapshot.functions.is_empty() {
                 snapshot.projection_diagnostics.push(format!(
@@ -557,7 +553,7 @@ pub(crate) fn project_stored_cpu_with_sources(
         if source_path.is_some_and(|path| {
             node.authored_location
                 .as_ref()
-                .is_some_and(|location| !location.source_url.starts_with(path))
+                .is_some_and(|location| !matches_source_path(location, path))
         }) {
             node.authored_location = None;
         }
@@ -575,7 +571,7 @@ pub(crate) fn project_stored_cpu_with_sources(
             if source_path.is_none_or(|path| {
                 authored
                     .as_ref()
-                    .is_some_and(|location| location.source_url.starts_with(path))
+                    .is_some_and(|location| matches_source_path(location, path))
             }) {
                 node.authored_location = authored;
             } else {
@@ -793,6 +789,67 @@ mod tests {
         assert_eq!(selected.sources[0].functions.len(), 1);
         assert_eq!(selected.sources[0].functions[0].ranges[0].count, 2);
         assert_eq!(Sha256::digest(serde_json::to_vec(&raw).unwrap()), hash);
+    }
+
+    #[test]
+    fn vscode_relative_map_sources_match_authored_coverage_and_cpu_prefixes() {
+        let mut coverage = coverage();
+        let map_url = "https://main.vscode-cdn.net/sourcemaps/commit/core/vs/workbench/workbench.desktop.main.js.map";
+        let logical_source = "../../../src/vs/editor/common/model/textModel.ts";
+        let map_bytes = serde_json::to_vec(&json!({
+            "version": 3,
+            "sources": [logical_source],
+            "names": [],
+            "mappings": "AAAA;AAAA"
+        })).unwrap();
+        let mut prepared = PreparedViewSources::new();
+        prepared.insert(
+            (coverage.sources[0].script_id.clone(), coverage.sources[0].generated_url.clone()),
+            VerifiedLocalSources {
+                generated: "a\nb\n".into(),
+                map_url: map_url.into(),
+                map_bytes: map_bytes.clone(),
+            },
+        );
+        project_stored_coverage_with_sources(&mut coverage, &prepared);
+        assert!(coverage.sources[0].functions[0].authored_location.is_some());
+        crate::coverage_filter::filter_coverage(
+            &mut coverage, Some("src/vs/editor/common/model"), None,
+        ).unwrap();
+        assert_eq!(coverage.sources[0].functions[0].ranges[0].count, 2);
+
+        let mut profile = cpu();
+        prepared.clear();
+        prepared.insert(
+            ("1".into(), profile.script_provenance["1"].url.clone()),
+            VerifiedLocalSources {
+                generated: String::new(),
+                map_url: map_url.into(),
+                map_bytes,
+            },
+        );
+        project_stored_cpu_with_sources(
+            &mut profile, Some("src/vs/editor/common/model"), &prepared,
+        ).unwrap();
+        assert!(profile.nodes[1].authored_location.is_some());
+        assert_eq!(profile.functions.iter().filter(|function| function.name == "work").count(), 1);
+    }
+
+    #[test]
+    fn stored_map_uses_the_same_preceding_token_as_live_projection() {
+        let map_bytes = br#"{"version":3,"sources":["../../../src/vs/editor/common/model/textModel.ts"],"names":[],"mappings":"AAAA"}"#;
+        let DecodedMap::Regular(map) = decode_slice(map_bytes).unwrap() else {
+            panic!("expected regular map");
+        };
+        let map = AvailableMap {
+            generated: String::new(),
+            checkpoints: vec![(0, 0, 0, 0)],
+            map,
+        };
+        assert_eq!(
+            map.location(1, 0).unwrap().source_url,
+            "../../../src/vs/editor/common/model/textModel.ts"
+        );
     }
 
     #[test]
