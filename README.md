@@ -449,6 +449,17 @@ $ dbgjs target cdp Runtime.evaluate --params '{"expression":"document.title","re
 }
 ````
 
+Native child sessions share bounded routing for raw CDP and virtual-browser
+clients. Notification overflow or exhausted request bookkeeping fails the
+affected session explicitly instead of silently losing lifecycle events.
+Healthy siblings and the parent remain usable.
+
+To keep late replies from reaching a reused session ID, each endpoint's
+multiplexer retains up to 4,096 native routes. Each route permits up to 256
+unresolved request correlations and bounds its notification queues. Exhausted
+routes require reconnecting the owning endpoint; retrying the same failed
+session ID does not reset these limits.
+
 ## Durable contexts and offline evidence
 
 Disconnect without losing the investigation. Named captures remain queryable
