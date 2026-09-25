@@ -1,0 +1,71 @@
+name: Electron fixture with existing binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: "CI run supplying packaged binaries (tests this revision's fixture against those binaries, not rebuilt code)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  electron:
+    name: Electron fixture (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: win32-x64
+          - os: windows-11-arm
+            platform: win32-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-${{ matrix.platform }}
+          path: artifacts/npm
+          run-id: ${{ inputs.ci_run_id }}
+          github-token: ${{ github.token }}
+      - name: Extract existing binaries and report provenance
+        env:
+          BINARY_RUN_ID: ${{ inputs.ci_run_id }}
+        run: |
+          mkdir -p artifacts/electron-native
+          tar -xzf artifacts/npm/hediet-dbgjs-*.tar.gz -C artifacts/electron-native
+          artifacts/electron-native/package/bin/dbgjs.exe --json --version
+          {
+            printf 'Fixture revision: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Binary artifacts: CI run `%s`\n\n' "$BINARY_RUN_ID"
+            printf 'This run validates the fixture against existing binaries, not rebuilt runtime changes.\n\n'
+            printf 'Binary provenance:\n```json\n'
+            artifacts/electron-native/package/bin/dbgjs.exe --json --version
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Test isolated Electron process-tree webview
+        env:
+          DBGJS_TEST_BIN_DIR: artifacts/electron-native/package/bin
+        run: npx playwright test tests/playwright/electron-process-tree.spec.mjs
+      - name: Upload fixture test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-fixture-${{ matrix.platform }}
+          path: test-results
+          if-no-files-found: warn
