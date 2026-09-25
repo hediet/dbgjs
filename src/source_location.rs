@@ -192,6 +192,28 @@ mod tests {
     }
 
     #[test]
+    fn cached_source_map_resolves_authored_position_without_generated_source_bytes() {
+        let map = map(Some(CONTENT));
+        let view = view(GeneratedSourceInput {
+            url: GENERATED,
+            content: "",
+            source_map: Some(&map),
+            source_map_url: Some(MAP),
+            minified: false,
+        });
+        let resolved = resolve_source_position(
+            &view,
+            GENERATED,
+            Some(MAP),
+            Position { line: 0, column: 4 },
+            &SymbolIndexCache::default(),
+        );
+        assert_eq!(resolved.mapping, "authored");
+        assert_eq!(resolved.resolved.line, 1);
+        assert_eq!(resolved.resolved.column, 30);
+    }
+
+    #[test]
     fn formatted_location_matches_the_current_view_projection() {
         let source = "function example(){const text='};';return text;}";
         let view = view(GeneratedSourceInput {
