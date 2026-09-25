@@ -500,6 +500,20 @@ impl TargetDebuggerApi for DebuggerService {
                 })
             })
             .collect::<Result<Vec<_>, JsonRpcError>>()?;
+        let mut ids = breakpoints
+            .iter()
+            .map(|breakpoint| breakpoint.id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut locks = Vec::with_capacity(ids.len());
+        for id in ids {
+            locks.push(self.breakpoint_intent_lock(&context_id, id).await);
+        }
+        let mut _ownership_guards = Vec::with_capacity(locks.len());
+        for lock in &locks {
+            _ownership_guards.push(lock.lock().await);
+        }
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
             .await?;

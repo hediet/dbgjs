@@ -89,6 +89,40 @@ pub struct TargetDebuggerHandle {
 
 impl TargetDebuggerHandle {
     #[cfg(test)]
+    pub(crate) fn ownership_stub_for_tests(
+        snapshot: TargetDebuggerSnapshot,
+        owned: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        let (commands, mut receiver) = mpsc::channel(8);
+        let mut stub = Self::stub_for_tests(snapshot.clone());
+        stub.commands = commands;
+        tokio::spawn(async move {
+            while let Some(command) = receiver.recv().await {
+                match command {
+                    TargetCommand::OwnsLogpoint { response, .. } => {
+                        let _ = response.send(owned.load(Ordering::SeqCst));
+                    }
+                    TargetCommand::SetBreakpoints { lifetime, breakpoints, response } => {
+                        let result = if matches!(lifetime, BreakpointLifetime::TargetGeneration) {
+                            owned.store(true, Ordering::SeqCst);
+                            Ok(snapshot.clone())
+                        } else if owned.load(Ordering::SeqCst) {
+                            Err(TargetDebuggerError::BreakpointOwnedByTarget(
+                                breakpoints[0].id.clone(),
+                            ))
+                        } else {
+                            Ok(snapshot.clone())
+                        };
+                        let _ = response.send(result);
+                    }
+                    _ => {}
+                }
+            }
+        });
+        stub
+    }
+
+    #[cfg(test)]
     pub(crate) fn stub_for_tests(snapshot: TargetDebuggerSnapshot) -> Self {
         let (commands, _) = mpsc::channel(1);
         let (_, snapshots) = watch::channel(snapshot);
