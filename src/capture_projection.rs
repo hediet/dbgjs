@@ -665,9 +665,12 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.contains("inline source map"));
+        let directory = tempfile::tempdir().unwrap();
+        let generated = directory.path().join("bundle.js");
+        let map = directory.path().join("bundle.js.map");
         assert_eq!(
-            resolved_map_url("/project/bundle.js", Some("/project/bundle.js.map")).unwrap(),
-            "/project/bundle.js.map"
+            resolved_map_url(generated.to_str().unwrap(), Some(map.to_str().unwrap())).unwrap(),
+            map.to_str().unwrap()
         );
         let unrelated =
             url::Url::from_file_path(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))

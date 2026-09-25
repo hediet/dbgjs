@@ -7105,7 +7105,8 @@ commands:
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
   dbgjs coverage capture [--id <name>] [--raw] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
-    --raw collects counts and runtime offsets without source-map lookup or symbol enrichment
+    --raw is a deprecated compatibility flag; all captures store raw ranges without source-map lookup
+    source-map projection and enrichment happen when viewing with coverage show
   dbgjs coverage stop [--id <name>] [target scope]
   dbgjs coverage show [<selector>] [--exclude <baseline>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     filters match normalized source URLs, including authored ranges inside bundles
@@ -8646,6 +8647,9 @@ mod tests {
         let show_hint = super::coverage_delay_hint(&arguments(&["coverage", "show", "typing"])).unwrap();
         assert!(show_hint.contains("view"));
         assert!(show_hint.contains("source"));
+        let help = super::usage();
+        assert!(help.contains("--raw is a deprecated compatibility flag"));
+        assert!(!help.contains("--raw collects"));
         assert!(super::coverage_delay_hint(&arguments(&["source", "show"])).is_none());
     }
 
