@@ -15,6 +15,7 @@ struct RetryTransport {
     invalid_first_map: bool,
     map_requests: AtomicU64,
     source_requests: AtomicU64,
+    map_reads: AtomicU64,
     inbound: tokio::sync::Mutex<mpsc::UnboundedReceiver<CdpEnvelope>>,
     outbound: mpsc::UnboundedSender<CdpEnvelope>,
 }
@@ -40,6 +41,7 @@ impl MessageTransport<CdpEnvelope, CdpEnvelope> for RetryTransport {
                 }
             }
             "IO.read" => {
+                self.map_reads.fetch_add(1, Ordering::SeqCst);
                 let invalid =
                     self.invalid_first_map && self.map_requests.load(Ordering::SeqCst) == 1;
                 json!({"data": if invalid { "{invalid-map" } else { VALID_MAP }, "eof":true})
@@ -92,6 +94,7 @@ async fn verify_map_retry(invalid_first_map: bool) {
         invalid_first_map,
         map_requests: AtomicU64::new(0),
         source_requests: AtomicU64::new(0),
+        map_reads: AtomicU64::new(0),
         inbound: tokio::sync::Mutex::new(inbound),
         outbound,
     });
@@ -168,9 +171,10 @@ async fn verify_map_retry(invalid_first_map: bool) {
     let stored_first = serde_json::to_vec(&first).unwrap();
     let second = capture_heap_mapping(&driver, &session, 1);
     assert_eq!(second.scripts[0].mapping_status, HeapMappingStatus::NotAttempted);
-    assert_eq!(driver.source_map_cache_stats().bypasses, 0);
+    assert_eq!(driver.source_map_cache_stats(), Default::default());
     assert_eq!(transport.map_requests.load(Ordering::SeqCst), 0);
     assert_eq!(transport.source_requests.load(Ordering::SeqCst), 0);
+    assert_eq!(transport.map_reads.load(Ordering::SeqCst), 0);
     assert_eq!(first.scripts[0].hash, second.scripts[0].hash);
     assert_eq!(serde_json::to_vec(&first).unwrap(), stored_first);
     let groups = vec![HeapConstructorGroup {

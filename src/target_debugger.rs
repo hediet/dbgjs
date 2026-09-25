@@ -8349,7 +8349,7 @@ mod tests {
             },
             script_id: "42".into(),
         };
-        let script = ScriptState {
+        let mut script = ScriptState {
             url: "https://example.test/bundle.js".into(),
             hash: "hash".into(),
             source_map_url: Some("bundle.js.map".into()),
@@ -8373,11 +8373,30 @@ mod tests {
         assert!(captured.generated_source.is_none());
         assert!(captured.source_map.is_none());
         assert_eq!(captured.mapping_status, HeapMappingStatus::NotAttempted);
+        let small_payload = serde_json::to_vec(&captured).unwrap();
+        let source_marker = "generated-content-must-not-be-persisted";
+        let map_marker = "map-content-must-not-be-persisted";
+        let large_source = source_marker.repeat(32_768);
+        let large_map = map_marker.repeat(32_768);
+        let source = script.captured_source.as_mut().unwrap();
+        source.content = Arc::from(large_source);
+        source.source_map = Some(crate::source_view::SourceMapData::new(large_map.into_bytes()));
+        let large_payload = serde_json::to_vec(&captured_heap_script(&key, &script)).unwrap();
+        assert_eq!(large_payload, small_payload);
+        assert!(large_payload.len() < 1024);
+        assert!(!large_payload.windows(source_marker.len()).any(|part| part == source_marker.as_bytes()));
+        assert!(!large_payload.windows(map_marker.len()).any(|part| part == map_marker.as_bytes()));
         let mapping = HeapMappingSnapshot {
             connection_generation: 7,
             hydration_duration_micros: 0,
             scripts: vec![captured],
         };
+        let serialized_mapping = serde_json::to_vec(&mapping).unwrap();
+        assert!(serialized_mapping.len() < 1024);
+        assert!(!serialized_mapping.windows(source_marker.len())
+            .any(|part| part == source_marker.as_bytes()));
+        assert!(!serialized_mapping.windows(map_marker.len())
+            .any(|part| part == map_marker.as_bytes()));
         let viewed = project_heap_classes(
             "cheap".into(),
             &[HeapConstructorGroup {
