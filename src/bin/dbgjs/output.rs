@@ -3113,9 +3113,7 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
     if let Some(capture_id) = &snapshot.capture_id {
         println!("Capture {capture_id}");
     }
-    for diagnostic in &snapshot.projection_diagnostics {
-        println!("Projection unavailable: {diagnostic}");
-    }
+    print_projection_diagnostics(&snapshot.projection_diagnostics);
     if snapshot.sources.is_empty() {
         println!("No executed functions captured.");
         return;
@@ -3128,9 +3126,7 @@ fn print_coverage_human(snapshot: &CoverageSnapshot, options: CoverageOutputOpti
 }
 
 fn print_cpu_profile_human(snapshot: &CpuProfileSnapshot, options: CpuProfileOutputOptions<'_>) {
-    for diagnostic in &snapshot.projection_diagnostics {
-        println!("Projection unavailable: {diagnostic}");
-    }
+    print_projection_diagnostics(&snapshot.projection_diagnostics);
     let sampled_micros = snapshot
         .nodes
         .iter()
@@ -3641,6 +3637,15 @@ fn compact_bytes(bytes: u64) -> String {
         }
     }
     format!("{bytes} B")
+}
+
+fn print_projection_diagnostics(diagnostics: &[String]) {
+    if !diagnostics.is_empty() {
+        eprintln!(
+            "Projection unavailable: {} diagnostic(s); some locations may remain generated. Use --json for details.",
+            diagnostics.len(),
+        );
+    }
 }
 
 fn print_coverage_tree(

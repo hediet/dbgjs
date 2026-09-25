@@ -243,6 +243,8 @@ Capture persists cumulative raw ranges and cheap script provenance; mapping,
 exclusion and path filtering happen when viewing. When original generated source
 or its map is unavailable or has changed, the raw ranges remain available with
 explicit projection diagnostics rather than an empty authored result.
+Human-readable coverage and CPU views summarize projection diagnostics on stderr
+without consuming the display line budget; `--json` includes the full details.
 At view time, verified local files, cached maps, and bounded HTTP(S) source/map
 requests can reconstruct authored locations without attaching to the target.
 An omitted inline map can be recovered from the `sourceMappingURL` directive

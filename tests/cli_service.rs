@@ -2784,6 +2784,24 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
     );
     assert_eq!(named_offline["captureId"], "named-coverage");
     assert!(!named_offline["sources"].as_array().unwrap().is_empty(), "{named_offline}");
+    for (command, capture) in [("coverage", "named-coverage"), ("profile", "offline-profile")] {
+        let snapshot = run_json(
+            &cli, &service, &state_file,
+            &[command, "show", capture, "--context", &context],
+        );
+        assert!(!snapshot["projectionDiagnostics"].as_array().unwrap().is_empty(), "{snapshot}");
+        let arguments = [command, "show", capture, "--max-lines", "3", "--context", &context];
+        let (status, stdout, stderr) = run_human_in(
+            &cli, &service, &state_file, &std::env::current_dir().unwrap(), &arguments,
+        );
+        assert_success(&arguments, status, &stdout, &stderr);
+        let stdout = String::from_utf8(stdout).unwrap();
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stdout.lines().count() <= 3, "{stdout}");
+        assert!(!stdout.contains("Projection unavailable"), "{stdout}");
+        assert_eq!(stderr.lines().filter(|line| line.starts_with("Projection unavailable:")).count(), 1, "{stderr}");
+        assert!(stderr.contains("--json"), "{stderr}");
+    }
     let profile = captures
         .as_array()
         .unwrap()
