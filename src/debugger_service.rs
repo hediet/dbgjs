@@ -8079,6 +8079,8 @@ mod tests {
     #[test]
     fn stored_heap_view_recovers_available_map_without_changing_raw_capture() {
         use base64::Engine;
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use crate::service_api::{
             HeapMappingSnapshot, HeapMappingStatus, HeapNodeSelector, HeapScriptSnapshot,
             TargetRef,
@@ -8185,6 +8187,86 @@ mod tests {
                 &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
             ).await.unwrap();
             assert_eq!(recovered_inline.classes[0].name, "Original");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let hits = Arc::new(AtomicUsize::new(0));
+            let server_hits = hits.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    let count = stream.read(&mut request).await.unwrap();
+                    let map = br#"{"version":3,"file":"app.js","sources":["original.ts"],"sourcesContent":["class Original {}"],"names":[],"mappings":"AAAA"}"#;
+                    let body: &[u8] = if request[..count].starts_with(b"GET /app.js.map ") {
+                        map
+                    } else {
+                        b"class a {}"
+                    };
+                    server_hits.fetch_add(1, Ordering::SeqCst);
+                    stream.write_all(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    ).as_bytes()).await.unwrap();
+                    stream.write_all(body).await.unwrap();
+                }
+            });
+            {
+                let mut state = restored.state.lock().await;
+                let script = &mut state.captures
+                    .get_mut(&("test".to_owned(), "heap".to_owned()))
+                    .unwrap().heap_mapping.as_mut().unwrap().scripts[0];
+                script.url = format!("{base}/app.js");
+                script.hash = format!("{:x}", Sha256::digest(b"class a {}"));
+                script.source_map_url = Some("app.js.map".into());
+                script.diagnostic = None;
+            }
+            assert_eq!(hits.load(Ordering::SeqCst), 0);
+            let remote = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(remote.classes[0].name, "Original");
+            assert_eq!(hits.load(Ordering::SeqCst), 2);
+            let remote_nodes = restored.select_heap_nodes(
+                &CallCtx::default(),
+                TargetRef {
+                    connection: crate::service_api::ConnectionRef {
+                        context_id: "test".into(), connection_id: "runtime".into(),
+                    },
+                    target_id: "target-a".into(),
+                },
+                "heap".into(),
+                HeapNodeSelector { heap_object_id: Some("7".into()), ..Default::default() },
+                None,
+                false,
+            ).await.unwrap();
+            assert_eq!(
+                remote_nodes.nodes[0].source.locations[0].position.resolved.source_url,
+                format!("{base}/original.ts")
+            );
+            assert_eq!(hits.load(Ordering::SeqCst), 2);
+            {
+                let mut state = restored.state.lock().await;
+                state.captures.get_mut(&("test".to_owned(), "heap".to_owned()))
+                    .unwrap().heap_mapping.as_mut().unwrap().scripts[0].hash = "0".repeat(64);
+            }
+            let changed = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(changed.classes[0].name, "a");
+            assert!(changed.analysis.script_mappings[0].diagnostic.as_deref().unwrap()
+                .contains("identity changed"));
+            assert_eq!(hits.load(Ordering::SeqCst), 3);
+            {
+                let mut state = restored.state.lock().await;
+                state.captures.get_mut(&("test".to_owned(), "heap".to_owned()))
+                    .unwrap().heap_mapping.as_mut().unwrap().scripts[0].hash = "legacy-hash".into();
+            }
+            let unverified = restored.get_stored_heap_classes(
+                &CallCtx::default(), "test".into(), "heap".into(), None, None, None,
+            ).await.unwrap();
+            assert_eq!(unverified.classes[0].name, "a");
+            assert_eq!(hits.load(Ordering::SeqCst), 3);
+            server.abort();
             assert!(restored.state.lock().await.captures
                 [&("test".to_owned(), "heap".to_owned())]
                 .heap_mapping.as_ref().unwrap().scripts[0].source_map.is_none());

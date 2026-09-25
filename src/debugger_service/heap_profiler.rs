@@ -49,9 +49,14 @@ impl DebuggerService {
         else {
             return Ok(None);
         };
+        let (prepared, diagnostics) = if enrich_source {
+            crate::target_debugger::prepare_heap_view_sources(mapping.as_ref()).await
+        } else {
+            (Default::default(), Vec::new())
+        };
         tokio::task::spawn_blocking(move || {
             let mapping = if enrich_source {
-                crate::target_debugger::recover_heap_mapping_for_view(mapping)
+                crate::target_debugger::recover_heap_mapping_for_view(mapping, &prepared, &diagnostics)
             } else {
                 mapping
             };
@@ -300,8 +305,9 @@ impl HeapProfilerApi for DebuggerService {
         if let Some((path, mapping, name)) =
             self.stored_heap_capture(&target_ref, &capture_id).await?
         {
+            let (prepared, diagnostics) = crate::target_debugger::prepare_heap_view_sources(mapping.as_ref()).await;
             return tokio::task::spawn_blocking(move || {
-                let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping);
+                let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping, &prepared, &diagnostics);
                 stored_heap_classes(Path::new(&path), name, filter.as_deref(), mapping.as_ref())
             })
             .await

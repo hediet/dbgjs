@@ -3749,31 +3749,69 @@ pub fn stored_heap_classes(
     Ok(snapshot)
 }
 
+fn heap_script_needs_map(script: &HeapScriptSnapshot) -> bool {
+    script.source_map.is_none()
+        && (script.source_map_url.is_some()
+            || script.diagnostic.as_deref().is_some_and(|diagnostic| {
+                diagnostic.starts_with("inline or oversized source/map URL omitted")
+            }))
+}
+
+fn heap_script_sha256(script: &HeapScriptSnapshot) -> Option<&str> {
+    (script.hash.len() == 64 && script.hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then_some(script.hash.as_str())
+}
+
+pub(crate) async fn prepare_heap_view_sources(
+    mapping: Option<&HeapMappingSnapshot>,
+) -> (crate::capture_projection::PreparedViewSources, Vec<String>) {
+    let scripts = mapping.into_iter().flat_map(|mapping| mapping.scripts.iter())
+        .filter(|script| heap_script_needs_map(script))
+        .map(|script| (
+            script.script_id.clone(),
+            CaptureScriptProvenance {
+                url: script.url.clone(),
+                source_map_url: script.source_map_url.clone(),
+                source_sha256: heap_script_sha256(script).map(str::to_owned),
+            },
+        ))
+        .collect::<Vec<_>>();
+    crate::capture_projection::prepare_view_sources(
+        scripts.iter().map(|(id, provenance)| (id.as_str(), provenance)),
+        false,
+    ).await
+}
+
 pub(crate) fn recover_heap_mapping_for_view(
     mapping: Option<HeapMappingSnapshot>,
+    prepared: &crate::capture_projection::PreparedViewSources,
+    diagnostics: &[String],
 ) -> Option<HeapMappingSnapshot> {
     let mut mapping = mapping?;
     for index in 0..mapping.scripts.len() {
         let script = &mapping.scripts[index];
-        let omitted_map_reference = script.diagnostic.as_deref().is_some_and(|diagnostic| {
-            diagnostic.starts_with("inline or oversized source/map URL omitted")
-        });
-        if script.source_map.is_some()
-            || (script.source_map_url.is_none() && !omitted_map_reference)
-        {
+        if !heap_script_needs_map(script) {
             continue;
         }
-        let recovered = crate::capture_projection::recover_source_map_for_view(
-            &script.url,
-            script.source_map_url.as_deref(),
-            Some(&script.hash),
-            &script.hash,
-        );
+        let recovered = prepared.get(&(script.script_id.clone(), script.url.clone()))
+            .map(|sources| Ok((sources.map_bytes.clone(), sources.map_url.clone())))
+            .unwrap_or_else(|| crate::capture_projection::recover_source_map_for_view(
+                &script.url,
+                script.source_map_url.as_deref(),
+                heap_script_sha256(script),
+                &script.hash,
+            ));
         let (bytes, map_url) = match recovered {
             Ok(recovered) => recovered,
             Err(error) => {
+                let view_error = diagnostics.iter().find(|diagnostic| {
+                    diagnostic.starts_with(&format!("{}:", script.url))
+                });
                 mapping.scripts[index].mapping_status = HeapMappingStatus::MapLoadingFailed;
-                mapping.scripts[index].diagnostic = Some(error);
+                mapping.scripts[index].diagnostic = Some(match view_error {
+                    Some(view_error) => format!("{error}; {view_error}"),
+                    None => error,
+                });
                 continue;
             }
         };

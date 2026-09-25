@@ -304,9 +304,10 @@ impl CaptureApi for DebuggerService {
                 "stored heap payload kind does not match metadata",
             ).into());
         };
+        let (prepared, diagnostics) = crate::target_debugger::prepare_heap_view_sources(mapping.as_ref()).await;
         let capture_for_task = capture_name.clone();
         tokio::task::spawn_blocking(move || {
-            let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping);
+            let mapping = crate::target_debugger::recover_heap_mapping_for_view(mapping, &prepared, &diagnostics);
             stored_heap_classes(
                 Path::new(&path),
                 capture_for_task,
