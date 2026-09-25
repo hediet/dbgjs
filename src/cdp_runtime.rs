@@ -35,7 +35,7 @@ use crate::websocket_transport::{CdpWebSocketError, CdpWebSocketTransport};
 mod source_map_resources;
 use source_map_resources::SourceMapResources;
 
-const SOURCE_MAP_RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const SOURCE_MAP_RESOURCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Backlog for each session's raw CDP event broadcast. Generous because relay consumers must
 /// not silently miss console/network/lifecycle events while draining a burst.
@@ -1711,7 +1711,7 @@ pub(crate) fn read_source_map_cache_for_view(
     read_source_map_cache_file(&path)
 }
 
-pub(crate) const MAX_VIEW_SOURCE_MAP_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_VIEW_SOURCE_MAP_BYTES: usize = 128 * 1024 * 1024;
 
 pub(crate) async fn cache_source_map_for_view(
     script_hash: &str,

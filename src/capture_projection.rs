@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use reqwest::redirect::Policy;
 use sha2::{Digest, Sha256};
@@ -293,14 +292,14 @@ pub(crate) async fn prepare_view_sources<'a>(
     let mut prepared = BTreeMap::new();
     let mut diagnostics = Vec::new();
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(crate::cdp_runtime::SOURCE_MAP_RESOURCE_TIMEOUT)
         .redirect(Policy::none())
         .build()
     {
         Ok(client) => client,
         Err(error) => return (prepared, vec![format!("view HTTP client unavailable: {error}")]),
     };
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + crate::cdp_runtime::SOURCE_MAP_RESOURCE_TIMEOUT;
     for (id, provenance) in scripts {
         let key = (id.to_owned(), provenance.url.clone());
         if prepared.contains_key(&key) || load_map(Some(provenance), &provenance.url, needs_generated_source, None).is_ok() {
@@ -1136,6 +1135,47 @@ mod tests {
         fs::remove_file(&path).unwrap();
         let _ = fs::remove_file(path.with_extension("access"));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn stored_view_projects_a_valid_map_larger_than_thirty_two_mib() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut map = fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/capture_projection/bundle.js.map"),
+        )
+        .unwrap();
+        map.resize(32 * 1024 * 1024 + 1, b' ');
+        assert!(decode_slice(&map).is_ok());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let map_url = format!("http://{}/large-bundle.js.map", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            stream.read(&mut request).await.unwrap();
+            stream.write_all(format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", map.len(),
+            ).as_bytes()).await.unwrap();
+            let _ = stream.write_all(&map).await;
+        });
+        let mut snapshot = coverage();
+        snapshot.sources[0].provenance.as_mut().unwrap().source_map_url = Some(map_url.clone());
+        let (prepared, errors) = prepare_view_sources(
+            snapshot.sources.iter().filter_map(|source| source.provenance.as_ref()
+                .map(|provenance| (source.script_id.as_str(), provenance))),
+            true,
+        ).await;
+        assert!(errors.is_empty(), "{errors:?}");
+        project_stored_coverage_with_sources(&mut snapshot, &prepared);
+        assert!(snapshot.sources[0].functions[0].authored_location.is_some());
+        let cache_path = crate::cdp_runtime::source_map_cache_path_for_test(
+            snapshot.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
+            &map_url,
+        );
+        fs::remove_file(&cache_path).unwrap();
+        let _ = fs::remove_file(cache_path.with_extension("access"));
+        server.await.unwrap();
     }
 
     #[test]

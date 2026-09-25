@@ -87,15 +87,15 @@ fn main() {
 }
 
 fn coverage_delay_hint(arguments: &[String]) -> Option<&'static str> {
-    if !arguments.windows(2).any(|pair| {
-        pair[0] == "coverage" && matches!(pair[1].as_str(), "capture" | "take" | "show" | "stop")
-    }) {
-        return None;
-    }
-    Some(if arguments.iter().any(|argument| argument == "--raw") {
-        "dbgjs: Still waiting after 20s. Raw coverage already skips source-map lookup and enrichment; the current command is continuing."
+    let operation = arguments.windows(2).find_map(|pair| {
+        (pair[0] == "coverage"
+            && matches!(pair[1].as_str(), "capture" | "take" | "show" | "stop"))
+        .then_some(pair[1].as_str())
+    })?;
+    Some(if operation == "show" {
+        "dbgjs: Still waiting after 20s. This stored coverage view may fetch available sources and maps for projection; the raw capture remains unchanged. The current command is continuing."
     } else {
-        "dbgjs: Still waiting after 20s. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope. It skips source-map lookup and symbol enrichment. The current command is continuing."
+        "dbgjs: Still waiting after 20s. Coverage capture records raw ranges without fetching source maps; mapping and enrichment happen when viewing the stored capture with `dbgjs coverage show`. The current command is continuing."
     })
 }
 
@@ -8636,12 +8636,16 @@ mod tests {
         assert_eq!(result, Err("original failure"));
         let hint =
             super::coverage_delay_hint(&arguments(&["--json", "coverage", "capture"])).unwrap();
-        assert!(hint.contains("coverage capture --raw"));
-        assert!(
-            super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"]))
-                .unwrap()
-                .contains("already skips")
+        assert!(hint.contains("raw ranges"));
+        assert!(hint.contains("coverage show"));
+        assert!(!hint.contains("capture --raw"));
+        assert_eq!(
+            super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"])),
+            Some(hint)
         );
+        let show_hint = super::coverage_delay_hint(&arguments(&["coverage", "show", "typing"])).unwrap();
+        assert!(show_hint.contains("view"));
+        assert!(show_hint.contains("source"));
         assert!(super::coverage_delay_hint(&arguments(&["source", "show"])).is_none());
     }
 
