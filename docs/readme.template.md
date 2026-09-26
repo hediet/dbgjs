@@ -146,7 +146,9 @@ breakpoint, waiting for the pause, and resuming.
 
 Record function and block execution, then exclude a background capture when
 viewing the source-mapped tree. The stored capture stays intact; `--exclude` is
-a query option, not a recording option. `HL` means hit lines; `RL` means run lines.
+a query option, not a recording option. Exclusion removes matching runtime
+ranges hit by the baseline, rather than subtracting counts; retained counts
+are unchanged. `HL` means hit lines; `RL` means run lines.
 Capture persists cumulative raw ranges and cheap script provenance; mapping,
 exclusion and path filtering happen when viewing. When original generated source
 or its map is unavailable or has changed, the raw ranges remain available with
