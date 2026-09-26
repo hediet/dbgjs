@@ -8,7 +8,7 @@ import {
 	CdpConnection,
 	CdpRecording,
 	StrictReplayPeer,
-} from "../experiments/cdp-recording.mjs";
+} from "./support/cdp-recording.mjs";
 
 test("recordings persist, deduplicate, and derive redacted copies", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "cdp-recording-test-"));

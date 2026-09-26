@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, rm, writeFile, appendFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { chromium, expect, test } from "@playwright/test";
 import {
 	allocatePort,
@@ -14,7 +14,7 @@ const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const binDirectory = process.env.DBGJS_TEST_BIN_DIR ?? "target/debug";
 const cli = resolve(binDirectory, `dbgjs${executableSuffix}`);
 const service = resolve(binDirectory, `dbgjs-service${executableSuffix}`);
-const transcriptPath = resolve("artifacts/playwright-page-cli.md");
+const transcriptPath = resolve("tests/playwright/recordings/playwright-page-cli.md");
 
 test("selected page runs bounded Playwright programs through dbgjs", async () => {
 	test.setTimeout(300_000);
@@ -26,7 +26,7 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 	const scratchRoot = resolve(".test-tmp");
 	const stateDirectory = join(scratchRoot, `playwright-page-${randomUUID()}`);
 	await mkdir(stateDirectory, { recursive: true });
-	await mkdir(resolve("artifacts"), { recursive: true });
+	await mkdir(dirname(transcriptPath), { recursive: true });
 	await writeFile(
 		transcriptPath,
 		"# Playwright against a selected `dbgjs` page\n\nThis is a real Chromium/Playwright E2E run. The daemon control plane uses authenticated local IPC; Playwright receives a one-shot, capability-URL WebSocket bound only to loopback.\n",

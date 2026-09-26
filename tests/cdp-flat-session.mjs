@@ -8,7 +8,7 @@ import {
 	CdpRecording,
 	RecordingPeer,
 	StrictReplayPeer,
-} from "./cdp-recording.mjs";
+} from "./support/cdp-recording.mjs";
 
 async function main() {
 	const chrome = await launchChrome();

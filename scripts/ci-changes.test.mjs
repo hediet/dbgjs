@@ -9,9 +9,9 @@ import { changedPaths, classifyChanges, selectTestPlatforms } from "./ci-changes
 test("documentation-only changes do not start Rust or packaging jobs", () => {
 	assert.deepEqual(
 		classifyChanges([
-			"plan.md",
-			"docs/cli-design.md",
-			"todo/dbgjs-heap-and-source-debugging.md",
+			"docs/README.md",
+			"docs/architecture/cli-design.md",
+			"docs/investigations/jsdbg-blank-webview-investigation.md",
 			".github/skills/orthogonal-primitives/SKILL.md",
 		]),
 		{ rust: false, packages: false },
@@ -36,7 +36,8 @@ test("all native build inputs invalidate both jobs", () => {
 		"src/bin/dbgjs.rs",
 		"src/providers/node.mjs",
 		"src/embedded-help.md",
-		"crates/cdp-protocol/build.rs",
+		"crates/cdp-codegen/src/main.rs",
+		"tests/support/cdp-recording.mjs",
 		".github/actions/setup-linkrpc/action.yml",
 		"tests/transcripts/bounded-evaluation.txt",
 		".github/workflows/ci.yml",
@@ -55,9 +56,9 @@ test("npm-only changes skip Linux and Windows x64 Rust jobs", () => {
 
 test("mixed changes retain required jobs regardless of order", () => {
 	for (const paths of [
-		["src/lib.rs", "docs/cli-design.md"],
+		["src/lib.rs", "docs/architecture/cli-design.md"],
 		["npm/dbgjs/README.md", "src/lib.rs"],
-		["docs/cli-design.md", "npm/dbgjs/package.json"],
+		["docs/architecture/cli-design.md", "npm/dbgjs/package.json"],
 	]) {
 		const expected = paths.includes("src/lib.rs")
 			? { rust: true, packages: true }
@@ -95,7 +96,7 @@ test("npm-only changes always require the full Windows and macOS ARM64 suites", 
 });
 
 test("documentation-only and extension-only changes still skip all native tests", () => {
-	for (const paths of [[], ["README.md"], ["docs/ci.md"], ["vscode-extension/src/extension.ts"]]) {
+	for (const paths of [[], ["README.md"], ["docs/development/ci.md"], ["vscode-extension/src/extension.ts"]]) {
 		assert.deepEqual(selectTestPlatforms(classifyChanges(paths)), []);
 	}
 });

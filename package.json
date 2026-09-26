@@ -6,7 +6,7 @@
     "test": "npm run test:rust && npm run test:offline && npm run test:cdp-session",
     "test:rust": "cargo test --workspace --all-targets",
     "test:offline": "node --test tests/cdp-recording.test.mjs",
-    "test:cdp-session": "node experiments/cdp-flat-session.mjs",
+    "test:cdp-session": "node tests/cdp-flat-session.mjs",
     "test:e2e": "playwright test",
     "test:e2e:cdp": "playwright test tests/playwright/live-cdp.spec.mjs",
     "test:e2e:bounded-evaluation": "playwright test tests/playwright/bounded-evaluation.spec.mjs",

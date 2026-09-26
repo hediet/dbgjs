@@ -9,7 +9,6 @@ export function classifyChanges(paths) {
 	for (const path of paths) {
 		if (
 			path.startsWith("docs/") ||
-			path.startsWith("todo/") ||
 			path.startsWith(".github/skills/") ||
 			path.startsWith("vscode-extension/") ||
 			(!path.includes("/") && path.endsWith(".md"))
