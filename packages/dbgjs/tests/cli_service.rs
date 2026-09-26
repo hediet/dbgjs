@@ -17,7 +17,7 @@ use dbgjs::local_rpc::{
 fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() {
     let output = Command::new("node")
         .arg(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests")
                 .join("electron_bridge_ownership.mjs"),
         )
@@ -32,7 +32,7 @@ fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() 
     let transcript = String::from_utf8(output.stdout).unwrap();
     assert_eq!(
         transcript,
-        include_str!("transcripts/electron-attachment-ownership.txt")
+        include_str!("../../../tests/transcripts/electron-attachment-ownership.txt")
     );
 }
 
@@ -234,7 +234,7 @@ fn cli_source_grep_limits_real_minified_runtime_output() {
     let mut endpoint = String::new();
     BufReader::new(node.stdout.take().unwrap()).read_line(&mut endpoint).unwrap();
     let _node = ChildCleanup(node);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts")
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../artifacts")
         .join(format!("grep-budget-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
     let state_file = root.join("service.json");
@@ -274,7 +274,7 @@ fn cli_source_grep_limits_real_minified_runtime_output() {
 
 #[test]
 fn cli_log_reports_empty_capture_retention_and_reconnect() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!(
             "log-coverage-{}-{}",
@@ -400,7 +400,7 @@ fn target_logpoint_delete_removes_live_binding_and_rejects_context_delete() {
         .unwrap();
     assert!(endpoint.starts_with("ws://"), "{endpoint}");
     let _node = ChildCleanup(node);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!("logpoint-delete-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
@@ -573,7 +573,7 @@ fn logpoint_records_hits_without_application_console_and_reports_expression_erro
         .unwrap();
     assert!(endpoint.starts_with("ws://"), "{endpoint}");
     let _node = ChildCleanup(node);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!("logpoint-capture-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
@@ -713,7 +713,7 @@ fn logpoint_can_require_confirmed_installation_without_discarding_pending_config
         .unwrap();
     assert!(endpoint.starts_with("ws://"), "{endpoint}");
     let _node = ChildCleanup(node);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!("logpoint-install-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
@@ -825,7 +825,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
         .unwrap();
     assert!(endpoint.starts_with("ws://"), "{endpoint}");
     let _node = ChildCleanup(node);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!("logpoint-runtime-{}-{}", std::process::id(), unique_suffix()));
     fs::create_dir_all(&root).unwrap();
@@ -915,7 +915,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
 
 #[test]
 fn canonical_authored_source_from_relative_map_entry_installs_live_logpoint() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("artifacts")
         .join(format!("authored-logpoint-{}-{}", std::process::id(), unique_suffix()));
     let map_path = root.join("out").join("bundle.js.map");
@@ -1044,7 +1044,7 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
     let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
     let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
     let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
         .join("tests")
         .join("fixtures")
         .join("selector_browser.mjs");
@@ -1774,7 +1774,7 @@ fn cli_persists_ordered_source_formatting_rules() {
     }
     assert_eq!(
         transcript,
-        include_str!("transcripts/source-formatting.txt")
+        include_str!("../../../tests/transcripts/source-formatting.txt")
     );
 
     run_json(&cli, &service, &state_file, &["service", "stop"]);
@@ -2990,7 +2990,7 @@ catalog persisted, then immutable heap storage removed
     print!("{transcript}");
     assert_eq!(
         transcript,
-        include_str!("transcripts/context-global-identities.txt")
+        include_str!("../../../tests/transcripts/context-global-identities.txt")
     );
 
     run_json(&cli, &service, &state_file, &["service", "stop"]);
@@ -3181,7 +3181,7 @@ fn cli_service_connects_to_live_cdp() {
     print!("{daemon_transcript}");
     assert_eq!(
         daemon_transcript,
-        include_str!("transcripts/daemon-view.txt")
+        include_str!("../../../tests/transcripts/daemon-view.txt")
     );
 
     let ambiguous = run_in(
@@ -3318,7 +3318,7 @@ fn cli_service_connects_to_live_cdp() {
     print!("{transcript}");
     assert_eq!(
         transcript,
-        include_str!("transcripts/consistent-values.txt")
+        include_str!("../../../tests/transcripts/consistent-values.txt")
     );
 
     let connections = run_json(

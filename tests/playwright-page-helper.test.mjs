@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const helper = readFileSync(
-	new URL("../src/providers/playwright_page.mjs", import.meta.url),
+	new URL("../packages/dbgjs/src/providers/playwright_page.mjs", import.meta.url),
 	"utf8",
 );
 const packagePath = fileURLToPath(

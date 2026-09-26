@@ -5,7 +5,7 @@
 			"label": "Compile VS Code Extension",
 			"type": "npm",
 			"script": "compile",
-			"path": "vscode-extension",
+			"path": "packages/vscode-extension",
 			"group": "build",
 			"problemMatcher": []
 		},

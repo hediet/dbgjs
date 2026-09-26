@@ -57,11 +57,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: vscode-extension/package-lock.json
+          cache-dependency-path: packages/vscode-extension/package-lock.json
       - name: Install extension dependencies
-        run: npm --prefix vscode-extension ci
+        run: npm --prefix packages/vscode-extension ci
       - name: Typecheck, build, and test extension
-        run: npm --prefix vscode-extension test
+        run: npm --prefix packages/vscode-extension test
 
   contracts:
     name: Check generated contracts
@@ -131,8 +131,8 @@ jobs:
       - name: Test generated TypeScript heap streaming against Rust daemon
         if: runner.os == 'Linux'
         run: |
-          npm --prefix vscode-extension ci
-          npm --prefix vscode-extension run test:heap-streaming
+          npm --prefix packages/vscode-extension ci
+          npm --prefix packages/vscode-extension run test:heap-streaming
 
   packages:
     name: Package (${{ matrix.platform }})

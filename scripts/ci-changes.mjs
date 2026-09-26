@@ -10,7 +10,7 @@ export function classifyChanges(paths) {
 		if (
 			path.startsWith("docs/") ||
 			path.startsWith(".github/skills/") ||
-			path.startsWith("vscode-extension/") ||
+			path.startsWith("packages/vscode-extension/") ||
 			(!path.includes("/") && path.endsWith(".md"))
 		) {
 			continue;

@@ -632,7 +632,7 @@ mod tests {
     }
 
     fn fixture() -> CaptureScriptProvenance {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
             .join("tests/fixtures/capture_projection/bundle.js");
         let bytes = fs::read(&path).unwrap();
         CaptureScriptProvenance {
@@ -951,7 +951,7 @@ mod tests {
             }
         }
         let source_map = fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests/fixtures/capture_projection/bundle.js.map"),
         )
         .unwrap();
@@ -984,7 +984,7 @@ mod tests {
     fn omitted_inline_map_is_recovered_from_verified_generated_file_at_view_time() {
         let directory = tempfile::tempdir().unwrap();
         let map = fs::read_to_string(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests/fixtures/capture_projection/bundle.js.map"),
         )
         .unwrap();
@@ -1021,7 +1021,7 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let generated = b"a\nb\n".to_vec();
         let map = fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests/fixtures/capture_projection/bundle.js.map"),
         )
         .unwrap();
@@ -1137,7 +1137,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let map_url = format!("http://{}/cdn-map.js.map", listener.local_addr().unwrap());
         let map = fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests/fixtures/capture_projection/bundle.js.map"),
         )
         .unwrap();
@@ -1202,7 +1202,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let mut map = fs::read(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
                 .join("tests/fixtures/capture_projection/bundle.js.map"),
         )
         .unwrap();

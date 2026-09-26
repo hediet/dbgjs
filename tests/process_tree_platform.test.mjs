@@ -7,7 +7,7 @@ import { basename, join, posix } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-const source = (await readFile(new URL("../src/providers/process_tree.mjs", import.meta.url), "utf8"))
+const source = (await readFile(new URL("../packages/dbgjs/src/providers/process_tree.mjs", import.meta.url), "utf8"))
 	.replace(/^\s*import .+;$/gm, "")
 	.replace('const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));', "const rootPid = testRootPid;")
 	.replace("main().catch(reportError);", "");

@@ -33,10 +33,10 @@ test("all native build inputs invalidate both jobs", () => {
 		".cargo/config.toml",
 		"package.json",
 		"package-lock.json",
-		"src/bin/dbgjs.rs",
-		"src/providers/node.mjs",
-		"src/embedded-help.md",
-		"crates/cdp-codegen/src/main.rs",
+		"packages/dbgjs/Cargo.toml",
+		"packages/dbgjs/src/bin/dbgjs.rs",
+		"packages/dbgjs/src/providers/node.mjs",
+		"packages/cdp-codegen/src/main.rs",
 		"tests/support/cdp-recording.mjs",
 		".github/actions/setup-linkrpc/action.yml",
 		"tests/transcripts/bounded-evaluation.txt",
@@ -56,11 +56,11 @@ test("npm-only changes skip Linux and Windows x64 Rust jobs", () => {
 
 test("mixed changes retain required jobs regardless of order", () => {
 	for (const paths of [
-		["src/lib.rs", "docs/architecture/cli-design.md"],
-		["npm/dbgjs/README.md", "src/lib.rs"],
+		["packages/dbgjs/src/lib.rs", "docs/architecture/cli-design.md"],
+		["npm/dbgjs/README.md", "packages/dbgjs/src/lib.rs"],
 		["docs/architecture/cli-design.md", "npm/dbgjs/package.json"],
 	]) {
-		const expected = paths.includes("src/lib.rs")
+		const expected = paths.includes("packages/dbgjs/src/lib.rs")
 			? { rust: true, packages: true }
 			: { rust: false, packages: true };
 		assert.deepEqual(classifyChanges(paths), expected);
@@ -70,7 +70,7 @@ test("mixed changes retain required jobs regardless of order", () => {
 
 test("empty and extension-only changes skip the native pipeline", () => {
 	assert.deepEqual(classifyChanges([]), { rust: false, packages: false });
-	assert.deepEqual(classifyChanges(["vscode-extension/src/extension.ts"]), {
+	assert.deepEqual(classifyChanges(["packages/vscode-extension/src/extension.ts"]), {
 		rust: false,
 		packages: false,
 	});
@@ -96,7 +96,7 @@ test("npm-only changes always require the full Windows and macOS ARM64 suites", 
 });
 
 test("documentation-only and extension-only changes still skip all native tests", () => {
-	for (const paths of [[], ["README.md"], ["docs/development/ci.md"], ["vscode-extension/src/extension.ts"]]) {
+	for (const paths of [[], ["README.md"], ["docs/development/ci.md"], ["packages/vscode-extension/src/extension.ts"]]) {
 		assert.deepEqual(selectTestPlatforms(classifyChanges(paths)), []);
 	}
 });

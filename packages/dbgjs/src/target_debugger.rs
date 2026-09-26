@@ -7938,7 +7938,7 @@ mod tests {
 
             print!(
                 "{}",
-                include_str!("../tests/transcripts/bounded-evaluation.txt")
+                include_str!("../../../tests/transcripts/bounded-evaluation.txt")
             );
             root.target()
                 .close_target(created.target_id)

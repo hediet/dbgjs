@@ -3,7 +3,10 @@ use std::{env, path::Path, process::Command};
 fn git(arguments: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(arguments)
-        .current_dir(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"))
+        .current_dir(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+        )
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -32,7 +35,7 @@ fn main() {
         {
             // Submodule directories can contain ignored build outputs.
             if !Path::new(path).is_dir() {
-                println!("cargo:rerun-if-changed={path}");
+                println!("cargo:rerun-if-changed=../../{path}");
             }
         }
         Ok::<_, String>((commit.trim().to_owned(), !status.trim().is_empty()))

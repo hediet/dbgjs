@@ -133,7 +133,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     modules.push_str("]\n}\n");
     files.insert("mod.rs".into(), modules);
     write_outputs(
-        &repository.join("crates/cdp-protocol/src/generated"),
+        &repository.join("packages/cdp-protocol/src/generated"),
         files,
         check,
     )?;
