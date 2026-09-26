@@ -6138,6 +6138,128 @@ mod tests {
         })
     }
 
+    fn coverage_test_target() -> TargetRef {
+        TargetRef {
+            connection: ConnectionRef {
+                context_id: "test".into(),
+                connection_id: "runtime".into(),
+            },
+            target_id: "target-a".into(),
+        }
+    }
+
+    async fn add_coverage_test_debugger(service: &DebuggerService) {
+        service.state.lock().await.target_debuggers.insert(
+            ("test".into(), "runtime".into(), "target-a".into()),
+            TargetDebuggerHandle::stub_for_tests(TargetDebuggerSnapshot {
+                context_id: "test".into(),
+                connection_id: "runtime".into(),
+                target_id: "target-a".into(),
+                connection_generation: 1,
+                revision: 1,
+                phase: crate::service_api::TargetDebuggerPhase::Running,
+                scripts: Vec::new(),
+                breakpoints: Vec::new(),
+                logs: Vec::new(),
+                log_capture: Default::default(),
+                pause: None,
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn coverage_take_and_stop_retry_completed_capture_without_debugger() {
+        let (root, service) = capture_catalog_service();
+        let call = CallCtx::default();
+        for (name, stop) in [("take-retry", false), ("stop-retry", true)] {
+            let reservation = service
+                .reserve_capture(
+                    "test",
+                    "runtime",
+                    "target-a",
+                    1,
+                    name.into(),
+                    CaptureKind::Coverage,
+                )
+                .await
+                .unwrap();
+            service
+                .store_capture(&reservation, empty_coverage(42))
+                .await
+                .unwrap();
+            // Simulate a catalog write failure after the completed payload was staged.
+            // The API must promote it before looking up a live debugger or issuing another command.
+            {
+                let mut state = service.state.lock().await;
+                let stored = state
+                    .captures
+                    .remove(&("test".into(), name.into()))
+                    .unwrap();
+                state.capture_reservations.insert(
+                    ("test".into(), name.into()),
+                    CaptureReservation {
+                        metadata: stored.metadata,
+                        completed: Some(CompletedCapture {
+                            payload: stored.payload,
+                            heap_result: None,
+                        }),
+                        deleting: false,
+                    },
+                );
+            }
+            let snapshot = if stop {
+                service
+                    .stop_coverage(&call, coverage_test_target(), Some(name.into()))
+                    .await
+            } else {
+                service
+                    .take_coverage(&call, coverage_test_target(), Some(name.into()))
+                    .await
+            }
+            .unwrap();
+            assert_eq!(snapshot.capture_id.as_deref(), Some(name));
+            assert_eq!(snapshot.timestamp_micros, 42);
+            assert!(
+                service
+                    .state
+                    .lock()
+                    .await
+                    .captures
+                    .contains_key(&("test".into(), name.into()))
+            );
+        }
+        drop(service);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn coverage_take_and_stop_fresh_command_failure_abandons_reservation() {
+        let (root, service) = capture_catalog_service();
+        add_coverage_test_debugger(&service).await;
+        let call = CallCtx::default();
+        assert!(
+            service
+                .take_coverage(
+                    &call,
+                    coverage_test_target(),
+                    Some("take-fail".into()),
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            service
+                .stop_coverage(&call, coverage_test_target(), Some("stop-fail".into()))
+                .await
+                .is_err()
+        );
+        assert!(service.state.lock().await.capture_reservations.is_empty());
+        drop(service);
+        if root.exists() {
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn generated_capture_ids_and_publication_order_survive_restart() {
         let (root, service) = capture_catalog_service();
