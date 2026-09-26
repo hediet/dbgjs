@@ -485,9 +485,9 @@ see [the coverage benchmark](../development/vscode-coverage-benchmark.md).
 Heap captures retain bounded script URLs, CDP hashes, source-map URLs, and
 connection generation, but do **not** fetch or persist generated source or
 source-map bytes at capture time. `heap classes <name>` can hydrate available
-source/map data when viewing; disconnected analysis relies on cached or
-separately supplied artifacts and does not substitute scripts from a different
-live target. Constructor groups remain separate across scripts and display
+source/map data when viewing from local files, verified caches, HTTP(S)
+resources, or separately supplied artifacts. It does not substitute scripts
+from a different live target. Constructor groups remain separate across scripts and display
 provenance labels when available.
 
 JSON analysis includes per-script `scriptMappings` with the captured hash and
@@ -509,8 +509,9 @@ The supply command persists the map with that capture, rejects mismatched or
 missing captured hashes, malformed/unsupported maps, and a `file` field naming
 a different generated bundle. The hash is an explicit association to the
 captured script: source maps do not themselves cryptographically attest their
-generated input. Use a map from the same build. No map or source is fetched from
-the network during offline analysis. Maps without `sourcesContent` can still
+generated input. Use a map from the same build. Disconnecting the target does not
+disable view-time HTTP(S) retrieval; unavailable inputs produce explicit
+diagnostics while raw measurements remain usable. Maps without `sourcesContent` can still
 project positions, but cannot recover authored constructor names.
 
 `heap classes --no-cache` is explicitly rejected. Capture a new snapshot to

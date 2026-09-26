@@ -8,7 +8,7 @@ preserve unrelated work when moving or committing changes.
 
 ## Change detection and caches
 
-The small change-detection job always runs. Changes confined to `docs/`, `todo/`,
+The small change-detection job always runs. Changes confined to `docs/`,
 root Markdown files or agent skills do not
 start Rust or packaging jobs. The VS Code extension has a separate build and
 unit-test job, including its LinkRPC socket transport tests, on every CI run.

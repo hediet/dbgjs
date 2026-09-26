@@ -556,8 +556,8 @@ target.
 Heap captures retain cheap script identity and provenance: bounded URLs, CDP
 hashes, optional source-map URLs, and connection generation. Capture does not
 fetch generated source or source-map bytes. A stored class view may hydrate
-available sources/maps lazily for projection; when disconnected, mapping depends
-on already available artifacts or a separately supplied map. Missing or omitted
+available sources/maps lazily for projection from local files, verified caches,
+HTTP(S) resources, or a separately supplied map, without a live target. Missing or omitted
 mapping inputs remain explicit rather than being reported as mapped. Older
 captures may have less provenance.
 

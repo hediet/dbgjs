@@ -518,8 +518,8 @@ Capture typing
 - [Investigate typing in desktop VS Code](docs/walkthroughs/vscode.md)
 - [Launch and automate a website](docs/walkthroughs/website.md)
 - [Investigate an Express server with curl](docs/walkthroughs/node.md)
-- [CLI guide and command model](docs/cli-design.md)
-- [Architecture](docs/dbgjs-architecture-presentation.md)
+- [CLI guide and command model](docs/architecture/cli-design.md)
+- [Architecture](docs/architecture/dbgjs-architecture-presentation.md)
 
 ## These examples are executable
 
@@ -534,4 +534,4 @@ npm run generate:readme
 npm run test:readme
 ```
 
-See [generation and replay rules](docs/readme-generation.md).
+See [generation and replay rules](docs/development/readme-generation.md).
