@@ -19,7 +19,7 @@ type Progress = typeof HeapProfilerApi.members.capture_heap_snapshot._serverStre
 
 test("generated TS streams real heap progress from the Rust daemon and CLI", { timeout: 180_000 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "dbgjs-heap-streaming-"));
-	const repository = resolve("..");
+	const repository = resolve("../..");
 	const binarySuffix = process.platform === "win32" ? ".exe" : "";
 	const cli = join(repository, "target/debug", `dbgjs${binarySuffix}`);
 	const state = join(root, "service.json");

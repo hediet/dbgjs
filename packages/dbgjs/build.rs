@@ -3,10 +3,7 @@ use std::{env, path::Path, process::Command};
 fn git(arguments: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(arguments)
-        .current_dir(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-        )
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -21,12 +18,12 @@ fn main() {
         let status = git(&["status", "--porcelain", "--untracked-files=no"])?;
         // Rebuild after edits, staging, commits, and branch switches, including worktrees.
         for name in ["HEAD", "index", "packed-refs", "logs/HEAD"] {
-            let path = git(&["rev-parse", "--git-path", name])?;
+            let path = git(&["rev-parse", "--path-format=absolute", "--git-path", name])?;
             println!("cargo:rerun-if-changed={}", path.trim());
         }
         let reference = git(&["rev-parse", "--symbolic-full-name", "HEAD"])?;
         if reference.trim().starts_with("refs/") {
-            let path = git(&["rev-parse", "--git-path", reference.trim()])?;
+            let path = git(&["rev-parse", "--path-format=absolute", "--git-path", reference.trim()])?;
             println!("cargo:rerun-if-changed={}", path.trim());
         }
         for path in git(&["ls-files", "-z"])?
@@ -34,7 +31,7 @@ fn main() {
             .filter(|path| !path.is_empty())
         {
             // Submodule directories can contain ignored build outputs.
-            if !Path::new(path).is_dir() {
+            if !Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(path).is_dir() {
                 println!("cargo:rerun-if-changed=../../{path}");
             }
         }

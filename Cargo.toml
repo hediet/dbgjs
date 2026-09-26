@@ -1,5 +1,6 @@
 [workspace]
 members = ["packages/dbgjs", "packages/cdp-protocol", "packages/dbgjs-tui", "packages/cdp-codegen"]
+default-members = ["packages/dbgjs"]
 resolver = "3"
 
 [workspace.dependencies]

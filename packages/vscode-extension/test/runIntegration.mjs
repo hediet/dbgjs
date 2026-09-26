@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runTests } from "@vscode/test-electron";
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repositoryRoot = resolve(extensionRoot, "..");
+const repositoryRoot = resolve(extensionRoot, "../..");
 const build = spawnSync("cargo", ["build", "--bins"], {
 	cwd: repositoryRoot,
 	stdio: "inherit",

@@ -43,7 +43,7 @@ constructing RPC method names or request objects independently.
 [`scripts/generate-contracts.mjs`](../../scripts/generate-contracts.mjs) orchestrates
 the stdio daemon, contract export, and TypeScript CLI; it does not implement a
 code generator. There is no custom daemon schema exporter or checked-in
-intermediate schema bundle. The root [`build.rs`](../../build.rs) only embeds Git
+intermediate schema bundle. The dbgjs [`build.rs`](../../packages/dbgjs/build.rs) only embeds Git
 build provenance; it does not generate RPC contracts.
 
 Ordinary Rust builds compile the checked-in CDP sources without importing npm

@@ -206,7 +206,7 @@ local daemon; stdio does not change its connection lifecycle.
 For example, `client.contexts.list_contexts({ cwd: null })` and
 `client.heap.capture_heap_snapshot(params, { onMessage })` share the same
 connection; streamed calls retain their generated cancellation support.
-See [RPC contracts and code generation](../docs/architecture/contracts.md) for ownership,
+See [RPC contracts and code generation](../../docs/architecture/contracts.md) for ownership,
 regeneration, drift checks, and development links. The daemon still expects the one-line
 `{"hello":1,"token":"..."}` preamble before JSON-RPC traffic, so the extension
 writes that preamble once and creates the NDJSON transport without LinkRPC's
