@@ -89,7 +89,7 @@ The Rust [`DbgServiceClient`](../../packages/dbgjs/src/api/service_api/client.rs
 generated clients over one connection:
 
 ```rust,ignore
-let client = dbgjs::local_rpc::connect_existing(&state_file).await?;
+let client = dbgjs::connection::transport::local_rpc::connect_existing(&state_file).await?;
 let contexts = client.contexts.list_contexts(None).await?;
 let sources = client.sources.list_sources(contexts[0].id.clone(), None).await?;
 ```
@@ -130,7 +130,7 @@ fallback for transport, codec, undeclared remote, and non-compliant-server
 failures. There is no outer application-error wrapper to match:
 
 ```rust,ignore
-use dbgjs::service_api::TargetError;
+use dbgjs::api::service_api::TargetError;
 
 match client.targets.evaluate_target(target, epoch, 3, "value".into()).await {
     Err(TargetError::FrameNotFound { frame_index }) => {
