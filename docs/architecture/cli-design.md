@@ -30,7 +30,7 @@ The shared immutable state semantics are defined in
 [Debugger Data Model](./debugger-data-model.md). This document derives CLI
 workflows and presentation from that model rather than defining a second one.
 For operational steps against live VS Code processes, see
-[Debugging VS Code Processes with dbgjs](./debugging-vscode-processes.md).
+[Debugging VS Code Processes with dbgjs](../walkthroughs/debugging-vscode-processes.md).
 
 The CLI supports unary commands, ordered result feeds, and an interactive
 redrawn daemon-state view. The view uses the same debugger service observation
@@ -553,12 +553,13 @@ capturing target still belongs to the recorded connection generation, so a
 capture completing after reconnect cannot be attributed to the replacement
 target.
 
-Heap captures retain a mapping bundle in the durable catalog: generated script
-URLs, CDP hashes and source, source-map URL/content or load diagnostics, connection
-generation, execution-context auxiliary data, and owning frame IDs. Live and
-stored class queries share the same pure projection over captured inputs; stored
-analysis does not consult the current target. Per-script mapping availability is
-explicit, including unavailable metadata for older captures.
+Heap captures retain cheap script identity and provenance: bounded URLs, CDP
+hashes, optional source-map URLs, and connection generation. Capture does not
+fetch generated source or source-map bytes. A stored class view may hydrate
+available sources/maps lazily for projection; when disconnected, mapping depends
+on already available artifacts or a separately supplied map. Missing or omitted
+mapping inputs remain explicit rather than being reported as mapped. Older
+captures may have less provenance.
 
 `heap supply-map <capture> <script-id> <captured-script-hash> <map-file>` adds or
 replaces only that script's mapping bundle, leaving the heap payload immutable.

@@ -1,5 +1,11 @@
 # dbgjs (cdp-client): Architecture in 60 Seconds
 
+This is a conceptual overview, not a list of shipped clients or completed
+cross-runtime behavior. The TUI and VS Code/DAP adapter paths and unified
+context observation semantics below include planned work; see
+[the data model](./debugger-data-model.md) and
+[the remaining backlog](https://github.com/hediet/dbgjs/issues) for status.
+
 > **dbgjs is a native, service-oriented JavaScript debugger that turns volatile
 > CDP sessions into durable, coherent debugging state.**
 

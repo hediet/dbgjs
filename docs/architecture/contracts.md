@@ -8,8 +8,8 @@ with the daemon's API in a shared export bundle.
 
 | Contract | Authored source of truth | Derived consumer input |
 | --- | --- | --- |
-| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../tools/cdp-codegen/src/protocol_schema.rs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
-| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../src/service_api/) and shared serializable models in [`service_api.rs`](../src/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
+| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../../crates/cdp-codegen/src/protocol_schema.rs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
+| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../../src/service_api/) and shared serializable models in [`service_api.rs`](../../src/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
 
 The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
 It does not advertise imported CDP domain interfaces on its own RPC connection.
@@ -40,15 +40,15 @@ The Rust daemon clients and servers are generated directly from the annotated
 Rust traits by LinkRPC's macro. The CLI uses those generated clients, rather than
 constructing RPC method names or request objects independently.
 
-[`scripts/generate-contracts.mjs`](../scripts/generate-contracts.mjs) orchestrates
+[`scripts/generate-contracts.mjs`](../../scripts/generate-contracts.mjs) orchestrates
 the stdio daemon, contract export, and TypeScript CLI; it does not implement a
 code generator. There is no custom daemon schema exporter or checked-in
-intermediate schema bundle. The root [`build.rs`](../build.rs) only embeds Git
+intermediate schema bundle. The root [`build.rs`](../../build.rs) only embeds Git
 build provenance; it does not generate RPC contracts.
 
 Ordinary Rust builds compile the checked-in CDP sources without importing npm
 protocol JSON or running code generation. Do not edit generated sources.
-The independent [`cdp-codegen`](../tools/cdp-codegen/) tool can regenerate them
+The independent [`cdp-codegen`](../../crates/cdp-codegen/) tool can regenerate them
 even if the generated directory is missing; it does not depend on the runtime
 protocol crate.
 CDP providers implement supported methods of each generated command trait.
@@ -57,7 +57,7 @@ response, rather than fabricated successful results. CDP consumers implement
 the separate event traits to receive notifications.
 
 The extension's interface definitions and typed root bindings in
-[`src/generated/`](../vscode-extension/src/generated/)
+[`src/generated/`](../../vscode-extension/src/generated/)
 are produced by the **LinkRPC CLI**, preserving the exported wire schema and
 interface identity. The extension uses its generated client and derives any
 convenience aliases from generated types. Presentation models and endpoint-file
@@ -67,7 +67,7 @@ parsing are separate concerns; they must not become duplicate RPC schemas.
 
 Each operation has exactly one owning interface. The traits live in separate
 modules, with matching implementation modules in
-[`debugger_service/`](../src/debugger_service/). All implementations use the same
+[`debugger_service/`](../../src/debugger_service/). All implementations use the same
 `DebuggerService` instance and state; this is not a split into independent
 processes or databases.
 
@@ -85,7 +85,7 @@ processes or databases.
 | `cpu` | `CpuProfilerApi` | CPU profiling |
 | `heap` | `HeapProfilerApi` | Heap capture, streaming progress, selection, graph queries, comparison |
 
-The Rust [`DbgServiceClient`](../src/service_api/client.rs) composes all eleven
+The Rust [`DbgServiceClient`](../../src/service_api/client.rs) composes all eleven
 generated clients over one connection:
 
 ```rust,ignore
@@ -94,7 +94,7 @@ let contexts = client.contexts.list_contexts(None).await?;
 let sources = client.sources.list_sources(contexts[0].id.clone(), None).await?;
 ```
 
-The TypeScript [`DbgServiceClient`](../vscode-extension/src/dbgServiceClient.ts)
+The TypeScript [`DbgServiceClient`](../../vscode-extension/src/dbgServiceClient.ts)
 provides the same facets:
 
 ```ts
@@ -124,7 +124,7 @@ only; clients must use the appropriate capability for other operations.
 
 The target-debugger, capture, coverage, CPU-profiler, and heap-profiler
 capabilities declare their recoverable errors in
-[`service_api/errors.rs`](../src/service_api/errors.rs). Generated Rust clients
+[`service_api/errors.rs`](../../src/service_api/errors.rs). Generated Rust clients
 return the capability's error enum directly, with a `Generic(RpcCallError)`
 fallback for transport, codec, undeclared remote, and non-compliant-server
 failures. There is no outer application-error wrapper to match:

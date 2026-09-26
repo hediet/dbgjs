@@ -101,4 +101,4 @@ The generator supplies the [local website fixture](../../tests/readme/website.ht
 so this flow does not depend on the contents of a third-party website.
 
 [Back to the feature overview](../../README.md) ·
-[Generation and replay rules](../readme-generation.md)
+[Generation and replay rules](../development/readme-generation.md)

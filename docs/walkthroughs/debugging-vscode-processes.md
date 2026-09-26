@@ -439,7 +439,7 @@ are printed in full so they can be passed back to `source show`. JSON retains bo
 generated and resolved positions, breadcrumbs, provenance, and mapping diagnostics
 under `source`.
 
-Heap locations use captured script/source-map data and follow bound-function and
+Heap locations use captured script identity and available source-map data, and follow bound-function and
 prototype/constructor links within a bounded traversal. For directly selected heap
 objects, the debugger also attempts a live comparison on the same target. Live
 inspection reads `[[FunctionLocation]]`, follows bound targets, and inspects
@@ -480,21 +480,22 @@ a one-time stderr hint about the operation without interrupting it or
 mixing progress text into JSON stdout.
 
 For a reproducible installed-VS-Code workload and independent breadcrumb replay,
-see [the coverage benchmark](vscode-coverage-benchmark.md).
+see [the coverage benchmark](../development/vscode-coverage-benchmark.md).
 
-Heap captures also retain the observed script URLs and CDP hashes, generated
-source, source-map URLs/content, connection generation, and execution-context
-and owning-frame metadata. `heap classes <name>` uses these captured inputs,
-including after disconnecting or restarting the service; it never substitutes
-scripts from the current target. Constructor groups remain separate across
-scripts and display frame/context labels when available.
+Heap captures retain bounded script URLs, CDP hashes, source-map URLs, and
+connection generation, but do **not** fetch or persist generated source or
+source-map bytes at capture time. `heap classes <name>` can hydrate available
+source/map data when viewing; disconnected analysis relies on cached or
+separately supplied artifacts and does not substitute scripts from a different
+live target. Constructor groups remain separate across scripts and display
+provenance labels when available.
 
 JSON analysis includes per-script `scriptMappings` with the captured hash and
 one of `notAttempted`, `noMapSupplied`, `mapLoadingFailed`, or `mapped`, plus
 failure reasons. Legacy captures without metadata remain readable and explicitly
 report mapping as not attempted. Missing production maps are not diagnosed as
-network failures. Source-map hydration timing records capture-time work, not a
-new fetch during offline analysis.
+network failures. Any source-map hydration happens during view construction,
+not capture.
 
 For bundles distributed without maps, supply a matching build artifact:
 
@@ -513,10 +514,9 @@ the network during offline analysis. Maps without `sourcesContent` can still
 project positions, but cannot recover authored constructor names.
 
 `heap classes --no-cache` is explicitly rejected. Capture a new snapshot to
-refresh metadata; supplying a map updates only the selected stored capture.
-New captures retry previously failed or invalid source-map acquisitions with
-the map cache bypassed, even if the generated source was already resolved.
-This does not change the metadata or mapping results of older captures.
+refresh identity metadata; supplying a map updates only the selected stored
+capture. New captures do not eagerly retry source-map acquisition; a later
+view may hydrate inputs again without changing older raw captures.
 
 ## 8. Disconnect and clean up
 

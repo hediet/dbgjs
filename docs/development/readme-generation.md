@@ -1,12 +1,12 @@
 # Executable README
 
-The [README](../README.md) is a feature overview, with examples selected from
-real CLI recordings. The separate [VS Code](./walkthroughs/vscode.md),
-[website](./walkthroughs/website.md), and [Node](./walkthroughs/node.md)
+The [README](../../README.md) is a feature overview, with examples selected from
+real CLI recordings. The separate [VS Code](../walkthroughs/vscode.md),
+[website](../walkthroughs/website.md), and [Node](../walkthroughs/node.md)
 walkthroughs show the complete sequences. They all use the same recording;
 there is no separately maintained expected terminal output.
 
-[The runner](../tests/readme/run.mjs) downloads VS Code 1.137.0, starts a
+[The runner](../../tests/readme/run.mjs) downloads VS Code 1.137.0, starts a
 separate profile and workspace, and attaches only to its renderer. Additional
 scenarios launch a local website through Playwright and installed Chrome in
 independent contexts, then attach to an already running Express server. Real
@@ -24,7 +24,7 @@ npm run test:readme
 ```
 
 `generate:readme` executes every command, verifies the evidence, and only then
-updates [recording.json](../tests/readme/recording.json), the README, and all
+updates [recording.json](../../tests/readme/recording.json), the README, and all
 three walkthroughs. `test:readme` launches fresh runtimes and replays the same
 flows without updating any of those files. A failed command or missing evidence
 fails the run. It is a "does this walkthrough still work?" check, not a unit-test

@@ -1,8 +1,8 @@
 # Refactoring: one trait-centered LinkRPC codegen path for CDP
 
-Status: historical design proposal. The implemented contract pipeline and
+Status: historical design proposal, **not an approved refactoring**. The implemented contract pipeline and
 current sources of truth are documented in [RPC contracts and code
-generation](../contracts.md). The discussion below describes the earlier
+generation](../architecture/contracts.md). The discussion below describes the earlier
 architecture and a broader possible refactoring; it is not the current build
 or regeneration specification.
 

@@ -391,4 +391,4 @@ Capture typing
 ````
 
 [Back to the feature overview](../../README.md) ·
-[How this walkthrough is generated and checked](../readme-generation.md)
+[How this walkthrough is generated and checked](../development/readme-generation.md)

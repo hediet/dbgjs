@@ -1,5 +1,7 @@
 # Heap-based investigation: AI credits as dollars
 
+Historical case study, not a current CLI specification or implementation plan.
+
 Date: 2026-09-17.
 
 This is a dependency-ordered walkthrough of the successful heap-based approach,

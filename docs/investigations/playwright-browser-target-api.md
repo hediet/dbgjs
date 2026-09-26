@@ -1,5 +1,9 @@
 # Playwright API over browser targets
 
+Status: **exploratory and deferred; not approved for implementation**.
+The existing CLI browser-target input and Playwright test harness do not imply
+that a general public Playwright API is planned.
+
 ## Goal
 
 Offer an optional JavaScript API for Playwright-style page automation on a

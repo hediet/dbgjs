@@ -2,6 +2,10 @@
 
 This is the high-level companion to the
 [full debugger data model](./debugger-data-model.md).
+It illustrates the intended model; watches, target-selection policies, and
+observation history are not all implemented as durable context features.
+See [current context identity and selection](./context-identity.md) for the
+CLI's actual cwd/path behavior.
 
 ## The main decision
 
@@ -46,8 +50,10 @@ service. Contexts provide explicit isolation inside that service.
 
 ## Is a context "per cwd"?
 
-Not exactly. The current working directory is a **default context selector**,
-not context identity.
+Not exactly. A path context is identified by its normalized absolute path;
+the current working directory supplies a **default selector** that finds
+either an explicit cwd binding or a registered path context at or above it.
+The selected context need not equal the exact cwd.
 
 This distinction matters because:
 
@@ -56,18 +62,10 @@ This distinction matters because:
 - one debug context may cover several workspace folders;
 - VS Code, MCP, and other clients may not have a meaningful process cwd.
 
-A practical lookup hint is:
-
-```text
-workspace/project identity + optional debug profile -> DebugContextId
-```
-
-For a CLI, `cwd` helps discover the workspace/project identity. An explicit
-context ID always wins. A deliberate global or scratch context can be provided
-as a convenience, but should not be the only context.
-
-The exact automatic project-root discovery policy is deferred. It must never
-silently select between multiple matching contexts.
+For a CLI, an explicit `--context` wins; otherwise the nearest cwd selection
+wins over automatic path-context lookup. Named contexts (`:<id>`) cover
+investigations not associated with a project path. Multi-root and untitled
+VS Code policy is deferred.
 
 ## The state hierarchy
 

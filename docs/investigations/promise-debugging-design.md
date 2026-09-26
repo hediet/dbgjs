@@ -1,7 +1,8 @@
 # Idea: promise and pending-work debugging
 
 Status: a bounded, engine-backed subset is implemented. The broader lifecycle,
-history, provenance, and policy design below remains exploratory.
+history, provenance, and policy design below is **exploratory, deferred, and
+not approved for implementation**.
 
 ## Implemented bounded subset
 
@@ -63,7 +64,7 @@ report arrived.
 
 This is a different problem from making generated source readable. Formatting,
 deminification, and source recovery are covered by
-[idea-source-reconstruction.md](./idea-source-reconstruction.md) and are not
+[source-reconstruction-design.md](./source-reconstruction-design.md) and are not
 duplicated here. This document assumes that stack frames, call sites, and
 async creation frames may need that machinery to become readable, and simply
 treats "source location" as an opaque, already-resolved concept supplied by
@@ -206,7 +207,7 @@ The design should support these workflows:
 
 The concepts below are meant to stay independent, in the same spirit as the
 source/provenance/projection split in
-[idea-source-reconstruction.md](./idea-source-reconstruction.md): each answers
+[source-reconstruction-design.md](./source-reconstruction-design.md): each answers
 one question, and none should have to stand in for another.
 
 ### Promise reference

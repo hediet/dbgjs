@@ -1,7 +1,7 @@
 # Idea: source discovery and reconstruction
 
-Status: design exploration only. This document does not define committed CLI
-syntax or an implementation plan.
+Status: **exploratory and deferred; not approved for implementation**. This
+document does not define committed CLI syntax or an implementation plan.
 
 ## Motivation
 

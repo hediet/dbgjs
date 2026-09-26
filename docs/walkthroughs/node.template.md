@@ -67,4 +67,4 @@ Replay checks that the server remains responsive after disconnecting. Only
 the generator's final cleanup terminates the application it launched.
 
 [Back to the feature overview](../../README.md) ·
-[Generation and replay rules](../readme-generation.md)
+[Generation and replay rules](../development/readme-generation.md)

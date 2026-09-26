@@ -1,5 +1,8 @@
 # Investigating a blank VS Code webview with jsdbg
 
+Historical case study: commands and findings describe the version used on
+2026-09-10, not a current CLI acceptance test or open feature plan.
+
 Date: 2026-09-10  
 Bug: [microsoft/vscode#335418](https://github.com/microsoft/vscode/issues/335418), assigned to Alex Ross (`alexr00`)  
 Environment: Windows, VS Code Insiders 1.138.0-insider, commit `1f398ff5fa56ae9b782dc3a55856562233efd72e`.

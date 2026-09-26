@@ -1,6 +1,6 @@
 # CI and npm distribution
 
-[CI](../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, and
+[CI](../../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, and
 manual dispatch. It does not publish to an npm registry.
 
 Completed work is delivered to `main`; keep the primary checkout on `main` and
@@ -32,13 +32,13 @@ outputs so unchanged `dbgjs` binaries and tests can be reused. Main-branch runs
 save caches; pull requests and manually dispatched feature branches are
 restore-only, preventing unmerged changes from modifying caches consumed by
 `main`. The Rust version is pinned in
-[rust-toolchain.toml](../rust-toolchain.toml). `actions/setup-node` caches npm
+[rust-toolchain.toml](../../rust-toolchain.toml). `actions/setup-node` caches npm
 downloads; `npm ci` installs the locked registry dependencies. Cargo likewise
 uses the packages selected by the checked-in manifests and lockfile, including
 the immutable public Git revision for the unreleased Rust LinkRPC generator.
 It compiles checked-in generated Rust rather than importing npm CDP schemas or
 running a generator during ordinary builds. See
-[RPC contracts and code generation](./contracts.md) for source ownership,
+[RPC contracts and code generation](../architecture/contracts.md) for source ownership,
 regeneration checks, and the opt-in local LinkRPC development workflow.
 
 An npm-only change skips Linux/Windows x64 Rust unit tests but still verifies and
@@ -63,7 +63,7 @@ against the freshly built daemon and a real Node inspector, including CLI
 capture/snapshot progress, cancellation, disconnect, and recovery. It installs
 only the registry dependencies from the extension lockfile. The pinned Rust
 Git dependencies and local-only development overrides are documented in
-[the contract integration notes](./contracts.md#pinned-dependencies-and-local-linkrpc-development);
+[the contract integration notes](../architecture/contracts.md#pinned-dependencies-and-local-linkrpc-development);
 CI never substitutes a sibling checkout for the pinned public sources.
 
 The native package matrix builds Windows x64/ARM64, Linux
@@ -93,7 +93,7 @@ images for those platforms. Windows ARM64 builds, full tests, installed-package
 smoke tests, and VS Code E2E run natively on `windows-11-arm`.
 Alpine/musl is not supported.
 
-A focused [desktop VS Code E2E](../tests/vscode-discovery/README.md) runs on all
+A focused [desktop VS Code E2E](../../tests/vscode-discovery/README.md) runs on all
 five native platforms using downloaded candidate binaries and pinned VS Code.
 It discovers an isolated extension host, attaches by its discovered PID, and
 verifies an authored TypeScript breakpoint, mapped stack location, and local
@@ -112,7 +112,7 @@ outputs, its screenshot, and Electron diagnostics even on failure.
 
 ## Nightly and stable packages
 
-[Release packages](../.github/workflows/release.yml) runs after successful CI
+[Release packages](../../.github/workflows/release.yml) runs after successful CI
 on this repository's `main`, including manual CI dispatch on `main`. It rejects
 PRs, forks, other workflows, and failed runs. Documentation-only CI with no
 package artifacts produces no release; only the README replay builds Rust.
@@ -192,7 +192,7 @@ not the independent external uploader.
 ## Development debug information
 
 The workspace's `dev` and `test` profiles use `debug = 1` in
-[`Cargo.toml`](../Cargo.toml) to reduce debug-symbol storage, particularly Windows
+[`Cargo.toml`](../../Cargo.toml) to reduce debug-symbol storage, particularly Windows
 PDB files. This retains line information for stack traces and source-level
 stepping, but omits full type and variable debug information. Incremental
 compilation and release profile settings are unchanged.
