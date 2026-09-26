@@ -3668,9 +3668,9 @@ fn print_coverage_tree(
     }
 
     println!(
-        "{} RL (run lines), {} HL (hit lines)",
-        root.aggregate().run_lines,
-        root.aggregate().hit_lines
+        "{} HL (hit lines), {} RL (run lines)",
+        root.aggregate().hit_lines,
+        root.aggregate().run_lines
     );
     if let Some(analysis) = &snapshot.analysis {
         println!(

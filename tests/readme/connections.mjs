@@ -170,7 +170,7 @@ export async function recordConnections({ cli, service, output }) {
 			"coverage", "show", "quote", "--path-prefix", fixture.href, "--max-lines", "12",
 		], "live", (text) => {
 			assert.match(text, /express-server\.mjs/);
-			assert.match(text, /[1-9]\d* RL \(run lines\), [1-9]\d* HL \(hit lines\)/);
+			assert.match(text, /[1-9]\d* HL \(hit lines\), [1-9]\d* RL \(run lines\)/);
 			assert.ok(text.trimEnd().split(/\r?\n/).length <= 12);
 		});
 		const source = await readFile(fixture, "utf8");

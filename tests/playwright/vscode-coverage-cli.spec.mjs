@@ -147,7 +147,7 @@ test("traces deferred auto-whitespace cleanup in vscode.dev", async () => {
 			environment,
 			90_000,
 		);
-		expect(report).toMatch(/^\d+ RL \(run lines\), \d+ HL \(hit lines\)$/m);
+		expect(report).toMatch(/^\d+ HL \(hit lines\), \d+ RL \(run lines\)$/m);
 		expect(report).toMatch(/\.tsx?\s+\d+ HL, \d+ RL/);
 		expect(report).not.toContain("additional files omitted");
 		expect(report).not.toContain("additional hit ranges omitted");

@@ -122,7 +122,7 @@ test("captures coverage from a running VS Code extension host", async () => {
 			["coverage", "show", ".", "--max-lines", "80", "--no-cache"],
 			environment,
 		);
-		expect(report).toMatch(/^\d+ RL \(run lines\), \d+ HL \(hit lines\)$/m);
+		expect(report).toMatch(/^\d+ HL \(hit lines\), \d+ RL \(run lines\)$/m);
 		expect(report.trimEnd().split("\n").length).toBeLessThanOrEqual(80);
 
 		const coverage = await runJson(

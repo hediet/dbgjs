@@ -2798,6 +2798,12 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         let stdout = String::from_utf8(stdout).unwrap();
         let stderr = String::from_utf8(stderr).unwrap();
         assert!(stdout.lines().count() <= 3, "{stdout}");
+        if command == "coverage" {
+            let summary = stdout.lines().find(|line| line.contains("(hit lines)")).unwrap();
+            let hit_lines = summary.find("HL (hit lines)").unwrap();
+            let run_lines = summary.find("RL (run lines)").unwrap();
+            assert!(hit_lines < run_lines, "{summary}");
+        }
         assert!(!stdout.contains("Projection unavailable"), "{stdout}");
         assert_eq!(stderr.lines().filter(|line| line.starts_with("Projection unavailable:")).count(), 1, "{stderr}");
         assert!(stderr.contains("--json"), "{stderr}");

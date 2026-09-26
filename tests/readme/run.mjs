@@ -149,7 +149,7 @@ try {
 	await command("coverage-show", [
 		"coverage", "show", "typing", "--exclude", "background", "--path-prefix", "src/vs/editor/common/model", "--max-lines", "16",
 	], "live", (text) => {
-		assert.match(text, /\d+ RL \(run lines\), \d+ HL \(hit lines\)/);
+		assert.match(text, /\d+ HL \(hit lines\), \d+ RL \(run lines\)/);
 		assert.match(text, /textModel\.ts/);
 		assert.ok(text.trimEnd().split(/\r?\n/).length <= 16);
 	});
