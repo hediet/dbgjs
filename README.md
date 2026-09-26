@@ -238,7 +238,9 @@ breakpoint, waiting for the pause, and resuming.
 
 Record function and block execution, then exclude a background capture when
 viewing the source-mapped tree. The stored capture stays intact; `--exclude` is
-a query option, not a recording option. `HL` means hit lines; `RL` means run lines.
+a query option, not a recording option. Exclusion removes matching runtime
+ranges hit by the baseline, rather than subtracting counts; retained counts
+are unchanged. `HL` means hit lines; `RL` means run lines.
 Capture persists cumulative raw ranges and cheap script provenance; mapping,
 exclusion and path filtering happen when viewing. When original generated source
 or its map is unavailable or has changed, the raw ranges remain available with
@@ -251,7 +253,6 @@ An omitted inline map can be recovered from the `sourceMappingURL` directive
 when the generated source is available and matches its captured SHA-256.
 Inline `data:` and oversized script/map URLs are omitted from capture
 provenance so URLs cannot smuggle source or map bytes into raw payloads.
-The legacy `raw` take option now produces the same raw capture in either mode;
 `noCache` applies only to live source acquisition, not stored views. Stored
 views reuse the verified source-map cache when available and may populate it
 after fetching a map; capture payloads never contain source or map bytes.
