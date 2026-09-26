@@ -26,7 +26,7 @@ export async function packPackages(values, execute = execFileSync) {
 	assert.equal(typeof provenance.gitDirty, "boolean", "Binary gitDirty must be known.");
 	manifest.gitHead = provenance.gitCommit;
 	manifest.gitDirty = provenance.gitDirty;
-	const cargo = await readFile(join(root, "Cargo.toml"), "utf8");
+	const cargo = await readFile(join(root, "packages", "dbgjs", "Cargo.toml"), "utf8");
 	if (!cargo.includes(`version = "${manifest.version}"`)) throw new Error("Cargo and npm package versions must match.");
 	for (const key of Object.keys(platforms)) {
 		if (manifest.optionalDependencies[`@hediet/dbgjs-${key}`] !== manifest.version) {
