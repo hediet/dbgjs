@@ -5497,6 +5497,229 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn source_endpoints_preserve_validation_and_missing_context_errors() {
+        let service = service_with_state(PathBuf::from("unused"), ServiceState::default());
+        let call = CallCtx::default();
+        let missing = "absent".to_owned();
+        let missing_context = |error: JsonRpcError| {
+            assert_eq!(error, not_found("context", &missing));
+        };
+        missing_context(
+            service
+                .show_source_graph(&call, missing.clone())
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .show_uncompacted_source_graph(&call, missing.clone())
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .show_source_tree(&call, missing.clone(), SourceTreeKind::Loaded)
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .resolve_sources(&call, missing.clone(), "src.js".into())
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .explain_source(&call, missing.clone(), "src.js".into())
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .evict_source_caches(&call, missing.clone())
+                .await
+                .unwrap_err(),
+        );
+        missing_context(
+            service
+                .map_source(&call, missing.clone(), "src.js".into(), 1, 1)
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(
+            service
+                .map_source(&call, missing.clone(), "src.js".into(), 0, 1)
+                .await
+                .unwrap_err(),
+            invalid_params("source locations are one-based")
+        );
+        let options = SourceSearchOptions {
+            pattern: String::new(),
+            path: None,
+            regex: false,
+            case_sensitive: true,
+            max_results: 10,
+            context_lines: 0,
+            timeout_ms: None,
+            view: SourceViewPreference::Policy,
+        };
+        assert_eq!(
+            service
+                .grep_sources(&call, missing.clone(), options.clone())
+                .await
+                .unwrap_err(),
+            invalid_params("source grep pattern must not be empty")
+        );
+        missing_context(
+            service
+                .grep_sources(
+                    &call,
+                    missing.clone(),
+                    SourceSearchOptions {
+                        pattern: "match".into(),
+                        ..options
+                    },
+                )
+                .await
+                .unwrap_err(),
+        );
+    }
+
+    #[tokio::test]
+    async fn source_endpoints_return_empty_results_for_context_without_sources() {
+        let mut state = ServiceState::default();
+        state
+            .contexts
+            .insert("ctx".into(), context_with_targets([]));
+        state.target_debuggers.insert(
+            ("other".into(), "connection".into(), "target".into()),
+            TargetDebuggerHandle::ownership_stub_for_tests(
+                TargetDebuggerSnapshot {
+                    context_id: "other".into(),
+                    connection_id: "connection".into(),
+                    target_id: "target".into(),
+                    connection_generation: 1,
+                    revision: 1,
+                    phase: crate::service_api::TargetDebuggerPhase::Running,
+                    scripts: vec![],
+                    breakpoints: vec![],
+                    logs: vec![],
+                    log_capture: Default::default(),
+                    pause: None,
+                },
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            ),
+        );
+        let service = service_with_state(PathBuf::from("unused"), state);
+        let call = CallCtx::default();
+        assert!(
+            service
+                .list_sources(&call, "ctx".into(), None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .show_source_graph(&call, "ctx".into())
+                .await
+                .unwrap(),
+            CompactedSourceGraphSnapshot {
+                roots: vec![],
+                nodes: vec![],
+                edges: vec![]
+            }
+        );
+        assert_eq!(
+            service
+                .show_uncompacted_source_graph(&call, "ctx".into())
+                .await
+                .unwrap(),
+            UncompactedSourceGraphSnapshot {
+                roots: vec![],
+                nodes: vec![],
+                edges: vec![]
+            }
+        );
+        assert_eq!(
+            service
+                .resolve_sources(&call, "ctx".into(), "src.js".into())
+                .await
+                .unwrap(),
+            UncompactedSourceGraphSnapshot {
+                roots: vec![],
+                nodes: vec![],
+                edges: vec![]
+            }
+        );
+        assert!(
+            service
+                .show_source_tree(&call, "ctx".into(), SourceTreeKind::Resolved)
+                .await
+                .unwrap()
+                .sources
+                .is_empty()
+        );
+        assert!(
+            service
+                .explain_source(&call, "ctx".into(), "src.js".into())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            service
+                .map_source(&call, "ctx".into(), "src.js".into(), 1, 1)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .evict_source_caches(&call, "ctx".into())
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            service
+                .show_source(
+                    &call,
+                    "ctx".into(),
+                    String::new(),
+                    SourceDisplayOptions {
+                        line: None,
+                        context_lines: 0,
+                        view: SourceViewPreference::Policy,
+                    },
+                )
+                .await
+                .unwrap_err(),
+            not_found("source", "<empty>")
+        );
+        let search = service
+            .grep_sources(
+                &call,
+                "ctx".into(),
+                SourceSearchOptions {
+                    pattern: "match".into(),
+                    path: None,
+                    regex: false,
+                    case_sensitive: true,
+                    max_results: 10,
+                    context_lines: 0,
+                    timeout_ms: None,
+                    view: SourceViewPreference::Policy,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(search.matches.is_empty());
+        assert_eq!(search.searched_sources, 0);
+    }
+
     #[test]
     fn process_projection_contributes_windows_sessions_and_targets_to_the_resource_graph() {
         let process = |process_id, parent_process_id, role, window_id, window_title| {

@@ -84,15 +84,12 @@ impl SourceApi for DebuggerService {
         path: Option<String>,
     ) -> Result<Vec<SourceSnapshotInfo>, JsonRpcError> {
         let state = self.state.lock().await;
-        if !state.contexts.contains_key(&context_id) {
-            return Err(not_found("context", &context_id));
-        }
+        let context = source_context(&state, &context_id)?;
         let mut sources = BTreeMap::new();
         let mut live_debuggers = Vec::new();
-        for ((candidate_context, connection_id, target_id), debugger) in &state.target_debuggers {
-            if candidate_context != &context_id {
-                continue;
-            }
+        for ((_, connection_id, target_id), debugger) in
+            scoped_source_debuggers(&state, &context_id)
+        {
             live_debuggers.push((connection_id.clone(), target_id.clone(), debugger.clone()));
             for script in debugger.snapshot().scripts {
                 if path.as_ref().is_some_and(|path| !script.url.contains(path)) {
@@ -141,25 +138,23 @@ impl SourceApi for DebuggerService {
                 }
             }
         }
-        if let Some(context) = state.contexts.get(&context_id) {
-            for breakpoint in context.breakpoints.values() {
-                if path
-                    .as_ref()
-                    .is_some_and(|path| !breakpoint.source_path.contains(path))
-                {
-                    continue;
-                }
-                sources
-                    .entry((breakpoint.source_path.clone(), String::new(), String::new()))
-                    .or_insert_with(|| SourceSnapshotInfo {
-                        path: breakpoint.source_path.clone(),
-                        kind: "intent".into(),
-                        status: "known".into(),
-                        connection_id: None,
-                        target_id: None,
-                        source_map_url: None,
-                    });
+        for breakpoint in context.breakpoints.values() {
+            if path
+                .as_ref()
+                .is_some_and(|path| !breakpoint.source_path.contains(path))
+            {
+                continue;
             }
+            sources
+                .entry((breakpoint.source_path.clone(), String::new(), String::new()))
+                .or_insert_with(|| SourceSnapshotInfo {
+                    path: breakpoint.source_path.clone(),
+                    kind: "intent".into(),
+                    status: "known".into(),
+                    connection_id: None,
+                    target_id: None,
+                    source_map_url: None,
+                });
         }
         drop(state);
         for (connection_id, target_id, debugger) in live_debuggers {
@@ -204,10 +199,7 @@ impl SourceApi for DebuggerService {
     ) -> Result<CompactedSourceGraphSnapshot, JsonRpcError> {
         let model = {
             let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state.source_models.get(&context_id).cloned()
+            source_model_for_context(&state, &context_id)?
         };
         let Some(model) = model else {
             return Ok(CompactedSourceGraphSnapshot {
@@ -273,10 +265,7 @@ impl SourceApi for DebuggerService {
     ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
         let model = {
             let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state.source_models.get(&context_id).cloned()
+            source_model_for_context(&state, &context_id)?
         };
         let Some(model) = model else {
             return Ok(UncompactedSourceGraphSnapshot {
@@ -312,15 +301,9 @@ impl SourceApi for DebuggerService {
     ) -> Result<SourceTreeSnapshot, JsonRpcError> {
         let (model, debuggers) = {
             let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
             (
-                state.source_models.get(&context_id).cloned(),
-                state
-                    .target_debuggers
-                    .iter()
-                    .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+                source_model_for_context(&state, &context_id)?,
+                scoped_source_debuggers(&state, &context_id)
                     .map(|(_, debugger)| debugger.clone())
                     .collect::<Vec<_>>(),
             )
@@ -367,10 +350,7 @@ impl SourceApi for DebuggerService {
     ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
         let model = {
             let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state.source_models.get(&context_id).cloned()
+            source_model_for_context(&state, &context_id)?
         };
         let Some(model) = model else {
             return Ok(UncompactedSourceGraphSnapshot {
@@ -397,14 +377,8 @@ impl SourceApi for DebuggerService {
     ) -> Result<SourceContentSnapshot, JsonRpcError> {
         let (debuggers, formatting) = {
             let state = self.state.lock().await;
-            let context = state
-                .contexts
-                .get(&context_id)
-                .ok_or_else(|| not_found("context", &context_id))?;
-            let debuggers = state
-                .target_debuggers
-                .iter()
-                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+            let context = source_context(&state, &context_id)?;
+            let debuggers = scoped_source_debuggers(&state, &context_id)
                 .map(|((_, _, target_id), debugger)| (target_id.clone(), debugger.clone()))
                 .collect::<Vec<_>>();
             (
@@ -522,13 +496,8 @@ impl SourceApi for DebuggerService {
         let mut cancellation = SearchCancellationGuard::new(control.cancellation_flag());
         let (debuggers, local_sources, formatting) = {
             let state = self.state.lock().await;
-            let Some(context) = state.contexts.get(&context_id) else {
-                return Err(not_found("context", &context_id));
-            };
-            let debuggers = state
-                .target_debuggers
-                .iter()
-                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
+            let context = source_context(&state, &context_id)?;
+            let debuggers = scoped_source_debuggers(&state, &context_id)
                 .map(|((_, connection_id, target_id), debugger)| {
                     (connection_id.clone(), target_id.clone(), debugger.clone())
                 })
@@ -695,20 +664,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         path: String,
     ) -> Result<Vec<SourceGraphViewSnapshot>, JsonRpcError> {
-        let debuggers = {
-            let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state
-                .target_debuggers
-                .iter()
-                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
-                .map(|((_, connection_id, target_id), debugger)| {
-                    (connection_id.clone(), target_id.clone(), debugger.clone())
-                })
-                .collect::<Vec<_>>()
-        };
+        let debuggers = self.source_debuggers(&context_id).await?;
         let mut explanations = Vec::new();
         for (connection_id, target_id, debugger) in debuggers {
             let mut target_explanations = debugger
@@ -749,20 +705,7 @@ impl SourceApi for DebuggerService {
         if line == 0 || column == 0 {
             return Err(invalid_params("source locations are one-based"));
         }
-        let debuggers = {
-            let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state
-                .target_debuggers
-                .iter()
-                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
-                .map(|((_, connection_id, target_id), debugger)| {
-                    (connection_id.clone(), target_id.clone(), debugger.clone())
-                })
-                .collect::<Vec<_>>()
-        };
+        let debuggers = self.source_debuggers(&context_id).await?;
         let mut locations = Vec::new();
         for (connection_id, target_id, debugger) in debuggers {
             let mut target_locations = debugger
@@ -802,19 +745,8 @@ impl SourceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<u32, JsonRpcError> {
-        let debuggers = {
-            let state = self.state.lock().await;
-            if !state.contexts.contains_key(&context_id) {
-                return Err(not_found("context", &context_id));
-            }
-            state
-                .target_debuggers
-                .iter()
-                .filter(|((candidate_context, _, _), _)| candidate_context == &context_id)
-                .map(|(_, debugger)| debugger.clone())
-                .collect::<Vec<_>>()
-        };
-        for debugger in &debuggers {
+        let debuggers = self.source_debuggers(&context_id).await?;
+        for (_, _, debugger) in &debuggers {
             debugger
                 .evict_source_caches()
                 .await
@@ -878,4 +810,47 @@ impl SourceApi for DebuggerService {
         }
         Ok(exported)
     }
+}
+
+impl DebuggerService {
+    async fn source_debuggers(
+        &self,
+        context_id: &str,
+    ) -> Result<Vec<(String, String, TargetDebuggerHandle)>, JsonRpcError> {
+        let state = self.state.lock().await;
+        source_context(&state, context_id)?;
+        Ok(scoped_source_debuggers(&state, context_id)
+            .map(|((_, connection_id, target_id), debugger)| {
+                (connection_id.clone(), target_id.clone(), debugger.clone())
+            })
+            .collect())
+    }
+}
+
+fn source_context<'a>(
+    state: &'a ServiceState,
+    context_id: &str,
+) -> Result<&'a Arc<ContextState>, JsonRpcError> {
+    state
+        .contexts
+        .get(context_id)
+        .ok_or_else(|| not_found("context", context_id))
+}
+
+fn source_model_for_context(
+    state: &ServiceState,
+    context_id: &str,
+) -> Result<Option<Arc<ContextSourceModel>>, JsonRpcError> {
+    source_context(state, context_id)?;
+    Ok(state.source_models.get(context_id).cloned())
+}
+
+fn scoped_source_debuggers<'a>(
+    state: &'a ServiceState,
+    context_id: &'a str,
+) -> impl Iterator<Item = (&'a (String, String, String), &'a TargetDebuggerHandle)> + 'a {
+    state
+        .target_debuggers
+        .iter()
+        .filter(move |((candidate_context, _, _), _)| candidate_context == context_id)
 }
