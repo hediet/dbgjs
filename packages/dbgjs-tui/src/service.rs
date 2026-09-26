@@ -3,11 +3,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbgjs::context_identity::{
+use dbgjs::service::context_identity::{
     normalize_absolute_path, path_and_parents, resolve_context_expression,
 };
-use dbgjs::local_rpc::{default_state_file, ensure_service};
-use dbgjs::service_api::{
+use dbgjs::connection::transport::local_rpc::{default_state_file, ensure_service};
+use dbgjs::api::service_api::{
     ConnectionStatus, ContextSnapshot, ContextSummary, DbgServiceClient, MutationOptions,
     ObservationCursor, ObservationResult, ProcessTreeSnapshot, ResourceGraphSnapshot,
     SourceContentSnapshot, SourceDisplayOptions, SourceTreeKind, SourceTreeSnapshot,
@@ -105,7 +105,7 @@ pub enum Data {
     Processes(Vec<ProcessTreeSnapshot>),
     Resources(ResourceGraphSnapshot),
     Sources(SourceTreeSnapshot),
-    Captures(Vec<dbgjs::service_api::CaptureSnapshot>),
+    Captures(Vec<dbgjs::api::service_api::CaptureSnapshot>),
 }
 
 pub enum ServiceEvent {
@@ -478,7 +478,7 @@ async fn perform_action(
             let snapshot = if connected {
                 client
                     .contexts
-                    .connect_connection(dbgjs::service_api::ConnectionRef {
+                    .connect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id,
                         connection_id: connection_id.clone(),
                     })
@@ -486,7 +486,7 @@ async fn perform_action(
             } else {
                 client
                     .contexts
-                    .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                    .disconnect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id,
                         connection_id: connection_id.clone(),
                     })
@@ -513,7 +513,7 @@ async fn perform_action(
             let snapshot = client
                 .contexts
                 .delete_connection(
-                    dbgjs::service_api::ConnectionRef {
+                    dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id,
                         connection_id: connection_id.clone(),
                     },
@@ -646,7 +646,7 @@ async fn configure_connection_path(
         client
             .contexts
             .put_connection(
-                dbgjs::service_api::ConnectionRef {
+                dbgjs::api::service_api::ConnectionRef {
                     context_id: path.context_id.clone(),
                     connection_id: connection_id.clone(),
                 },
@@ -657,7 +657,7 @@ async fn configure_connection_path(
     }
     let snapshot = client
         .contexts
-        .connect_connection(dbgjs::service_api::ConnectionRef {
+        .connect_connection(dbgjs::api::service_api::ConnectionRef {
             context_id: path.context_id,
             connection_id: connection_id.clone(),
         })
@@ -683,7 +683,7 @@ async fn set_connection_path_configured(
         let snapshot = client
             .contexts
             .put_connection(
-                dbgjs::service_api::ConnectionRef {
+                dbgjs::api::service_api::ConnectionRef {
                     context_id: path.context_id,
                     connection_id: path.connection_id.clone(),
                 },
@@ -714,7 +714,7 @@ async fn set_connection_path_configured(
     let snapshot = match connection.status {
         ConnectionStatus::Connected { .. } | ConnectionStatus::Connecting => client
             .contexts
-            .disconnect_connection(dbgjs::service_api::ConnectionRef {
+            .disconnect_connection(dbgjs::api::service_api::ConnectionRef {
                 context_id: path.context_id.clone(),
                 connection_id: path.connection_id.clone(),
             })
@@ -731,7 +731,7 @@ async fn set_connection_path_configured(
     let snapshot = client
         .contexts
         .delete_connection(
-            dbgjs::service_api::ConnectionRef {
+            dbgjs::api::service_api::ConnectionRef {
                 context_id: path.context_id,
                 connection_id: path.connection_id.clone(),
             },

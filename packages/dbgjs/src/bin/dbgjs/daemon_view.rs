@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use dbgjs::service_api::{
+use dbgjs::api::service_api::{
     BreakpointSnapshot, BreakpointStatus, ConnectionConfiguration, ConnectionSnapshot,
     ConnectionStatus, ContextSnapshot, DbgServiceClient, FrameProjectionSnapshot,
     TargetBreakpointStatus, TargetDebuggerPhase, TargetDebuggerSnapshot, TargetSnapshot,
@@ -74,8 +74,8 @@ async fn capture(
         for target in &snapshot.target_forest {
             let debugger = client
                 .targets
-                .get_target(dbgjs::service_api::TargetRef {
-                    connection: dbgjs::service_api::ConnectionRef {
+                .get_target(dbgjs::api::service_api::TargetRef {
+                    connection: dbgjs::api::service_api::ConnectionRef {
                         context_id: snapshot.id.clone(),
                         connection_id: target.connection_id.clone(),
                     },
@@ -163,7 +163,7 @@ async fn wait_for_change(
                 .contexts
                 .observe_context(
                     context_id,
-                    dbgjs::service_api::ObservationCursor::After { revision },
+                    dbgjs::api::service_api::ObservationCursor::After { revision },
                     VIEW_OBSERVE_TIMEOUT_MS,
                 )
                 .await;
@@ -177,8 +177,8 @@ async fn wait_for_change(
             let _ = client
                 .targets
                 .observe_target(
-                    dbgjs::service_api::TargetRef {
-                        connection: dbgjs::service_api::ConnectionRef {
+                    dbgjs::api::service_api::TargetRef {
+                        connection: dbgjs::api::service_api::ConnectionRef {
                             context_id: context_id,
                             connection_id: connection_id,
                         },
@@ -369,7 +369,7 @@ fn pause_location(debugger: &TargetDebuggerSnapshot) -> String {
     }
 }
 
-fn source_location(location: &dbgjs::service_api::SourceLocation) -> String {
+fn source_location(location: &dbgjs::api::service_api::SourceLocation) -> String {
     format!(
         "{}:{}:{}",
         inline(&location.source_url, 80),
@@ -470,7 +470,7 @@ fn rpc_error(error: impl std::fmt::Display) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dbgjs::service_api::{
+    use dbgjs::api::service_api::{
         BreakpointSnapshot, ContextSnapshot, FrameSnapshot, PauseSnapshot, ScopeSnapshot,
         SourceLocation, TargetAttachmentState, TargetBreakpointSnapshot, TargetNodeSnapshot,
     };

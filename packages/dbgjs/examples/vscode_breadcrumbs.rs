@@ -1,6 +1,6 @@
 use std::{env, error::Error, fs, hint::black_box, path::Path, time::Instant};
 
-use dbgjs::language_intelligence::SymbolIndex;
+use dbgjs::source::language_intelligence::SymbolIndex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

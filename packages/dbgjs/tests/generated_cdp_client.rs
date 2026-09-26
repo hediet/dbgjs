@@ -4,7 +4,7 @@ use dbgjs::cdp::{
     CdpClient, CdpEventsClient, DebuggerPausedParams, DebuggerScriptParsedParams,
     RuntimeRemoteObjectType, TargetAttachToTargetParams,
 };
-use dbgjs::session_transport::{CdpEnvelope, CdpSessionMux};
+use dbgjs::connection::transport::session_transport::{CdpEnvelope, CdpSessionMux};
 use linkrpc::connection::channel::{Channel, RejectingHandler};
 use linkrpc::prelude::{
     CallCtx, InterfaceHandler, JsonRpcError, JsonRpcMessage, MessageTransport, RpcCallError,

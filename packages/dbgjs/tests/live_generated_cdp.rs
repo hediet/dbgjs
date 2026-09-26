@@ -5,15 +5,15 @@ use std::time::Duration;
 use dbgjs::cdp::{
     InputDispatchKeyEventParams, InputDispatchKeyEventParamsType, RuntimeRemoteObjectType,
 };
-use dbgjs::cdp_runtime::CdpConnection;
-use dbgjs::context_source_model::ContextSourceModel;
-use dbgjs::debugger_driver::{DebuggerDriver, DebuggerRecording};
-use dbgjs::debugger_engine::{
+use dbgjs::debugger::cdp_runtime::CdpConnection;
+use dbgjs::service::context_source_model::ContextSourceModel;
+use dbgjs::debugger::debugger_driver::{DebuggerDriver, DebuggerRecording};
+use dbgjs::debugger::debugger_engine::{
     BreakpointBinding, BreakpointKey, DebuggerState, FrameProjection, Input, ScriptSourceState,
     SessionKey, SessionPhase,
 };
-use dbgjs::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
-use dbgjs::source_view::Position;
+use dbgjs::source::source_effects::{SourceEffectInterpreter, SourceEffectOptions};
+use dbgjs::source::source_view::Position;
 use serde_json::json;
 use sourcemap::SourceMapBuilder;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};

@@ -3,7 +3,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use dbgjs::local_rpc::{
+use dbgjs::connection::transport::local_rpc::{
     default_state_file, ensure_service, serve_local, serve_stdio, write_startup_error,
 };
 use tokio::sync::watch;

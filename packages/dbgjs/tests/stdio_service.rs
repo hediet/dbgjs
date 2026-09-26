@@ -1,7 +1,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use dbgjs::service_api;
+use dbgjs::api::service_api;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout, Command};

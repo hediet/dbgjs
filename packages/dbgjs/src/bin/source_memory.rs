@@ -4,8 +4,8 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dbgjs::context_source_model::{ContextSourceModel, SourceContributionId};
-use dbgjs::source_view::{
+use dbgjs::service::context_source_model::{ContextSourceModel, SourceContributionId};
+use dbgjs::source::source_view::{
     GeneratedSourceInput, Position, ResolutionPolicy, ResolvedSourceView,
 };
 use sourcemap::SourceMapBuilder;

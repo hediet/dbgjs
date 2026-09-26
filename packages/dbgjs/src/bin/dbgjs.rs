@@ -10,17 +10,17 @@ use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
-use dbgjs::context_identity::{
+use dbgjs::service::context_identity::{
     ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
 };
-use dbgjs::coverage_filter::CoveragePathFilter;
-use dbgjs::local_rpc::{connect_existing, default_state_file, ensure_service};
-use dbgjs::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
-use dbgjs::promise_debugging::{
+use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
+use dbgjs::connection::transport::local_rpc::{connect_existing, default_state_file, ensure_service};
+use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
+use dbgjs::debugger::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
 };
-use dbgjs::service_api::{
+use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
     ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
@@ -53,7 +53,7 @@ const DEFAULT_VALUE_PROPERTY_LIMIT: u32 = 20;
 const PLAYWRIGHT_PROGRAM_LIMIT: usize = 1024 * 1024;
 const PLAYWRIGHT_OUTPUT_LIMIT: usize = 1024 * 1024 + 4096;
 const PLAYWRIGHT_ERROR_LIMIT: usize = 64 * 1024;
-const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../providers/playwright_page.mjs");
+const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../connection/providers/playwright_page.mjs");
 const COVERAGE_HINT_DELAY: Duration = Duration::from_secs(20);
 
 fn main() {
@@ -750,7 +750,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .supply_stored_heap_source_map(
                     context,
                     capture.clone(),
-                    dbgjs::service_api::HeapSourceMapSupply {
+                    dbgjs::api::service_api::HeapSourceMapSupply {
                         script_id: script.clone(),
                         script_hash: hash.clone(),
                         source_map_url,
@@ -1129,10 +1129,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
             let mut trees =
-                dbgjs::process_discovery::discover_process_trees(options.root_kind, options.stats)
+                dbgjs::connection::discovery::process_discovery::discover_process_trees(options.root_kind, options.stats)
                     .await?;
             if options.full {
-                dbgjs::process_discovery::populate_process_tree_targets(&mut trees).await;
+                dbgjs::connection::discovery::process_discovery::populate_process_tree_targets(&mut trees).await;
                 if let Ok(client) = connect_existing(&state_file).await
                     && let Ok(contexts) = client.contexts.list_contexts(None).await
                 {
@@ -1165,9 +1165,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ProcessAttachLocator::VscodeProcess { .. }
                     | ProcessAttachLocator::VscodeWindow { .. }
             ) {
-                dbgjs::process_discovery::discover_vscode_process_trees(false).await?
+                dbgjs::connection::discovery::process_discovery::discover_vscode_process_trees(false).await?
             } else {
-                dbgjs::process_discovery::discover_recognized_process_trees().await?
+                dbgjs::connection::discovery::process_discovery::discover_recognized_process_trees().await?
             };
             let (connection_id, configuration, target) =
                 process_attach_destination(options.locator, &discovered)?;
@@ -1196,7 +1196,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 rpc(client
                     .contexts
-                    .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                    .disconnect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
                     })
@@ -1208,7 +1208,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 rpc(client
                     .contexts
                     .put_connection(
-                        dbgjs::service_api::ConnectionRef {
+                        dbgjs::api::service_api::ConnectionRef {
                             context_id: context_id.clone(),
                             connection_id: connection_id.clone(),
                         },
@@ -1217,7 +1217,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .await)?;
                 rpc(client
                     .contexts
-                    .connect_connection(dbgjs::service_api::ConnectionRef {
+                    .connect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
                     })
@@ -1254,8 +1254,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let result = rpc(client
                 .targets
                 .attach_target(
-                    dbgjs::service_api::TargetRef {
-                        connection: dbgjs::service_api::ConnectionRef {
+                    dbgjs::api::service_api::TargetRef {
+                        connection: dbgjs::api::service_api::ConnectionRef {
                             context_id: context_id.clone(),
                             connection_id: connection_id.clone(),
                         },
@@ -1606,7 +1606,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .contexts
-                .connect_connection(dbgjs::service_api::ConnectionRef {
+                .connect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
                     connection_id: connection_id,
                 })
@@ -1618,7 +1618,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             output.print(&rpc(client
                 .contexts
-                .disconnect_connection(dbgjs::service_api::ConnectionRef {
+                .disconnect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
                     connection_id: connection_id,
                 })
@@ -1644,7 +1644,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let enabled = rpc(client
                 .contexts
                 .set_pause_future_children(
-                    dbgjs::service_api::ConnectionRef {
+                    dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id,
                         connection_id: connection_id,
                     },
@@ -1667,7 +1667,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&rpc(client
                 .contexts
                 .delete_connection(
-                    dbgjs::service_api::ConnectionRef {
+                    dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id,
                         connection_id: connection_id,
                     },
@@ -2108,9 +2108,9 @@ struct ResolvedScope {
 }
 
 impl ResolvedScope {
-    fn target_ref(&self) -> dbgjs::service_api::TargetRef {
-        dbgjs::service_api::TargetRef {
-            connection: dbgjs::service_api::ConnectionRef {
+    fn target_ref(&self) -> dbgjs::api::service_api::TargetRef {
+        dbgjs::api::service_api::TargetRef {
+            connection: dbgjs::api::service_api::ConnectionRef {
                 context_id: self.context.clone(),
                 connection_id: self.connection.clone(),
             },
@@ -2339,14 +2339,14 @@ fn target_list_output(
                 .is_none_or(|connection| node.connection_id == connection)
         })
         .collect::<Vec<_>>();
-    let targets = dbgjs::target_selector::select_target_matches(
+    let targets = dbgjs::debugger::target_selector::select_target_matches(
         &candidates,
         snapshot
             .connections
             .iter()
             .map(|connection| (connection.id.as_str(), connection.generation)),
         scope.target.as_deref(),
-        |node| dbgjs::target_selector::TargetSelectorCandidate {
+        |node| dbgjs::debugger::target_selector::TargetSelectorCandidate {
             target: &node.target,
             connection_id: &node.connection_id,
             generation: node.connection_generation,
@@ -2377,13 +2377,13 @@ fn target_list_output(
         selected: selection_applies
             && selection.connection.as_deref() == Some(node.connection_id.as_str())
             && selection.target.as_deref().is_some_and(|selector| {
-                dbgjs::target_selector::match_target_selector(
+                dbgjs::debugger::target_selector::match_target_selector(
                     &node.target,
                     &node.connection_id,
                     node.connection_generation,
                     selector,
                 )
-                .is_some_and(|rank| rank >= dbgjs::target_selector::TargetSelectorMatch::Canonical)
+                .is_some_and(|rank| rank >= dbgjs::debugger::target_selector::TargetSelectorMatch::Canonical)
             }),
         parent_target_id: node.parent_target_id.clone(),
         attachment: node.attachment,
@@ -2707,7 +2707,7 @@ fn log_scope(
     scope: &ResolvedScope,
     target_id: &str,
     connection_generation: u64,
-    capture: &dbgjs::service_api::LogCaptureSnapshot,
+    capture: &dbgjs::api::service_api::LogCaptureSnapshot,
 ) -> String {
     format!(
         "{}\0{}\0{}\0{}\0{}",
@@ -3280,7 +3280,7 @@ async fn resolve_scope(
             .await)?;
         return Ok(ResolvedScope {
             context,
-            target: dbgjs::target_selector::resolved_target_selector(
+            target: dbgjs::debugger::target_selector::resolved_target_selector(
                 &target.connection_id,
                 &target.target_id,
                 target.connection_generation,
@@ -3321,7 +3321,7 @@ async fn resolve_offline_scope(
 
 fn resolve_target_scope(
     context: String,
-    snapshot: &dbgjs::service_api::ContextSnapshot,
+    snapshot: &dbgjs::api::service_api::ContextSnapshot,
     selection: &CliSelection,
     options: &ScopeOptions,
 ) -> Result<ResolvedScope, io::Error> {
@@ -3338,7 +3338,7 @@ fn resolve_target_scope(
         .filter(|connection| {
             matches!(
                 connection.status,
-                dbgjs::service_api::ConnectionStatus::Connected { .. }
+                dbgjs::api::service_api::ConnectionStatus::Connected { .. }
             )
         })
         .collect::<Vec<_>>();
@@ -3374,14 +3374,14 @@ fn resolve_target_scope(
                 .map(|target| (*connection, target))
         })
         .collect::<Vec<_>>();
-    let candidates = dbgjs::target_selector::select_target_matches(
+    let candidates = dbgjs::debugger::target_selector::select_target_matches(
         &candidates,
         snapshot
             .connections
             .iter()
             .map(|connection| (connection.id.as_str(), connection.generation)),
         requested_target.map(String::as_str),
-        |(connection, target)| dbgjs::target_selector::TargetSelectorCandidate {
+        |(connection, target)| dbgjs::debugger::target_selector::TargetSelectorCandidate {
             target,
             connection_id: &connection.id,
             generation: connection.generation,
@@ -3391,7 +3391,7 @@ fn resolve_target_scope(
     let (connection, target) = match candidates.as_slice() {
         [(connection, target)] => (
             connection.id.clone(),
-            dbgjs::target_selector::resolved_target_selector(
+            dbgjs::debugger::target_selector::resolved_target_selector(
                 &connection.id,
                 &target.target_id,
                 connection.generation,
@@ -3421,7 +3421,7 @@ fn resolve_target_scope(
             let details = candidates
                 .iter()
                 .map(|(connection, target)| {
-                    let qualified = dbgjs::target_selector::qualified_target_selector(
+                    let qualified = dbgjs::debugger::target_selector::qualified_target_selector(
                         &connection.id,
                         &target.target_id,
                         connection.generation,
@@ -3485,7 +3485,7 @@ async fn evaluate_watches(
                     unserializable_value: None,
                     description: Some("unavailable in this frame".to_owned()),
                     object_id: None,
-                    preview: dbgjs::service_api::ValuePreviewSnapshot {
+                    preview: dbgjs::api::service_api::ValuePreviewSnapshot {
                         kind: "error".to_owned(),
                         preview: Some("unavailable in this frame".to_owned()),
                         truncated: false,
@@ -3507,7 +3507,7 @@ fn pause_epoch(snapshot: &TargetDebuggerSnapshot) -> Option<u64> {
 }
 
 async fn resolve_pause_epoch(
-    client: &dbgjs::service_api::DbgServiceClient,
+    client: &dbgjs::api::service_api::DbgServiceClient,
     context_id: &str,
     connection_id: &str,
     target_id: &str,
@@ -3517,8 +3517,8 @@ async fn resolve_pause_epoch(
         [] => {
             let snapshot = rpc(client
                 .targets
-                .get_target(dbgjs::service_api::TargetRef {
-                    connection: dbgjs::service_api::ConnectionRef {
+                .get_target(dbgjs::api::service_api::TargetRef {
+                    connection: dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.to_owned(),
                         connection_id: connection_id.to_owned(),
                     },
@@ -3533,7 +3533,7 @@ async fn resolve_pause_epoch(
 }
 
 fn current_pause_epoch(
-    snapshot: &dbgjs::service_api::TargetDebuggerSnapshot,
+    snapshot: &dbgjs::api::service_api::TargetDebuggerSnapshot,
 ) -> Result<u64, io::Error> {
     match snapshot.phase {
         TargetDebuggerPhase::Paused { epoch } => Ok(epoch),
@@ -4937,7 +4937,7 @@ fn absolute_path(path: &Path) -> Result<std::path::PathBuf, io::Error> {
 
 async fn wait_for_heap_stream<T>(
     output: &OutputFormat,
-    mut result: linkrpc::prelude::CallResult<T, dbgjs::service_api::HeapProfilerError>,
+    mut result: linkrpc::prelude::CallResult<T, dbgjs::api::service_api::HeapProfilerError>,
     mut progress: linkrpc::prelude::StreamReceiver<HeapSnapshotProgress>,
 ) -> Result<T, Box<dyn std::error::Error>> {
     let mut last_progress = None::<HeapSnapshotProgress>;
@@ -5646,8 +5646,8 @@ async fn print_breakpoint_result(
     for application in &breakpoint.applications {
         let target = rpc(client
             .targets
-            .get_target(dbgjs::service_api::TargetRef {
-                connection: dbgjs::service_api::ConnectionRef {
+            .get_target(dbgjs::api::service_api::TargetRef {
+                connection: dbgjs::api::service_api::ConnectionRef {
                     context_id: context.id.clone(),
                     connection_id: application.connection_id.clone(),
                 },
@@ -5910,7 +5910,7 @@ async fn add_connection(
     let configured = rpc(client
         .contexts
         .put_connection(
-            dbgjs::service_api::ConnectionRef {
+            dbgjs::api::service_api::ConnectionRef {
                 context_id: context_id.to_owned(),
                 connection_id: connection_id.to_owned(),
             },
@@ -5920,7 +5920,7 @@ async fn add_connection(
     if connect_now {
         let mut connected = rpc(client
             .contexts
-            .connect_connection(dbgjs::service_api::ConnectionRef {
+            .connect_connection(dbgjs::api::service_api::ConnectionRef {
                 context_id: context_id.to_owned(),
                 connection_id: connection_id.to_owned(),
             })
@@ -6001,8 +6001,8 @@ async fn add_connection(
             };
             let snapshot = rpc(client
                 .targets
-                .get_target(dbgjs::service_api::TargetRef {
-                    connection: dbgjs::service_api::ConnectionRef {
+                .get_target(dbgjs::api::service_api::TargetRef {
+                    connection: dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.to_owned(),
                         connection_id: connection_id.to_owned(),
                     },
@@ -6341,8 +6341,8 @@ async fn wait_target(
     let snapshot = rpc(client
         .targets
         .wait_target(
-            dbgjs::service_api::TargetRef {
-                connection: dbgjs::service_api::ConnectionRef {
+            dbgjs::api::service_api::TargetRef {
+                connection: dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id.to_owned(),
                     connection_id: connection_id.to_owned(),
                 },
@@ -6626,9 +6626,9 @@ fn read_playwright_program(
 /// already speak the same `CdpEnvelope` wire format, so this is pure message pass-through: dbgjs
 /// does not interpret CDP itself here, it only relays bytes between the two connections.
 async fn run_relay_stdio(websocket_url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use dbgjs::cdp_transport::ManagedCdpTransport;
-    use dbgjs::stdio_transport::CdpStdioTransport;
-    use dbgjs::websocket_transport::CdpWebSocketTransport;
+    use dbgjs::connection::transport::cdp_transport::ManagedCdpTransport;
+    use dbgjs::connection::transport::stdio_transport::CdpStdioTransport;
+    use dbgjs::connection::transport::websocket_transport::CdpWebSocketTransport;
     use linkrpc::prelude::MessageTransport;
 
     let websocket = CdpWebSocketTransport::connect(websocket_url).await?;
@@ -6698,7 +6698,7 @@ async fn run_playwright_program(
         )
         .into());
     }
-    let playwright_package = dbgjs::connection_provider::find_playwright_package()?;
+    let playwright_package = dbgjs::connection::providers::find_playwright_package()?;
     let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
     let mut child = TokioCommand::new(&node)
         .arg("--input-type=module")
@@ -7167,8 +7167,8 @@ mod tests {
         ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
         select_renderer_target, wait_for_renderer_target_id,
     };
-    use dbgjs::context_identity::ContextKind;
-    use dbgjs::service_api::{
+    use dbgjs::service::context_identity::ContextKind;
+    use dbgjs::api::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
         ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot,
@@ -7700,20 +7700,20 @@ mod tests {
         let (kind, options) =
             parse_source_tree_options(&arguments(&["resolved", "--max-lines", "42", "--no-trim"]))
                 .unwrap();
-        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Resolved);
+        assert_eq!(kind, dbgjs::api::service_api::SourceTreeKind::Resolved);
         assert_eq!(options.max_lines, 42);
         assert!(!options.all);
         assert!(!options.trim_width);
 
         let (kind, options) = parse_source_tree_options(&arguments(&["loaded", "--all"])).unwrap();
-        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Loaded);
+        assert_eq!(kind, dbgjs::api::service_api::SourceTreeKind::Loaded);
         assert!(options.all);
         assert!(options.trim_width);
 
         let (kind, _) = parse_source_tree_options(&arguments(&["source-mapped"])).unwrap();
-        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::SourceMapped);
+        assert_eq!(kind, dbgjs::api::service_api::SourceTreeKind::SourceMapped);
         let (kind, _) = parse_source_tree_options(&arguments(&["formatted"])).unwrap();
-        assert_eq!(kind, dbgjs::service_api::SourceTreeKind::Formatted);
+        assert_eq!(kind, dbgjs::api::service_api::SourceTreeKind::Formatted);
 
         assert!(parse_source_tree_options(&arguments(&["loaded", "--max-lines", "0"])).is_err());
         assert!(parse_source_tree_options(&arguments(&["unknown"])).is_err());
@@ -7881,7 +7881,7 @@ mod tests {
             .iter()
             .flat_map(ConnectionSnapshot::target_forest)
             .collect();
-        snapshot.target_forest[0].attachment = dbgjs::service_api::TargetAttachmentState::Debugger;
+        snapshot.target_forest[0].attachment = dbgjs::api::service_api::TargetAttachmentState::Debugger;
         let selection = CliSelection {
             context: Some("ctx".to_owned()),
             connection: Some("browser".to_owned()),
@@ -7923,7 +7923,7 @@ mod tests {
             "a managed debugger must be distinct from CDP's targetInfo.attached"
         );
         let mut native = snapshot.clone();
-        native.target_forest[0].attachment = dbgjs::service_api::TargetAttachmentState::CdpClient;
+        native.target_forest[0].attachment = dbgjs::api::service_api::TargetAttachmentState::CdpClient;
         let discovered = target_list_output(
             &native,
             &selection,
@@ -7934,7 +7934,7 @@ mod tests {
         let native = discovered.targets.iter().find(|entry| entry.target.target_id == "page-1").unwrap();
         assert_eq!(serde_json::to_value(native).unwrap()["attachment"], "cdpClient");
         let entry = &targets.targets[0];
-        let qualified = dbgjs::target_selector::qualified_target_selector(
+        let qualified = dbgjs::debugger::target_selector::qualified_target_selector(
             &entry.connection_id,
             &entry.target.target_id,
             entry.connection_generation,
@@ -8110,7 +8110,7 @@ mod tests {
 
     #[test]
     fn log_cursor_scope_changes_on_reconnect_and_reattachment() {
-        use dbgjs::service_api::LogCaptureSnapshot;
+        use dbgjs::api::service_api::LogCaptureSnapshot;
         let scope = ResolvedScope {
             context: "ctx".into(),
             connection: "browser".into(),

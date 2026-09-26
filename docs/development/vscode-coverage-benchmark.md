@@ -71,7 +71,7 @@ with `cargo run --release --example vscode_breadcrumbs`. Do not compare debug
 timings to release timings as evidence of an algorithmic improvement.
 
 The replay calls the production
-[`SymbolIndex`](../../packages/dbgjs/src/language_intelligence.rs) by identity; no breadcrumb
+[`SymbolIndex`](../../packages/dbgjs/src/source/language_intelligence.rs) by identity; no breadcrumb
 implementation is copied into the benchmark. It builds the index once, times
 each complete lookup pass separately, and verifies that all passes return
 identical strings and `null` results. `--baseline` additionally checks those

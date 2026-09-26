@@ -1,4 +1,4 @@
-use dbgjs::service_api::{
+use dbgjs::api::service_api::{
     AgentSessionSnapshot, BreakpointPendingReason, BreakpointSnapshot, BreakpointStatus,
     CaptureSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
     CompactedSourceNodeSnapshot, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
@@ -18,7 +18,7 @@ use dbgjs::service_api::{
     UncompactedSourceGraphSnapshot, UncompactedSourceNodeSnapshot,
     UncompactedSourceRevisionSnapshot, ValueSnapshot,
 };
-use dbgjs::coverage_filter::CoveragePathFilter;
+use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -123,7 +123,7 @@ pub struct TargetListEntry {
     pub connection_generation: u64,
     pub selected: bool,
     pub parent_target_id: Option<String>,
-    pub attachment: dbgjs::service_api::TargetAttachmentState,
+    pub attachment: dbgjs::api::service_api::TargetAttachmentState,
     #[serde(flatten)]
     pub target: TargetSnapshot,
 }
@@ -350,7 +350,7 @@ impl OutputFormat {
 
     pub fn print_logs(
         &self,
-        snapshot: &dbgjs::service_api::TargetLogSnapshot,
+        snapshot: &dbgjs::api::service_api::TargetLogSnapshot,
         after: u64,
         limit: usize,
     ) -> Result<u64, serde_json::Error> {
@@ -599,11 +599,11 @@ impl OutputFormat {
 }
 
 fn log_coverage_human(
-    snapshot: &dbgjs::service_api::TargetLogSnapshot,
+    snapshot: &dbgjs::api::service_api::TargetLogSnapshot,
     empty: bool,
     after: u64,
 ) -> String {
-    use dbgjs::service_api::LogCaptureStatus;
+    use dbgjs::api::service_api::LogCaptureStatus;
     let capture = &snapshot.capture;
     let status = match capture.status {
         LogCaptureStatus::Active => "active",
@@ -1131,10 +1131,10 @@ fn source_tree_lines(
         return vec![format!(
             "No {} sources are currently observed.",
             match snapshot.kind {
-                dbgjs::service_api::SourceTreeKind::Loaded => "loaded",
-                dbgjs::service_api::SourceTreeKind::SourceMapped => "source-mapped",
-                dbgjs::service_api::SourceTreeKind::Formatted => "formatted",
-                dbgjs::service_api::SourceTreeKind::Resolved => "resolved",
+                dbgjs::api::service_api::SourceTreeKind::Loaded => "loaded",
+                dbgjs::api::service_api::SourceTreeKind::SourceMapped => "source-mapped",
+                dbgjs::api::service_api::SourceTreeKind::Formatted => "formatted",
+                dbgjs::api::service_api::SourceTreeKind::Resolved => "resolved",
             }
         )];
     }
@@ -1618,8 +1618,8 @@ fn promise_line(promise: &PromiseSnapshot) -> String {
     )
 }
 
-fn promise_state_name(state: dbgjs::service_api::PromiseState) -> &'static str {
-    use dbgjs::service_api::PromiseState;
+fn promise_state_name(state: dbgjs::api::service_api::PromiseState) -> &'static str {
+    use dbgjs::api::service_api::PromiseState;
     match state {
         PromiseState::Pending => "pending",
         PromiseState::Fulfilled => "fulfilled",
@@ -1629,10 +1629,10 @@ fn promise_state_name(state: dbgjs::service_api::PromiseState) -> &'static str {
 }
 
 fn promise_classification_name(
-    classification: dbgjs::service_api::PromiseClassification,
+    classification: dbgjs::api::service_api::PromiseClassification,
 ) -> &'static str {
     match classification {
-        dbgjs::service_api::PromiseClassification::Indeterminate => "indeterminate",
+        dbgjs::api::service_api::PromiseClassification::Indeterminate => "indeterminate",
     }
 }
 
@@ -1675,7 +1675,7 @@ impl HumanOutput for HeapReferencesSnapshot {
     }
 }
 
-fn heap_reference_line(reference: &dbgjs::service_api::HeapReferenceSnapshot) -> String {
+fn heap_reference_line(reference: &dbgjs::api::service_api::HeapReferenceSnapshot) -> String {
     let label = reference
         .name
         .as_deref()
@@ -1698,7 +1698,7 @@ fn heap_preview_suffix(preview: Option<&str>) -> String {
     preview.map(|preview| format!("  {preview}")).unwrap_or_default()
 }
 
-fn heap_reference_source(reference: &str, source: &dbgjs::object_inspection::ObjectSourceSnapshot) -> String {
+fn heap_reference_source(reference: &str, source: &dbgjs::debugger::object_inspection::ObjectSourceSnapshot) -> String {
     let rendered = render_object_source(source);
     if rendered.is_empty() {
         String::new()
@@ -1779,10 +1779,10 @@ fn heap_path_lines(path: &HeapPathSnapshot) -> Vec<String> {
     lines
 }
 
-fn heap_path_step_line(step: &dbgjs::service_api::HeapPathStepSnapshot) -> String {
+fn heap_path_step_line(step: &dbgjs::api::service_api::HeapPathStepSnapshot) -> String {
     let direction = match step.direction {
-        dbgjs::service_api::HeapTraversalDirection::Outgoing => "->",
-        dbgjs::service_api::HeapTraversalDirection::Incoming => "<-",
+        dbgjs::api::service_api::HeapTraversalDirection::Outgoing => "->",
+        dbgjs::api::service_api::HeapTraversalDirection::Incoming => "<-",
     };
     let label = step
         .name
@@ -2071,8 +2071,8 @@ fn print_target_tree(
 
 }
 
-fn target_attachment_label(state: dbgjs::service_api::TargetAttachmentState) -> &'static str {
-    use dbgjs::service_api::TargetAttachmentState;
+fn target_attachment_label(state: dbgjs::api::service_api::TargetAttachmentState) -> &'static str {
+    use dbgjs::api::service_api::TargetAttachmentState;
     match state {
         TargetAttachmentState::Debugger => "; debugger attached",
         TargetAttachmentState::CdpClient => "; CDP client attached",
@@ -2081,7 +2081,7 @@ fn target_attachment_label(state: dbgjs::service_api::TargetAttachmentState) -> 
 }
 
 fn target_tree_selector(entry: &TargetListEntry) -> String {
-    dbgjs::target_selector::qualified_target_selector(
+    dbgjs::debugger::target_selector::qualified_target_selector(
         &entry.connection_id,
         &entry.target.target_id,
         entry.connection_generation,
@@ -2227,9 +2227,9 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
             Some(ProcessTreeLeaf::Target(target)) => {
                 let attachment = target.attachment.unwrap_or_else(|| {
                     if target.target.attached {
-                        dbgjs::service_api::TargetAttachmentState::CdpClient
+                        dbgjs::api::service_api::TargetAttachmentState::CdpClient
                     } else {
-                        dbgjs::service_api::TargetAttachmentState::Detached
+                        dbgjs::api::service_api::TargetAttachmentState::Detached
                     }
                 });
                 let target = &target.target;
@@ -2303,9 +2303,9 @@ impl BoundedTreeStyle<ProcessOrder, ProcessTreeLeaf<'_>> for ProcessTreeStyle {
 
 pub(super) fn project_process_tree_target_attachments(
     trees: &mut [ProcessTreeSnapshot],
-    contexts: &[dbgjs::service_api::ContextSnapshot],
+    contexts: &[dbgjs::api::service_api::ContextSnapshot],
 ) {
-    use dbgjs::service_api::{ConnectionConfiguration, TargetAttachmentState};
+    use dbgjs::api::service_api::{ConnectionConfiguration, TargetAttachmentState};
     for context in contexts {
         for connection in &context.connections {
             let root_pid = match connection.configuration {
@@ -3058,7 +3058,7 @@ impl HumanOutput for ValueSnapshot {
         if let Some(promise) = &self.promise {
             println!("Promise <{}>", promise_state_name(promise.state));
             if let Some(settlement) = &promise.settlement {
-                let label = if promise.state == dbgjs::service_api::PromiseState::Rejected {
+                let label = if promise.state == dbgjs::api::service_api::PromiseState::Rejected {
                     "reason"
                 } else {
                     "value"
@@ -3474,7 +3474,7 @@ fn render_heap_classes_human(
         return output;
     }
     for diagnostic in &snapshot.analysis.script_mappings {
-        if diagnostic.status != dbgjs::service_api::HeapMappingStatus::Mapped
+        if diagnostic.status != dbgjs::api::service_api::HeapMappingStatus::Mapped
             && output.len() < maximum_lines.saturating_sub(1) {
             output.push(format!("Mapping script:{} ({}): {}{}",
                 diagnostic.script_id, diagnostic.url, heap_mapping_status_label(&diagnostic.status),
@@ -3529,8 +3529,8 @@ fn render_heap_classes_human(
     output
 }
 
-fn heap_mapping_status_label(status: &dbgjs::service_api::HeapMappingStatus) -> &'static str {
-    use dbgjs::service_api::HeapMappingStatus;
+fn heap_mapping_status_label(status: &dbgjs::api::service_api::HeapMappingStatus) -> &'static str {
+    use dbgjs::api::service_api::HeapMappingStatus;
     match status {
         HeapMappingStatus::NotAttempted => "not attempted (metadata unavailable)",
         HeapMappingStatus::NoMapSupplied => "no map supplied",
@@ -3892,8 +3892,8 @@ fn coverage_entries(snapshot: &CoverageSnapshot) -> Vec<CoverageEntry> {
 }
 
 fn format_generated_location(
-    source: &dbgjs::service_api::CoverageSourceSnapshot,
-    function: &dbgjs::service_api::CoverageFunctionSnapshot,
+    source: &dbgjs::api::service_api::CoverageSourceSnapshot,
+    function: &dbgjs::api::service_api::CoverageFunctionSnapshot,
 ) -> String {
     match &function.generated_location {
         Some(location) => {
@@ -4245,7 +4245,7 @@ fn print_source_excerpt(label: &str, source: &SourceExcerpt) {
     }
 }
 
-fn runtime_location(location: &dbgjs::service_api::SourceLocation) -> String {
+fn runtime_location(location: &dbgjs::api::service_api::SourceLocation) -> String {
     if location.source_url.is_empty() {
         format!(
             "runtime (anonymous script):{}:{}",
@@ -4291,7 +4291,7 @@ fn render_value_snapshot(value: &ValueSnapshot) -> String {
 }
 
 fn render_value_preview_with_reference(
-    value: &dbgjs::service_api::ValuePreviewSnapshot,
+    value: &dbgjs::api::service_api::ValuePreviewSnapshot,
 ) -> String {
     let preview = render_value_preview(value);
     let reference = value
@@ -4302,13 +4302,13 @@ fn render_value_preview_with_reference(
     format!("{preview}{reference}")
 }
 
-fn render_value_preview(value: &dbgjs::service_api::ValuePreviewSnapshot) -> String {
+fn render_value_preview(value: &dbgjs::api::service_api::ValuePreviewSnapshot) -> String {
     let preview = value.preview.as_deref().unwrap_or(&value.kind);
     let truncated = if value.truncated { "..." } else { "" };
     format!("{}{truncated}{}", terminal_text(preview), render_object_source(&value.source))
 }
 
-fn render_object_source(source: &dbgjs::object_inspection::ObjectSourceSnapshot) -> String {
+fn render_object_source(source: &dbgjs::debugger::object_inspection::ObjectSourceSnapshot) -> String {
     let mut output = String::new();
     if source.has_conflicting_locations() {
         output.push_str("\n  source conflict: location evidence disagrees; all positions retained");
@@ -4419,8 +4419,8 @@ fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
         } => format!(
             "CDP over stdio from {command} ({})",
             match topology {
-                dbgjs::service_api::CdpStdioTopology::Browser => "browser",
-                dbgjs::service_api::CdpStdioTopology::Target => "target",
+                dbgjs::api::service_api::CdpStdioTopology::Browser => "browser",
+                dbgjs::api::service_api::CdpStdioTopology::Target => "target",
             }
         ),
     }
@@ -4573,7 +4573,7 @@ fn print_breakpoint_pending_reason(reason: &BreakpointPendingReason, indent: &st
 }
 
 fn print_target_breakpoint_explanation(
-    breakpoint: &dbgjs::service_api::TargetBreakpointSnapshot,
+    breakpoint: &dbgjs::api::service_api::TargetBreakpointSnapshot,
 ) {
     match &breakpoint.status {
         TargetBreakpointStatus::WaitingForScript => {
@@ -4647,7 +4647,7 @@ mod tests {
         source_search_incomplete_message, source_tree_lines, style_process_label,
         style_session_label, target_tree_selector, terminal_text,
     };
-    use dbgjs::service_api::{
+    use dbgjs::api::service_api::{
         AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
         CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
         CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
@@ -4701,21 +4701,21 @@ mod tests {
     fn object_source_output_keeps_complete_resolvable_paths_and_conflicting_evidence() {
         let path = format!("file:///workspace/{}/provider.ts", "long-directory/".repeat(30));
         let generated = SourceLocation { source_url: "file:///workspace/app.min.js".into(), line: 1, column: 89 };
-        let position = dbgjs::source_location::ResolvedSourcePosition {
+        let position = dbgjs::source::source_location::ResolvedSourcePosition {
             generated: generated.clone(),
             resolved: SourceLocation { source_url: path.clone(), line: 42, column: 7 },
             breadcrumb: Some("Provider.provideModels".into()),
             mapping: "authored".into(),
             diagnostic: None,
         };
-        let heap = dbgjs::object_inspection::ObjectLocationSnapshot {
+        let heap = dbgjs::debugger::object_inspection::ObjectLocationSnapshot {
             origin: "heapSnapshot".into(), kind: "function".into(), script_id: "7".into(),
             position,
         };
         let mut live = heap.clone();
         live.origin = "live".into();
         live.position.generated.column += 1;
-        let source = dbgjs::object_inspection::ObjectSourceSnapshot {
+        let source = dbgjs::debugger::object_inspection::ObjectSourceSnapshot {
             locations: vec![heap, live], diagnostics: vec![],
         };
         let rendered = super::render_object_source(&source);
@@ -4730,12 +4730,12 @@ mod tests {
 
     #[test]
     fn object_source_output_prefers_snapshot_for_matching_live_locations() {
-        use dbgjs::object_inspection::{ObjectLocationSnapshot, ObjectSourceSnapshot};
+        use dbgjs::debugger::object_inspection::{ObjectLocationSnapshot, ObjectSourceSnapshot};
         let heap = ObjectLocationSnapshot {
             origin: "heapSnapshot".into(),
             kind: "constructor".into(),
             script_id: "7".into(),
-            position: dbgjs::source_location::ResolvedSourcePosition {
+            position: dbgjs::source::source_location::ResolvedSourcePosition {
                 generated: SourceLocation {
                     source_url: "file:///workspace/app.min.js".into(), line: 1, column: 89,
                 },
@@ -5586,7 +5586,7 @@ mod tests {
 
     #[test]
     fn process_tree_distinguishes_managed_debuggers_from_cdp_clients() {
-        use dbgjs::service_api::{
+        use dbgjs::api::service_api::{
             ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
             TargetAttachmentState, TargetNodeSnapshot,
         };
@@ -5659,7 +5659,7 @@ mod tests {
             connection_generation: 1,
             selected: false,
             parent_target_id: None,
-            attachment: dbgjs::service_api::TargetAttachmentState::Detached,
+            attachment: dbgjs::api::service_api::TargetAttachmentState::Detached,
             target: TargetSnapshot {
                 target_id: target_id.to_owned(),
                 target_type: "page".to_owned(),
@@ -5696,13 +5696,13 @@ mod tests {
             &root, &browser, &renderer, &renderer_iframe, &page, &page_iframe,
         ] {
             assert_eq!(
-                dbgjs::target_selector::match_target_selector(
+                dbgjs::debugger::target_selector::match_target_selector(
                     &entry.target,
                     &entry.connection_id,
                     entry.connection_generation,
                     &target_tree_selector(entry),
                 ),
-                Some(dbgjs::target_selector::TargetSelectorMatch::Qualified),
+                Some(dbgjs::debugger::target_selector::TargetSelectorMatch::Qualified),
             );
         }
     }
@@ -6276,7 +6276,7 @@ mod tests {
 
     #[test]
     fn log_empty_reports_capture_status_not_absence_of_errors() {
-        use dbgjs::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
+        use dbgjs::api::service_api::{LogCaptureSnapshot, LogCaptureStatus, TargetLogSnapshot};
         let mut snapshot = TargetLogSnapshot {
             context_id: "context".into(),
             connection_id: "browser".into(),

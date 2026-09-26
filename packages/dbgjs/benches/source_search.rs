@@ -2,8 +2,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use dbgjs::content_store::ContentHash;
-use dbgjs::source_search::{
+use dbgjs::capture::content_store::ContentHash;
+use dbgjs::source::source_search::{
     SearchControl, SearchDocument, SearchQuery, SourceIdentity, search,
 };
 

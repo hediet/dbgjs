@@ -1,4 +1,5 @@
 /target
+/packages/dbgjs/target
 /node_modules
 /tests/fixtures/typescript-browser/dist
 /test-results

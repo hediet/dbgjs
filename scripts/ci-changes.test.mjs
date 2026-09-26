@@ -35,7 +35,7 @@ test("all native build inputs invalidate both jobs", () => {
 		"package-lock.json",
 		"packages/dbgjs/Cargo.toml",
 		"packages/dbgjs/src/bin/dbgjs.rs",
-		"packages/dbgjs/src/providers/node.mjs",
+		"packages/dbgjs/src/connection/providers/node.mjs",
 		"packages/cdp-codegen/src/main.rs",
 		"tests/support/cdp-recording.mjs",
 		".github/actions/setup-linkrpc/action.yml",

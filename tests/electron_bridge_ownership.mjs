@@ -125,7 +125,7 @@ globalThis.require = (name) => {
 };
 
 const source = await readFile(
-	new URL("../packages/dbgjs/src/providers/electron_renderer_bridge.js", import.meta.url),
+	new URL("../packages/dbgjs/src/connection/providers/electron_renderer_bridge.js", import.meta.url),
 	"utf8",
 );
 const install = (0, eval)(`(${source})`);

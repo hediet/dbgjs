@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use sourcemap::SourceMapBuilder;
 
-use dbgjs::local_rpc::{
+use dbgjs::connection::transport::local_rpc::{
     LocalTransportEndpoint, persistent_state_file, read_endpoint, startup_error_file,
 };
 

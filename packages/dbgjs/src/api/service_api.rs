@@ -1,0 +1,2168 @@
+mod client;
+pub use client::{DbgServiceClient, interfaces, register};
+mod errors;
+pub use errors::*;
+
+mod service;
+pub use service::*;
+mod context;
+pub use context::*;
+mod source;
+pub use source::*;
+mod capture;
+pub use capture::*;
+mod target_debugger;
+pub use target_debugger::*;
+mod cdp_access;
+pub use cdp_access::*;
+mod relay;
+pub use relay::*;
+mod browser_automation;
+pub use browser_automation::*;
+mod coverage;
+pub use coverage::*;
+mod cpu_profiler;
+pub use cpu_profiler::*;
+mod heap_profiler;
+pub use heap_profiler::*;
+
+use linkrpc::prelude::{JsonRpcError, link_rpc_interface};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::service::context_identity::ContextKind;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRef {
+    pub context_id: String,
+    pub connection_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetRef {
+    pub connection: ConnectionRef,
+    pub target_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceInfo {
+    pub process_id: u32,
+    pub agent_instance_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTreeSnapshot {
+    pub root_process_id: u32,
+    #[serde(default)]
+    pub root_kind: ProcessRootKind,
+    pub processes: Vec<ProcessSnapshot>,
+    pub runtime_metadata_available: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ProcessTargetSnapshot>,
+    /// Whether runtime children were queried for this root. An empty `targets` collection is only
+    /// authoritative when this is true.
+    #[serde(default)]
+    pub targets_observed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_discovery_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessRootKind {
+    #[default]
+    Vscode,
+    Node,
+    Electron,
+    Browser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessTargetSnapshot {
+    pub process_id: Option<u32>,
+    #[serde(flatten)]
+    pub target: TargetSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<TargetAttachmentState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessSnapshot {
+    pub process_id: u32,
+    pub parent_process_id: Option<u32>,
+    #[serde(default)]
+    pub attachable: bool,
+    #[serde(default)]
+    pub debug_target_id: Option<String>,
+    pub name: String,
+    pub command_line: String,
+    pub creation_date: String,
+    pub role: ProcessRole,
+    pub display_name: Option<String>,
+    pub window_id: Option<u32>,
+    pub window_title: Option<String>,
+    #[serde(default)]
+    pub cpu_percent: Option<u32>,
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub agent_sessions: Vec<AgentSessionSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionSnapshot {
+    pub internal_id: String,
+    pub chat_uri: Option<String>,
+    pub title: Option<String>,
+    pub working_directories: Vec<String>,
+    pub disconnected: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceGraphSnapshot {
+    pub revision: u64,
+    pub resources: Vec<ResourceSnapshot>,
+    pub relations: Vec<ResourceRelationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSnapshot {
+    pub id: String,
+    pub kinds: Vec<String>,
+    pub label: Option<String>,
+    pub attributes: BTreeMap<String, serde_json::Value>,
+    pub contributors: Vec<String>,
+    pub capabilities: Vec<ResourceCapabilitySnapshot>,
+    pub frontiers: Vec<ResourceFrontierSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceCapabilitySnapshot {
+    pub source: String,
+    pub handle: u64,
+    pub kind: String,
+    pub title: String,
+    pub detail: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceFrontierSnapshot {
+    pub relation: String,
+    pub state: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceRelationSnapshot {
+    pub kind: String,
+    pub from: String,
+    pub to: String,
+    pub contributors: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessRole {
+    VscodeMain,
+    ElectronMain,
+    BrowserMain,
+    Renderer,
+    ExtensionHost,
+    NodeUtility,
+    Node,
+    TypeScriptServer,
+    TypeScriptInstaller,
+    LanguageServer,
+    PtyHost,
+    FileWatcher,
+    AgentHost,
+    Copilot,
+    Claude,
+    Codex,
+    Agent,
+    Gpu,
+    NetworkService,
+    AudioService,
+    Crashpad,
+    Utility,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSummary {
+    pub agent_instance_id: String,
+    pub id: String,
+    pub kind: ContextKind,
+    pub path_distance: Option<u32>,
+    pub path_ancestor: Option<bool>,
+    pub display_name: String,
+    pub revision: u64,
+    pub connection_count: u32,
+    pub breakpoint_count: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSnapshot {
+    pub agent_instance_id: String,
+    pub id: String,
+    pub display_name: String,
+    pub revision: u64,
+    #[serde(default)]
+    pub resource_revision: u64,
+    pub connections: Vec<ConnectionSnapshot>,
+    pub target_forest: Vec<TargetNodeSnapshot>,
+    pub breakpoints: Vec<BreakpointSnapshot>,
+    #[serde(default)]
+    pub source_formatting: SourceFormattingSettings,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceFormattingMode {
+    #[default]
+    Off,
+    Auto,
+    On,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFormattingRule {
+    pub id: String,
+    pub mode: SourceFormattingMode,
+    pub target_pattern: Option<String>,
+    pub url_pattern: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFormattingSettings {
+    pub default_mode: SourceFormattingMode,
+    pub rules: Vec<SourceFormattingRule>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceViewPreference {
+    #[default]
+    Policy,
+    Original,
+    Formatted,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationOptions {
+    pub expected_revision: Option<u64>,
+    pub request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ObservationCursor {
+    Current,
+    After { revision: u64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextObservation {
+    pub snapshot: ContextSnapshot,
+    pub events: Vec<ContextEventSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextEventSnapshot {
+    pub revision: u64,
+    pub kind: String,
+    pub subject_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ObservationResult {
+    Items {
+        items: Vec<ContextObservation>,
+    },
+    HistoryGap {
+        requested_revision: u64,
+        oldest_available_revision: u64,
+        current: ContextSnapshot,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionSnapshot {
+    pub id: String,
+    pub configuration: ConnectionConfiguration,
+    pub generation: u64,
+    pub status: ConnectionStatus,
+    pub targets: Vec<TargetSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConnectionConfiguration {
+    #[serde(rename_all = "camelCase")]
+    DirectCdp { endpoint: String },
+    #[serde(rename_all = "camelCase")]
+    NodeInspector { endpoint: String },
+    #[serde(rename_all = "camelCase")]
+    Process { process_id: u32 },
+    #[serde(rename_all = "camelCase")]
+    ProcessTree { root_pid: u32 },
+    /// Uses the process tree rooted at `root_pid` as the access path while exposing only
+    /// `target_id` and its descendants as this connection's public target scope.
+    #[serde(rename_all = "camelCase")]
+    ScopedProcessTree { root_pid: u32, target_id: String },
+    #[serde(rename_all = "camelCase")]
+    Playwright {
+        url: String,
+        #[serde(default, alias = "playwright_package")]
+        playwright_package: Option<String>,
+        channel: PlaywrightChannel,
+        headless: bool,
+        #[serde(default, alias = "ignore_https_errors")]
+        ignore_https_errors: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    Chrome {
+        url: String,
+        executable: String,
+        headless: bool,
+        #[serde(default, alias = "user_data_dir")]
+        user_data_dir: Option<String>,
+        args: Vec<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Node {
+        program: String,
+        args: Vec<String>,
+        cwd: String,
+        #[serde(alias = "runtime_executable")]
+        runtime_executable: String,
+        #[serde(default, alias = "runtime_args")]
+        runtime_args: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        cwd: String,
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        topology: CdpStdioTopology,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CdpStdioTopology {
+    Browser,
+    #[default]
+    Target,
+}
+
+impl From<&str> for ConnectionConfiguration {
+    fn from(endpoint: &str) -> Self {
+        Self::DirectCdp {
+            endpoint: endpoint.to_owned(),
+        }
+    }
+}
+
+impl From<String> for ConnectionConfiguration {
+    fn from(endpoint: String) -> Self {
+        Self::DirectCdp { endpoint }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaywrightChannel {
+    Bundled,
+    Chrome,
+    ChromeBeta,
+    ChromeDev,
+    ChromeCanary,
+    Msedge,
+    MsedgeBeta,
+    MsedgeDev,
+    MsedgeCanary,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetSnapshot {
+    pub target_id: String,
+    pub target_type: String,
+    pub title: String,
+    pub url: String,
+    pub attached: bool,
+    pub parent_id: Option<String>,
+    pub opener_id: Option<String>,
+    pub browser_context_id: Option<String>,
+    pub subtype: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaywrightProxyEndpoint {
+    pub id: String,
+    pub websocket_url: String,
+    pub connection_generation: u64,
+}
+
+/// A short-lived, authenticated loopback CDP endpoint exposed by `dbgjs context relay` or
+/// `dbgjs target relay`. `id` identifies the relay for `close_relay`; `websocket_url` carries
+/// its own random capability token and must not be reused once the relay closes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayEndpoint {
+    pub id: String,
+    pub websocket_url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetNodeSnapshot {
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub target: TargetSnapshot,
+    pub parent_target_id: Option<String>,
+    pub attachment: TargetAttachmentState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetAttachmentState {
+    Detached,
+    #[serde(alias = "external")]
+    CdpClient,
+    Debugger,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalTargetSnapshot {
+    pub context_id: String,
+    pub resource_id: String,
+    pub target_id: String,
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub target: TargetSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureKind {
+    Coverage,
+    CpuProfile,
+    HeapSnapshot,
+}
+
+pub fn capture_relative_index(selector: &str) -> Result<Option<usize>, String> {
+    if selector == "." {
+        return Ok(Some(1));
+    }
+    let Some(index) = selector.strip_prefix('.') else {
+        return Ok(None);
+    };
+    if index.is_empty() || !index.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Ok(None);
+    }
+    match index.parse::<usize>() {
+        Ok(index) if index > 0 => Ok(Some(index)),
+        _ => Err(format!(
+            "invalid capture selector '{selector}': relative indices start at .1"
+        )),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureSnapshot {
+    pub context_id: String,
+    pub name: String,
+    pub kind: CaptureKind,
+    pub target_id: String,
+    pub connection_id: String,
+    pub connection_generation: u64,
+    pub storage_id: String,
+}
+
+impl ConnectionSnapshot {
+    pub fn target_forest(&self) -> Vec<TargetNodeSnapshot> {
+        let targets = self
+            .targets
+            .iter()
+            .map(|target| (target.target_id.as_str(), target))
+            .collect::<BTreeMap<_, _>>();
+        let mut children = BTreeMap::<&str, Vec<&str>>::new();
+        let mut roots = Vec::new();
+
+        for target in &self.targets {
+            let parent = target
+                .parent_id
+                .as_deref()
+                .filter(|parent| targets.contains_key(parent))
+                .or_else(|| {
+                    target
+                        .opener_id
+                        .as_deref()
+                        .filter(|parent| targets.contains_key(parent))
+                });
+            if let Some(parent) = parent {
+                children.entry(parent).or_default().push(&target.target_id);
+            } else {
+                roots.push(target.target_id.as_str());
+            }
+        }
+        roots.sort_unstable();
+        for child_ids in children.values_mut() {
+            child_ids.sort_unstable();
+        }
+
+        let mut visited = std::collections::BTreeSet::new();
+        let mut forest = Vec::with_capacity(targets.len());
+        for target_id in roots {
+            self.append_target_node(
+                target_id,
+                None,
+                &targets,
+                &children,
+                &mut visited,
+                &mut forest,
+            );
+        }
+        for target_id in targets.keys() {
+            if !visited.contains(*target_id) {
+                self.append_target_node(
+                    target_id,
+                    None,
+                    &targets,
+                    &children,
+                    &mut visited,
+                    &mut forest,
+                );
+            }
+        }
+        forest
+    }
+
+    fn append_target_node(
+        &self,
+        target_id: &str,
+        parent_target_id: Option<&str>,
+        targets: &BTreeMap<&str, &TargetSnapshot>,
+        children: &BTreeMap<&str, Vec<&str>>,
+        visited: &mut std::collections::BTreeSet<String>,
+        forest: &mut Vec<TargetNodeSnapshot>,
+    ) {
+        if !visited.insert(target_id.to_owned()) {
+            return;
+        }
+        let target = targets
+            .get(target_id)
+            .expect("target forest only contains known targets");
+        forest.push(TargetNodeSnapshot {
+            connection_id: self.id.clone(),
+            connection_generation: self.generation,
+            target: (*target).clone(),
+            parent_target_id: parent_target_id.map(str::to_owned),
+            attachment: if target.attached {
+                TargetAttachmentState::CdpClient
+            } else {
+                TargetAttachmentState::Detached
+            },
+        });
+        for child in children.get(target_id).into_iter().flatten() {
+            self.append_target_node(child, Some(target_id), targets, children, visited, forest);
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConnectionStatus {
+    Disconnected,
+    Connecting,
+    Disconnecting,
+    Connected {
+        product: String,
+        #[serde(rename = "protocolVersion")]
+        #[schemars(rename = "protocolVersion")]
+        protocol_version: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSnapshot {
+    pub id: String,
+    pub source_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub status: BreakpointStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_reason: Option<BreakpointPendingReason>,
+    pub enabled: bool,
+    pub condition: Option<String>,
+    pub target_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<TargetBreakpointSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applications: Vec<BreakpointApplicationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum BreakpointStatus {
+    Unconfirmed,
+    Disabled,
+    Pending,
+    PartiallyBound { application_count: u32 },
+    Bound { application_count: u32 },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointPendingReason {
+    WaitingForTarget,
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Unmapped {
+        diagnostics: Vec<String>,
+    },
+    Applicable,
+    Installing,
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSpec {
+    pub source_path: String,
+    pub line: u32,
+    pub column: u32,
+    pub enabled: bool,
+    pub condition: Option<String>,
+    pub target_selector: Option<String>,
+}
+
+/// Tests breakpoint applicability against a canonical target ID.
+pub fn breakpoint_applies_to_target(
+    enabled: bool,
+    target_selector: Option<&str>,
+    target_id: &str,
+) -> bool {
+    enabled && target_selector.is_none_or(|selector| selector == target_id)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSnapshotInfo {
+    pub path: String,
+    pub kind: String,
+    pub status: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
+    pub source_map_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceContentSnapshot {
+    pub path: String,
+    pub content: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub total_lines: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMatchSnapshot {
+    pub path: String,
+    pub content_hash: String,
+    pub kind: String,
+    pub provenance: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
+    pub line: u32,
+    pub column: u32,
+    pub match_length: u32,
+    pub text: String,
+    pub before_context: Vec<String>,
+    pub after_context: Vec<String>,
+    #[serde(default)]
+    pub excerpt_start_column: Option<u32>,
+    #[serde(default)]
+    pub text_truncated: bool,
+    #[serde(default)]
+    pub context_truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchOptions {
+    pub pattern: String,
+    pub path: Option<String>,
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub max_results: u32,
+    pub context_lines: u32,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub view: SourceViewPreference,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchSnapshot {
+    pub matches: Vec<SourceMatchSnapshot>,
+    pub omitted_matches: u64,
+    #[serde(default)]
+    pub output_omitted_matches: u64,
+    pub searched_sources: u32,
+    pub searched_contents: u32,
+    pub skipped_sources: u32,
+    #[serde(default)]
+    pub skipped: Vec<SourceSearchSkip>,
+    #[serde(default)]
+    pub output_truncated: bool,
+    #[serde(default)]
+    pub omitted_diagnostics: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSearchSkip {
+    pub path: String,
+    pub kind: String,
+    pub connection_id: Option<String>,
+    pub target_id: Option<String>,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceDisplayOptions {
+    pub line: Option<u32>,
+    pub context_lines: u32,
+    #[serde(default)]
+    pub view: SourceViewPreference,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceProjectionPathSnapshot {
+    pub generated_url: String,
+    pub steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceGraphViewSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub generated_url: String,
+    pub source_path: String,
+    pub role: String,
+    pub kind: String,
+    pub primary_provenance: String,
+    pub alternative_provenance: Vec<String>,
+    pub projection_paths: Vec<SourceProjectionPathSnapshot>,
+    pub resolved_source_count: u32,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactedSourceGraphSnapshot {
+    pub roots: Vec<u32>,
+    pub nodes: Vec<CompactedSourceNodeSnapshot>,
+    pub edges: Vec<CompactedSourceEdgeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactedSourceNodeSnapshot {
+    pub id: u32,
+    pub prefix: String,
+    pub source_count: u32,
+    #[serde(default)]
+    pub snapshot_count: u32,
+    #[serde(default)]
+    pub listed_source_paths: Vec<String>,
+    pub runtime_internal: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactedSourceEdgeSnapshot {
+    pub derived: u32,
+    pub basis: u32,
+    pub kind: String,
+    pub mapping_count: u32,
+    #[serde(default)]
+    pub fan_out: bool,
+    pub suffix_rewrite: Option<SourceSuffixRewriteSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSuffixRewriteSnapshot {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceGraphSnapshot {
+    pub roots: Vec<u64>,
+    pub nodes: Vec<UncompactedSourceNodeSnapshot>,
+    pub edges: Vec<UncompactedSourceEdgeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceNodeSnapshot {
+    pub id: u64,
+    pub uri: String,
+    pub revision: UncompactedSourceRevisionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UncompactedSourceRevisionSnapshot {
+    Content { hash: String },
+    Version { namespace: String, value: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UncompactedSourceEdgeSnapshot {
+    pub id: u64,
+    pub derived: u64,
+    pub basis: u64,
+    pub projection: UncompactedProjectionSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UncompactedProjectionSnapshot {
+    #[serde(rename_all = "camelCase")]
+    IdentityEqualContent { content_hash: String },
+    #[serde(rename_all = "camelCase")]
+    IdentityDeclaredByProvider { provider: String },
+    #[serde(rename_all = "camelCase")]
+    SourceMap { map_hash: String, source_index: u32 },
+    #[serde(rename_all = "camelCase")]
+    Format { formatter: String },
+    #[serde(rename_all = "camelCase")]
+    Edit { edit: String },
+    #[serde(rename_all = "camelCase")]
+    Offset { line_delta: i64, column_delta: i64 },
+}
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceTreeKind {
+    Loaded,
+    SourceMapped,
+    Formatted,
+    Resolved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTreeSnapshot {
+    pub kind: SourceTreeKind,
+    pub sources: Vec<UncompactedSourceNodeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMappingSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub direction: String,
+    pub quality: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetDebuggerSnapshot {
+    pub context_id: String,
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub revision: u64,
+    pub phase: TargetDebuggerPhase,
+    pub scripts: Vec<TargetScriptSnapshot>,
+    pub breakpoints: Vec<TargetBreakpointSnapshot>,
+    pub logs: Vec<ConsoleMessageSnapshot>,
+    #[serde(default)]
+    pub log_capture: LogCaptureSnapshot,
+    pub pause: Option<PauseSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetAttachmentOutcome {
+    Created,
+    Stolen,
+    Reused,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetAttachOptions {
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub expected_connection_generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetAttachmentResult {
+    pub outcome: TargetAttachmentOutcome,
+    pub target: TargetDebuggerSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleMessageSnapshot {
+    pub index: u64,
+    pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogCaptureSnapshot {
+    pub status: LogCaptureStatus,
+    pub capture_id: Option<String>,
+    pub session_id: Option<String>,
+    pub started_at_unix_ms: Option<u64>,
+    pub collected_events: Vec<String>,
+    pub evicted_count: Option<u64>,
+    pub dropped_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub logpoints: Vec<LogpointCaptureSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointCaptureSnapshot {
+    pub id: String,
+    pub hits: u64,
+    pub successful_evaluations: u64,
+    pub failed_evaluations: u64,
+    pub failed_serializations: u64,
+    pub recorded_events: u64,
+    pub dropped_events: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum LogCaptureStatus {
+    Active,
+    Inactive,
+    Stopped,
+    #[default]
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetLogSnapshot {
+    pub context_id: String,
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub capture: LogCaptureSnapshot,
+    pub messages: Vec<ConsoleMessageSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetDebuggerPhase {
+    Running,
+    Paused { epoch: u64 },
+    Resuming { epoch: u64 },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetBreakpointSnapshot {
+    pub id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub status: TargetBreakpointStatus,
+    pub source: Option<SourceExcerpt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assessments: Vec<BreakpointScriptAssessmentSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applications: Vec<BreakpointApplicationSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointSourceCandidateSnapshot {
+    pub source_url: String,
+    pub content_hash: String,
+    pub provenance: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointMappingSnapshot {
+    pub source_url: String,
+    pub requested_line: u32,
+    pub requested_column: u32,
+    pub generated_url: String,
+    pub generated_line: u32,
+    pub generated_column: u32,
+    pub quality: String,
+    pub projection: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointScriptAssessmentSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub script_id: String,
+    pub script_url: String,
+    pub script_version: u64,
+    pub status: BreakpointScriptAssessmentStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointScriptAssessmentStatus {
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Mapping {
+        candidate: BreakpointSourceCandidateSnapshot,
+    },
+    Unmapped {
+        candidate: BreakpointSourceCandidateSnapshot,
+        diagnostics: Vec<String>,
+    },
+    Applicable {
+        candidate: BreakpointSourceCandidateSnapshot,
+        mappings: Vec<BreakpointMappingSnapshot>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointApplicationSnapshot {
+    pub connection_id: String,
+    pub target_id: String,
+    pub connection_generation: u64,
+    pub script_id: String,
+    pub script_url: String,
+    pub script_version: u64,
+    pub generated_line: u32,
+    pub generated_column: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping: Option<BreakpointMappingSnapshot>,
+    pub status: BreakpointApplicationStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum BreakpointApplicationStatus {
+    Installing,
+    Installed { backend_id: String },
+    Removing,
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointSpec {
+    pub id: String,
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+    pub expression: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LogpointRemovalResult {
+    pub existed: bool,
+    pub removed_bindings: u32,
+    pub target: TargetDebuggerSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetBreakpointStatus {
+    WaitingForScript,
+    SourceNotFound {
+        diagnostics: Vec<String>,
+    },
+    AmbiguousSource {
+        candidates: Vec<BreakpointSourceCandidateSnapshot>,
+        omitted_candidate_count: u32,
+    },
+    Unmapped {
+        diagnostics: Vec<String>,
+    },
+    Applicable {
+        mapping_count: u32,
+    },
+    Installing {
+        application_count: u32,
+    },
+    Installed {
+        binding_count: u32,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetScriptSnapshot {
+    pub url: String,
+    pub source_map_url: Option<String>,
+    pub status: TargetScriptStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetScriptStatus {
+    Unresolved,
+    Pending,
+    Resolved { authored_sources: Vec<String> },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PauseSnapshot {
+    pub epoch: u64,
+    pub reason: String,
+    pub frames: Vec<FrameSnapshot>,
+    pub source: Option<SourceExcerpt>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceExcerpt {
+    pub source_url: String,
+    pub breadcrumb: Option<String>,
+    pub current_line: u32,
+    pub lines: Vec<SourceExcerptLine>,
+    pub highlight_start: u32,
+    pub highlight_length: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceExcerptLine {
+    pub line: u32,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationSnapshot {
+    pub expression: String,
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+    pub unserializable_value: Option<String>,
+    pub description: Option<String>,
+    pub object_id: Option<String>,
+    pub preview: ValuePreviewSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ValueSelector {
+    Expression {
+        expression: String,
+        #[serde(rename = "allowSideEffects")]
+        allow_side_effects: bool,
+    },
+    RemoteObject {
+        object_id: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueInspectionOptions {
+    pub max_preview_length: u32,
+    pub max_properties: u32,
+    pub retain_references: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueSnapshot {
+    pub selector: ValueSelector,
+    pub subtype: Option<String>,
+    pub class_name: Option<String>,
+    pub preview: ValuePreviewSnapshot,
+    pub properties: Vec<ValuePropertySnapshot>,
+    #[serde(default)]
+    pub omitted_property_count: u64,
+    #[serde(default)]
+    pub properties_truncated: bool,
+    pub promise: Option<PromiseSnapshot>,
+}
+
+impl ValueSnapshot {
+    pub fn without_references(mut self) -> Self {
+        self.preview.reference = None;
+        for property in &mut self.properties {
+            property.value.reference = None;
+        }
+        if let Some(promise) = &mut self.promise {
+            promise.reference = None;
+            if let Some(settlement) = &mut promise.settlement {
+                settlement.reference = None;
+            }
+        }
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePropertySnapshot {
+    pub name: String,
+    pub value: ValuePreviewSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotSnapshot {
+    pub media_type: String,
+    pub data_base64: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeSnapshot {
+    pub index: u32,
+    pub kind: String,
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableSnapshot {
+    pub name: String,
+    pub kind: String,
+    pub value: Option<serde_json::Value>,
+    pub unserializable_value: Option<String>,
+    pub description: Option<String>,
+    pub object_id: Option<String>,
+    pub preview: ValuePreviewSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseState {
+    Pending,
+    Fulfilled,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseOrigin {
+    Live,
+    HeapSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PromiseClassification {
+    Indeterminate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValuePreviewSnapshot {
+    pub kind: String,
+    pub preview: Option<String>,
+    pub truncated: bool,
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub source: crate::debugger::object_inspection::ObjectSourceSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseSnapshot {
+    pub reference: Option<String>,
+    pub origin: PromiseOrigin,
+    pub state: PromiseState,
+    pub settlement: Option<ValuePreviewSnapshot>,
+    pub retained: Option<bool>,
+    pub classification: PromiseClassification,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PromiseSelectionSnapshot {
+    pub capture_id: String,
+    pub promises: Vec<PromiseSnapshot>,
+    pub total_promises: u64,
+    pub omitted_promise_count: u64,
+    pub graph_parse_duration_micros: u64,
+    pub used_cached_graph: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
+    pub timestamp_micros: u64,
+    pub sources: Vec<CoverageSourceSnapshot>,
+    #[serde(default)]
+    pub analysis: Option<CoverageAnalysisSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projection_diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureScriptProvenance {
+    pub url: String,
+    pub source_map_url: Option<String>,
+    pub source_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageAnalysisSnapshot {
+    pub duration_micros: u64,
+    pub source_map_cache_hits: u64,
+    pub source_map_cache_misses: u64,
+    pub source_map_cache_bypasses: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageSourceSnapshot {
+    pub script_id: String,
+    pub generated_url: String,
+    pub associated_authored_source: Option<String>,
+    pub functions: Vec<CoverageFunctionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<CaptureScriptProvenance>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageFunctionSnapshot {
+    pub name: String,
+    pub block_coverage: bool,
+    pub root_start_offset: u32,
+    pub root_end_offset: u32,
+    pub ranges: Vec<CoverageRangeSnapshot>,
+    #[serde(default)]
+    pub effective_ranges: Vec<CoverageRangeSnapshot>,
+    pub authored_location: Option<SourceLocation>,
+    pub breadcrumb: Option<String>,
+    pub generated_location: Option<SourceLocation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageRangeSnapshot {
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub count: u64,
+    pub authored_start: Option<SourceLocation>,
+    pub authored_end: Option<SourceLocation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfileSnapshot {
+    pub capture_id: String,
+    pub sampling_interval_micros: Option<u64>,
+    pub start_time_micros: f64,
+    pub end_time_micros: f64,
+    pub nodes: Vec<CpuProfileNodeSnapshot>,
+    pub samples: Vec<i64>,
+    /// Raw CDP timestamp differences in sample order, which need not be chronological.
+    pub time_deltas_micros: Vec<i64>,
+    #[serde(default)]
+    pub functions: Vec<CpuProfileFunctionSnapshot>,
+    #[serde(default)]
+    pub analysis: Option<CpuProfileAnalysisSnapshot>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_provenance: BTreeMap<String, CaptureScriptProvenance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projection_diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfileNodeSnapshot {
+    pub id: i64,
+    pub call_frame: CpuProfileCallFrameSnapshot,
+    pub hit_count: Option<i64>,
+    pub children: Vec<i64>,
+    pub deopt_reason: Option<String>,
+    pub position_ticks: Vec<CpuProfilePositionTickSnapshot>,
+    pub authored_location: Option<SourceLocation>,
+    pub breadcrumb: Option<String>,
+    pub self_time_micros: u64,
+    pub total_time_micros: u64,
+    pub sample_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfileCallFrameSnapshot {
+    pub function_name: String,
+    pub script_id: String,
+    pub url: String,
+    pub line_number: i64,
+    pub column_number: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfilePositionTickSnapshot {
+    pub line: i64,
+    pub ticks: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfileFunctionSnapshot {
+    pub name: String,
+    pub breadcrumb: Option<String>,
+    pub generated_location: SourceLocation,
+    pub authored_location: Option<SourceLocation>,
+    pub self_time_micros: u64,
+    pub total_time_micros: u64,
+    pub sample_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CpuProfileAnalysisSnapshot {
+    pub duration_micros: u64,
+    pub source_map_cache_hits: u64,
+    pub source_map_cache_misses: u64,
+    pub source_map_cache_bypasses: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSnapshotProgress {
+    pub done: i64,
+    pub total: i64,
+    pub finished: Option<bool>,
+    pub bytes_written: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSnapshotResult {
+    pub path: String,
+    pub bytes_written: u64,
+    pub timing: HeapSnapshotTiming,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapCaptureResult {
+    pub capture_id: String,
+    pub bytes_written: u64,
+    pub timing: HeapSnapshotTiming,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub mapping: Option<HeapMappingSnapshot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptProvenance {
+    pub execution_context_id: Option<i64>,
+    pub execution_context_aux_data: Option<serde_json::Value>,
+    pub frame_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapMappingSnapshot {
+    pub connection_generation: u64,
+    pub scripts: Vec<HeapScriptSnapshot>,
+    pub hydration_duration_micros: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapScriptSnapshot {
+    pub script_id: String,
+    pub url: String,
+    pub hash: String,
+    pub provenance: ScriptProvenance,
+    pub source_map_url: Option<String>,
+    pub generated_source: Option<String>,
+    pub source_map: Option<String>,
+    pub mapping_status: HeapMappingStatus,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapMappingStatus {
+    #[default]
+    NotAttempted,
+    NoMapSupplied,
+    MapLoadingFailed,
+    Mapped,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapScriptMappingDiagnostic {
+    pub script_id: String,
+    pub url: String,
+    pub hash: String,
+    pub provenance: ScriptProvenance,
+    pub status: HeapMappingStatus,
+    pub diagnostic: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSourceMapSupply {
+    pub script_id: String,
+    pub script_hash: String,
+    pub source_map_url: String,
+    pub source_map: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSnapshotTiming {
+    pub taking_duration_micros: u64,
+    pub retrieving_duration_micros: u64,
+}
+
+impl HeapSnapshotTiming {
+    pub fn total_duration_micros(&self) -> u64 {
+        self.taking_duration_micros
+            .saturating_add(self.retrieving_duration_micros)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassSnapshot {
+    pub capture_id: String,
+    pub total_instances: u64,
+    pub total_shallow_size: u64,
+    pub classes: Vec<HeapClassSnapshotEntry>,
+    pub analysis: HeapClassAnalysisSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassAnalysisSnapshot {
+    #[serde(default)]
+    pub snapshot_timing: Option<HeapSnapshotTiming>,
+    pub parse_duration_micros: u64,
+    pub projection_duration_micros: u64,
+    pub source_map_hydration_duration_micros: u64,
+    pub constructor_group_count: u64,
+    pub used_cached_groups: bool,
+    #[serde(default)]
+    pub mapping_status: HeapMappingStatus,
+    #[serde(default)]
+    pub script_mappings: Vec<HeapScriptMappingDiagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapClassSnapshotEntry {
+    pub name: String,
+    pub source_url: String,
+    pub location: SourceLocation,
+    pub generated_name: String,
+    pub instance_count: u64,
+    pub shallow_size: u64,
+    pub instances: Vec<HeapInstanceSnapshot>,
+    pub omitted_instance_count: u64,
+    #[serde(default)]
+    pub script_id: String,
+    #[serde(default)]
+    pub provenance: ScriptProvenance,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapInstanceSnapshot {
+    pub alias: String,
+    pub heap_object_id: String,
+    pub shallow_size: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapNodeSelector {
+    pub heap_object_id: Option<String>,
+    pub node_type: Option<String>,
+    pub name: Option<String>,
+    pub name_regex: Option<String>,
+    pub string_contains: Option<String>,
+    pub string_regex: Option<String>,
+    pub min_shallow_size: Option<u64>,
+    pub max_shallow_size: Option<u64>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapNodeLocationSnapshot {
+    pub script_id: i64,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapNodeSnapshot {
+    pub reference: String,
+    pub node_index: u32,
+    pub node_type: String,
+    pub heap_object_id: String,
+    pub name: String,
+    pub string_value: Option<String>,
+    pub string_truncated: bool,
+    #[serde(default)]
+    pub preview: Option<String>,
+    pub shallow_size: u64,
+    pub outgoing_reference_count: u64,
+    pub incoming_reference_count: u64,
+    pub locations: Vec<HeapNodeLocationSnapshot>,
+    #[serde(default)]
+    pub source: crate::debugger::object_inspection::ObjectSourceSnapshot,
+    pub immediate_dominator: Option<String>,
+    pub retained_size: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapNodeSelectionSnapshot {
+    pub capture_id: String,
+    pub total_nodes: u64,
+    pub total_edges: u64,
+    pub nodes: Vec<HeapNodeSnapshot>,
+    #[serde(default)]
+    pub incomplete_string_count: u64,
+    pub graph_parse_duration_micros: u64,
+    pub used_cached_graph: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapReferenceDirection {
+    Incoming,
+    #[default]
+    Outgoing,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapEdgePolicy {
+    #[default]
+    Strong,
+    All,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapReferenceSnapshot {
+    pub edge_index: u32,
+    pub edge_type: String,
+    pub name: Option<String>,
+    pub name_or_index: i64,
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub source_preview: Option<String>,
+    #[serde(default)]
+    pub target_preview: Option<String>,
+    #[serde(default)]
+    pub source_locations: crate::debugger::object_inspection::ObjectSourceSnapshot,
+    #[serde(default)]
+    pub target_locations: crate::debugger::object_inspection::ObjectSourceSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapReferencesSnapshot {
+    pub capture_id: String,
+    pub node: HeapNodeSnapshot,
+    pub direction: HeapReferenceDirection,
+    pub edge_policy: HeapEdgePolicy,
+    pub references: Vec<HeapReferenceSnapshot>,
+    pub omitted_reference_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapPathDirection {
+    #[default]
+    Outgoing,
+    Incoming,
+    Either,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapPathCost {
+    #[default]
+    Edges,
+    Readable,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapPathOptions {
+    pub direction: HeapPathDirection,
+    pub edge_policy: HeapEdgePolicy,
+    pub cost: HeapPathCost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapTraversalDirection {
+    Outgoing,
+    Incoming,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapPathStepSnapshot {
+    pub from: String,
+    pub to: String,
+    pub edge_index: u32,
+    pub edge_type: String,
+    pub name: Option<String>,
+    pub name_or_index: i64,
+    pub direction: HeapTraversalDirection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapPathSnapshot {
+    pub capture_id: String,
+    pub from: String,
+    pub to: String,
+    pub cost: u64,
+    pub nodes: Vec<HeapNodeSnapshot>,
+    pub steps: Vec<HeapPathStepSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapDominatorSnapshot {
+    pub capture_id: String,
+    pub node: HeapNodeSnapshot,
+    pub chain: Vec<HeapNodeSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HeapAggregateBy {
+    #[default]
+    NodeType,
+    Name,
+    StringValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapAggregateEntrySnapshot {
+    pub key: String,
+    pub key_truncated: bool,
+    pub count: u64,
+    pub shallow_size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapAggregateSnapshot {
+    pub capture_id: String,
+    pub by: HeapAggregateBy,
+    pub entries: Vec<HeapAggregateEntrySnapshot>,
+    pub omitted_entry_count: u64,
+    #[serde(default)]
+    pub incomplete_string_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapDiffEntrySnapshot {
+    pub key: String,
+    pub key_truncated: bool,
+    pub count_delta: i64,
+    pub shallow_size_delta: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapDiffSnapshot {
+    pub older_capture_id: String,
+    pub newer_capture_id: String,
+    pub by: HeapAggregateBy,
+    pub entries: Vec<HeapDiffEntrySnapshot>,
+    #[serde(default)]
+    pub older_incomplete_string_count: u64,
+    #[serde(default)]
+    pub newer_incomplete_string_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StepKind {
+    Into,
+    Over,
+    Out,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSnapshot {
+    pub index: u32,
+    pub function_name: String,
+    pub raw: SourceLocation,
+    pub projected: FrameProjectionSnapshot,
+    pub scopes: Vec<ScopeSnapshot>,
+    pub breadcrumb: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceLocation {
+    pub source_url: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FrameProjectionSnapshot {
+    Raw,
+    Pending,
+    Resolved { location: SourceLocation },
+    Failed { message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TargetWaitPredicate {
+    #[serde(rename_all = "camelCase")]
+    Changed {
+        #[serde(alias = "after_revision")]
+        after_revision: u64,
+    },
+    Running,
+    #[serde(rename_all = "camelCase")]
+    BreakpointInstalled {
+        #[serde(alias = "breakpoint_id")]
+        breakpoint_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Paused {
+        #[serde(alias = "after_epoch")]
+        after_epoch: u64,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, PromiseClassification,
+        PromiseOrigin, PromiseSnapshot, PromiseState, TargetAttachmentState, TargetSnapshot,
+        TargetWaitPredicate, ValuePreviewSnapshot, ValuePropertySnapshot, ValueSelector,
+        ValueSnapshot,
+    };
+
+    #[test]
+    fn target_references_compose_connection_identity_on_the_wire() {
+        let reference = super::TargetRef {
+            connection: super::ConnectionRef {
+                context_id: "workspace".into(),
+                connection_id: "node".into(),
+            },
+            target_id: "process".into(),
+        };
+        let wire = serde_json::json!({
+            "connection": { "contextId": "workspace", "connectionId": "node" },
+            "targetId": "process"
+        });
+        assert_eq!(serde_json::to_value(&reference).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<super::TargetRef>(wire.clone()).unwrap(),
+            reference
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(super::TargetRef)).unwrap();
+        jsonschema::validator_for(&schema)
+            .unwrap()
+            .validate(&wire)
+            .unwrap();
+    }
+
+    #[test]
+    fn target_wait_predicate_uses_camel_case_fields() {
+        let predicate = TargetWaitPredicate::Paused { after_epoch: 7 };
+        assert_eq!(
+            serde_json::to_value(&predicate).unwrap(),
+            serde_json::json!({ "kind": "paused", "afterEpoch": 7 })
+        );
+        assert_eq!(
+            serde_json::from_value::<TargetWaitPredicate>(
+                serde_json::json!({ "kind": "paused", "after_epoch": 7 })
+            )
+            .unwrap(),
+            predicate
+        );
+    }
+
+    #[test]
+    fn enum_schemas_preserve_camel_case_wire_fields() {
+        fn check<T: schemars::JsonSchema + serde::de::DeserializeOwned + serde::Serialize>(
+            examples: &[serde_json::Value],
+        ) {
+            let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+            let validator = jsonschema::validator_for(&schema).unwrap();
+            for example in examples {
+                let value: T = serde_json::from_value(example.clone()).unwrap();
+                let wire = serde_json::to_value(value).unwrap();
+                validator.validate(&wire).unwrap();
+                let variant = schema["oneOf"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|variant| variant["properties"]["kind"]["enum"][0] == wire["kind"])
+                    .unwrap();
+                let fields = variant["properties"].as_object().unwrap();
+                for key in wire.as_object().unwrap().keys() {
+                    assert!(fields.contains_key(key), "missing schema field: {key}");
+                }
+            }
+        }
+
+        check::<ConnectionConfiguration>(&[
+            serde_json::json!({ "kind": "process", "processId": 1 }),
+            serde_json::json!({ "kind": "processTree", "rootPid": 1 }),
+            serde_json::json!({
+                "kind": "scopedProcessTree", "rootPid": 1, "targetId": "target"
+            }),
+            serde_json::json!({
+                "kind": "playwright", "url": "", "channel": "bundled", "headless": true
+            }),
+            serde_json::json!({
+                "kind": "chrome", "url": "", "executable": "", "headless": true, "args": []
+            }),
+            serde_json::json!({
+                "kind": "node", "program": "", "args": [], "cwd": "",
+                "runtimeExecutable": "node", "env": {}
+            }),
+        ]);
+        check::<super::UncompactedProjectionSnapshot>(&[
+            serde_json::json!({ "kind": "identityEqualContent", "contentHash": "hash" }),
+            serde_json::json!({ "kind": "sourceMap", "mapHash": "hash", "sourceIndex": 0 }),
+            serde_json::json!({ "kind": "offset", "lineDelta": 1, "columnDelta": 2 }),
+        ]);
+        check::<TargetWaitPredicate>(&[
+            serde_json::json!({ "kind": "changed", "afterRevision": 1 }),
+            serde_json::json!({ "kind": "breakpointInstalled", "breakpointId": "breakpoint" }),
+            serde_json::json!({ "kind": "paused", "afterEpoch": 1 }),
+        ]);
+    }
+
+    #[test]
+    fn value_snapshot_can_hide_every_live_reference_without_losing_previews() {
+        let preview = |text: &str, reference: &str| ValuePreviewSnapshot {
+            kind: "object".to_owned(),
+            preview: Some(text.to_owned()),
+            truncated: false,
+            reference: Some(reference.to_owned()),
+            source: Default::default(),
+        };
+        let snapshot = ValueSnapshot {
+            selector: ValueSelector::Expression {
+                expression: "value".to_owned(),
+                allow_side_effects: true,
+            },
+            subtype: None,
+            class_name: Some("Object".to_owned()),
+            preview: preview("Object", "object:1"),
+            properties: vec![ValuePropertySnapshot {
+                name: "child".to_owned(),
+                value: preview("Object", "object:2"),
+            }],
+            omitted_property_count: 0,
+            properties_truncated: false,
+            promise: Some(PromiseSnapshot {
+                reference: Some("promise:1".to_owned()),
+                origin: PromiseOrigin::Live,
+                state: PromiseState::Fulfilled,
+                settlement: Some(preview("Object", "object:3")),
+                retained: None,
+                classification: PromiseClassification::Indeterminate,
+            }),
+        }
+        .without_references();
+
+        assert_eq!(snapshot.preview.preview.as_deref(), Some("Object"));
+        assert!(snapshot.preview.reference.is_none());
+        assert!(snapshot.properties[0].value.reference.is_none());
+        assert!(snapshot.promise.as_ref().unwrap().reference.is_none());
+        assert!(
+            snapshot
+                .promise
+                .as_ref()
+                .unwrap()
+                .settlement
+                .as_ref()
+                .unwrap()
+                .reference
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn target_forest_uses_parent_then_opener_and_breaks_cycles() {
+        let connection = ConnectionSnapshot {
+            id: "connection".to_owned(),
+            configuration: ConnectionConfiguration::DirectCdp {
+                endpoint: "ws://example".to_owned(),
+            },
+            generation: 7,
+            status: ConnectionStatus::Disconnected,
+            targets: vec![
+                target("z-root", None, None),
+                target("child-by-opener", Some("missing"), Some("z-root")),
+                target("child-by-parent", Some("z-root"), Some("other")),
+                target("cycle-b", Some("cycle-a"), None),
+                target("cycle-a", Some("cycle-b"), None),
+                target("a-root", None, None),
+            ],
+        };
+
+        let forest = connection.target_forest();
+        assert_eq!(
+            forest
+                .iter()
+                .filter(|node| node.parent_target_id.is_none())
+                .map(|node| node.target.target_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-root", "z-root", "cycle-a"],
+        );
+        let z_root = forest
+            .iter()
+            .find(|node| node.target.target_id == "z-root")
+            .unwrap();
+        assert_eq!(z_root.connection_id, "connection");
+        assert_eq!(z_root.connection_generation, 7);
+        assert_eq!(z_root.attachment, TargetAttachmentState::CdpClient);
+        assert_eq!(
+            forest
+                .iter()
+                .filter(|node| node.parent_target_id.as_deref() == Some("z-root"))
+                .map(|node| node.target.target_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["child-by-opener", "child-by-parent"],
+        );
+        assert_eq!(
+            forest
+                .iter()
+                .find(|node| node.target.target_id == "cycle-b")
+                .unwrap()
+                .parent_target_id
+                .as_deref(),
+            Some("cycle-a"),
+        );
+    }
+
+    fn target(target_id: &str, parent_id: Option<&str>, opener_id: Option<&str>) -> TargetSnapshot {
+        TargetSnapshot {
+            target_id: target_id.to_owned(),
+            target_type: "node".to_owned(),
+            title: target_id.to_owned(),
+            url: String::new(),
+            attached: true,
+            parent_id: parent_id.map(str::to_owned),
+            opener_id: opener_id.map(str::to_owned),
+            browser_context_id: None,
+            subtype: None,
+        }
+    }
+}

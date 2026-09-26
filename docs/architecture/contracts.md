@@ -9,7 +9,7 @@ with the daemon's API in a shared export bundle.
 | Contract | Authored source of truth | Derived consumer input |
 | --- | --- | --- |
 | Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../../packages/cdp-codegen/src/protocol_schema.rs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
-| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../../packages/dbgjs/src/service_api/) and shared serializable models in [`service_api.rs`](../../packages/dbgjs/src/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
+| CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../../packages/dbgjs/src/api/service_api/) and shared serializable models in [`service_api.rs`](../../packages/dbgjs/src/api/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
 
 The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
 It does not advertise imported CDP domain interfaces on its own RPC connection.
@@ -67,7 +67,7 @@ parsing are separate concerns; they must not become duplicate RPC schemas.
 
 Each operation has exactly one owning interface. The traits live in separate
 modules, with matching implementation modules in
-[`debugger_service/`](../../packages/dbgjs/src/debugger_service/). All implementations use the same
+[`debugger_service/`](../../packages/dbgjs/src/service/debugger_service/). All implementations use the same
 `DebuggerService` instance and state; this is not a split into independent
 processes or databases.
 
@@ -85,7 +85,7 @@ processes or databases.
 | `cpu` | `CpuProfilerApi` | CPU profiling |
 | `heap` | `HeapProfilerApi` | Heap capture, streaming progress, selection, graph queries, comparison |
 
-The Rust [`DbgServiceClient`](../../packages/dbgjs/src/service_api/client.rs) composes all eleven
+The Rust [`DbgServiceClient`](../../packages/dbgjs/src/api/service_api/client.rs) composes all eleven
 generated clients over one connection:
 
 ```rust,ignore
@@ -124,7 +124,7 @@ only; clients must use the appropriate capability for other operations.
 
 The target-debugger, capture, coverage, CPU-profiler, and heap-profiler
 capabilities declare their recoverable errors in
-[`service_api/errors.rs`](../../packages/dbgjs/src/service_api/errors.rs). Generated Rust clients
+[`service_api/errors.rs`](../../packages/dbgjs/src/api/service_api/errors.rs). Generated Rust clients
 return the capability's error enum directly, with a `Generic(RpcCallError)`
 fallback for transport, codec, undeclared remote, and non-compliant-server
 failures. There is no outer application-error wrapper to match:
