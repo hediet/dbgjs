@@ -2624,6 +2624,7 @@ impl StoredHeapGraph {
             graph: &self.graph,
             parse_duration: self.parse_duration,
             used_cached_graph: false,
+            canonicalize_path_endpoints: true,
         }
     }
 
@@ -2673,6 +2674,7 @@ struct HeapGraphView<'a> {
     graph: &'a HeapGraph,
     parse_duration: Duration,
     used_cached_graph: bool,
+    canonicalize_path_endpoints: bool,
 }
 
 fn live_heap_graph_view<'a>(
@@ -2688,6 +2690,7 @@ fn live_heap_graph_view<'a>(
         graph,
         parse_duration,
         used_cached_graph,
+        canonicalize_path_endpoints: false,
     }
 }
 
@@ -2827,8 +2830,13 @@ impl HeapGraphView<'_> {
     fn path(&self, from: String, to: String, options: HeapPathOptions,
         max_string_length: Option<u32>,
     ) -> Result<Option<HeapPathSnapshot>, TargetDebuggerError> {
-        let (from_node, from) = self.reference_node(&from)?;
-        let (to_node, to) = self.reference_node(&to)?;
+        let (from_node, canonical_from) = self.reference_node(&from)?;
+        let (to_node, canonical_to) = self.reference_node(&to)?;
+        let (from, to) = if self.canonicalize_path_endpoints {
+            (canonical_from, canonical_to)
+        } else {
+            (from, to)
+        };
         self.graph.shortest_path(from_node, to_node, PathOptions {
             direction: heap_path_direction(options.direction),
             edge_policy: heap_edge_policy(options.edge_policy),
@@ -6870,6 +6878,18 @@ mod tests {
             HeapPathOptions::default(), Some(3)).unwrap(),
             stored.path("sample#1".into(), "sample#3".into(),
                 HeapPathOptions::default(), Some(3)).unwrap());
+        let live_path = live.path("sample#01".into(), "sample#03".into(),
+            HeapPathOptions::default(), None).unwrap().unwrap();
+        assert_eq!((live_path.from.as_str(), live_path.to.as_str()),
+            ("sample#01", "sample#03"));
+        let stored_path = stored.path("sample#01".into(), "sample#03".into(),
+            HeapPathOptions::default(), None).unwrap().unwrap();
+        assert_eq!((stored_path.from.as_str(), stored_path.to.as_str()),
+            ("sample#1", "sample#3"));
+        let stored_alias = stored.path(".#01".into(), ".#03".into(),
+            HeapPathOptions::default(), None).unwrap().unwrap();
+        assert_eq!((stored_alias.from.as_str(), stored_alias.to.as_str()),
+            ("sample#1", "sample#3"));
         assert_eq!(live.dominators("sample#3", Some(3)).unwrap(),
             stored.dominators("sample#3", Some(3)).unwrap());
         assert_eq!(live.aggregate(HeapAggregateBy::Name, 1, Some(3)).unwrap(),
