@@ -16,7 +16,7 @@ export function classifyChanges(paths) {
 			continue;
 		}
 		packages = true;
-		if (!path.startsWith("npm/") && !path.startsWith("scripts/npm-")) {
+		if (!path.startsWith("npm/")) {
 			rust = true;
 		}
 	}

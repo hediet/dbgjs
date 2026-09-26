@@ -5,15 +5,15 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { platforms } from "../npm/dbgjs/lib/platform.mjs";
-import { npm } from "./npm-tools.mjs";
+import { platforms } from "../dbgjs/lib/platform.mjs";
+import { npm } from "./tools.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 export async function packPackages(values, execute = execFileSync) {
 	const platform = platforms[values.platform];
 	if (!platform || !values["bin-dir"] || !values.output) {
-		throw new Error("Usage: node scripts/npm-pack.mjs --platform <platform> --bin-dir <binaries> --output <tarballs>");
+		throw new Error("Usage: node npm/scripts/pack.mjs --platform <platform> --bin-dir <binaries> --output <tarballs>");
 	}
 	const output = resolve(values.output);
 	const manifest = JSON.parse(await readFile(join(root, "npm", "dbgjs", "package.json"), "utf8"));

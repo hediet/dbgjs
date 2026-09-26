@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { platforms } from "../npm/dbgjs/lib/platform.mjs";
-import { assertTrustedRun, finalizeRelease, GithubRepository, prepareRelease, reserveNightlyVersion } from "./npm-release.mjs";
+import { platforms } from "../dbgjs/lib/platform.mjs";
+import { assertTrustedRun, finalizeRelease, GithubRepository, prepareRelease, reserveNightlyVersion } from "./release.mjs";
 
 test("new versions produce nightly and stable; stable tags follow artifact upload", async () => {
 	const fixture = createFixture();

@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { platforms } from "../npm/dbgjs/lib/platform.mjs";
-import { inspectCandidatePackages, prepareReleasePackages } from "./npm-release-pack.mjs";
+import { platforms } from "../dbgjs/lib/platform.mjs";
+import { inspectCandidatePackages, prepareReleasePackages } from "./release-pack.mjs";
 
 const gitHead = "1234567890abcdef1234567890abcdef12345678";
 
@@ -14,7 +14,7 @@ test("candidate packages become stable and nightly tarballs with matching depend
 	const input = join(directory, "input");
 	const fixture = join(directory, "fixture");
 	const packageDirectory = join(fixture, "package");
-	const entry = JSON.parse(await readFile(new URL("../npm/dbgjs/package.json", import.meta.url), "utf8"));
+	const entry = JSON.parse(await readFile(new URL("../dbgjs/package.json", import.meta.url), "utf8"));
 	try {
 		await mkdir(input);
 		await mkdir(join(packageDirectory, "bin"), { recursive: true });

@@ -39,7 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: node scripts/npm-release.mjs prepare
+        run: node npm/scripts/release.mjs prepare
       - name: Upload nightly packages
         if: steps.prepare.outputs.nightly == 'true'
         uses: ./.github/actions/upload-npm
@@ -54,4 +54,4 @@ jobs:
         if: steps.prepare.outputs.stable == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/npm-release.mjs finalize
+        run: node npm/scripts/release.mjs finalize

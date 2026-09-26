@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { platforms } from "../npm/dbgjs/lib/platform.mjs";
-import { npm } from "./npm-tools.mjs";
+import { platforms } from "../dbgjs/lib/platform.mjs";
+import { npm } from "./tools.mjs";
 
 export async function prepareReleasePackages({ input, output, version, tag }) {
 	assert.ok(
@@ -101,6 +101,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 		version: { type: "string" }, tag: { type: "string" },
 	} });
 	assert.ok(values.input && values.output && values.version && values.tag,
-		"Usage: node scripts/npm-release-pack.mjs --input <candidates> --output <packages> --version <version> --tag <next|latest>");
+		"Usage: node npm/scripts/release-pack.mjs --input <candidates> --output <packages> --version <version> --tag <next|latest>");
 	console.log(JSON.stringify(await prepareReleasePackages(values)));
 }

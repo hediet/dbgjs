@@ -4,9 +4,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { packPackages } from "./npm-pack.mjs";
+import { packPackages } from "./pack.mjs";
 
-const entry = JSON.parse(await readFile(new URL("../npm/dbgjs/package.json", import.meta.url), "utf8"));
+const entry = JSON.parse(await readFile(new URL("../dbgjs/package.json", import.meta.url), "utf8"));
 const gitCommit = "1234567890abcdef1234567890abcdef12345678";
 
 test("both package manifests carry binary provenance, including dirty candidates", async () => {

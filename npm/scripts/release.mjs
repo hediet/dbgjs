@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { platforms } from "../npm/dbgjs/lib/platform.mjs";
-import { inspectCandidatePackages, prepareReleasePackages } from "./npm-release-pack.mjs";
+import { platforms } from "../dbgjs/lib/platform.mjs";
+import { inspectCandidatePackages, prepareReleasePackages } from "./release-pack.mjs";
 
 export async function prepareRelease({ github, sourceRunId, download, inspect, pack, directory }) {
 	const run = await github.getRun(sourceRunId);
@@ -240,7 +240,7 @@ async function main() {
 	} else if (process.argv[2] === "finalize") {
 		await finalizeRelease(github, JSON.parse(await readFile(statePath, "utf8")));
 	} else {
-		throw new Error("Usage: node scripts/npm-release.mjs <prepare|finalize>");
+		throw new Error("Usage: node npm/scripts/release.mjs <prepare|finalize>");
 	}
 }
 

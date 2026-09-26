@@ -37,7 +37,7 @@ jobs:
           node-version: "22"
           package-manager-cache: false
       - name: Test change detection and generated documentation
-        run: node --test scripts/ci-changes.test.mjs tests/readme/transcript.test.mjs scripts/npm-release.test.mjs scripts/npm-release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs tests/process_tree_platform.test.mjs
+        run: node --test scripts/ci-changes.test.mjs tests/readme/transcript.test.mjs npm/scripts/release.test.mjs npm/scripts/release-pack.test.mjs tests/vscode-discovery/transcript.test.mjs tests/process_tree_platform.test.mjs
       - name: Detect changes
         id: changes
         env:
@@ -179,9 +179,9 @@ jobs:
       - name: Build distribution binaries
         run: cargo build --locked --release --workspace --bin dbgjs --bin dbgjs-service --bin dbgjs-tui
       - name: Test npm packaging
-        run: node --test scripts/npm-platform.test.mjs scripts/npm-pack.test.mjs
+        run: node --test npm/scripts/platform.test.mjs npm/scripts/pack.test.mjs
       - name: Pack npm tarballs
-        run: node scripts/npm-pack.mjs --platform ${{ matrix.platform }} --bin-dir target/release --output artifacts/npm --candidate
+        run: node npm/scripts/pack.mjs --platform ${{ matrix.platform }} --bin-dir target/release --output artifacts/npm --candidate
       - name: Upload npm tarballs
         uses: actions/upload-artifact@v7
         with:
@@ -245,7 +245,7 @@ jobs:
             fi
           done
       - name: Test downloaded npm tarballs
-        run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm --candidate
+        run: node npm/scripts/smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm --candidate
 
   package-smoke-windows-macos:
     name: Windows/macOS smoke (${{ matrix.platform }})
@@ -280,7 +280,7 @@ jobs:
           name: npm-dbgjs
           path: artifacts/npm
       - name: Test downloaded npm tarballs
-        run: node scripts/npm-smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm --candidate
+        run: node npm/scripts/smoke.mjs --platform ${{ matrix.platform }} --artifacts artifacts/npm --candidate
 
   vscode-e2e:
     name: VS Code discovery/source maps (${{ matrix.platform }})
