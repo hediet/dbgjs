@@ -832,16 +832,11 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
-    pub async fn take_coverage(
-        &self,
-        capture_id: Option<String>,
-        raw: bool,
-    ) -> Result<CoverageSnapshot, TargetDebuggerError> {
+    pub async fn take_coverage(&self, capture_id: Option<String>) -> Result<CoverageSnapshot, TargetDebuggerError> {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(TargetCommand::TakeCoverage {
                 capture_id,
-                raw,
                 response,
             })
             .await
@@ -1270,7 +1265,6 @@ enum TargetCommand {
     },
     TakeCoverage {
         capture_id: Option<String>,
-        raw: bool,
         response: oneshot::Sender<Result<CoverageSnapshot, TargetDebuggerError>>,
     },
     StopCoverage {
@@ -1951,12 +1945,11 @@ async fn run_target(
             }
             Next::Command(Some(TargetCommand::TakeCoverage {
                 capture_id,
-                raw,
                 response,
             })) => {
                 let result = match coverage.as_mut() {
                     Some(recording) => {
-                        capture_coverage(&mut driver, &session_key, recording, capture_id, raw)
+                        capture_coverage(&mut driver, &session_key, recording, capture_id)
                             .await
                     }
                     None => Err(TargetDebuggerError::CoverageNotActive),
@@ -4129,7 +4122,6 @@ async fn capture_coverage(
     session_key: &SessionKey,
     recording: &mut CoverageRecording,
     capture_id: Option<String>,
-    _raw: bool,
 ) -> Result<CoverageSnapshot, TargetDebuggerError> {
     if let Some(capture_id) = &capture_id
         && recording.captures.contains_key(capture_id)

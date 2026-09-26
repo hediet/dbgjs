@@ -408,7 +408,7 @@ and agent-host targets:
 # Precise JavaScript coverage
 dbgjs coverage start
 # Collection-only lower bound: no source/map lookup or symbol enrichment
-dbgjs --json coverage capture --raw
+dbgjs --json coverage capture
 dbgjs coverage capture --id baseline
 dbgjs coverage stop --id after-click
 dbgjs coverage show after-click --exclude baseline --all
@@ -467,16 +467,16 @@ Use `--path-glob '**/issue/**'` for a directory anywhere in a URL. These filters
 also inspect authored ranges in bundled scripts. The old `--path` spelling is a
 deprecated prefix alias, not a substring search.
 
-`coverage capture --raw` retains execution counts and runtime ranges while
-skipping capture-time source acquisition and enrichment. It also accepts
-`--id`. Without `--raw`, named and unnamed captures are both
-enriched. Capturing and stopping always store full immutable captures.
+`coverage capture` retains execution counts and runtime ranges without
+capture-time source acquisition and enrichment. It also accepts `--id`.
+Viewing a stored capture performs source mapping and enrichment when sources
+and maps are available. Capturing and stopping always store full immutable captures.
 Use `coverage show <capture> --exclude <baseline>` to derive an excluded view,
 including offline and JSON output, without modifying either capture.
 The baseline must belong to the same target and connection generation.
 Stored captures are immutable; `coverage show --no-cache` is not
 supported. Coverage operations still pending after 20 seconds print
-a one-time stderr hint about this mode without interrupting the operation or
+a one-time stderr hint about the operation without interrupting it or
 mixing progress text into JSON stdout.
 
 For a reproducible installed-VS-Code workload and independent breadcrumb replay,

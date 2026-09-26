@@ -215,7 +215,6 @@ async fn raw_take_and_stop_do_not_fetch_or_parse_large_available_sources_and_map
         &session,
         &mut recording,
         Some("first".into()),
-        false,
     )
     .await
     .unwrap();
@@ -309,7 +308,6 @@ async fn raw_profiler_captures_never_persist_inline_script_url_source_bytes() {
         &session,
         &mut recording,
         Some("inline-script".into()),
-        false,
     )
     .await
     .unwrap();
@@ -379,13 +377,8 @@ async fn captured_provenance_reuses_cdp_sha256_without_source_hydration() {
 }
 
 #[tokio::test]
-async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option() {
-    for (capture_id, raw) in [
-        (None, false),
-        (Some("named"), false),
-        (None, true),
-        (Some("raw"), true),
-    ] {
+async fn named_and_unnamed_captures_persist_raw_without_enrichment() {
+    for capture_id in [None, Some("named")] {
         let (mut driver, session, transport) = coverage_driver(true).await;
         let mut recording = CoverageRecording::default();
         let snapshot = capture_coverage(
@@ -393,7 +386,6 @@ async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option
             &session,
             &mut recording,
             capture_id.map(str::to_owned),
-            raw,
         )
         .await
         .unwrap();
@@ -423,7 +415,6 @@ async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option
                     &session,
                     &mut recording,
                     Some(capture_id.into()),
-                    raw,
                 )
                 .await,
                 Err(TargetDebuggerError::CoverageCaptureAlreadyExists(_))
@@ -434,14 +425,13 @@ async fn named_and_unnamed_captures_persist_raw_independent_of_legacy_raw_option
 }
 
 #[tokio::test]
-async fn non_raw_coverage_delegates_effective_ranges_to_view() {
+async fn coverage_capture_delegates_effective_ranges_to_view() {
     let (mut driver, session, _) = coverage_driver(false).await;
     let snapshot = capture_coverage(
         &mut driver,
         &session,
         &mut CoverageRecording::default(),
         Some("unmapped".into()),
-        false,
     )
     .await
     .unwrap();
@@ -485,7 +475,6 @@ async fn failed_native_stop_retains_accumulated_counts_and_named_captures_for_re
         &session,
         &mut active,
         Some("baseline".into()),
-        true,
     )
     .await
     .unwrap();
@@ -522,7 +511,6 @@ async fn successive_captures_and_stop_preserve_complete_cumulative_coverage() {
         &session,
         &mut active,
         Some("baseline".into()),
-        true,
     )
     .await
     .unwrap();
@@ -531,7 +519,6 @@ async fn successive_captures_and_stop_preserve_complete_cumulative_coverage() {
         &session,
         &mut active,
         Some("selected".into()),
-        true,
     )
     .await
     .unwrap();

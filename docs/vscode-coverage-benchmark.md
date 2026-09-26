@@ -45,7 +45,7 @@ Each Playwright program installs the first-run welcome-dialog handler so a
 dialog appearing after startup can also be dismissed during later interactions.
 
 The workload is a two-file multi-diff. The runner clicks **Revert Block**, captures
-both raw (`coverage capture --raw`) and enriched coverage, and checks that `revertRangeMappings`
+raw coverage (`coverage capture`) and its enriched stored view (`coverage show`), and checks that `revertRangeMappings`
 executed and has an authored TypeScript location. It also exercises source
 explanation, source display, and position mapping. Raw captures must contain no
 authored locations or breadcrumbs, and enrichment must preserve the measured
@@ -93,10 +93,10 @@ projection.
 | `capture-report.json` | Installed VS Code identity, dbgjs revision/binary hashes, machine information, workload size, and mapped revert evidence |
 | `commands.jsonl` | Exact executable/argument vectors, terminal wall times, exit codes, and output log paths |
 | `timings.json` | Completed run's command timing records |
-| `logs/` | Untruncated command output, including both coverage captures |
+| `logs/` | Untruncated command output, including the raw capture and enriched view |
 | `runtime/` | Disposable workspace/profile/service state retained for diagnosis |
 
-Compare `Capture without projection` with `Capture with mapping and breadcrumbs`
+Compare `Capture without projection` with `View capture with mapping and breadcrumbs`
 in the command log. Those times include CLI startup, IPC, serialization, and
 output collection. The replay's `lookupSeconds` isolates production breadcrumb
 lookup from browser startup, source-map loading, coverage collection, and output
@@ -108,7 +108,7 @@ baseline against which an optimization can be developed.
 The local `artifacts/rust-capture-profile/service.sleepy` capture was collected
 with Very Sleepy 0.91 against the debug service and locally resolved Rust PDBs.
 Symbol servers were disabled. The benchmark used `--skip-build --capture-only`;
-sampling covered service setup, raw/enriched capture, and shutdown, but not the
+sampling covered service setup, the historical raw/enriched capture workflow, and shutdown, but not the
 later source queries or offline replay.
 
 The profile contains 33,588 samples over 29.047 seconds. Very Sleepy samples
@@ -154,19 +154,18 @@ For a collection-only lower bound outside the harness:
 
 ```powershell
 dbgjs coverage start
-dbgjs --json coverage capture --raw
+dbgjs --json coverage capture
 ```
 
-`--raw` skips source fetching, source-map lookup, formatting, and symbol
-enrichment for the capture. Runtime script identifiers/URLs, UTF-16 source offsets, and
-execution counts remain available. It composes with `--id` and
-generated-source output filters. Omitting it enriches both named and unnamed
-captures before storage. Capturing and stopping always retain full immutable
-coverage; derive an excluded view with
+Capture records raw ranges without source fetching, source-map lookup, or symbol
+enrichment. Runtime script identifiers/URLs, UTF-16 source offsets, and
+execution counts remain available. To project a capture, use
+`dbgjs --json coverage show <capture-id>`. Capturing and stopping always retain
+full immutable coverage; derive an excluded view with
 `coverage show <capture> --exclude <baseline>` instead.
 
 Coverage commands that have not completed after 20 seconds print a one-time
-hint on **stderr** describing `coverage capture --raw`. The original operation
+hint on **stderr** describing the current capture or view. The original operation
 continues; the hint neither restarts nor cancels it. JSON remains on stdout.
 The harness preserves separate stdout/stderr streams so the hint cannot corrupt
 JSON parsing.
@@ -227,7 +226,9 @@ retrieves a per-source cell, while parsing and breadcrumb lookup run outside it.
 The result comparison preserves original tie-breaking, boundary behavior,
 duplicate positions, and missing breadcrumbs.
 
-A fresh installed-Code capture in `artifacts/vscode-coverage-optimized-20260914`
+These historical timings used separate raw and enriched captures, before
+projection moved to `coverage show`; they are not timings of the current
+capture-then-view workflow. A fresh installed-Code capture in `artifacts/vscode-coverage-optimized-20260914`
 measured **0.909 s raw** and **16.356 s enriched**, compared with **0.868 s**
 and **66.216 s** in the final baseline capture. The new capture mapped the
 executed revert function to TypeScript and verified identical raw/enriched
@@ -380,7 +381,8 @@ The release CLI, service, and replay were built with:
 cargo build --release -j 1 --bin dbgjs --bin dbgjs-service --example vscode_breadcrumbs
 ```
 
-Cargo confirmed `release` / `optimized`, and the replay confirmed
+The following historical run also used separate raw and enriched captures,
+not the current capture-then-view workflow. Cargo confirmed `release` / `optimized`, and the replay confirmed
 `debugAssertions: false`. Three successful fresh-cache captures used identical
 release executable hashes and the same VS Code commit/bundle as above:
 

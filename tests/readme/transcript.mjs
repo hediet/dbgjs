@@ -134,7 +134,7 @@ export function compareRecordings(actual, expected) {
 			let stderr = normalize(step.stderr, replacements);
 			if (step.args[0] === "coverage" && step.args[1] === "capture") {
 				stderr = stderr.replace(
-					/^dbgjs: Still waiting after \d+s\. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope\. It skips source-map lookup and symbol enrichment\. The current command is continuing\.(?:\n|$)/gm,
+					/^dbgjs: Still waiting after \d+s\. Coverage capture records raw ranges without fetching source maps; mapping and enrichment happen when viewing the stored capture with `dbgjs coverage show`\. The current command is continuing\.(?:\n|$)/gm,
 					"",
 				).trimEnd();
 			}

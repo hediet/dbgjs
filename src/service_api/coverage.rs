@@ -7,7 +7,6 @@ pub trait CoverageApi {
     async fn take_coverage(
         target_ref: TargetRef,
         capture_id: Option<String>,
-        raw: Option<bool>,
     ) -> Result<CoverageSnapshot, CoverageError>;
 
     async fn stop_coverage(

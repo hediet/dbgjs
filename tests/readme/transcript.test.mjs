@@ -104,7 +104,7 @@ test("coverage progress timing can vary without hiding other stderr changes", ()
 	const before = recording("exact");
 	const after = recording("exact");
 	before.steps[0].args = after.steps[0].args = ["coverage", "capture", "--id", "background"];
-	before.steps[0].stderr = "dbgjs: Still waiting after 20s. For a collection-only lower bound, use `dbgjs coverage capture --raw` with the same target scope. It skips source-map lookup and symbol enrichment. The current command is continuing.\n";
+	before.steps[0].stderr = "dbgjs: Still waiting after 20s. Coverage capture records raw ranges without fetching source maps; mapping and enrichment happen when viewing the stored capture with `dbgjs coverage show`. The current command is continuing.\n";
 	compareRecordings(after, before);
 	assert.match(renderSteps(before.steps), /Still waiting after 20s/);
 	after.steps[0].stderr = "Unexpected source-map failure";

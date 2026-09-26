@@ -28,7 +28,6 @@ impl CoverageApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
         capture_id: Option<String>,
-        raw: Option<bool>,
     ) -> Result<CoverageSnapshot, CoverageError> {
         let TargetRef {
             connection:
@@ -93,10 +92,7 @@ impl CoverageApi for DebuggerService {
             return Ok(snapshot);
         }
         let mut snapshot = match debugger
-            .take_coverage(
-                Some(reservation.reservation.metadata.name.clone()),
-                raw.unwrap_or(false),
-            )
+            .take_coverage(Some(reservation.reservation.metadata.name.clone()))
             .await
             .map_err(CoverageError::from)
         {

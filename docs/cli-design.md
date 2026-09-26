@@ -1461,11 +1461,11 @@ dbgjs coverage show before-click
 dbgjs coverage show .2 --target renderer-4
 ```
 
-Naming and enrichment are independent. Every capture made without `--raw` is
-source-mapped and enriched before successful publication, including captures
-with explicit IDs. `--raw` deliberately skips enrichment for inexpensive
-baselines. Stored captures are immutable: `coverage show --no-cache` is rejected
-rather than silently pretending to recompute them.
+Capture records raw execution ranges and cheap provenance, whether or not it
+has an explicit ID. Mapping and enrichment happen when viewing the stored
+capture with `coverage show`. Stored captures are immutable:
+`coverage show --no-cache` is rejected rather than silently pretending to
+recompute them.
 
 Coverage source filters are explicit:
 

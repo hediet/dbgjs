@@ -157,15 +157,16 @@ export async function main(args = process.argv.slice(2)) {
 			await page.getByRole("button", { name: "Revert Block", exact: true }).last().click();
 		`);
 		const unprojected = JSON.parse(await dbgjs("Capture without projection", [
-			"--json", "coverage", "capture", "--raw", ...scope,
+			"--json", "coverage", "capture", ...scope,
 		]));
 		assert(unprojected.sources.flatMap((source) => source.functions).every((fn) =>
 			fn.authoredLocation == null && fn.breadcrumb == null && fn.generatedLocation == null &&
 			fn.effectiveRanges.length === 0 &&
 			fn.ranges.every((range) => range.authoredStart == null && range.authoredEnd == null)
 		), "Raw coverage must not perform source lookup or enrichment");
-		const projected = JSON.parse(await dbgjs("Capture with mapping and breadcrumbs", [
-			"--json", "coverage", "capture", ...scope,
+		assert.equal(typeof unprojected.captureId, "string", "Capture must have a durable ID");
+		const projected = JSON.parse(await dbgjs("View capture with mapping and breadcrumbs", [
+			"--json", "coverage", "show", unprojected.captureId, ...scope,
 		]));
 		const { source, lookups, revert } = extractWorkload(projected);
 		const rawRevert = unprojected.sources.find((entry) => entry.scriptId === source.scriptId)

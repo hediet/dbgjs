@@ -593,11 +593,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
                 .coverage
-                .take_coverage(
-                    scope.target_ref(),
-                    options.capture_id.clone(),
-                    Some(options.raw),
-                )
+                .take_coverage(scope.target_ref(), options.capture_id.clone())
                 .await)?;
             let capture_id = snapshot.capture_id.as_deref().ok_or_else(|| {
                 io::Error::new(
@@ -3748,7 +3744,6 @@ struct CoverageShowOptions {
 
 struct CoverageCaptureOptions {
     capture_id: Option<String>,
-    raw: bool,
     path: Option<String>,
     path_glob: Option<String>,
     deprecated_path: bool,
@@ -5189,7 +5184,6 @@ fn parse_coverage_show_options(values: &[String]) -> Result<CoverageShowOptions,
 
 fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOptions, io::Error> {
     let mut capture_id = None;
-    let mut raw = false;
     let mut render_values = Vec::with_capacity(values.len());
     let mut index = 0;
     while index < values.len() {
@@ -5219,9 +5213,6 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
                 ));
             }
             index += 2;
-        } else if values[index] == "--raw" {
-            raw = true;
-            index += 1;
         } else {
             render_values.push(values[index].clone());
             index += 1;
@@ -5234,7 +5225,6 @@ fn parse_coverage_capture_options(values: &[String]) -> Result<CoverageCaptureOp
     let options = parse_coverage_show_options(&show_values)?;
     Ok(CoverageCaptureOptions {
         capture_id,
-        raw,
         path: options.path,
         path_glob: options.path_glob,
         deprecated_path: options.deprecated_path,
@@ -7104,8 +7094,7 @@ commands:
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
   dbgjs coverage start [target scope]
-  dbgjs coverage capture [--id <name>] [--raw] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
-    --raw is a deprecated compatibility flag; all captures store raw ranges without source-map lookup
+  dbgjs coverage capture [--id <name>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     source-map projection and enrichment happen when viewing with coverage show
   dbgjs coverage stop [--id <name>] [target scope]
   dbgjs coverage show [<selector>] [--exclude <baseline>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
@@ -8586,19 +8575,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_raw_coverage_independently_of_storage_and_rendering() {
+    fn rejects_removed_raw_coverage_flag() {
         let options = parse_coverage_capture_options(&arguments(&[
-            "--raw",
             "--id",
             "sample",
             "--max-lines",
             "5",
         ]))
         .unwrap();
-        assert!(options.raw);
         assert_eq!(options.capture_id.as_deref(), Some("sample"));
         assert_eq!(options.max_lines, 5);
-        assert!(!parse_coverage_capture_options(&[]).unwrap().raw);
+        assert!(parse_coverage_capture_options(&arguments(&["--raw"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--id", "--raw"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude"])).is_err());
         assert!(parse_coverage_capture_options(&arguments(&["--exclude", "baseline"])).is_err());
@@ -8640,16 +8627,11 @@ mod tests {
         assert!(hint.contains("raw ranges"));
         assert!(hint.contains("coverage show"));
         assert!(!hint.contains("capture --raw"));
-        assert_eq!(
-            super::coverage_delay_hint(&arguments(&["coverage", "capture", "--raw"])),
-            Some(hint)
-        );
         let show_hint = super::coverage_delay_hint(&arguments(&["coverage", "show", "typing"])).unwrap();
         assert!(show_hint.contains("view"));
         assert!(show_hint.contains("source"));
         let help = super::usage();
-        assert!(help.contains("--raw is a deprecated compatibility flag"));
-        assert!(!help.contains("--raw collects"));
+        assert!(!help.contains("--raw"));
         assert!(super::coverage_delay_hint(&arguments(&["source", "show"])).is_none());
     }
 

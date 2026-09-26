@@ -159,7 +159,6 @@ An omitted inline map can be recovered from the `sourceMappingURL` directive
 when the generated source is available and matches its captured SHA-256.
 Inline `data:` and oversized script/map URLs are omitted from capture
 provenance so URLs cannot smuggle source or map bytes into raw payloads.
-The legacy `raw` take option now produces the same raw capture in either mode;
 `noCache` applies only to live source acquisition, not stored views. Stored
 views reuse the verified source-map cache when available and may populate it
 after fetching a map; capture payloads never contain source or map bytes.
