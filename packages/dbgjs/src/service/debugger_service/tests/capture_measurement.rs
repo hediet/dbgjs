@@ -11,8 +11,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const FUNCTIONS: usize = 128;
 const SAMPLES: usize = 16_384;
 const HEAP_OBJECTS: usize = 1_024;
+const CASES: [(&str, CaptureKind); 3] = [
+    ("coverage", CaptureKind::Coverage),
+    ("cpu", CaptureKind::CpuProfile),
+    ("heap", CaptureKind::HeapSnapshot),
+];
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Traffic {
     source_requests: u64,
     source_bytes: u64,
@@ -36,7 +41,8 @@ struct FixtureServer {
     source: String,
     mode: Arc<AtomicU64>,
     counts: Arc<[AtomicU64; 4]>,
-    task: tokio::task::JoinHandle<()>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    control: Option<reqwest::Client>,
 }
 
 impl FixtureServer {
@@ -66,9 +72,23 @@ impl FixtureServer {
                 }
                 let request = String::from_utf8(request).unwrap();
                 let path = request.split_whitespace().nth(1).unwrap();
+                let is_control = path.starts_with("/__fixture/");
                 let is_map = path.ends_with(".map");
                 let mode = server_mode.load(Ordering::SeqCst);
-                let body = if is_map {
+                let body = if path == "/__fixture/traffic" {
+                    let values: [u64; 4] =
+                        std::array::from_fn(|i| server_counts[i].load(Ordering::SeqCst));
+                    serde_json::to_string(&Traffic {
+                        source_requests: values[0],
+                        source_bytes: values[1],
+                        map_requests: values[2],
+                        map_bytes: values[3],
+                    })
+                    .unwrap()
+                } else if let Some(mode) = path.strip_prefix("/__fixture/mode/") {
+                    server_mode.store(mode.parse().unwrap(), Ordering::SeqCst);
+                    String::new()
+                } else if is_map {
                     serde_json::json!({
                         "version": 3, "file": path.trim_start_matches('/').trim_end_matches(".map"),
                         "sources": ["original.ts"],
@@ -83,10 +103,12 @@ impl FixtureServer {
                 } else {
                     server_source.clone()
                 };
-                let index = if is_map { 2 } else { 0 };
-                server_counts[index].fetch_add(1, Ordering::SeqCst);
-                server_counts[index + 1].fetch_add(body.len() as u64, Ordering::SeqCst);
-                let status = if !is_map && mode == 2 {
+                if !is_control {
+                    let index = if is_map { 2 } else { 0 };
+                    server_counts[index].fetch_add(1, Ordering::SeqCst);
+                    server_counts[index + 1].fetch_add(body.len() as u64, Ordering::SeqCst);
+                }
+                let status = if !is_control && !is_map && mode == 2 {
                     "404 Not Found"
                 } else {
                     "200 OK"
@@ -105,7 +127,24 @@ impl FixtureServer {
             source,
             mode,
             counts,
-            task,
+            task: Some(task),
+            control: None,
+        }
+    }
+
+    fn remote(base: String) -> Self {
+        Self {
+            base,
+            source: format!("class a {{}}\n{}", "// fixture padding\n".repeat(1_024)),
+            mode: Arc::new(AtomicU64::new(0)),
+            counts: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+            task: None,
+            control: Some(
+                reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                    .unwrap(),
+            ),
         }
     }
 
@@ -117,13 +156,40 @@ impl FixtureServer {
         }
     }
 
-    fn traffic(&self) -> Traffic {
+    async fn traffic(&self) -> Traffic {
+        if let Some(client) = &self.control {
+            let bytes = client
+                .get(format!("{}/__fixture/traffic", self.base))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            return serde_json::from_slice(&bytes).unwrap();
+        }
         let values: [u64; 4] = std::array::from_fn(|i| self.counts[i].load(Ordering::SeqCst));
         Traffic {
             source_requests: values[0],
             source_bytes: values[1],
             map_requests: values[2],
             map_bytes: values[3],
+        }
+    }
+
+    async fn set_mode(&self, mode: u64) {
+        if let Some(client) = &self.control {
+            client
+                .get(format!("{}/__fixture/mode/{mode}", self.base))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        } else {
+            self.mode.store(mode, Ordering::SeqCst);
         }
     }
 
@@ -141,7 +207,9 @@ impl FixtureServer {
 
 impl Drop for FixtureServer {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
         for name in ["coverage", "cpu", "heap"] {
             self.clear_map(name);
         }
@@ -387,31 +455,23 @@ async fn view(service: &DebuggerService, name: &str, kind: CaptureKind, availabl
     }
 }
 
-async fn run_workflow(measure: bool) {
-    let server = FixtureServer::start().await;
-    let (root, writer) = capture_catalog_service();
-    fs::create_dir_all(&root).unwrap();
-    let path = root.join("service.json");
-    let cases = [
-        ("coverage", CaptureKind::Coverage),
-        ("cpu", CaptureKind::CpuProfile),
-        ("heap", CaptureKind::HeapSnapshot),
-    ];
+async fn publish_workflow(server: &FixtureServer, writer: &DebuggerService, measure: bool) {
+    let path = &writer.persistence_path;
     let mut total_written = 0;
     let mut total_serialized = 0;
-    for (name, kind) in cases {
+    for (name, kind) in CASES {
         server.clear_map(name);
         let fixture = match kind {
             CaptureKind::Coverage => Fixture::Coverage(coverage_fixture(server.provenance(name))),
             CaptureKind::CpuProfile => Fixture::Cpu(cpu_fixture(server.provenance(name))),
             CaptureKind::HeapSnapshot => Fixture::Heap(heap_fixture()),
         };
-        let before = server.traffic();
+        let before = server.traffic().await;
         let started = Instant::now();
-        publish_fixture(&writer, &server, name, kind, fixture).await;
+        publish_fixture(writer, server, name, kind, fixture).await;
         let elapsed = started.elapsed();
         assert_eq!(
-            server.traffic(),
+            server.traffic().await,
             before,
             "publication must not fetch sources/maps"
         );
@@ -432,38 +492,40 @@ async fn run_workflow(measure: bool) {
                 "publish {name}: elapsed_us={} payload_serialized_bytes={payload_serialized} payload_written_bytes={payload_bytes} catalog_serialized_written_bytes={catalog_bytes} rss_kib={:?} traffic={:?}",
                 elapsed.as_micros(),
                 rss_kib(),
-                server.traffic().since(before)
+                server.traffic().await.since(before)
             );
         }
     }
     if measure {
         println!("cumulative: serialized_bytes={total_serialized} written_bytes={total_written}");
     }
-    drop(writer);
-    let before = server.traffic();
+}
+
+async fn read_workflow(server: &FixtureServer, path: PathBuf, measure: bool) {
+    let before = server.traffic().await;
     let started = Instant::now();
     let (shutdown, _) = watch::channel(false);
     let restored = DebuggerService::load(shutdown, path.clone()).unwrap();
     let restart = started.elapsed();
-    assert_eq!(server.traffic(), before);
+    assert_eq!(server.traffic().await, before);
     assert!(restored.state.lock().await.target_debuggers.is_empty());
     if measure {
         println!(
             "restart: elapsed_us={} rss_kib={:?} traffic={:?}",
             restart.as_micros(),
             rss_kib(),
-            server.traffic().since(before)
+            server.traffic().await.since(before)
         );
     }
     let catalog = fs::read(&path).unwrap();
-    for (name, kind) in cases {
+    for (name, kind) in CASES {
         let reference = restored.state.lock().await.captures[&("test".into(), name.into())]
             .payload
             .clone();
         let original = fs::read(&reference.path).unwrap();
         assert!(!String::from_utf8_lossy(&original).contains(&server.source));
         assert!(!String::from_utf8_lossy(&catalog).contains(&server.source));
-        let before = server.traffic();
+        let before = server.traffic().await;
         let started = Instant::now();
         let raw = load_capture_payload(&reference, kind).unwrap();
         let raw_read = started.elapsed();
@@ -478,20 +540,21 @@ async fn run_workflow(measure: bool) {
             }
             CapturePayload::HeapSnapshot { path } => assert_eq!(fs::read(path).unwrap(), original),
         }
-        assert_eq!(server.traffic(), before);
+        assert_eq!(server.traffic().await, before);
         if measure {
             println!(
                 "raw {name}: elapsed_us={} rss_kib={:?} traffic={:?}",
                 raw_read.as_micros(),
                 rss_kib(),
-                server.traffic().since(before)
+                server.traffic().await.since(before)
             );
         }
         for phase in ["first", "repeated"] {
-            let before = server.traffic();
+            let before = server.traffic().await;
             let started = Instant::now();
             view(&restored, name, kind, true).await;
-            let traffic = server.traffic().since(before);
+            let elapsed = started.elapsed();
+            let traffic = server.traffic().await.since(before);
             if phase == "first" {
                 assert_eq!(traffic.source_requests, 1);
                 assert_eq!(traffic.source_bytes, server.source.len() as u64);
@@ -510,7 +573,7 @@ async fn run_workflow(measure: bool) {
             if measure {
                 println!(
                     "view {name} {phase}: elapsed_us={} rss_kib={:?} traffic={:?}",
-                    started.elapsed().as_micros(),
+                    elapsed.as_micros(),
                     rss_kib(),
                     traffic
                 );
@@ -518,10 +581,10 @@ async fn run_workflow(measure: bool) {
         }
         for mode in [1, 2] {
             server.clear_map(name);
-            server.mode.store(mode, Ordering::SeqCst);
-            let before = server.traffic();
+            server.set_mode(mode).await;
+            let before = server.traffic().await;
             view(&restored, name, kind, false).await;
-            let traffic = server.traffic().since(before);
+            let traffic = server.traffic().await.since(before);
             assert_eq!(traffic.source_requests, 1);
             assert_eq!(
                 traffic.map_requests, 0,
@@ -529,7 +592,7 @@ async fn run_workflow(measure: bool) {
             );
             assert_eq!(fs::read(&reference.path).unwrap(), original);
         }
-        server.mode.store(0, Ordering::SeqCst);
+        server.set_mode(0).await;
         assert_eq!(fs::read(&reference.path).unwrap(), original);
         assert_eq!(
             fs::read(&path).unwrap(),
@@ -538,7 +601,101 @@ async fn run_workflow(measure: bool) {
         );
     }
     drop(restored);
+}
+
+async fn run_workflow(measure: bool) {
+    let server = FixtureServer::start().await;
+    let (root, writer) = capture_catalog_service();
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("service.json");
+    publish_workflow(&server, &writer, measure).await;
+    drop(writer);
+    read_workflow(&server, path, measure).await;
     fs::remove_dir_all(root).unwrap();
+}
+
+async fn run_process_workflow(measure: bool) {
+    let server = FixtureServer::start().await;
+    let (root, template) = capture_catalog_service();
+    drop(template);
+    fs::create_dir_all(&root).unwrap();
+    let mut pids = Vec::new();
+    for mode in ["writer", "reader"] {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "service::debugger_service::tests::capture_measurement::capture_measurement_subprocess_worker",
+            "--exact", "--ignored", "--nocapture", "--test-threads=1",
+        ])
+            .env("DBGJS_MEASUREMENT_MODE", mode)
+            .env("DBGJS_MEASUREMENT_ROOT", &root)
+            .env("DBGJS_MEASUREMENT_ORIGIN", &server.base)
+            .env("DBGJS_MEASUREMENT_PRINT", if measure { "1" } else { "0" })
+            .kill_on_drop(true);
+        let started = Instant::now();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+            .await
+            .expect("measurement subprocess exceeded 30 seconds")
+            .unwrap();
+        let elapsed = started.elapsed();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{mode} failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let pid: u32 = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("measurement-worker-pid: ")?.parse().ok())
+            .expect("subprocess did not identify itself");
+        assert_ne!(pid, std::process::id());
+        pids.push(pid);
+        if measure {
+            println!("process {mode}: pid={pid} wall_us={}", elapsed.as_micros());
+            print!("{stdout}");
+        }
+        if mode == "writer" {
+            assert_eq!(
+                server.traffic().await,
+                Traffic::default(),
+                "writer must exit without fetching source/map resources"
+            );
+            assert!(root.join("service.json").is_file());
+        }
+    }
+    assert_ne!(pids[0], pids[1], "reader must be a different process");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "internal subprocess mode; invoked by capture_measurement_process_*"]
+async fn capture_measurement_subprocess_worker() {
+    let Ok(mode) = std::env::var("DBGJS_MEASUREMENT_MODE") else {
+        return;
+    };
+    println!("\nmeasurement-worker-pid: {}", std::process::id());
+    let root = PathBuf::from(std::env::var_os("DBGJS_MEASUREMENT_ROOT").unwrap());
+    let server = FixtureServer::remote(std::env::var("DBGJS_MEASUREMENT_ORIGIN").unwrap());
+    let measure = std::env::var("DBGJS_MEASUREMENT_PRINT").unwrap() == "1";
+    match mode.as_str() {
+        "writer" => {
+            let (_, mut writer) = capture_catalog_service();
+            writer.persistence_path = root.join("service.json");
+            publish_workflow(&server, &writer, measure).await;
+        }
+        "reader" => read_workflow(&server, root.join("service.json"), measure).await,
+        _ => panic!("unexpected subprocess mode {mode}"),
+    }
+}
+
+#[tokio::test]
+async fn capture_measurement_process_restart_preserves_raw_and_views() {
+    run_process_workflow(false).await;
+}
+
+#[tokio::test]
+#[ignore = "observational OS-process restart benchmark; run explicitly"]
+async fn capture_measurement_process_baseline() {
+    run_process_workflow(true).await;
 }
 
 #[tokio::test]

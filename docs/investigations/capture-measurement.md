@@ -17,6 +17,9 @@ export DBGJS_SOURCE_MAP_CACHE="$PWD/target/measurement-map-cache"
 cargo test -p dbgjs --lib capture_measurement_roundtrip -- --test-threads=1
 cargo test -p dbgjs --lib capture_measurement_baseline -- \
   --ignored --nocapture --test-threads=1
+cargo test -p dbgjs --lib capture_measurement_process_restart -- --test-threads=1
+cargo test -p dbgjs --lib capture_measurement_process_baseline -- \
+  --ignored --nocapture --test-threads=1
 ```
 
 For repeated observations, run the **same compiled lib-test executable** in
@@ -25,6 +28,8 @@ separate processes (Cargo's `--message-format=json` identifies its `executable`)
 ```sh
 "$TEST_EXECUTABLE" capture_measurement_baseline \
   --ignored --nocapture --test-threads=1
+"$TEST_EXECUTABLE" capture_measurement_process_baseline \
+  --ignored --nocapture --test-threads=1
 ```
 
 No browser, package installation, or optional profiler is needed. The test starts
@@ -32,6 +37,24 @@ and exercises a real loopback HTTP fixture server; its served response-body
 counts are the source/map request and byte observations. Fixture directories and
 their individual map-cache entries are removed on successful completion. The
 server task is aborted when its owner is dropped.
+
+The process test invokes a single ignored `capture_measurement_subprocess_worker`
+test by its exact name in the existing lib-test executable. The parent waits for
+the writer's successful **exit** before launching the reader; it verifies both
+worker PIDs differ from itself and each other. Each subprocess has a 30-second
+hang watchdog and is killed if its pending command is dropped. This is a safety
+bound, not a performance threshold. No daemon, alternate storage implementation,
+or second fixture harness is introduced.
+
+The parent hosts only the HTTP server. Children receive the fixture origin,
+catalog directory, and test mode through command-local environment variables.
+The reader constructs no writer/service template; it loads only the files left
+by the exited writer. Its first views cannot reuse writer process memory. A
+separate fixture control endpoint lets children inspect the server's actual
+counters and select unchanged/changed/404 responses. Control requests are
+excluded from source/map traffic counts and phase timers; the control client has
+a five-second hang timeout. This preserves assertions about zero source/map
+requests during publication, clean-process load, and raw reads.
 
 ## What is measured
 
@@ -52,8 +75,9 @@ input is emitted to the production staging/final paths with the existing
 storage synchronization methods, simulating the completed raw CDP stream.
 It does **not** measure the browser heap-snapshot producer.
 
-After dropping the writer, production `DebuggerService::load` reconstructs the
-service from the persisted catalog and validates payloads. Production
+After dropping the writer (or awaiting its subprocess exit), production
+`DebuggerService::load` reconstructs the service from the persisted catalog and
+validates payloads. Production
 `load_capture_payload` measures the raw read/verification/decode; for heap it
 verifies bytes and returns the raw path rather than parsing a graph. Stored
 coverage, CPU, and heap-class endpoints then perform the first and repeated
@@ -82,13 +106,14 @@ runtime, HTTP server, fixtures, and retained allocator pages—not per-capture
 allocation, a delta, or a peak. Assertions/re-serialization used to verify raw
 fixtures occur outside the raw-read timer.
 
-## Observed baseline, 2026-10-06
+## Initial same-process baseline, 2026-10-06
 
 Linux x86-64 host, 12 logical CPUs, 31 GiB RAM, Rust/Cargo 1.90.0, default Cargo
 test profile (`debug = 1`, not release), two build jobs, incremental disabled.
 Measurement used the owning `oct6-measurement` worktree and
 `CARGO_TARGET_DIR=/root/.copilot/session-state/3542cd20-76bf-4298-8bc5-dd12c8f2e227/files/oct6-measurement-target`.
-Three fresh test processes ran the same executable; unrelated compilation on
+At commit `62343f5`, three fresh test processes ran the same executable;
+unrelated compilation on
 the shared host was active, so ranges describe observed runs, not budgets.
 
 | Phase | Wall time range (µs) | Current process RSS range (KiB) |
@@ -128,16 +153,62 @@ revalidates/refetches source while reusing the verified map. CPU/heap views reus
 the existing map cache without HTTP. Both changed-source and 404 fixtures retain
 raw captures, report unavailable projection, and do not request a map.
 
+## Real OS-process boundary baseline, 2026-10-06
+
+The follow-up runs **the same fixture builders and production publication/read
+helpers** in separate writer and reader processes. Three independent process
+pairs passed, with the same toolchain/profile/host settings above. For example,
+writer PID **178716** exited successfully before reader PID **178718** launched.
+The parent and reader verified zero source/map requests from the writer, service
+load, and each raw read. Each clean reader also passed mapped first/repeated
+views, changed-source and 404 unavailable projections, and catalog/raw byte
+immutability.
+
+| Phase | Wall time range (µs) | Current worker RSS range (KiB) |
+| --- | ---: | ---: |
+| Coverage publication | 10,928–14,918 | 40,796–41,008 |
+| CPU publication | 19,423–23,416 | 41,880–42,156 |
+| Heap publication | 8,542–12,978 | 42,660–43,000 |
+| Clean reader service load | 7,700–8,074 | 35,256–35,680 |
+| Coverage raw read | 2,329–2,406 | 36,528–36,760 |
+| Coverage first view | 60,554–94,274 | 45,208–45,620 |
+| Coverage repeated view | 50,078–64,236 | 45,372–45,720 |
+| CPU raw read | 11,106–16,398 | 46,116–46,336 |
+| CPU first view | 117,418–126,073 | 47,804–47,932 |
+| CPU repeated view | 106,236–117,932 | 47,804–47,928 |
+| Heap raw verification | 951–1,013 | 47,660–47,776 |
+| Heap first class view | 59,044–77,164 | 50,812–51,184 |
+| Heap repeated class view | 50,773–64,682 | 50,868–51,240 |
+
+The parent separately observed whole writer-command wall time
+**124,260–139,431 µs** and whole reader-command wall time
+**1,053,204–1,094,002 µs**. Those include executable launch, lib-test/runtime
+initialization, all corresponding workflow steps, control requests, assertions,
+and process exit; they are **not isolated daemon launch/restart latency**.
+Phase timing excludes fixture preparation and counter/control requests.
+
+Per-payload serialized/written bytes and source/map traffic matched the initial
+table. Catalog publications were 1,267 / 1,974 / 3,382 B in these runs:
+**206,999 B cumulatively serialized and 241,259 B logically written**, including
+6,623 B of catalog writes. Different fixture metadata/path lengths account for
+different logical file totals; neither set is a physical disk-write measurement.
+
+RSS now describes the current writer **or reader worker**, not the parent HTTP
+server. It still includes the worker's test runtime, fixture/control client,
+decoded data, and allocator retention. The lower reader load RSS must not be
+treated as allocation savings or a phase-attributed memory delta.
+
 ## Boundaries
 
 “First” means the fixture map cache was cleared; “repeated” means that map is
-available. Neither means a cold OS page cache. Reconstruction is a new service
-object in the same test process, **not** an OS process restart or daemon-launch
-latency. Each baseline observation itself starts a fresh test process.
+available. Neither means a cold OS page cache. The initial benchmark reconstructs
+a new service object in the same process; the process benchmark reconstructs
+it in a different OS process after writer exit. Both use the production load
+path, but neither launches the production service daemon/CLI.
 
 Browser/CDP acquisition latency and source/map CDP calls, full-sized V8 profiles,
 network throughput, OS-cold disk access, peak RSS/allocation attribution,
-filesystem physical writes, service-process restart, and platform-specific
+filesystem physical writes, isolated production-daemon restart latency, and platform-specific
 behavior are **unmeasured**. This baseline establishes the real durable storage
 and deferred projection boundary; it is not an embedded-vs-external speedup
 claim or a performance SLA. Broader live-browser measurements should reuse the
