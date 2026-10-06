@@ -960,6 +960,75 @@ struct RelayDebugAttachment {
     attachment: DebugAttachment,
 }
 
+struct TargetAttachmentLock {
+    lock: Arc<Mutex<()>>,
+    target_id: String,
+    physical_key: String,
+    attempt: ConnectionAttempt,
+    capability: Option<Arc<dyn DebugCapability>>,
+}
+
+impl TargetAttachmentLock {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lock.lock().await
+    }
+
+    fn validate(
+        &self,
+        state: &ServiceState,
+        context_id: &str,
+        connection_id: &str,
+    ) -> Result<(), JsonRpcError> {
+        let connection = state
+            .contexts
+            .get(context_id)
+            .ok_or_else(|| not_found("context", context_id))?
+            .connections
+            .get(connection_id)
+            .ok_or_else(|| not_found("connection", connection_id))?;
+        let key = (
+            context_id.into(),
+            connection_id.into(),
+            self.target_id.clone(),
+        );
+        let current_capability = target_debug_capability(state, &key, connection.generation);
+        let same_capability = match (&self.capability, current_capability) {
+            (Some(original), Some(current)) => Arc::ptr_eq(original, &current),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.attempt.configuration_version != connection.configuration_version
+            || self.attempt.generation != connection.generation
+            || self.physical_key != physical_target_key(state, &key)?
+            || !same_capability
+        {
+            return Err(invalid_state(
+                "target changed while waiting for its attachment lock",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn target_debug_capability(
+    state: &ServiceState,
+    key: &(String, String, String),
+    generation: u64,
+) -> Option<Arc<dyn DebugCapability>> {
+    let target = context_connection_target(state, &key.0, &key.1, generation, &key.2)?;
+    state
+        .resource_graphs
+        .get(&key.0)?
+        .read(|graph| {
+            graph.capability_from_source(
+                &target.resource_id,
+                &connection_source_id(&key.1, generation),
+                &CapabilityKind::Debug,
+            )
+        })?
+        .as_debug()
+}
+
 fn physical_target_key(
     state: &ServiceState,
     key: &(String, String, String),
@@ -1917,8 +1986,8 @@ impl DebuggerService {
         let _attachment_guard = attachment_lock.lock().await;
         let (mut target_id, mut debugger_key, prior_owner, mut resolved_generation) = {
             let mut state = self.state.lock().await;
-            let target_id =
-                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            attachment_lock.validate(&state, &context_id, &connection_id)?;
+            let target_id = attachment_lock.target_id.clone();
             let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
@@ -1993,6 +2062,8 @@ impl DebuggerService {
         };
 
         let mut outcome = TargetAttachmentOutcome::Created;
+        let mut reconnected_attachment_lock = None;
+        let mut _reconnected_attachment_guard = None;
         if let Some(owner) = &prior_owner {
             self.publish_target_attachment_change(&owner.key, owner.attempt)
                 .await;
@@ -2031,6 +2102,14 @@ impl DebuggerService {
                         .resolve_target_id(&context_id, &connection_id, &target_id)
                         .await?;
                     debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
+                    let reconnected = self
+                        .target_attachment_lock(&context_id, &connection_id, &target_id)
+                        .await?;
+                    if !Arc::ptr_eq(&attachment_lock.lock, &reconnected.lock) {
+                        _reconnected_attachment_guard =
+                            Some(reconnected.lock.clone().lock_owned().await);
+                    }
+                    reconnected_attachment_lock = Some(reconnected);
                 }
             } else if let Some(attachment) = owner.attachment {
                 attachment
@@ -2047,6 +2126,13 @@ impl DebuggerService {
 
         let (runtime, attempt, debug_capability, waiting_for_debugger, source_model) = {
             let mut state = self.state.lock().await;
+            reconnected_attachment_lock
+                .as_ref()
+                .unwrap_or(&attachment_lock)
+                .validate(&state, &context_id, &connection_id)?;
+            if state.target_debuggers.contains_key(&debugger_key) {
+                return Err(ownership_conflict(&debugger_key));
+            }
             let context = state
                 .contexts
                 .get(&context_id)
@@ -2164,26 +2250,8 @@ impl DebuggerService {
             .get(&context_id)
             .and_then(|context| context.connections.get(&connection_id))
             .is_some_and(|connection| connection.generation == generation);
-        let capability_is_current = context_connection_target(
-            &state,
-            &context_id,
-            &connection_id,
-            generation,
-            &target_id,
-        )
-        .and_then(|target| {
-            state.resource_graphs.get(&context_id).and_then(|graph| {
-                graph.read(|graph| {
-                    graph.capability_from_source(
-                        &target.resource_id,
-                        &connection_source_id(&connection_id, generation),
-                        &CapabilityKind::Debug,
-                    )
-                })
-            })
-        })
-        .and_then(|capability| capability.as_debug())
-        .is_some_and(|current| Arc::ptr_eq(&current, &debug_capability));
+        let capability_is_current = target_debug_capability(&state, &debugger_key, generation)
+            .is_some_and(|current| Arc::ptr_eq(&current, &debug_capability));
         if !runtime_is_current || !generation_is_current || !capability_is_current {
             drop(state);
             let _ = debug_capability.close(&opened).await;
@@ -2301,21 +2369,40 @@ impl DebuggerService {
         context_id: &str,
         connection_id: &str,
         target_id: &str,
-    ) -> Result<Arc<Mutex<()>>, JsonRpcError> {
-        let key = {
+    ) -> Result<TargetAttachmentLock, JsonRpcError> {
+        let (target_id, physical_key, attempt, capability) = {
             let state = self.state.lock().await;
             let target_id =
                 Self::resolve_target_id_in_state(&state, context_id, connection_id, target_id)?;
-            physical_target_key(&state, &(context_id.into(), connection_id.into(), target_id))?
+            let key = (context_id.into(), connection_id.into(), target_id.clone());
+            let connection = &state.contexts[context_id].connections[connection_id];
+            (
+                target_id,
+                physical_target_key(&state, &key)?,
+                ConnectionAttempt {
+                    configuration_version: connection.configuration_version,
+                    generation: connection.generation,
+                },
+                target_debug_capability(&state, &key, connection.generation),
+            )
         };
         let mut locks = self.attachment_locks.lock().await;
         locks.retain(|_, lock| lock.strong_count() != 0);
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            return Ok(lock);
-        }
-        let lock = Arc::new(Mutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        Ok(lock)
+        let lock = locks
+            .get(&physical_key)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(physical_key.clone(), Arc::downgrade(&lock));
+                lock
+            });
+        Ok(TargetAttachmentLock {
+            lock,
+            target_id,
+            physical_key,
+            attempt,
+            capability,
+        })
     }
 
     /// Looks up an already-attached target's debugger handle, rejecting the call while its

@@ -188,6 +188,223 @@ async fn bounded<F: std::future::Future>(future: F) -> F::Output {
         .expect("lifecycle operation stalled")
 }
 
+fn target_ref(selector: &str) -> crate::api::service_api::TargetRef {
+    crate::api::service_api::TargetRef {
+        connection: crate::api::service_api::ConnectionRef {
+            context_id: "ctx".into(),
+            connection_id: "conn".into(),
+        },
+        target_id: selector.into(),
+    }
+}
+
+async fn poll_queued<F: std::future::Future>(mut future: std::pin::Pin<&mut F>) {
+    std::future::poll_fn(|cx| {
+        assert!(
+            future.as_mut().poll(cx).is_pending(),
+            "operation must queue behind the held target lock"
+        );
+        std::task::Poll::Ready(())
+    })
+    .await;
+}
+
+async fn replace_targets(
+    service: &DebuggerService,
+    runtime: &Arc<ConnectionRuntime>,
+    targets: Vec<TargetSnapshot>,
+) {
+    let mut state = service.state.lock().await;
+    let context = state.contexts["ctx"].clone();
+    stage_connection_resource_graph(
+        &mut state,
+        "ctx",
+        "conn",
+        &context,
+        &targets
+            .into_iter()
+            .map(|target| (target.target_id.clone(), target))
+            .collect(),
+        runtime,
+        &[],
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn queued_title_attach_keeps_resolved_target_when_selector_moves() {
+    let transport = TestTransport::new(false, false);
+    let (service, runtimes) = fixture(&[("conn", transport)]).await;
+    let mut page = target("page");
+    page.title = "wanted".into();
+    let mut other = target("other");
+    replace_targets(&service, &runtimes[0], vec![page.clone(), other.clone()]).await;
+    let page_lock = service
+        .target_attachment_lock("ctx", "conn", "page")
+        .await
+        .unwrap();
+    let page_guard = page_lock.lock().await;
+    let other_lock = service
+        .target_attachment_lock("ctx", "conn", "other")
+        .await
+        .unwrap();
+    let other_guard = other_lock.lock().await;
+    let call = CallCtx::default();
+    let mut queued = Box::pin(service.attach_target(
+        &call,
+        target_ref("wanted"),
+        TargetAttachOptions::default(),
+    ));
+    poll_queued(queued.as_mut()).await;
+    page.title = "original".into();
+    other.title = "wanted".into();
+    replace_targets(&service, &runtimes[0], vec![page, other]).await;
+    drop(page_guard);
+    let attached = bounded(queued).await.unwrap();
+    assert_eq!(
+        attached.target.target_id, "page",
+        "selector moved while queued; the operation must not attach B while holding A's lock"
+    );
+    drop(other_guard);
+    runtimes[0].close().await;
+}
+
+#[tokio::test]
+async fn queued_url_detach_keeps_resolved_target_when_selector_moves() {
+    let transport = TestTransport::new(false, false);
+    let (service, runtimes) = fixture(&[("conn", transport)]).await;
+    let mut page = target("page");
+    page.url = "https://needle.test".into();
+    let mut other = target("other");
+    replace_targets(&service, &runtimes[0], vec![page.clone(), other.clone()]).await;
+    let call = CallCtx::default();
+    service
+        .attach_target(&call, target_ref("page"), TargetAttachOptions::default())
+        .await
+        .unwrap();
+    service
+        .attach_target(&call, target_ref("other"), TargetAttachOptions::default())
+        .await
+        .unwrap();
+    let page_lock = service
+        .target_attachment_lock("ctx", "conn", "page")
+        .await
+        .unwrap();
+    let page_guard = page_lock.lock().await;
+    let other_lock = service
+        .target_attachment_lock("ctx", "conn", "other")
+        .await
+        .unwrap();
+    let other_guard = other_lock.lock().await;
+    let mut queued = Box::pin(service.detach_target(&call, target_ref("needle.test"), None));
+    poll_queued(queued.as_mut()).await;
+    page.url = "https://original.test".into();
+    other.url = "https://needle.test".into();
+    replace_targets(&service, &runtimes[0], vec![page, other]).await;
+    drop(page_guard);
+    bounded(queued).await.unwrap();
+    let state = service.state.lock().await;
+    assert!(
+        !state
+            .target_debuggers
+            .contains_key(&("ctx".into(), "conn".into(), "page".into())),
+        "queued detach must release A, not newly matching B"
+    );
+    assert!(
+        state
+            .target_debuggers
+            .contains_key(&("ctx".into(), "conn".into(), "other".into()))
+    );
+    drop(state);
+    drop(other_guard);
+    runtimes[0].close().await;
+}
+
+#[tokio::test]
+async fn queued_attach_rejects_reconnect_even_when_physical_resource_is_unchanged() {
+    let transport = TestTransport::new(false, false);
+    let (service, runtimes) = fixture(&[("conn", transport.clone())]).await;
+    let lock = service
+        .target_attachment_lock("ctx", "conn", "page")
+        .await
+        .unwrap();
+    let guard = lock.lock().await;
+    let call = CallCtx::default();
+    let mut queued =
+        Box::pin(service.attach_target(&call, target_ref("page"), TargetAttachOptions::default()));
+    poll_queued(queued.as_mut()).await;
+    let replacement_transport = TestTransport::new(false, false);
+    let replacement =
+        raw_session_tests::runtime_with_transport(2, replacement_transport.clone()).await;
+    {
+        let mut state = service.state.lock().await;
+        super::tests::insert_context_with_targets(
+            &mut state,
+            "ctx",
+            [("conn", 2, vec![target("page")])],
+        );
+        let context = state.contexts["ctx"].clone();
+        stage_connection_resource_graph(
+            &mut state,
+            "ctx",
+            "conn",
+            &context,
+            &BTreeMap::from([("page".into(), target("page"))]),
+            &replacement,
+            &[],
+        )
+        .unwrap();
+        state
+            .runtimes
+            .insert(("ctx".into(), "conn".into()), replacement.clone());
+    }
+    drop(guard);
+    let result = bounded(queued).await;
+    assert!(
+        result.is_err(),
+        "queued generation-1 request attached to generation 2: {result:?}"
+    );
+    assert_eq!(transport.attaches.load(Ordering::SeqCst), 0);
+    assert_eq!(replacement_transport.attaches.load(Ordering::SeqCst), 0);
+    replacement.close().await;
+    runtimes[0].close().await;
+}
+
+#[tokio::test]
+async fn queued_attach_rejects_changed_physical_identity_or_target_incarnation() {
+    for recreated in [false, true] {
+        let transport = TestTransport::new(false, false);
+        let (service, runtimes) = fixture(&[("conn", transport.clone())]).await;
+        let lock = service
+            .target_attachment_lock("ctx", "conn", "page")
+            .await
+            .unwrap();
+        let guard = lock.lock().await;
+        let call = CallCtx::default();
+        let mut queued = Box::pin(service.attach_target(
+            &call,
+            target_ref("page"),
+            TargetAttachOptions::default(),
+        ));
+        poll_queued(queued.as_mut()).await;
+        let mut replacement = target("page");
+        if recreated {
+            replace_targets(&service, &runtimes[0], Vec::new()).await;
+        } else {
+            replacement.subtype = Some("electron-renderer".into());
+        }
+        replace_targets(&service, &runtimes[0], vec![replacement]).await;
+        drop(guard);
+        let result = bounded(queued).await;
+        assert!(
+            result.is_err(),
+            "queued request lost its physical/incarnation identity (recreated={recreated}): {result:?}"
+        );
+        assert_eq!(transport.attaches.load(Ordering::SeqCst), 0);
+        runtimes[0].close().await;
+    }
+}
+
 #[tokio::test]
 async fn provider_removal_is_not_blocked_by_pending_attach() {
     let transport = TestTransport::new(true, false);
@@ -560,6 +777,85 @@ async fn pending_public_attach_keeps_relay_registration_exclusive() {
     let guard = bounded(service.relay_lifecycle_lock.write()).await;
     drop(guard);
     runtimes[0].close().await;
+}
+
+#[tokio::test]
+async fn force_reconnect_refreshes_generation_without_relocking_same_physical_target() {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut handlers = Vec::new();
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            handlers.push(tokio::spawn(async move {
+                let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    let request: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    let result = if request["method"] == "Debugger.enable" {
+                        serde_json::json!({"debuggerId": "test"})
+                    } else {
+                        serde_json::json!({})
+                    };
+                    socket
+                        .send(Message::Text(
+                            serde_json::json!({
+                                "id": request["id"], "result": result,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }));
+        }
+        for handler in handlers {
+            handler.await.unwrap();
+        }
+    });
+    let mut state = ServiceState::default();
+    super::tests::insert_context_with_targets(&mut state, "ctx", [("conn", 0, Vec::new())]);
+    let mut context = (*state.contexts["ctx"]).clone();
+    let mut connections = (*context.connections).clone();
+    let mut connection = (*connections["conn"]).clone();
+    connection.configuration = ConnectionConfiguration::NodeInspector { endpoint };
+    connection.status = ConnectionStatus::Disconnected;
+    connections.insert("conn".into(), Arc::new(connection));
+    context.connections = Arc::new(connections);
+    state.contexts.insert("ctx".into(), Arc::new(context));
+    let service = super::tests::service_with_state(PathBuf::from("unused"), state);
+    let call = CallCtx::default();
+    let reference = target_ref(&synthetic_node_target_id("conn"));
+    bounded(service.connect_connection(&call, reference.connection.clone()))
+        .await
+        .unwrap();
+    let original =
+        bounded(service.attach_target(&call, reference.clone(), TargetAttachOptions::default()))
+            .await
+            .unwrap();
+    let replacement = bounded(service.attach_target(
+        &call,
+        reference.clone(),
+        TargetAttachOptions {
+            force: true,
+            expected_connection_generation: Some(original.target.connection_generation),
+        },
+    ))
+    .await
+    .unwrap();
+    assert_eq!(replacement.outcome, TargetAttachmentOutcome::Stolen);
+    assert_eq!(
+        replacement.target.connection_generation,
+        original.target.connection_generation + 1
+    );
+    service
+        .disconnect_connection(&call, reference.connection)
+        .await
+        .unwrap();
+    bounded(server).await.unwrap();
 }
 
 #[tokio::test]

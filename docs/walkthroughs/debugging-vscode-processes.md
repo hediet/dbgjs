@@ -541,6 +541,11 @@ for a removed target or an obsolete generation cannot register a debugger for
 its replacement. Opening one target's debugger does not serialize unrelated
 physical targets.
 
+Attach and detach resolve a title or URL selector once before waiting for that
+target's ownership lock. Later metadata changes cannot redirect the queued
+operation to another target; a changed connection generation, physical identity,
+or target incarnation instead rejects the queued operation.
+
 Disconnect only one connection:
 
 ```powershell

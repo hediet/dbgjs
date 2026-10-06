@@ -201,8 +201,8 @@ impl TargetDebuggerApi for DebuggerService {
         let _attachment_guard = attachment_lock.lock().await;
         let (key, debugger, runtime, attachment, attempt) = {
             let state = self.state.lock().await;
-            let target_id =
-                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            attachment_lock.validate(&state, &context_id, &connection_id)?;
+            let target_id = attachment_lock.target_id.clone();
             let key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
