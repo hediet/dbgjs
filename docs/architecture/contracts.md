@@ -13,6 +13,8 @@ with the daemon's API in a shared export bundle.
 
 The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
 It does not advertise imported CDP domain interfaces on its own RPC connection.
+Shared wire models, including `ContextKind`, belong to `api::service_api`;
+service context-identity helpers and CLI/TUI consumers use those same types.
 
 ## Generated consumers
 

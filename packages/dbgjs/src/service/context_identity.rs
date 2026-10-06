@@ -2,17 +2,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::path::Path;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(rename_all = "camelCase")]
-pub enum ContextKind {
-    Path,
-    Named,
-}
+use crate::api::service_api::ContextKind;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContextIdentity {

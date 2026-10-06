@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
+use dbgjs::api::service_api::ContextKind;
 use dbgjs::service::context_identity::{
-    ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
+    ContextIdentity, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
 };
 use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
@@ -7167,7 +7168,7 @@ mod tests {
         ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
         select_renderer_target, wait_for_renderer_target_id,
     };
-    use dbgjs::service::context_identity::ContextKind;
+    use dbgjs::api::service_api::ContextKind;
     use dbgjs::api::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,

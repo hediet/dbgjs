@@ -164,6 +164,10 @@ provenance so URLs cannot smuggle source or map bytes into raw payloads.
 `noCache` applies only to live source acquisition, not stored views. Stored
 views reuse the verified source-map cache when available and may populate it
 after fetching a map; capture payloads never contain source or map bytes.
+Live acquisition and stored-view projection share the source layer's resource
+limits, URL/path resolution, inline decoding, and integrity-checked map cache.
+Source-map recovery for stored projection does not depend on the live CDP
+runtime or debugger engine.
 
 {{example:coverage-start,coverage-baseline,coverage-type,coverage-stop,coverage-show}}
 

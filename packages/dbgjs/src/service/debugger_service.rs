@@ -12,7 +12,7 @@ mod target_debugger;
 mod errors;
 
 use crate::api::service_api::{
-    BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, CoverageApi, CpuProfilerApi,
+    BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, ContextKind, CoverageApi, CpuProfilerApi,
     HeapProfilerApi, RelayApi, ServiceApi, SourceApi, TargetDebuggerApi,
     CaptureError, CoverageError, CpuProfilerError, HeapProfilerError, TargetError,
 };
@@ -44,7 +44,7 @@ use crate::service::context_engine::{
     reduce_context,
 };
 use crate::service::context_identity::{
-    ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
+    compare_context_paths, normalize_absolute_path, path_relation,
     synthetic_node_target_id,
 };
 use crate::service::context_source_model::{

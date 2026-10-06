@@ -4840,7 +4840,7 @@ mod tests {
             vec![ContextSummary {
                 agent_instance_id: "agent".to_owned(),
                 id: "ctx".to_owned(),
-                kind: dbgjs::service::context_identity::ContextKind::Named,
+                kind: dbgjs::api::service_api::ContextKind::Named,
                 path_distance: None,
                 path_ancestor: None,
                 display_name: "Context".to_owned(),

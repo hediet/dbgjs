@@ -846,7 +846,7 @@ mod tests {
             .contexts
             .put_context(
                 "shop".into(),
-                crate::service::context_identity::ContextKind::Named,
+                crate::api::service_api::ContextKind::Named,
                 Some("Shop".into()),
             )
             .await

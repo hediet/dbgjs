@@ -429,7 +429,7 @@ fn tone_style(tone: Tone) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use dbgjs::service::context_identity::ContextKind;
+    use dbgjs::api::service_api::ContextKind;
     use dbgjs::api::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
         ContextSummary, SourceFormattingSettings,

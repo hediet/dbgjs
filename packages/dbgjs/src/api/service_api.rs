@@ -30,8 +30,16 @@ use linkrpc::prelude::{JsonRpcError, link_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::service::context_identity::ContextKind;
 use std::collections::BTreeMap;
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ContextKind {
+    Path,
+    Named,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1992,6 +2000,27 @@ mod tests {
             .unwrap(),
             predicate
         );
+    }
+
+    #[test]
+    fn context_kind_preserves_wire_values_and_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(super::ContextKind)).unwrap();
+        assert_eq!(schema["title"], "ContextKind");
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["enum"], serde_json::json!(["path", "named"]));
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        for (kind, wire) in [
+            (super::ContextKind::Path, serde_json::json!("path")),
+            (super::ContextKind::Named, serde_json::json!("named")),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<super::ContextKind>(wire.clone()).unwrap(),
+                kind
+            );
+            validator.validate(&wire).unwrap();
+        }
+        assert!(serde_json::from_value::<super::ContextKind>(serde_json::json!("Path")).is_err());
     }
 
     #[test]
