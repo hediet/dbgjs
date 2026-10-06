@@ -129,7 +129,7 @@ impl FixtureServer {
 
     fn clear_map(&self, name: &str) {
         let provenance = self.provenance(name);
-        let path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let path = crate::source::source_map_resources::source_map_cache_path_for_test(
             provenance.source_sha256.as_deref().unwrap(),
             provenance.source_map_url.as_deref().unwrap(),
         );
