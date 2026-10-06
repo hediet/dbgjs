@@ -533,6 +533,14 @@ detaching the active debugger, even if discovery's attachment projection has
 not caught up. A different owner's attachment still reports an ownership
 conflict; use `--force` only when that debugger should be detached and replaced.
 
+An explicit `target detach` stays detached when discovery updates that target's
+title or URL. Newly discovered targets (including a removed target that later
+reappears) can still be auto-attached; reconnecting starts a new connection
+generation. Discovery continues while an attachment is pending, and completion
+for a removed target or an obsolete generation cannot register a debugger for
+its replacement. Opening one target's debugger does not serialize unrelated
+physical targets.
+
 Disconnect only one connection:
 
 ```powershell

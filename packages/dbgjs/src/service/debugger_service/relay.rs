@@ -203,7 +203,7 @@ impl RelayApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<RelayEndpoint, JsonRpcError> {
-        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.write().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
@@ -233,7 +233,7 @@ impl RelayApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.write().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {

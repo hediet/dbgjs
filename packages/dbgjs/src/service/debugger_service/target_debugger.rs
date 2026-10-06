@@ -26,7 +26,7 @@ impl TargetDebuggerApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.read().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         self.attach_target_internal(ctx, context_id, connection_id, target_id, options)
             .await
@@ -193,9 +193,12 @@ impl TargetDebuggerApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.read().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
-        let _attachment_guard = self.attachment_lock.lock().await;
+        let attachment_lock = self
+            .target_attachment_lock(&context_id, &connection_id, &target_id)
+            .await?;
+        let _attachment_guard = attachment_lock.lock().await;
         let (key, debugger, runtime, attachment, attempt) = {
             let state = self.state.lock().await;
             let target_id =

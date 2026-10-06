@@ -22,7 +22,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
@@ -95,8 +95,8 @@ pub struct DebuggerService {
     state: Arc<Mutex<ServiceState>>,
     // Serializes context intent, target claims, and attachment bootstrap per context.
     breakpoint_intent_locks: Arc<Mutex<BTreeMap<String, std::sync::Weak<Mutex<()>>>>>,
-    attachment_lock: Arc<Mutex<()>>,
-    relay_lifecycle_lock: Arc<Mutex<()>>,
+    attachment_locks: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
+    relay_lifecycle_lock: Arc<tokio::sync::RwLock<()>>,
     relay_attachment_lock: Arc<Mutex<()>>,
     relay_attachments: Arc<Mutex<BTreeMap<(String, String, String, String), RelayDebugAttachment>>>,
     persistence_path: PathBuf,
@@ -208,8 +208,8 @@ impl DebuggerService {
             agent_instance_id: random_instance_id()?,
             state: Arc::new(Mutex::new(state)),
             breakpoint_intent_locks: Arc::new(Mutex::new(BTreeMap::new())),
-            attachment_lock: Arc::new(Mutex::new(())),
-            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            attachment_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            relay_lifecycle_lock: Arc::new(tokio::sync::RwLock::new(())),
             relay_attachment_lock: Arc::new(Mutex::new(())),
             relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path,
@@ -510,7 +510,7 @@ impl DebuggerService {
                     ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                         connection_id: connection_id.clone(),
                         attempt,
-                        change,
+                        change: change.clone(),
                     }),
                 )
                 .expect("provider target graph observations do not fail");
@@ -565,17 +565,26 @@ impl DebuggerService {
                 }
 
                 if !runtime.is_direct_debugger()
+                    && matches!(change, TargetGraphChange::Created { .. })
                     && let Some(target_id) = target_to_attach
                 {
-                    let _ = service
-                        .attach_target_internal(
-                            &CallCtx::default(),
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id,
-                            TargetAttachOptions::default(),
-                        )
-                        .await;
+                    let service = service.clone();
+                    let context_id = context_id.clone();
+                    let connection_id = connection_id.clone();
+                    tokio::spawn(async move {
+                        let _ = service
+                            .attach_target_internal(
+                                &CallCtx::default(),
+                                context_id,
+                                connection_id,
+                                target_id,
+                                TargetAttachOptions {
+                                    expected_connection_generation: Some(generation),
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
+                    });
                 }
             }
         });
@@ -1902,7 +1911,10 @@ impl DebuggerService {
         target_id: String,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, JsonRpcError> {
-        let _attachment_guard = self.attachment_lock.lock().await;
+        let attachment_lock = self
+            .target_attachment_lock(&context_id, &connection_id, &target_id)
+            .await?;
+        let _attachment_guard = attachment_lock.lock().await;
         let (mut target_id, mut debugger_key, prior_owner, mut resolved_generation) = {
             let mut state = self.state.lock().await;
             let target_id =
@@ -2152,7 +2164,27 @@ impl DebuggerService {
             .get(&context_id)
             .and_then(|context| context.connections.get(&connection_id))
             .is_some_and(|connection| connection.generation == generation);
-        if !runtime_is_current || !generation_is_current {
+        let capability_is_current = context_connection_target(
+            &state,
+            &context_id,
+            &connection_id,
+            generation,
+            &target_id,
+        )
+        .and_then(|target| {
+            state.resource_graphs.get(&context_id).and_then(|graph| {
+                graph.read(|graph| {
+                    graph.capability_from_source(
+                        &target.resource_id,
+                        &connection_source_id(&connection_id, generation),
+                        &CapabilityKind::Debug,
+                    )
+                })
+            })
+        })
+        .and_then(|capability| capability.as_debug())
+        .is_some_and(|current| Arc::ptr_eq(&current, &debug_capability));
+        if !runtime_is_current || !generation_is_current || !capability_is_current {
             drop(state);
             let _ = debug_capability.close(&opened).await;
             return Err(invalid_state(
@@ -2262,6 +2294,28 @@ impl DebuggerService {
             debugger.set_breakpoint(context_revision, breakpoint).await?;
         }
         Ok(())
+    }
+
+    async fn target_attachment_lock(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+    ) -> Result<Arc<Mutex<()>>, JsonRpcError> {
+        let key = {
+            let state = self.state.lock().await;
+            let target_id =
+                Self::resolve_target_id_in_state(&state, context_id, connection_id, target_id)?;
+            physical_target_key(&state, &(context_id.into(), connection_id.into(), target_id))?
+        };
+        let mut locks = self.attachment_locks.lock().await;
+        locks.retain(|_, lock| lock.strong_count() != 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        Ok(lock)
     }
 
     /// Looks up an already-attached target's debugger handle, rejecting the call while its
@@ -2771,7 +2825,7 @@ impl DebuggerService {
     /// be removed once the relay's dispatch task completes, however it ends.
     async fn register_relay(
         &self,
-        _relay_lifecycle_guard: &tokio::sync::MutexGuard<'_, ()>,
+        _relay_lifecycle_guard: &tokio::sync::RwLockWriteGuard<'_, ()>,
         id: String,
         context_id: String,
         relay: crate::connection::relay::context_relay::RelaySession,
@@ -3172,7 +3226,6 @@ fn sync_connection_resource_graph(
     runtime: &Arc<ConnectionRuntime>,
 ) -> Result<(), String> {
     let source = connection_source_id(connection_id, connection.generation);
-    graph.retract_source(&source);
 
     let root_id = connection_root_resource_id(connection_id, connection.generation);
     let root_kind = match connection.configuration {
@@ -3198,6 +3251,16 @@ fn sync_connection_resource_graph(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    // Keep capability identity across metadata updates, but not across removal/recreation.
+    // Pending attachments use it to reject completion for an obsolete target incarnation.
+    let capabilities = resources
+        .values()
+        .filter_map(|resource| {
+            graph.capability_from_source(resource, &source, &CapabilityKind::Debug)
+                .map(|capability| (resource.clone(), capability))
+        })
+        .collect::<BTreeMap<_, _>>();
+    graph.retract_source(&source);
     let mut root_upsert = ResourceUpsert::new(
         root_id.clone(),
         ResourceFacts::of_kind(ResourceKind::new(root_kind))
@@ -3282,9 +3345,9 @@ fn sync_connection_resource_graph(
         }
         delta = delta.upsert(
             ResourceUpsert::new(resource.clone(), facts)
-                .with_capability(CapabilityObject::Debug(
-                    runtime.debug_capability(resource.clone(), runtime_id),
-                ))
+                .with_capability(capabilities.get(&resource).cloned().unwrap_or_else(|| {
+                    CapabilityObject::Debug(runtime.debug_capability(resource.clone(), runtime_id))
+                }))
                 .with_frontier(RelationKind::Contains, DiscoveryState::Unobserved),
         );
 
@@ -5494,6 +5557,10 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 }
 
 #[cfg(test)]
+#[path = "debugger_service/attachment_lifecycle_tests.rs"]
+mod attachment_lifecycle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -5915,7 +5982,7 @@ mod tests {
         })
     }
 
-    fn insert_context_with_targets(
+    pub(super) fn insert_context_with_targets(
         state: &mut ServiceState,
         context_id: &str,
         connections: impl IntoIterator<Item = (&'static str, u64, Vec<TargetSnapshot>)>,
@@ -6006,15 +6073,15 @@ mod tests {
         state.resource_graphs.insert(context_id.to_owned(), graph);
     }
 
-    fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
+    pub(super) fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
         let (shutdown, _) = watch::channel(false);
         let (revision_signal, _) = watch::channel(0);
         DebuggerService {
             agent_instance_id: "test-agent".into(),
             state: Arc::new(Mutex::new(state)),
             breakpoint_intent_locks: Arc::new(Mutex::new(BTreeMap::new())),
-            attachment_lock: Arc::new(Mutex::new(())),
-            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            attachment_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            relay_lifecycle_lock: Arc::new(tokio::sync::RwLock::new(())),
             relay_attachment_lock: Arc::new(Mutex::new(())),
             relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path: path,

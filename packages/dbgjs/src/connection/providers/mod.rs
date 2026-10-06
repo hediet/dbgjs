@@ -1720,6 +1720,13 @@ pub(crate) mod raw_session_tests {
 
     pub(crate) async fn runtime(generation: u64) -> Arc<ConnectionRuntime> {
         let transport = Arc::new(IdleTransport(Arc::new(Mutex::new(None))));
+        runtime_with_transport(generation, transport).await
+    }
+
+    pub(crate) async fn runtime_with_transport<T: ManagedCdpTransport + 'static>(
+        generation: u64,
+        transport: Arc<T>,
+    ) -> Arc<ConnectionRuntime> {
         let cdp = Arc::new(CdpConnection::connect_transport(transport).await.unwrap());
         let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
         Arc::new(ConnectionRuntime {
@@ -1737,6 +1744,14 @@ pub(crate) mod raw_session_tests {
             provider_target_sender,
             pause_future_children: OnceLock::new(),
         })
+    }
+
+    pub(crate) fn emit(runtime: &ConnectionRuntime, event: ProviderTargetEvent) {
+        runtime.provider_target_sender.send(event).unwrap();
+    }
+
+    pub(crate) async fn wait_events_closed(runtime: &ConnectionRuntime) {
+        runtime.provider_target_sender.closed().await;
     }
 
     #[tokio::test]
