@@ -5497,6 +5497,8 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 mod tests {
     use super::*;
 
+    mod capture_measurement;
+
     #[tokio::test]
     async fn source_endpoints_preserve_validation_and_missing_context_errors() {
         let service = service_with_state(PathBuf::from("unused"), ServiceState::default());
