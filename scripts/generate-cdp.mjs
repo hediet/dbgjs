@@ -13,13 +13,14 @@ const expectedFallbacks = [
 
 export function codegenBinary() {
 	if (process.env.LINKRPC_CODEGEN) return process.env.LINKRPC_CODEGEN;
-	const cargo = readFileSync(join(root, 'Cargo.toml'), 'utf8');
-	const version = cargo.match(/^linkrpc = "=([^"]+)"$/m)?.[1];
-	if (!version) throw new Error('expected an exact published LinkRPC version in Cargo.toml');
+	const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).config?.linkrpcRustCodegenVersion;
+	if (typeof version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+		throw new Error('expected an exact published LinkRPC Rust codegen version in package.json config');
+	}
 	const installRoot = join(root, 'node_modules/.cache/linkrpc-codegen', version);
 	const binary = join(installRoot, 'bin', `linkrpc-codegen${process.platform === 'win32' ? '.exe' : ''}`);
 	if (!existsSync(binary)) {
-		const installed = spawnSync('cargo', ['install', '--locked', '--root', installRoot, '--version', version, 'linkrpc', '--bin', 'linkrpc-codegen'], {
+		const installed = spawnSync('cargo', ['install', '--locked', '--root', installRoot, '--version', `=${version}`, 'linkrpc', '--bin', 'linkrpc-codegen'], {
 			stdio: 'inherit',
 			env: { ...process.env, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? join(installRoot, 'target'), CARGO_BUILD_JOBS: '2', CARGO_INCREMENTAL: '0' },
 		});

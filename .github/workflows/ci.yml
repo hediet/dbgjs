@@ -86,6 +86,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check generated CDP Rust bindings
         run: npm run check:cdp
+      - name: Test CDP adaptation and deterministic Rust generation
+        run: npm run test:cdp-adapter
       - name: Check TypeScript contracts against daemon reflection
         run: npm run check:contracts
 

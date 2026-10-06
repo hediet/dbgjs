@@ -5,7 +5,7 @@ const clone = (value) => structuredClone(value);
 
 function insert(object, key, value) {
 	if (Object.hasOwn(object, key)) throw new Error(`duplicate CDP schema entry: ${key}`);
-	object[key] = value;
+	Object.defineProperty(object, key, { value, enumerable: true, writable: true, configurable: true });
 }
 
 function required(value, key) {
@@ -18,7 +18,10 @@ function fields(raw = [], domain, optional = []) {
 	const required = [];
 	for (const field of raw) {
 		if (typeof field.name !== 'string') continue;
-		properties[field.name] = convert(optional.includes(field.name) ? { ...field, optional: true } : field, domain);
+		Object.defineProperty(properties, field.name, {
+			value: convert(optional.includes(field.name) ? { ...field, optional: true } : field, domain),
+			enumerable: true, writable: true, configurable: true,
+		});
 		if (!field.optional && !optional.includes(field.name)) required.push(field.name);
 	}
 	return { type: 'object', properties, additionalProperties: false, ...(required.length ? { required } : {}) };
@@ -114,7 +117,7 @@ export function importCdpDomains(...documents) {
 		}
 		const key = `${name}:${kind}`;
 		if (!domains.has(key)) domains.set(key, { name, kind, methods: {} });
-		domains.get(key).methods[member] = method;
+		insert(domains.get(key).methods, member, method);
 	}
 	return [...domains.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, { name, kind, methods }]) => {
 		const reachable = references(methods);
@@ -124,7 +127,7 @@ export function importCdpDomains(...documents) {
 			id: `cdp.${name}${kind === 'events' ? '.events' : ''}`, hash: '', methods,
 			components: { schemas: Object.fromEntries(Object.entries(components).filter(([key]) => reachable.has(key))) },
 			[CODEGEN]: { profile: 'cdp', wireAddressing: 'root', wirePrefix: prefix, sessionMultiplexing: 'transport' },
-			...(imported[CODEGEN].domains[name].description ? { description: imported[CODEGEN].domains[name].description } : {}),
+			...(Object.hasOwn(imported[CODEGEN].domains[name], 'description') ? { description: imported[CODEGEN].domains[name].description } : {}),
 		} };
 	});
 }

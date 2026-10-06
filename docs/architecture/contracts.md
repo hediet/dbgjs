@@ -8,7 +8,7 @@ with the daemon's API in a shared export bundle.
 
 | Contract | Authored source of truth | Derived consumer input |
 | --- | --- | --- |
-| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`protocol_schema.rs`](../../packages/cdp-codegen/src/protocol_schema.rs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
+| Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`cdp-adapter.mjs`](../../scripts/cdp-adapter.mjs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
 | CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../../packages/dbgjs/src/api/service_api/) and shared serializable models in [`service_api.rs`](../../packages/dbgjs/src/api/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
 
 The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
@@ -20,8 +20,9 @@ service context-identity helpers and CLI/TUI consumers use those same types.
 
 ```mermaid
 flowchart TD
-    CDP["Pinned devtools-protocol JSON"] --> Import["protocol_schema.rs: import + compatibility overrides"]
-    Import --> CdpGen["LinkRPC Rust generator: shared types + domain traits"]
+    CDP["Pinned devtools-protocol JSON"] --> Import["CDP Node adapter: definitions + compatibility overrides"]
+    Import --> Definitions["LinkRPC definitions + source-layout options"]
+    Definitions --> CdpGen["Published LinkRPC Rust CLI: shared types + domain traits + facades"]
     CdpGen --> Generated["Checked-in generated Rust + bare domain targets"]
     Generated --> CdpMacro["LinkRPC trait macro: preserves schema and hash"]
     CdpMacro --> Cdp["Per-domain CDP clients + providers + server adapters"]
@@ -50,7 +51,7 @@ build provenance; it does not generate RPC contracts.
 
 Ordinary Rust builds compile the checked-in CDP sources without importing npm
 protocol JSON or running code generation. Do not edit generated sources.
-The independent [`cdp-codegen`](../../packages/cdp-codegen/) tool can regenerate them
+The independent [`CDP adapter driver`](../../scripts/generate-cdp.mjs) can regenerate them
 even if the generated directory is missing; it does not depend on the runtime
 protocol crate.
 CDP providers implement supported methods of each generated command trait.
@@ -316,9 +317,10 @@ CDP generation is independent:
 ```sh
 npm run generate:cdp
 npm run check:cdp
+npm run test:cdp-adapter
 ```
 
-The staged [`CDP adapter`](../../scripts/cdp-adapter.mjs) produces LinkRPC
+The [`CDP adapter`](../../scripts/cdp-adapter.mjs) produces LinkRPC
 definitions and source-layout options, not Rust source. Its generic driver can
 emit those definitions independently:
 
@@ -329,18 +331,19 @@ node scripts/generate-cdp.mjs --definitions
 The corresponding `linkrpc-codegen` binary is owned by LinkRPC's publishable
 Rust `linkrpc` crate. It handles shared components, traits, bindings, client
 facades, and directional catalogs. The driver installs the exact published
-version pinned in `Cargo.toml` into `node_modules/.cache/linkrpc-codegen`;
+codegen version pinned in `package.json`'s `config.linkrpcRustCodegenVersion`
+into `node_modules/.cache/linkrpc-codegen`;
 `LINKRPC_CODEGEN` is an explicit local-development binary override. Adapter
 tests cover the old importer's compatibility rules, every method's directional
 partition, wire hashes, expected fallbacks, determinism, and byte-for-byte
 comparison against all checked-in generated files.
 
-The default npm commands still use `cdp-codegen` until the generic CLI has been
-released and that published version is pinned. Do not switch CI to an
-unpublished version, a sibling worktree, or a dbgjs-specific Rust generator.
-After the pin is available, switch the npm commands to `scripts/generate-cdp.mjs`
-and remove `packages/cdp-codegen`; ordinary builds continue using the unchanged
-checked-in bindings.
+The default npm commands invoke the Node adapter and published generic Rust CLI.
+There is no dbgjs Rust generator or adapter that shells a dbgjs-specific
+generation binary. Command and event contracts keep separate facades/catalogs
+and the same immutable bare domain prefixes. Expected unsupported constructs
+retain their explicit JSON-value fallbacks; unexpected fallbacks fail generation
+before any checked-in output is changed.
 
 Both generated Rust and TypeScript are checked in, carry generated-file headers,
 and are marked generated for GitHub. CI runs both drift checks; ordinary builds
@@ -357,8 +360,8 @@ and failures, and is not the input to code generation.
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
 dependencies resolve from public crates.io packages. The root
 `[workspace.dependencies]` pins `linkrpc` and `linkrpc-tokio` to the exact
-published version `=0.3.0-next.20260923.1`; the runtime, protocol crate, and
-generator inherit these dependencies. `Cargo.lock` also locks the transitive
+published runtime version `=0.3.0-next.20260923.1`; the runtime and protocol
+crate inherit these dependencies. `Cargo.lock` also locks the transitive
 macro crate and registry checksums.
 Ordinary installs and CI do not need access to the private LinkRPC Git
 repository, a sibling checkout, a local path patch, vendored sources, or an
@@ -367,6 +370,11 @@ unpublished local package.
 The locked LinkRPC versions provide shared component generation, typed endpoint
 bindings, schema-preserving macro-backed CDP clients with inline parameters, and
 heap-progress streams.
+The Rust codegen tool is pinned independently to `0.3.0-next.20261006.1` in
+`package.json`. Its output is byte-identical to the existing CDP bindings and
+compiles with the pinned runtime. Upgrading the tool therefore does not force
+unrelated daemon schema normalization, interface-hash, or reflection changes
+from a newer runtime onto this generation-only migration.
 The Rust generator emits a trait annotated with
 `#[link_rpc_interface(schema_json = "...")]`; the same macro used by the daemon
 trait generates the CDP client and provider infrastructure. The imported CDP
@@ -388,7 +396,7 @@ To validate an explicitly built CLI without changing existing npm links, pass
 `npm run generate:contracts -- --cli /absolute/path/to/linkrpc.js` (or the same
 option to `check:contracts`). CI always uses the pinned installed CLI.
 
-Any opt-in Cargo override must target the configured Git source, not
+Any opt-in Cargo override must target the configured registry source,
 `crates-io`. Remove local overrides and restore the pinned lockfile before
 committing. Ordinary builds, contract generation, and CI use the same
 portable sources.

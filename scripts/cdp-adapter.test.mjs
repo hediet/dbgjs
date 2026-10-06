@@ -72,6 +72,12 @@ test('interface retains hash-invisible codegen extensions', () => {
 	assert.equal(imported.methods['Debugger.scriptParsed'][CODEGEN].kind, 'notification');
 });
 
+test('preserves explicitly empty normative domain descriptions', () => {
+	const [domain] = importCdpDomains({ domains: [{ domain: 'Example', description: '', commands: [{ name: 'enable' }] }] });
+	assert.ok(Object.hasOwn(domain.schema, 'description'));
+	assert.equal(domain.schema.description, '');
+});
+
 test('preserves recursive references and CDP codegen metadata', () => {
 	const node = imported.components.schemas['DOM.Node'];
 	assert.equal(node.title, 'Node');
@@ -130,6 +136,17 @@ test('rejects duplicate protocol entries instead of overwriting', () => {
 	assert.throws(() => importCdpProtocol({}), /expected protocol domains array/);
 	assert.throws(() => importCdpProtocol({ domains: [{}] }), /expected domain/);
 	assert.throws(() => importCdpProtocol({ domains: [{ domain: 'Example', commands: [{ name: 'same' }], events: [{ name: 'same' }] }] }), /duplicate CDP schema entry: Example.same/);
+});
+
+test('dictionary keys retain own properties even when they match JavaScript prototype names', () => {
+	const schema = importCdpProtocol({ domains: [{ domain: '__proto__', commands: [{
+		name: 'constructor', parameters: [{ name: '__proto__', type: 'string' }],
+	}] }] });
+	assert.ok(Object.hasOwn(schema[CODEGEN].domains, '__proto__'));
+	assert.ok(Object.hasOwn(schema.methods['__proto__.constructor'].params.properties, '__proto__'));
+	assert.equal(schema.methods['__proto__.constructor'].params.properties.__proto__.type, 'string');
+	const [domain] = importCdpDomains({ domains: [{ domain: 'Example', commands: [{ name: '__proto__' }] }] });
+	assert.ok(Object.hasOwn(domain.schema.methods, '__proto__'));
 });
 
 test('all generated outputs match the legacy generator byte-for-byte and repeat deterministically', () => {
