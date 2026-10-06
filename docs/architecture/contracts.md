@@ -318,6 +318,30 @@ npm run generate:cdp
 npm run check:cdp
 ```
 
+The staged [`CDP adapter`](../../scripts/cdp-adapter.mjs) produces LinkRPC
+definitions and source-layout options, not Rust source. Its generic driver can
+emit those definitions independently:
+
+```sh
+node scripts/generate-cdp.mjs --definitions
+```
+
+The corresponding `linkrpc-codegen` binary is owned by LinkRPC's publishable
+Rust `linkrpc` crate. It handles shared components, traits, bindings, client
+facades, and directional catalogs. The driver installs the exact published
+version pinned in `Cargo.toml` into `node_modules/.cache/linkrpc-codegen`;
+`LINKRPC_CODEGEN` is an explicit local-development binary override. Adapter
+tests cover the old importer's compatibility rules, every method's directional
+partition, wire hashes, expected fallbacks, determinism, and byte-for-byte
+comparison against all checked-in generated files.
+
+The default npm commands still use `cdp-codegen` until the generic CLI has been
+released and that published version is pinned. Do not switch CI to an
+unpublished version, a sibling worktree, or a dbgjs-specific Rust generator.
+After the pin is available, switch the npm commands to `scripts/generate-cdp.mjs`
+and remove `packages/cdp-codegen`; ordinary builds continue using the unchanged
+checked-in bindings.
+
 Both generated Rust and TypeScript are checked in, carry generated-file headers,
 and are marked generated for GitHub. CI runs both drift checks; ordinary builds
 do not silently update either set.
