@@ -2744,7 +2744,9 @@ impl HumanOutput for ContextSnapshot {
     fn print_human(&self) {
         println!("Context {}  rev {}", self.id, self.revision);
         println!("  Name: {}", self.display_name);
-        println!("  Idle timeout: {}", self.idle_timeout);
+        if self.idle_timeout != dbgjs::api::service_api::IdleTimeout::Infinite {
+            println!("  Idle timeout: {}", self.idle_timeout);
+        }
 
         if self.connections.is_empty() {
             println!("  Connections: none");
@@ -2761,11 +2763,15 @@ impl HumanOutput for ContextSnapshot {
                     "      Configuration: {}",
                     connection_configuration(&connection.configuration)
                 );
-                println!(
-                    "      Idle timeout: {}{}",
-                    connection.effective_idle_timeout,
-                    if connection.idle_timeout.is_none() { " (inherited)" } else { " (override)" }
-                );
+                if connection.idle_timeout.is_some()
+                    || connection.effective_idle_timeout != dbgjs::api::service_api::IdleTimeout::Infinite
+                {
+                    println!(
+                        "      Idle timeout: {}{}",
+                        connection.effective_idle_timeout,
+                        if connection.idle_timeout.is_none() { " (inherited)" } else { " (override)" }
+                    );
+                }
                 if connection.targets.is_empty() {
                     println!("      Targets: none");
                 } else {

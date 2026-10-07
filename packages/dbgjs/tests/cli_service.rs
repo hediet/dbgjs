@@ -14,6 +14,38 @@ use dbgjs::connection::transport::local_rpc::{
 };
 
 #[test]
+fn cli_idle_timeout_preserves_default_human_output_and_shows_nondefault_policies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let _cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let human = |arguments: &[&str]| {
+        let (status, stdout, stderr) = run_in_with_format(
+            &cli, &service, &state_file, root, arguments, false,
+        );
+        assert_success(arguments, status, &stdout, &stderr);
+        String::from_utf8(stdout).unwrap()
+    };
+    assert_eq!(
+        human(&["context", "create", ":human", "--set"]).trim(),
+        "Context human  rev 1\n  Name: human\n  Connections: none",
+    );
+    assert!(human(&["context", "configure", "--idle-timeout", "2h"])
+        .contains("  Idle timeout: 2h"));
+    assert!(human(&[
+        "connection", "add", "ws://127.0.0.1:9", "--connection", "browser",
+        "--idle-timeout", "inf",
+    ]).contains("Idle timeout: inf (override)"));
+    assert!(human(&[
+        "connection", "configure", "--connection", "browser", "--idle-timeout", "inherit",
+    ]).contains("Idle timeout: 2h (inherited)"));
+    run_json_in(&cli, &service, &state_file, root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+}
+
+#[test]
 fn cli_idle_timeout_disconnects_independently_and_defers_coverage_recordings() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
