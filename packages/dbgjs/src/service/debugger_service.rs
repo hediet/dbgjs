@@ -8245,6 +8245,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_observation_preserves_snapshot_history_handoff() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "context-observation-handoff-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let service = service_with_state(root.join("service.json"), ServiceState::default());
+        let call = CallCtx::default();
+        let initial = service
+            .put_context(&call, "test".into(), ContextKind::Named, None)
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } = service
+            .observe_context(&call, "test".into(), ObservationCursor::Current, 0)
+            .await
+            .unwrap()
+        else {
+            panic!("expected current snapshot")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, initial);
+        assert!(items[0].events.is_empty());
+
+        let updated = service
+            .put_context(
+                &call,
+                "test".into(),
+                ContextKind::Named,
+                Some("updated".into()),
+            )
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } = service
+            .observe_context(
+                &call,
+                "test".into(),
+                ObservationCursor::After {
+                    revision: initial.revision,
+                },
+                0,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected history after snapshot")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, updated);
+        assert!(!items[0].events.is_empty());
+
+        let observation = service.observe_context(
+            &call,
+            "test".into(),
+            ObservationCursor::After {
+                revision: updated.revision,
+            },
+            60_000,
+        );
+        tokio::pin!(observation);
+        assert!(futures_util::poll!(&mut observation).is_pending());
+        let latest = service
+            .put_context(
+                &call,
+                "test".into(),
+                ContextKind::Named,
+                Some("latest".into()),
+            )
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } =
+            tokio::time::timeout(Duration::from_secs(1), &mut observation)
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("expected waiting update")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, latest);
+        for timeout_ms in [0, 1] {
+            assert_eq!(
+                service
+                    .observe_context(
+                        &call,
+                        "test".into(),
+                        ObservationCursor::After {
+                            revision: latest.revision,
+                        },
+                        timeout_ms,
+                    )
+                    .await
+                    .unwrap(),
+                ObservationResult::Items { items: Vec::new() }
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn context_observation_preserves_bounded_history_and_gap_snapshots() {
+        let service = service_with_state(PathBuf::from("unused"), ServiceState::default());
+        let call = CallCtx::default();
+        let mut state = service.state.lock().await;
+        let mut context = ContextState::new("test".into());
+        for revision in 1..=257 {
+            let transition = reduce_context(
+                &context,
+                ContextInput::UserCommand(UserCommand::PutContext {
+                    display_name: Some(revision.to_string()),
+                }),
+            )
+            .unwrap();
+            service.commit_context(&mut state, "test", transition);
+            context = state.contexts["test"].clone();
+        }
+        assert_eq!(state.history["test"].len(), 256);
+        drop(state);
+        let current = service.get_context(&call, "test".into()).await.unwrap();
+        assert_eq!(current.revision, 257);
+        for (revision, oldest_available_revision) in [(0, 2), (256, 257)] {
+            assert_eq!(
+                service
+                    .observe_context(
+                        &call,
+                        "test".into(),
+                        ObservationCursor::After { revision },
+                        0,
+                    )
+                    .await
+                    .unwrap(),
+                ObservationResult::HistoryGap {
+                    requested_revision: revision,
+                    oldest_available_revision,
+                    current: current.clone(),
+                }
+            );
+            service.state.lock().await.history.clear();
+        }
+        assert_eq!(
+            service
+                .observe_context(
+                    &call,
+                    "test".into(),
+                    ObservationCursor::After { revision: u64::MAX },
+                    0,
+                )
+                .await
+                .unwrap(),
+            ObservationResult::Items { items: Vec::new() }
+        );
+    }
+
+    #[tokio::test]
+    async fn context_observation_waiter_wakes_when_context_is_deleted() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "context-observation-delete-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let service = service_with_state(root.join("service.json"), ServiceState::default());
+        let call = CallCtx::default();
+        let snapshot = service
+            .put_context(&call, "test".into(), ContextKind::Named, None)
+            .await
+            .unwrap();
+        let observation = service.observe_context(
+            &call,
+            "test".into(),
+            ObservationCursor::After {
+                revision: snapshot.revision,
+            },
+            60_000,
+        );
+        tokio::pin!(observation);
+        assert!(futures_util::poll!(&mut observation).is_pending());
+
+        service
+            .delete_context(&call, "test".into(), MutationOptions::default())
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut observation).await;
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result
+                .expect("deletion must wake the waiting observer")
+                .unwrap_err(),
+            not_found("context", "test")
+        );
+    }
+
+    #[tokio::test]
     async fn failed_context_persistence_does_not_cancel_playwright_proxies() {
         let root = std::env::current_dir()
             .unwrap()
@@ -8289,6 +8486,21 @@ mod tests {
             },
         );
         let service = service_with_state(blocker.join("service.json"), state);
+        let call = CallCtx::default();
+        let snapshot = service.get_context(&call, "test".into()).await.unwrap();
+        let retained = ContextObservation {
+            snapshot: snapshot.clone(),
+            events: Vec::new(),
+        };
+        service
+            .state
+            .lock()
+            .await
+            .history
+            .entry("test".into())
+            .or_default()
+            .push_back(retained.clone());
+        let signal = service.revision_signal.subscribe();
 
         assert!(
             service
@@ -8299,6 +8511,27 @@ mod tests {
                 )
                 .await
                 .is_err()
+        );
+        assert!(!signal.has_changed().unwrap());
+        assert_eq!(
+            service.get_context(&call, "test".into()).await.unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            service
+                .observe_context(
+                    &call,
+                    "test".into(),
+                    ObservationCursor::After {
+                        revision: snapshot.revision.saturating_sub(1),
+                    },
+                    0,
+                )
+                .await
+                .unwrap(),
+            ObservationResult::Items {
+                items: vec![retained]
+            }
         );
         assert!(!*cancelled.borrow());
         assert!(capture_path.exists());

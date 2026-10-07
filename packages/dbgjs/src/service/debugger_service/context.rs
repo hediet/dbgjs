@@ -117,57 +117,51 @@ impl ContextApi for DebuggerService {
 
     async fn observe_context(
         &self,
-        _ctx: &CallCtx,
+        ctx: &CallCtx,
         context_id: String,
         cursor: ObservationCursor,
         timeout_ms: u64,
     ) -> Result<ObservationResult, JsonRpcError> {
         let requested_revision = match cursor {
-            ObservationCursor::Current => None,
-            ObservationCursor::After { revision } => Some(revision),
+            ObservationCursor::Current => {
+                return Ok(ObservationResult::Items {
+                    items: vec![ContextObservation {
+                        snapshot: self.get_context(ctx, context_id).await?,
+                        events: Vec::new(),
+                    }],
+                });
+            }
+            ObservationCursor::After { revision } => revision,
         };
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let mut signal = self.revision_signal.subscribe();
         loop {
             {
                 let state = self.state.lock().await;
-                if !state.contexts.contains_key(&context_id) {
-                    return Err(not_found("context", &context_id));
-                }
-                if requested_revision.is_none() {
-                    return Ok(ObservationResult::Items {
-                        items: vec![ContextObservation {
-                            snapshot: service_snapshot(
-                                &state,
-                                &self.agent_instance_id,
-                                &context_id,
-                            )
-                            .expect("context was checked above"),
-                            events: Vec::new(),
-                        }],
-                    });
-                }
-                let requested = requested_revision.expect("checked above");
-                let current = service_snapshot(&state, &self.agent_instance_id, &context_id)
-                    .expect("context was checked above");
+                let current_revision = state
+                    .contexts
+                    .get(&context_id)
+                    .ok_or_else(|| not_found("context", &context_id))?
+                    .revision;
                 let history = state.history.get(&context_id);
                 let oldest_available = history
                     .and_then(|history| history.front())
                     .map(|observation| observation.snapshot.revision);
                 let history_gap = oldest_available
-                    .is_some_and(|oldest| requested.saturating_add(1) < oldest)
-                    || (oldest_available.is_none() && requested < current.revision);
+                    .is_some_and(|oldest| requested_revision.saturating_add(1) < oldest)
+                    || (oldest_available.is_none() && requested_revision < current_revision);
                 if history_gap {
                     return Ok(ObservationResult::HistoryGap {
-                        requested_revision: requested,
-                        oldest_available_revision: oldest_available.unwrap_or(current.revision),
-                        current,
+                        requested_revision,
+                        oldest_available_revision: oldest_available.unwrap_or(current_revision),
+                        current: service_snapshot(&state, &self.agent_instance_id, &context_id)
+                            .expect("context was checked above"),
                     });
                 }
                 let items = history
                     .into_iter()
                     .flatten()
-                    .filter(|item| item.snapshot.revision > requested)
+                    .filter(|item| item.snapshot.revision > requested_revision)
                     .cloned()
                     .collect::<Vec<_>>();
                 if !items.is_empty() || timeout_ms == 0 {
@@ -270,6 +264,8 @@ impl ContextApi for DebuggerService {
                 .capture_reservations
                 .retain(|(candidate_context, _), _| candidate_context != &context_id);
             self.persist_or_restore(&mut state, previous)?;
+            self.revision_signal
+                .send_modify(|revision| *revision = revision.wrapping_add(1));
             (
                 runtimes,
                 capture_paths,

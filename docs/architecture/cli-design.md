@@ -1154,6 +1154,11 @@ Clients should be able to resume consumption from a known revision. If requested
 history is no longer available, the agent returns an explicit history-gap error
 and a current state snapshot or revision from which to continue.
 
+Pending context observations are notified after deletion is persisted and return
+the existing context-not-found error when the context is absent. If deletion
+cannot be persisted, the context and its retained observation history remain
+available.
+
 ### 12.3 Following events
 
 Continuous event output uses a streaming response:
