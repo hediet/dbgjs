@@ -46,7 +46,7 @@ jsonschema = { version = "0.33.0", default-features = false }
 tempfile = "3"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "test-util"] }
 
 [[bench]]
 name = "source_search"

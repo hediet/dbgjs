@@ -10,6 +10,7 @@ impl CdpAccessApi for DebuggerService {
         params: serde_json::Value,
         validate: bool,
     ) -> Result<serde_json::Value, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -91,6 +92,7 @@ impl CdpAccessApi for DebuggerService {
         params: serde_json::Value,
         validate: bool,
     ) -> Result<serde_json::Value, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {

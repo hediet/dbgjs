@@ -2744,6 +2744,9 @@ impl HumanOutput for ContextSnapshot {
     fn print_human(&self) {
         println!("Context {}  rev {}", self.id, self.revision);
         println!("  Name: {}", self.display_name);
+        if self.idle_timeout != dbgjs::api::service_api::IdleTimeout::Infinite {
+            println!("  Idle timeout: {}", self.idle_timeout);
+        }
 
         if self.connections.is_empty() {
             println!("  Connections: none");
@@ -2760,6 +2763,15 @@ impl HumanOutput for ContextSnapshot {
                     "      Configuration: {}",
                     connection_configuration(&connection.configuration)
                 );
+                if connection.idle_timeout.is_some()
+                    || connection.effective_idle_timeout != dbgjs::api::service_api::IdleTimeout::Infinite
+                {
+                    println!(
+                        "      Idle timeout: {}{}",
+                        connection.effective_idle_timeout,
+                        if connection.idle_timeout.is_none() { " (inherited)" } else { " (override)" }
+                    );
+                }
                 if connection.targets.is_empty() {
                     println!("      Targets: none");
                 } else {
@@ -5614,12 +5626,15 @@ mod tests {
             target_discovery_error: None,
         };
         let context = ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent".into(),
             id: "context".into(),
             display_name: "test".into(),
             revision: 1,
             resource_revision: 1,
             connections: vec![ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "tree".into(),
                 configuration: ConnectionConfiguration::ProcessTree { root_pid: 1 },
                 generation: 3,

@@ -8,6 +8,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         mode: SourceFormattingMode,
     ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         self.update_source_formatting(&context_id, UserCommand::SetSourceFormatting { mode })
             .await
     }
@@ -20,6 +21,7 @@ impl SourceApi for DebuggerService {
         target_pattern: Option<String>,
         url_pattern: Option<String>,
     ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         if target_pattern.is_none() && url_pattern.is_none() {
             return Err(invalid_params(
                 "a formatting rule requires --target, --url, or both",
@@ -70,6 +72,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         rule_id: String,
     ) -> Result<SourceFormattingSettings, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         self.update_source_formatting(
             &context_id,
             UserCommand::RemoveSourceFormattingRule { rule_id },
@@ -83,6 +86,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         path: Option<String>,
     ) -> Result<Vec<SourceSnapshotInfo>, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let state = self.state.lock().await;
         let context = source_context(&state, &context_id)?;
         let mut sources = BTreeMap::new();
@@ -197,6 +201,7 @@ impl SourceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<CompactedSourceGraphSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let model = {
             let state = self.state.lock().await;
             source_model_for_context(&state, &context_id)?
@@ -263,6 +268,7 @@ impl SourceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let model = {
             let state = self.state.lock().await;
             source_model_for_context(&state, &context_id)?
@@ -299,6 +305,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         kind: SourceTreeKind,
     ) -> Result<SourceTreeSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let (model, debuggers) = {
             let state = self.state.lock().await;
             (
@@ -348,6 +355,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         source: String,
     ) -> Result<UncompactedSourceGraphSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let model = {
             let state = self.state.lock().await;
             source_model_for_context(&state, &context_id)?
@@ -375,6 +383,7 @@ impl SourceApi for DebuggerService {
         path: String,
         options: SourceDisplayOptions,
     ) -> Result<SourceContentSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let (debuggers, formatting) = {
             let state = self.state.lock().await;
             let context = source_context(&state, &context_id)?;
@@ -472,6 +481,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         options: SourceSearchOptions,
     ) -> Result<SourceSearchSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         if options.pattern.is_empty() {
             return Err(invalid_params("source grep pattern must not be empty"));
         }
@@ -664,6 +674,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         path: String,
     ) -> Result<Vec<SourceGraphViewSnapshot>, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let debuggers = self.source_debuggers(&context_id).await?;
         let mut explanations = Vec::new();
         for (connection_id, target_id, debugger) in debuggers {
@@ -702,6 +713,7 @@ impl SourceApi for DebuggerService {
         line: u32,
         column: u32,
     ) -> Result<Vec<SourceMappingSnapshot>, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         if line == 0 || column == 0 {
             return Err(invalid_params("source locations are one-based"));
         }
@@ -745,6 +757,7 @@ impl SourceApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<u32, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let debuggers = self.source_debuggers(&context_id).await?;
         for (_, _, debugger) in &debuggers {
             debugger
@@ -761,6 +774,7 @@ impl SourceApi for DebuggerService {
         context_id: String,
         destination: String,
     ) -> Result<Vec<String>, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let destination = PathBuf::from(destination);
         fs::create_dir_all(&destination).map_err(|error| {
             internal_error(format!(

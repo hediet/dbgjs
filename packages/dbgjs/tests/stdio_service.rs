@@ -39,8 +39,10 @@ async fn stdio_reflects_every_service_contract_and_exits_on_eof_without_persiste
             );
         }
     }
-    assert_eq!(methods.len(), 85);
+    assert_eq!(methods.len(), 87);
     assert!(methods.contains("remove_logpoint"));
+    assert!(methods.contains("set_context_idle_timeout"));
+    assert!(methods.contains("set_connection_idle_timeout"));
     assert!(
         !items
             .iter()

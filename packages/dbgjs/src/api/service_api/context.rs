@@ -12,6 +12,16 @@ pub trait ContextApi {
 
     async fn get_context(context_id: String) -> Result<ContextSnapshot, JsonRpcError>;
 
+    async fn set_context_idle_timeout(
+        context_id: String,
+        idle_timeout: IdleTimeout,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
+    async fn set_connection_idle_timeout(
+        connection_ref: ConnectionRef,
+        idle_timeout: Option<IdleTimeout>,
+    ) -> Result<ContextSnapshot, JsonRpcError>;
+
     async fn get_resource_graph(context_id: String) -> Result<ResourceGraphSnapshot, JsonRpcError>;
 
     async fn observe_context(

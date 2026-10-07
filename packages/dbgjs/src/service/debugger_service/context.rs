@@ -2,6 +2,31 @@ use super::*;
 
 #[async_trait::async_trait]
 impl ContextApi for DebuggerService {
+    async fn set_context_idle_timeout(
+        &self,
+        _ctx: &CallCtx,
+        context_id: String,
+        idle_timeout: IdleTimeout,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        validate_idle_timeout(idle_timeout)?;
+        self.mutate_idle_timeout(&context_id, UserCommand::SetContextIdleTimeout { idle_timeout }).await
+    }
+
+    async fn set_connection_idle_timeout(
+        &self,
+        _ctx: &CallCtx,
+        connection_ref: ConnectionRef,
+        idle_timeout: Option<IdleTimeout>,
+    ) -> Result<ContextSnapshot, JsonRpcError> {
+        if let Some(timeout) = idle_timeout {
+            validate_idle_timeout(timeout)?;
+        }
+        self.mutate_idle_timeout(&connection_ref.context_id, UserCommand::SetConnectionIdleTimeout {
+            connection_id: connection_ref.connection_id,
+            idle_timeout,
+        }).await
+    }
+
     async fn list_contexts(
         &self,
         _ctx: &CallCtx,
@@ -214,6 +239,7 @@ impl ContextApi for DebuggerService {
             if state.contexts.remove(&context_id).is_none() {
                 return Err(not_found("context", &context_id));
             }
+            state.connection_activity.retain(|(candidate_context, _), _| candidate_context != &context_id);
             state.resource_graphs.remove(&context_id);
             state.process_projections.remove(&context_id);
             state.context_kinds.remove(&context_id);
@@ -328,7 +354,7 @@ impl ContextApi for DebuggerService {
             context_id,
             connection_id,
         } = connection_ref;
-        let (configuration, attempt) = {
+        let (configuration, attempt, _activity) = {
             let mut state = self.state.lock().await;
             let context = state
                 .contexts
@@ -353,7 +379,10 @@ impl ContextApi for DebuggerService {
                 effects => panic!("connect command emitted unexpected effects: {effects:?}"),
             };
             self.commit_context(&mut state, &context_id, transition);
-            (configuration, attempt)
+            let activity = Arc::new(ConnectionActivity::default());
+            let guard = ActivityGuard::new(vec![activity.clone()]);
+            state.connection_activity.insert((context_id.clone(), connection_id.clone()), activity);
+            (configuration, attempt, guard)
         };
 
         let connected = connect_runtime(&configuration, &connection_id, attempt.generation).await;
@@ -476,6 +505,7 @@ impl ContextApi for DebuggerService {
             .await;
         } else {
             state.runtimes.remove(&runtime_key);
+            state.connection_activity.remove(&runtime_key);
         }
         drop(state);
         for target_id in auto_attach_targets {
@@ -497,79 +527,7 @@ impl ContextApi for DebuggerService {
         _ctx: &CallCtx,
         connection_ref: ConnectionRef,
     ) -> Result<ContextSnapshot, JsonRpcError> {
-        let ConnectionRef {
-            context_id,
-            connection_id,
-        } = connection_ref;
-        let (runtime, attempt) = {
-            let mut state = self.state.lock().await;
-            let context = state
-                .contexts
-                .get(&context_id)
-                .cloned()
-                .ok_or_else(|| not_found("context", &context_id))?;
-            let transition = reduce_context(
-                &context,
-                ContextInput::UserCommand(UserCommand::DisconnectConnection {
-                    connection_id: connection_id.clone(),
-                }),
-            )
-            .map_err(transition_rpc_error)?;
-            let attempt = match transition.effects.as_slice() {
-                [] => {
-                    return Ok(
-                        service_snapshot(&state, &self.agent_instance_id, &context_id)
-                            .expect("context was checked above"),
-                    );
-                }
-                [ContextEffect::Disconnect { attempt, .. }] => *attempt,
-                effects => panic!("disconnect command emitted unexpected effects: {effects:?}"),
-            };
-            self.commit_context(&mut state, &context_id, transition);
-            let runtime = state
-                .runtimes
-                .remove(&(context_id.clone(), connection_id.clone()));
-            retract_connection_resource_graph(
-                &mut state,
-                &context_id,
-                &connection_id,
-                attempt.generation,
-            );
-            remove_connection_debugger_registrations(&mut state, &context_id, &connection_id);
-            state
-                .pause_children_leases
-                .remove(&(context_id.clone(), connection_id.clone()));
-            cancel_playwright_proxies(
-                &mut state,
-                &context_id,
-                &connection_id,
-                Some(attempt.generation),
-            );
-            (runtime, attempt)
-        };
-
-        self.release_relay_attachments_for_connection(&context_id, &connection_id)
-            .await;
-        if let Some(runtime) = runtime {
-            runtime.close().await;
-        }
-
-        let mut state = self.state.lock().await;
-        let context = state
-            .contexts
-            .get(&context_id)
-            .cloned()
-            .ok_or_else(|| not_found("context", &context_id))?;
-        let transition = reduce_context(
-            &context,
-            ContextInput::EffectCompletion(EffectCompletion::ConnectionClosed {
-                connection_id,
-                attempt,
-            }),
-        )
-        .map_err(transition_rpc_error)?;
-        let result = self.commit_context(&mut state, &context_id, transition);
-        Ok(result)
+        self.disconnect_connection_internal(connection_ref, false).await
     }
 
     async fn set_pause_future_children(
@@ -578,6 +536,7 @@ impl ContextApi for DebuggerService {
         connection_ref: ConnectionRef,
         enabled: bool,
     ) -> Result<bool, JsonRpcError> {
+        let _activity = self.connection_activity(&connection_ref).await;
         let ConnectionRef {
             context_id,
             connection_id,
@@ -671,6 +630,7 @@ impl ContextApi for DebuggerService {
         .map_err(transition_rpc_error)?;
         let result = self.commit_context(&mut state, &context_id, transition);
         self.complete_request(&mut state, &context_id, &options, result.revision);
+        state.connection_activity.remove(&(context_id.clone(), connection_id.clone()));
         remove_connection_debugger_registrations(&mut state, &context_id, &connection_id);
         state
             .pause_children_leases
@@ -688,6 +648,7 @@ impl ContextApi for DebuggerService {
         line: u32,
         column: u32,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         validate_breakpoint_id(&breakpoint_id)?;
         if source_path.is_empty() {
             return Err(invalid_params("source path must not be empty"));
@@ -772,6 +733,7 @@ impl ContextApi for DebuggerService {
         specification: BreakpointSpec,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         validate_breakpoint_id(&breakpoint_id)?;
         validate_breakpoint_spec(&specification)?;
         {
@@ -867,6 +829,7 @@ impl ContextApi for DebuggerService {
         breakpoint_id: String,
         options: MutationOptions,
     ) -> Result<ContextSnapshot, JsonRpcError> {
+        let _activity = self.context_activity(&context_id).await;
         let lock = self.breakpoint_intent_lock(&context_id).await;
         let _ownership_guard = lock.lock().await;
         let (result, target_debuggers) = {

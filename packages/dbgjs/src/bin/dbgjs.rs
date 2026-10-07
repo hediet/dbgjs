@@ -25,7 +25,7 @@ use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
     ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
-    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
+    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, IdleTimeout, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, ProcessRootKind,
     ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
     SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
@@ -43,6 +43,10 @@ mod bounded_tree;
 mod daemon_view;
 #[path = "dbgjs/output.rs"]
 mod output;
+#[path = "dbgjs/idle_timeout.rs"]
+mod idle_timeout;
+
+use idle_timeout::extract_idle_timeout_option;
 
 use output::{
     ConnectionListEntry, ConnectionListOutput, CoverageOutputOptions, CpuProfileOutputOptions,
@@ -155,6 +159,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mut scope_options = extract_scope_options(&mut arguments)?;
+    let idle_timeout = extract_idle_timeout_option(&mut arguments)?;
     let state_file = default_state_file();
     let selection_file = state_file.with_extension("selection.json");
     let cwd = env::current_dir()?;
@@ -1310,14 +1315,39 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 kind,
             } = resolve_context_expression(&expression, &cwd)?;
             let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
+            let mut snapshot = rpc(client
                 .contexts
                 .put_context(context_id.clone(), kind, display_name)
                 .await)?;
+            if let Some(timeout) = idle_timeout {
+                snapshot = rpc(client.contexts.set_context_idle_timeout(
+                    context_id.clone(), timeout.ok_or_else(|| io::Error::other("a context timeout cannot inherit"))?,
+                ).await)?;
+            }
             if set_default {
                 select_context(&selection_file, &context_id)?;
             }
             output.print(&snapshot)?;
+        }
+        [context, configure] if context == "context" && configure == "configure" => {
+            let context_id = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let timeout = idle_timeout.flatten().ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput, "context configure requires --idle-timeout <duration|inf>",
+            ))?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.contexts.set_context_idle_timeout(context_id, timeout).await)?)?;
+        }
+        [connection, configure] if connection == "connection" && configure == "configure" => {
+            let context_id = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            let timeout = idle_timeout.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput, "connection configure requires --idle-timeout <duration|inf|inherit>",
+            ))?;
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.contexts.set_connection_idle_timeout(
+                dbgjs::api::service_api::ConnectionRef { context_id, connection_id: connection_id.to_owned() },
+                timeout,
+            ).await)?)?;
         }
         [context, show] if context == "context" && show == "show" => {
             let context_id =
@@ -1413,6 +1443,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1436,6 +1467,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1459,6 +1491,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1479,6 +1512,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1497,6 +1531,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1522,6 +1557,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1547,6 +1583,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1573,6 +1610,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1598,6 +1636,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -5894,6 +5933,7 @@ async fn add_connection(
     selection_file: &std::path::Path,
     set_default: bool,
     output: OutputFormat,
+    idle_timeout: Option<Option<IdleTimeout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if set_default && !connect_now {
         return Err(io::Error::new(
@@ -5908,7 +5948,7 @@ async fn add_connection(
             | ConnectionConfiguration::ScopedProcessTree { .. }
     );
     let client = ensure_service(state_file).await?;
-    let configured = rpc(client
+    let mut configured = rpc(client
         .contexts
         .put_connection(
             dbgjs::api::service_api::ConnectionRef {
@@ -5918,6 +5958,14 @@ async fn add_connection(
             configuration,
         )
         .await)?;
+    if let Some(timeout) = idle_timeout {
+        configured = rpc(client.contexts.set_connection_idle_timeout(
+            dbgjs::api::service_api::ConnectionRef {
+                context_id: context_id.to_owned(), connection_id: connection_id.to_owned(),
+            },
+            timeout,
+        ).await)?;
+    }
     if connect_now {
         let mut connected = rpc(client
             .contexts
@@ -7028,7 +7076,9 @@ commands:
   dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process attach <process-reference> [--context <id>] [--set] [--force]
   dbgjs context list
-  dbgjs context create <path|:id> [display-name] [--set]
+  dbgjs context create <path|:id> [display-name] [--set] [--idle-timeout <duration|inf>]
+  dbgjs context configure [--context <path|:id>] --idle-timeout <duration|inf>
+  dbgjs connection configure --connection <id> [--context <path|:id>] --idle-timeout <duration|inf|inherit>
   dbgjs context show [--context <path|:id>]
   dbgjs context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
   dbgjs context relay --stdio [--context <id>]
@@ -8176,6 +8226,7 @@ mod tests {
 
     fn context_snapshot(connections: &[(&str, &[&str])]) -> ContextSnapshot {
         ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent".to_owned(),
             id: "ctx".to_owned(),
             display_name: "Context".to_owned(),
@@ -8184,6 +8235,8 @@ mod tests {
             connections: connections
                 .iter()
                 .map(|(connection_id, target_ids)| ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                     id: (*connection_id).to_owned(),
                     configuration: ConnectionConfiguration::DirectCdp {
                         endpoint: String::new(),

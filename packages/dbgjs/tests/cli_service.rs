@@ -14,6 +14,122 @@ use dbgjs::connection::transport::local_rpc::{
 };
 
 #[test]
+fn cli_idle_timeout_preserves_default_human_output_and_shows_nondefault_policies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let _cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let human = |arguments: &[&str]| {
+        let (status, stdout, stderr) = run_in_with_format(
+            &cli, &service, &state_file, root, arguments, false,
+        );
+        assert_success(arguments, status, &stdout, &stderr);
+        String::from_utf8(stdout).unwrap()
+    };
+    assert_eq!(
+        human(&["context", "create", ":human", "--set"]).trim(),
+        "Context human  rev 1\n  Name: human\n  Connections: none",
+    );
+    assert!(human(&["context", "configure", "--idle-timeout", "2h"])
+        .contains("  Idle timeout: 2h"));
+    assert!(human(&[
+        "connection", "add", "ws://127.0.0.1:9", "--connection", "browser",
+        "--idle-timeout", "inf",
+    ]).contains("Idle timeout: inf (override)"));
+    assert!(human(&[
+        "connection", "configure", "--connection", "browser", "--idle-timeout", "inherit",
+    ]).contains("Idle timeout: 2h (inherited)"));
+    run_json_in(&cli, &service, &state_file, root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+}
+
+#[test]
+fn cli_idle_timeout_disconnects_independently_and_defers_coverage_recordings() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let _cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let program = root.join("app.cjs");
+    fs::write(&program, "setInterval(() => Math.random(), 100);\n").unwrap();
+    let created = run_json_in(&cli, &service, &state_file, root, &[
+        "context", "create", ":idle", "--idle-timeout", "inf", "--set",
+    ]);
+    assert_eq!(created["idleTimeout"]["kind"], "infinite");
+    let program = program.to_str().unwrap();
+    let first = run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "first", "--connect",
+    ]);
+    assert_eq!(first["connections"][0]["idleTimeout"], Value::Null);
+    assert_eq!(first["connections"][0]["effectiveIdleTimeout"]["kind"], "infinite");
+    run_json_in(&cli, &service, &state_file, root, &[
+        "target", "attach", "--connection", "first", "--target", "$node-root:first", "--set",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &["target", "release", "--connection", "first"]);
+    let (status, stdout, stderr) = run_in(&cli, &service, &state_file, root, &[
+        "coverage", "start", "--connection", "first",
+    ]);
+    assert_success(&["coverage", "start"], status, &stdout, &stderr);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "second", "--connect",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "third", "--idle-timeout", "inf", "--connect",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "context", "configure", "--idle-timeout", "500ms",
+    ]);
+    let status = |id: &str, snapshot: &Value| {
+        snapshot["connections"].as_array().unwrap().iter()
+            .find(|connection| connection["id"] == id).unwrap()["status"]["kind"]
+            .as_str().unwrap().to_owned()
+    };
+    let wait_disconnected = |id: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = run_json_in(&cli, &service, &state_file, root, &["context", "show"]);
+            if status(id, &snapshot) == "disconnected" {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "{id} did not expire: {snapshot}");
+            thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let snapshot = wait_disconnected("second");
+    assert_eq!(status("first", &snapshot), "connected");
+    assert_eq!(status("third", &snapshot), "connected");
+    let capture = run_json_in(&cli, &service, &state_file, root, &[
+        "coverage", "stop", "--connection", "first", "--id", "saved",
+    ]);
+    assert_eq!(capture["captureId"], "saved");
+    wait_disconnected("first");
+    let captures = run_json_in(&cli, &service, &state_file, root, &["capture", "list"]);
+    assert_eq!(captures[0]["name"], "saved");
+    run_json_in(&cli, &service, &state_file, root, &["coverage", "show", "saved"]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "configure", "--connection", "third", "--idle-timeout", "inherit",
+    ]);
+    let snapshot = wait_disconnected("third");
+    assert_eq!(snapshot["connections"][2]["idleTimeout"], Value::Null);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "configure", "--connection", "third", "--idle-timeout", "inf",
+    ]);
+    let reconnected = run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "connect", "--connection", "third",
+    ]);
+    assert_eq!(status("third", &reconnected), "connected");
+    assert_eq!(reconnected["connections"][2]["generation"], 2);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "disconnect", "--connection", "third",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+}
+
+#[test]
 fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() {
     let output = Command::new("node")
         .arg(
