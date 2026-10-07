@@ -10,6 +10,9 @@ mod service;
 mod source;
 mod target_debugger;
 mod errors;
+mod idle;
+
+use idle::{ActivityGuard, ConnectionActivity, validate_idle_timeout};
 
 use crate::api::service_api::{
     BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, ContextKind, CoverageApi, CpuProfilerApi,
@@ -65,7 +68,7 @@ use crate::api::service_api::{
     HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapEdgePolicy, HeapNodeSelectionSnapshot, HeapNodeSelector,
     HeapPathOptions, HeapPathSnapshot, HeapReferenceDirection, HeapReferencesSnapshot,
-    HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec, MutationOptions, ObservationCursor,
+    HeapSnapshotProgress, HeapSnapshotResult, IdleTimeout, LogpointSpec, MutationOptions, ObservationCursor,
     ObservationResult, PlaywrightProxyEndpoint, ProcessTreeSnapshot, PromiseSelectionSnapshot,
     PromiseState, RelayEndpoint, ResourceCapabilitySnapshot, ResourceFrontierSnapshot,
     ResourceGraphSnapshot, ResourceRelationSnapshot, ResourceSnapshot, ScreenshotSnapshot,
@@ -258,6 +261,7 @@ impl DebuggerService {
                 .is_some_and(|current| Arc::ptr_eq(current, &runtime));
             if is_current_runtime {
                 state.runtimes.remove(&runtime_key);
+                state.connection_activity.remove(&runtime_key);
                 retract_connection_resource_graph(
                     &mut state,
                     &context_id,
@@ -759,6 +763,7 @@ fn context_event_snapshot(event: &crate::service::context_engine::RevisionEvent)
 
 #[derive(Clone, Default)]
 struct ServiceState {
+    connection_activity: BTreeMap<(String, String), Arc<ConnectionActivity>>,
     contexts: BTreeMap<String, Arc<ContextState>>,
     resource_graphs: BTreeMap<String, SharedResourceGraph>,
     process_projections: BTreeMap<String, Vec<ProcessTreeSnapshot>>,
@@ -4352,6 +4357,8 @@ fn snapshot(
                 generation: connection.generation,
                 status: connection.status.clone(),
                 targets: targets.into_values().map(|target| target.target).collect(),
+                idle_timeout: connection.idle_timeout,
+                effective_idle_timeout: connection.idle_timeout.unwrap_or(context.idle_timeout),
             }
         })
         .collect::<Vec<_>>();
@@ -4374,6 +4381,7 @@ fn snapshot(
         agent_instance_id: agent_instance_id.to_owned(),
         id: id.to_owned(),
         display_name: context.display_name.clone(),
+        idle_timeout: context.idle_timeout,
         revision: context.revision,
         resource_revision: graph.map_or(0, |graph| graph.revision.0),
         connections,
@@ -4632,6 +4640,8 @@ struct StoredContextState {
     breakpoints: BTreeMap<String, StoredBreakpointState>,
     #[serde(default)]
     source_formatting: SourceFormattingSettings,
+    #[serde(default)]
+    idle_timeout: IdleTimeout,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4639,6 +4649,8 @@ struct StoredContextState {
 struct StoredConnectionState {
     configuration: ConnectionConfiguration,
     configuration_version: u64,
+    #[serde(default)]
+    idle_timeout: Option<IdleTimeout>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4696,6 +4708,7 @@ impl From<&ServiceState> for StoredServiceState {
                                 .copied()
                                 .unwrap_or(ContextKind::Named),
                             display_name: context.display_name.clone(),
+                            idle_timeout: context.idle_timeout,
                             revision: context.revision,
                             connections: context
                                 .connections
@@ -4706,6 +4719,7 @@ impl From<&ServiceState> for StoredServiceState {
                                         StoredConnectionState {
                                             configuration: connection.configuration.clone(),
                                             configuration_version: connection.configuration_version,
+                                            idle_timeout: connection.idle_timeout,
                                         },
                                     )
                                 })
@@ -4808,6 +4822,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                     id,
                     Arc::new(ContextState {
                         display_name: context.display_name,
+                        idle_timeout: context.idle_timeout,
                         revision: context.revision,
                         connections: Arc::new(
                             context
@@ -4821,6 +4836,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                                             configuration_version: connection.configuration_version,
                                             generation: 0,
                                             status: ConnectionStatus::Disconnected,
+                                            idle_timeout: connection.idle_timeout,
                                         }),
                                     )
                                 })
@@ -4851,6 +4867,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             })
             .collect(),
         source_models: BTreeMap::new(),
+        connection_activity: BTreeMap::new(),
         resource_graphs: BTreeMap::new(),
         process_projections: BTreeMap::new(),
         context_kinds,
@@ -4923,6 +4940,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
                     id,
                     StoredContextState {
                         kind: ContextKind::Named,
+                        idle_timeout: IdleTimeout::Infinite,
                         display_name: context.display_name,
                         revision: context.revision,
                         connections: context
@@ -4933,6 +4951,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
                                     id,
                                     StoredConnectionState {
                                         configuration: connection.endpoint.into(),
+                                        idle_timeout: None,
                                         configuration_version: connection.configuration_version,
                                     },
                                 )
@@ -6042,6 +6061,7 @@ mod tests {
     ) -> Arc<ContextState> {
         Arc::new(ContextState {
             display_name: "test".into(),
+            idle_timeout: IdleTimeout::Infinite,
             revision: 1,
             connections: Arc::new(
                 connections
@@ -6050,6 +6070,7 @@ mod tests {
                         (
                             connection_id.into(),
                             Arc::new(crate::service::context_engine::ConnectionState {
+                                idle_timeout: None,
                                 configuration: ConnectionConfiguration::DirectCdp {
                                     endpoint: format!("ws://{connection_id}"),
                                 },

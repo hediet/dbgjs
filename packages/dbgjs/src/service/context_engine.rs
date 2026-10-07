@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::api::service_api::{
-    ConnectionConfiguration, ConnectionStatus, SourceFormattingMode, SourceFormattingRule,
+    ConnectionConfiguration, ConnectionStatus, IdleTimeout, SourceFormattingMode, SourceFormattingRule,
     SourceFormattingSettings,
 };
 
@@ -17,6 +17,8 @@ pub struct ContextState {
     pub breakpoints: Arc<BTreeMap<String, Arc<BreakpointState>>>,
     #[serde(default)]
     pub source_formatting: SourceFormattingSettings,
+    #[serde(default)]
+    pub idle_timeout: IdleTimeout,
 }
 
 impl ContextState {
@@ -27,6 +29,7 @@ impl ContextState {
             connections: Arc::new(BTreeMap::new()),
             breakpoints: Arc::new(BTreeMap::new()),
             source_formatting: SourceFormattingSettings::default(),
+            idle_timeout: IdleTimeout::Infinite,
         })
     }
 }
@@ -38,6 +41,8 @@ pub struct ConnectionState {
     pub configuration_version: u64,
     pub generation: u64,
     pub status: ConnectionStatus,
+    #[serde(default)]
+    pub idle_timeout: Option<IdleTimeout>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +77,13 @@ pub enum ContextInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum UserCommand {
+    SetContextIdleTimeout {
+        idle_timeout: IdleTimeout,
+    },
+    SetConnectionIdleTimeout {
+        connection_id: String,
+        idle_timeout: Option<IdleTimeout>,
+    },
     PutContext {
         display_name: Option<String>,
     },
@@ -291,6 +303,21 @@ fn reduce_user_command(
     command: UserCommand,
 ) -> Result<ContextTransition, ContextTransitionError> {
     match command {
+        UserCommand::SetContextIdleTimeout { idle_timeout } => {
+            let mut state = (**previous).clone();
+            state.idle_timeout = idle_timeout;
+            Ok(changed(state, ContextChange::Durable, Vec::new(), ContextEvent::ContextUpdated))
+        }
+        UserCommand::SetConnectionIdleTimeout { connection_id, idle_timeout } => {
+            if !previous.connections.contains_key(&connection_id) {
+                return Err(ContextTransitionError::ConnectionNotFound(connection_id));
+            }
+            let mut state = (**previous).clone();
+            Arc::make_mut(Arc::make_mut(&mut state.connections).get_mut(&connection_id).unwrap())
+                .idle_timeout = idle_timeout;
+            Ok(changed(state, ContextChange::Durable, Vec::new(),
+                ContextEvent::ConnectionConfigured { connection_id }))
+        }
         UserCommand::PutContext { display_name } => {
             let mut state = (**previous).clone();
             if let Some(display_name) = display_name {
@@ -323,6 +350,7 @@ fn reduce_user_command(
             let generation = connections
                 .get(&connection_id)
                 .map_or(0, |connection| connection.generation);
+            let idle_timeout = connections.get(&connection_id).and_then(|connection| connection.idle_timeout);
             connections.insert(
                 connection_id.clone(),
                 Arc::new(ConnectionState {
@@ -330,6 +358,7 @@ fn reduce_user_command(
                     configuration_version,
                     generation,
                     status: ConnectionStatus::Disconnected,
+                    idle_timeout,
                 }),
             );
             Ok(changed(

@@ -28,6 +28,7 @@ pub async fn serve_stdio() -> Result<(), LocalRpcError> {
         shutdown_sender,
         state_directory.path().join("contexts.json"),
     )?);
+    service.supervise_idle_connections();
     let connection = service_connection(
         NdjsonTransport::new(tokio::io::stdin(), tokio::io::stdout()),
         service.clone(),
@@ -153,6 +154,7 @@ async fn serve_named_pipe(
         shutdown_sender,
         persistent_state_file(state_file),
     )?);
+    service.supervise_idle_connections();
     let token = random_token()?;
     let pipe_id = random_token()?;
     let pipe_name = format!(r"\\.\pipe\dbgjs-{}", &pipe_id[..32]);
@@ -204,6 +206,7 @@ async fn serve_unix_socket(
         shutdown_sender,
         persistent_state_file(state_file),
     )?);
+    service.supervise_idle_connections();
     let token = random_token()?;
     let socket_path = unix_socket_path()?;
     if let Some(parent) = socket_path.parent() {

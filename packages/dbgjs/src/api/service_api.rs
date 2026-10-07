@@ -236,6 +236,32 @@ pub struct ContextSnapshot {
     pub breakpoints: Vec<BreakpointSnapshot>,
     #[serde(default)]
     pub source_formatting: SourceFormattingSettings,
+    #[serde(default)]
+    pub idle_timeout: IdleTimeout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum IdleTimeout {
+    #[default]
+    Infinite,
+    After { milliseconds: u64 },
+}
+
+impl std::fmt::Display for IdleTimeout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Infinite => formatter.write_str("inf"),
+            Self::After { milliseconds } => {
+                for (unit, divisor) in [("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1_000), ("ms", 1)] {
+                    if milliseconds % divisor == 0 {
+                        return write!(formatter, "{}{unit}", milliseconds / divisor);
+                    }
+                }
+                unreachable!()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -322,6 +348,10 @@ pub struct ConnectionSnapshot {
     pub generation: u64,
     pub status: ConnectionStatus,
     pub targets: Vec<TargetSnapshot>,
+    #[serde(default)]
+    pub idle_timeout: Option<IdleTimeout>,
+    #[serde(default)]
+    pub effective_idle_timeout: IdleTimeout,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2130,6 +2160,8 @@ mod tests {
     #[test]
     fn target_forest_uses_parent_then_opener_and_breaks_cycles() {
         let connection = ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
             id: "connection".to_owned(),
             configuration: ConnectionConfiguration::DirectCdp {
                 endpoint: "ws://example".to_owned(),

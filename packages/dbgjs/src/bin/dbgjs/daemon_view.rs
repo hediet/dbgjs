@@ -489,12 +489,15 @@ mod tests {
             subtype: None,
         };
         let context = ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent-ignored".to_owned(),
             id: "shop".to_owned(),
             display_name: "Shop".to_owned(),
             revision: 12,
             resource_revision: 1,
             connections: vec![ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "browser".to_owned(),
                 configuration: ConnectionConfiguration::DirectCdp {
                     endpoint: "ws://ignored".to_owned(),
@@ -620,12 +623,15 @@ mod tests {
             subtype: None,
         };
         let context = ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "ignored".to_owned(),
             id: "workers\u{1b}[2J".to_owned(),
             display_name: "Workers\u{7}".to_owned(),
             revision: 4,
             resource_revision: 1,
             connections: vec![ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "runtime\u{1b}".to_owned(),
                 configuration: ConnectionConfiguration::NodeInspector {
                     endpoint: "ws://ignored".to_owned(),
@@ -749,6 +755,7 @@ mod tests {
     fn empty_context_view(id: &str, revision: u64) -> ContextView {
         ContextView {
             snapshot: ContextSnapshot {
+            idle_timeout: Default::default(),
                 agent_instance_id: "ignored".to_owned(),
                 id: id.to_owned(),
                 display_name: id.to_owned(),

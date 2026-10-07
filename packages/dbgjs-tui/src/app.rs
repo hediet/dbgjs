@@ -4436,6 +4436,8 @@ mod tests {
             .unwrap()
             .connections
             .push(ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "process-tree-100".to_owned(),
                 configuration: ConnectionConfiguration::ProcessTree { root_pid: 100 },
                 generation: 1,
@@ -4812,12 +4814,15 @@ mod tests {
             subtype: None,
         };
         let context = ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent".to_owned(),
             id: "ctx".to_owned(),
             display_name: "Context".to_owned(),
             revision: 1,
             resource_revision: 1,
             connections: vec![ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "browser".to_owned(),
                 configuration: ConnectionConfiguration::DirectCdp {
                     endpoint: "ws://example".to_owned(),

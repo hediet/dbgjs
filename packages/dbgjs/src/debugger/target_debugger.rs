@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -83,6 +83,7 @@ pub struct TargetBreakpointSpec {
 
 #[derive(Clone)]
 pub struct TargetDebuggerHandle {
+    idle_disconnect_blocked: Arc<AtomicBool>,
     commands: mpsc::Sender<TargetCommand>,
     snapshots: watch::Receiver<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
@@ -143,6 +144,7 @@ impl TargetDebuggerHandle {
         let (_, heap_snapshot_progress) = watch::channel(None);
         let (raw_events, _) = broadcast::channel(1);
         Self {
+            idle_disconnect_blocked: Arc::new(AtomicBool::new(false)),
             commands,
             snapshots,
             pause_events,
@@ -202,6 +204,7 @@ impl TargetDebuggerHandle {
         let (snapshot_sender, snapshots) = watch::channel(initial);
         let (pause_events, _) = broadcast::channel(COMMAND_BUFFER);
         let (commands, command_receiver) = mpsc::channel(COMMAND_BUFFER);
+        let idle_disconnect_blocked = Arc::new(AtomicBool::new(false));
         tokio::spawn(run_target(
             context_id,
             connection_id,
@@ -212,8 +215,10 @@ impl TargetDebuggerHandle {
             command_receiver,
             snapshot_sender,
             pause_events.clone(),
+            idle_disconnect_blocked.clone(),
         ));
         Ok(Self {
+            idle_disconnect_blocked,
             commands,
             snapshots,
             pause_events,
@@ -237,6 +242,11 @@ impl TargetDebuggerHandle {
 
     pub fn snapshot(&self) -> TargetDebuggerSnapshot {
         self.snapshots.borrow().clone()
+    }
+
+    pub(crate) fn blocks_idle_disconnect(&self) -> bool {
+        self.idle_disconnect_blocked.load(Ordering::SeqCst)
+            || self.snapshots.borrow().pause.is_some()
     }
 
     pub async fn set_breakpoint(
@@ -1311,6 +1321,7 @@ async fn run_target(
     mut commands: mpsc::Receiver<TargetCommand>,
     snapshots: watch::Sender<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
+    idle_disconnect_blocked: Arc<AtomicBool>,
 ) {
     let mut breakpoint_owners = BTreeMap::<String, BreakpointOwnership>::new();
     let mut coverage = None::<CoverageRecording>;
@@ -1324,6 +1335,7 @@ async fn run_target(
     let mut heap_graphs = BTreeMap::<String, Arc<HeapGraph>>::new();
     let mut heap_aliases = BTreeMap::<(String, String), String>::new();
     loop {
+        idle_disconnect_blocked.store(coverage.is_some() || cpu_profile.is_some(), Ordering::SeqCst);
         enum Next {
             Command(Option<TargetCommand>),
             Event(Result<bool, DebuggerDriverError>),
@@ -1333,6 +1345,9 @@ async fn run_target(
             command = commands.recv() => Next::Command(command),
             event = driver.process_next_event() => Next::Event(event),
         };
+        if matches!(&next, Next::Command(Some(_))) {
+            idle_disconnect_blocked.store(true, Ordering::SeqCst);
+        }
         match next {
             Next::Command(Some(TargetCommand::SetBreakpoints {
                 lifetime,

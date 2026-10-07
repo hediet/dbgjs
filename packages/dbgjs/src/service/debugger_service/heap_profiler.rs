@@ -82,6 +82,7 @@ impl HeapProfilerApi for DebuggerService {
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapSnapshotResult, HeapProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -121,6 +122,7 @@ impl HeapProfilerApi for DebuggerService {
         expose_internals: bool,
         progress: StreamSender<HeapSnapshotProgress>,
     ) -> Result<HeapCaptureResult, HeapProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -314,6 +316,7 @@ impl HeapProfilerApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))?
             .map_err(HeapProfilerError::from);
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -342,6 +345,7 @@ impl HeapProfilerApi for DebuggerService {
             move |graph| graph.promises(state, limit, max_preview_length)).await? {
             return Ok(result);
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -371,6 +375,7 @@ impl HeapProfilerApi for DebuggerService {
                 move |graph| graph.select(selector, max_string_length, include_dominators))
                 .await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -404,6 +409,7 @@ impl HeapProfilerApi for DebuggerService {
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -436,6 +442,7 @@ impl HeapProfilerApi for DebuggerService {
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -466,6 +473,7 @@ impl HeapProfilerApi for DebuggerService {
                 }).await?.ok_or_else(|| invalid_state("stored heap capture disappeared").into());
             }
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -494,6 +502,7 @@ impl HeapProfilerApi for DebuggerService {
             move |graph| graph.aggregate(by, limit, max_string_length)).await? {
             return Ok(result);
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -537,6 +546,7 @@ impl HeapProfilerApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))?
             .map_err(HeapProfilerError::from);
         }
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -563,6 +573,7 @@ impl HeapProfilerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<Option<HeapSnapshotProgress>, HeapProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {

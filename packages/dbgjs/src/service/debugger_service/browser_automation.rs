@@ -8,6 +8,7 @@ impl BrowserAutomationApi for DebuggerService {
         target_ref: TargetRef,
         selector: String,
     ) -> Result<bool, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -30,6 +31,7 @@ impl BrowserAutomationApi for DebuggerService {
         target_ref: TargetRef,
         text: String,
     ) -> Result<bool, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -51,6 +53,7 @@ impl BrowserAutomationApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<ScreenshotSnapshot, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {

@@ -18,6 +18,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -114,6 +115,7 @@ impl TargetDebuggerApi for DebuggerService {
         predicate: TargetWaitPredicate,
         timeout_ms: u64,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -164,6 +166,7 @@ impl TargetDebuggerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -185,6 +188,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         expected_connection_generation: Option<u64>,
     ) -> Result<ContextSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -294,6 +298,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         pause_epoch: u64,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -316,6 +321,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: u64,
         kind: ApiStepKind,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -346,6 +352,7 @@ impl TargetDebuggerApi for DebuggerService {
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -369,6 +376,7 @@ impl TargetDebuggerApi for DebuggerService {
         frame_index: u32,
         scope_index: u32,
     ) -> Result<Vec<VariableSnapshot>, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -391,6 +399,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: Option<u64>,
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -414,6 +423,7 @@ impl TargetDebuggerApi for DebuggerService {
         selector: ValueSelector,
         options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -439,6 +449,7 @@ impl TargetDebuggerApi for DebuggerService {
         column: u32,
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -473,6 +484,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         logpoints: Vec<LogpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -520,6 +532,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         logpoint_id: String,
     ) -> Result<crate::api::service_api::LogpointRemovalResult, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         validate_id("logpoint", &logpoint_id)?;
         if logpoint_id.starts_with("log:") {
             return Err(

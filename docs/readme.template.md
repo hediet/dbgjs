@@ -57,6 +57,26 @@ was started with Node's Inspector enabled (`--inspect=127.0.0.1:0`).
 No second target attachment is needed. The [Express walkthrough](docs/walkthroughs/node.md)
 uses HTTP requests to collect coverage and pause inside a request handler.
 
+## Disconnect idle connections
+
+Contexts default to `inf`, keeping connections open until explicitly
+disconnected. Set an idle timeout when creating a context or change it later:
+
+```sh
+dbgjs context create :investigation "Investigation" --idle-timeout 2h --set
+dbgjs context configure --idle-timeout 30m
+dbgjs connection configure --connection browser --idle-timeout inf
+dbgjs connection configure --connection browser --idle-timeout inherit
+```
+
+Each connection has its own activity clock and inherits the context timeout
+unless overridden. `connection add` also accepts `--idle-timeout`. Durations
+use `ms`, `s`, `m`, `h`, or `d`. Active operations, paused debugging, recordings,
+and relay/proxy sessions defer expiry; status polling does not keep connections
+alive. Expiry detaches external applications and stops providers launched by
+dbgjs, preserving configuration, breakpoints, and saved captures.
+See [timeout semantics](docs/architecture/context-identity.md#idle-connection-timeout).
+
 ## Evaluate JavaScript
 
 Evaluate in the selected runtime, or in the current stack frame when paused.
