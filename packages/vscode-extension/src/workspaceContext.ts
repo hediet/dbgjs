@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { ContextSnapshot } from "./apiTypes.js";
 import { DaemonClient, defaultServiceStateFile } from "./daemonClient.js";
-import { ensureDaemonProcess } from "./daemonProcess.js";
+import { ensureDaemonProcess, listDaemonServices, type DaemonProcessOptions } from "./daemonProcess.js";
 import { normalizeContextPath } from "./model.js";
 
 const contextIdStateKey = "dbgjs.workspaceContextId";
@@ -77,6 +77,27 @@ export class WorkspaceContextController implements vscode.Disposable {
 		return this.connectionAttempt;
 	}
 
+	public async showServices(): Promise<string> {
+		return listDaemonServices(this.serviceOptions());
+	}
+
+	public async startCompatibleService(): Promise<void> {
+		await ensureDaemonProcess(this.serviceOptions(), true);
+		await this.ensureReady();
+	}
+
+	private serviceOptions(): DaemonProcessOptions {
+		const configuration = vscode.workspace.getConfiguration("dbgjs");
+		const configured = configuration.get<string>("serviceStatePath");
+		const configuredExecutable = configuration.get<string>("serviceExecutable");
+		return {
+			extensionPath: this.extensionContext.extensionPath,
+			stateFile: configured?.trim() || defaultServiceStateFile(),
+			log: this.log,
+			...(configuredExecutable === undefined ? {} : { configuredExecutable }),
+		};
+	}
+
 	public adoptSnapshot(snapshot: ContextSnapshot): void {
 		if (snapshot.id !== this.contextId) {
 			throw new Error(`Received context '${snapshot.id}' for '${this.contextId}'`);
@@ -105,20 +126,19 @@ export class WorkspaceContextController implements vscode.Disposable {
 	private async connectAndInitialize(): Promise<void> {
 		try {
 			this.clientValue?.close();
-			const configured = vscode.workspace
-				.getConfiguration("dbgjs")
-				.get<string>("serviceStatePath");
-			const configuredExecutable = vscode.workspace
-				.getConfiguration("dbgjs")
-				.get<string>("serviceExecutable");
-			const stateFile = configured?.trim() || defaultServiceStateFile();
-			await ensureDaemonProcess({
-				extensionPath: this.extensionContext.extensionPath,
-				stateFile,
-				log: this.log,
-				...(configuredExecutable === undefined ? {} : { configuredExecutable }),
-			});
-			const client = await DaemonClient.connect(stateFile, this.log);
+			const options = this.serviceOptions();
+			let client: DaemonClient;
+			try {
+				client = await DaemonClient.connectValidated(options.stateFile, this.log);
+			} catch (error) {
+				if (!(error instanceof Error) || !("code" in error)
+					|| (error.code !== "ENOENT" && error.code !== "ECONNREFUSED")) {
+					throw error;
+				}
+				this.log(`No service at the selected endpoint: ${error.message}; checking available services before startup`);
+				await ensureDaemonProcess(options);
+				client = await DaemonClient.connectValidated(options.stateFile, this.log);
+			}
 			this.clientValue = client;
 			client.onClose(() => {
 				if (!this.disposed) {

@@ -1,4 +1,12 @@
 use super::*;
+use crate::api::service_api::{DiscoveryApi, ServiceDescription, service_description};
+
+#[async_trait::async_trait]
+impl DiscoveryApi for DebuggerService {
+    async fn describe(&self, _ctx: &CallCtx) -> Result<ServiceDescription, JsonRpcError> {
+        Ok(service_description())
+    }
+}
 
 #[async_trait::async_trait]
 impl ServiceApi for DebuggerService {

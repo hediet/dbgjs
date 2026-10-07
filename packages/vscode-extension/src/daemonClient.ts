@@ -20,6 +20,7 @@ import {
 import { connectDaemon, type DaemonConnection } from "./daemonTransport.js";
 import { DbgServiceClient } from "./dbgServiceClient.js";
 import { unwrapRpcResult } from "./rpcResult.js";
+import { serviceContractFingerprint } from "./generated/interfaces.js";
 
 export class DaemonClient {
 	private constructor(
@@ -36,12 +37,46 @@ export class DaemonClient {
 		return new DaemonClient(hub, new DbgServiceClient(hub.connection), stateFile);
 	}
 
+	public static async connectValidated(
+		stateFile: string,
+		log?: (message: string) => void,
+	): Promise<DaemonClient> {
+		const client = await DaemonClient.connect(stateFile, log);
+		try {
+			await client.validateContract();
+			return client;
+		} catch (error) {
+			client.close();
+			throw error;
+		}
+	}
+
 	public onClose(listener: () => void): { dispose(): void } {
 		return this.hub.onClose(listener);
 	}
 
 	public close(): void {
 		this.hub.close();
+	}
+
+	public async validateContract(): Promise<void> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const description = await Promise.race([
+				this._service.discovery.describe({}),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("dbgjs service contract probe timed out")), 2_000);
+				}),
+			]);
+			if (description.contractFingerprint !== serviceContractFingerprint) {
+				throw new Error(
+					`Incompatible dbgjs service running (PID ${description.processId}, version ${description.version}): `
+					+ `service contract ${description.contractFingerprint}, extension expects ${serviceContractFingerprint}`,
+				);
+			}
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	public async listContexts(cwd?: string): Promise<readonly ContextSummary[]> {
@@ -308,16 +343,20 @@ export function defaultServiceStateFile(environment: NodeJS.ProcessEnv = process
 	if (environment.DBGJS_SERVICE_STATE !== undefined) {
 		return environment.DBGJS_SERVICE_STATE;
 	}
+	return join(defaultServiceDirectory(environment), "services", serviceContractFingerprint, "service.json");
+}
+
+export function defaultServiceDirectory(environment: NodeJS.ProcessEnv = process.env): string {
 	if (environment.LOCALAPPDATA !== undefined) {
-		return join(environment.LOCALAPPDATA, "dbgjs", "service.json");
+		return join(environment.LOCALAPPDATA, "dbgjs");
 	}
 	if (environment.XDG_RUNTIME_DIR !== undefined) {
-		return join(environment.XDG_RUNTIME_DIR, "dbgjs", "service.json");
+		return join(environment.XDG_RUNTIME_DIR, "dbgjs");
 	}
 	if (environment.HOME !== undefined) {
-		return join(environment.HOME, ".cache", "dbgjs", "service.json");
+		return join(environment.HOME, ".cache", "dbgjs");
 	}
-	return join(tmpdir(), `dbgjs-${process.pid}`, "service.json");
+	return join(tmpdir(), `dbgjs-${process.pid}`);
 }
 
 export async function ensureStateDirectory(stateFile: string): Promise<void> {

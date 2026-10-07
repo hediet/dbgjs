@@ -15,7 +15,8 @@ use dbgjs::service::context_identity::{
     resolve_context_expression, synthetic_node_target_id,
 };
 use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
-use dbgjs::connection::transport::local_rpc::{connect_existing, default_state_file, ensure_service};
+use dbgjs::connection::transport::local_rpc::{connect_existing, default_state_file, ensure_service, selection_state_file};
+use dbgjs::connection::transport::service_discovery::list_available_services;
 use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
 use dbgjs::debugger::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
@@ -154,8 +155,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mut scope_options = extract_scope_options(&mut arguments)?;
+    if matches!(arguments.as_slice(), [service, list] if service == "service" && list == "list") {
+        let services = list_available_services().await?;
+        if output.is_json() {
+            println!("{}", serde_json::to_string_pretty(&services)?);
+        } else if services.is_empty() {
+            println!("No dbgjs services found.");
+        } else {
+            for service in services {
+                println!("{}: {:?} ({})", service.state_file.display(), service.status,
+                    if service.compatible { "compatible" } else { "not compatible" });
+                if let Some(description) = service.description {
+                    println!("  PID {} | version {} | contract {}", description.process_id,
+                        description.version, description.contract_fingerprint);
+                }
+                if let Some(error) = service.error {
+                    println!("  {error}");
+                }
+            }
+        }
+        return Ok(());
+    }
     let state_file = default_state_file();
-    let selection_file = state_file.with_extension("selection.json");
+    let selection_file = selection_state_file(&state_file);
     let cwd = env::current_dir()?;
     let normalized_cwd = normalize_absolute_path(&cwd)?;
     if !is_context_create(&arguments)
@@ -1117,6 +1139,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
+        }
+        [service, start] if service == "service" && start == "start" => {
+            let client = ensure_service(&state_file).await?;
+            output.print(&rpc(client.service.service_info().await)?)?;
         }
         [service, status] if service == "service" && status == "status" => {
             let client = connect_existing(&state_file).await?;
@@ -7022,7 +7048,7 @@ commands:
   dbgjs --version | -V | version
     reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
   dbgjs daemon view [--context <id> | --all-contexts]
-  dbgjs service status|stop
+  dbgjs service list|start|status|stop
   dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process attach <process-reference> [--context <id>] [--set] [--force]

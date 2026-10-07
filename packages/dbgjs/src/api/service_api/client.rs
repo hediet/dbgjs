@@ -52,4 +52,5 @@ service_bundle! {
     coverage: coverage_api => CoverageApi, CoverageApiClient, CoverageApiServer;
     cpu: cpu_profiler_api => CpuProfilerApi, CpuProfilerApiClient, CpuProfilerApiServer;
     heap: heap_profiler_api => HeapProfilerApi, HeapProfilerApiClient, HeapProfilerApiServer;
+    discovery: discovery_api => DiscoveryApi, DiscoveryApiClient, DiscoveryApiServer;
 }

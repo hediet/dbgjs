@@ -1976,6 +1976,38 @@ namespace $contract6 {
 export const CpuProfilerApi: typeof $contract6.definition = $contract6.definition;
 
 namespace $contract7 {
+    const ServiceInterfaceSchema = z.object({
+        hash: z.string(),
+        id: z.string(),
+    });
+    
+    const ServiceDescriptionSchema = z.object({
+        contractFingerprint: z.string(),
+        gitCommit: z.string(),
+        interfaces: z.array(ServiceInterfaceSchema),
+        processId: z.int(),
+        version: z.string(),
+    });
+    
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.discovery.v1\",\"hash\":\"456de5a9625e3ba0\",\"methods\":{\"describe\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ServiceDescription\"}}},\"components\":{\"schemas\":{\"ServiceDescription\":{\"type\":\"object\",\"required\":[\"contractFingerprint\",\"gitCommit\",\"interfaces\",\"processId\",\"version\"],\"properties\":{\"contractFingerprint\":{\"type\":\"string\"},\"gitCommit\":{\"type\":\"string\"},\"interfaces\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/ServiceInterface\"}},\"processId\":{\"type\":\"integer\"},\"version\":{\"type\":\"string\"}},\"additionalProperties\":false},\"ServiceInterface\":{\"type\":\"object\",\"required\":[\"hash\",\"id\"],\"properties\":{\"hash\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    
+    export const definition = new InterfaceDefinition(
+        {
+            id: "dev.dbgjs.discovery.v1",
+            hash: "456de5a9625e3ba0",
+        },
+        {
+            describe: requestType(
+                z.object({}),
+                ServiceDescriptionSchema,
+            ),
+        },
+        { frozenSchema: wireSchema },
+    );
+}
+export const DiscoveryApi: typeof $contract7.definition = $contract7.definition;
+
+namespace $contract8 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -2958,9 +2990,9 @@ namespace $contract7 {
         { frozenSchema: wireSchema },
     );
 }
-export const HeapProfilerApi: typeof $contract7.definition = $contract7.definition;
+export const HeapProfilerApi: typeof $contract8.definition = $contract8.definition;
 
-namespace $contract8 {
+namespace $contract9 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3051,9 +3083,9 @@ namespace $contract8 {
         { frozenSchema: wireSchema },
     );
 }
-export const RelayApi: typeof $contract8.definition = $contract8.definition;
+export const RelayApi: typeof $contract9.definition = $contract9.definition;
 
-namespace $contract9 {
+namespace $contract10 {
     const SourceSuffixRewriteSnapshotSchema = z.object({
         from: z.string(),
         to: z.string(),
@@ -3430,9 +3462,9 @@ namespace $contract9 {
         { frozenSchema: wireSchema },
     );
 }
-export const SourceApi: typeof $contract9.definition = $contract9.definition;
+export const SourceApi: typeof $contract10.definition = $contract10.definition;
 
-namespace $contract10 {
+namespace $contract11 {
     const BreakpointMappingSnapshotSchema = z.object({
         generatedColumn: z.int(),
         generatedLine: z.int(),
@@ -4865,9 +4897,9 @@ namespace $contract10 {
         { frozenSchema: wireSchema },
     );
 }
-export const TargetDebuggerApi: typeof $contract10.definition = $contract10.definition;
+export const TargetDebuggerApi: typeof $contract11.definition = $contract11.definition;
 
-namespace $contract11 {
+namespace $contract12 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.defaults\",\"hash\":\"4a6e3a1c5d66ba45\",\"description\":\"Reflection: preset default service / interface on this connection.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"listBindings\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"bindings\"],\"properties\":{\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"prefix\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"prefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}}},\"additionalProperties\":false}}}}");
     
     /**
@@ -4903,9 +4935,9 @@ namespace $contract11 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDefaultsInterface: typeof $contract11.definition = $contract11.definition;
+export const hubrpcDefaultsInterface: typeof $contract12.definition = $contract12.definition;
 
-namespace $contract12 {
+namespace $contract13 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"1e19aea63bb21ff9\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":[\"string\",\"null\"]},\"interfaceId\":{\"type\":[\"string\",\"null\"]},\"limit\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\"},\"serviceId\":{\"type\":[\"string\",\"null\"]},\"timeoutMs\":{\"type\":[\"integer\",\"null\"],\"format\":\"uint32\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceDescription\":{\"type\":[\"string\",\"null\"]},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"nextCursor\":{\"type\":[\"string\",\"null\"]},\"truncated\":{\"type\":[\"boolean\",\"null\"]}},\"additionalProperties\":false}}}}");
     
     /**
@@ -4965,9 +4997,9 @@ namespace $contract12 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDirectoryInterface: typeof $contract12.definition = $contract12.definition;
+export const hubrpcDirectoryInterface: typeof $contract13.definition = $contract13.definition;
 
-namespace $contract13 {
+namespace $contract14 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.schemas\",\"hash\":\"de9a254daf241863\",\"description\":\"Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"required\":[\"interfaceId\"],\"properties\":{\"hash\":{\"type\":[\"string\",\"null\"]},\"interfaceId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"schema\"],\"properties\":{\"schema\":{\"description\":\"A full `LinkRpcInterfaceSchema`.\"}},\"additionalProperties\":false}}}}");
     
     /**
@@ -4999,7 +5031,7 @@ namespace $contract13 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcSchemasInterface: typeof $contract13.definition = $contract13.definition;
+export const hubrpcSchemasInterface: typeof $contract14.definition = $contract14.definition;
 
 export const BrowserAutomationApiRoot: QualifiedInterfaceTarget<typeof BrowserAutomationApi> = interfaceTarget(BrowserAutomationApi, { serviceId: "" });
 export const CaptureApiRoot: QualifiedInterfaceTarget<typeof CaptureApi> = interfaceTarget(CaptureApi, { serviceId: "" });
@@ -5008,6 +5040,7 @@ export const ServiceApiRoot: QualifiedInterfaceTarget<typeof ServiceApi> = inter
 export const ContextApiRoot: QualifiedInterfaceTarget<typeof ContextApi> = interfaceTarget(ContextApi, { serviceId: "" });
 export const CoverageApiRoot: QualifiedInterfaceTarget<typeof CoverageApi> = interfaceTarget(CoverageApi, { serviceId: "" });
 export const CpuProfilerApiRoot: QualifiedInterfaceTarget<typeof CpuProfilerApi> = interfaceTarget(CpuProfilerApi, { serviceId: "" });
+export const DiscoveryApiRoot: QualifiedInterfaceTarget<typeof DiscoveryApi> = interfaceTarget(DiscoveryApi, { serviceId: "" });
 export const HeapProfilerApiRoot: QualifiedInterfaceTarget<typeof HeapProfilerApi> = interfaceTarget(HeapProfilerApi, { serviceId: "" });
 export const RelayApiRoot: QualifiedInterfaceTarget<typeof RelayApi> = interfaceTarget(RelayApi, { serviceId: "" });
 export const SourceApiRoot: QualifiedInterfaceTarget<typeof SourceApi> = interfaceTarget(SourceApi, { serviceId: "" });
@@ -5015,3 +5048,5 @@ export const TargetDebuggerApiRoot: QualifiedInterfaceTarget<typeof TargetDebugg
 export const hubrpcDefaultsRoot: QualifiedInterfaceTarget<typeof hubrpcDefaultsInterface> = interfaceTarget(hubrpcDefaultsInterface, { serviceId: "" });
 export const hubrpcDirectoryRoot: QualifiedInterfaceTarget<typeof hubrpcDirectoryInterface> = interfaceTarget(hubrpcDirectoryInterface, { serviceId: "" });
 export const hubrpcSchemasRoot: QualifiedInterfaceTarget<typeof hubrpcSchemasInterface> = interfaceTarget(hubrpcSchemasInterface, { serviceId: "" });
+
+export const serviceContractFingerprint = "72df12b4edba0b9d5b23d8072fe061a400e4435ae776a1a834431850b2c6f00e";

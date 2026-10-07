@@ -29,6 +29,14 @@
       {
         "command": "dbgjs.copyContextId",
         "title": "dbgjs: Copy Workspace Context ID"
+      },
+      {
+        "command": "dbgjs.showServices",
+        "title": "dbgjs: Show Services"
+      },
+      {
+        "command": "dbgjs.startCompatibleService",
+        "title": "dbgjs: Start Compatible Service"
       }
     ],
     "configuration": {
@@ -36,7 +44,7 @@
       "properties": {
         "dbgjs.serviceStatePath": {
           "type": "string",
-          "description": "Path to the dbgjs-service endpoint state file. Defaults to DBGJS_SERVICE_STATE or the platform dbgjs cache location."
+          "description": "Exact path to the dbgjs-service endpoint file. Defaults to DBGJS_SERVICE_STATE or a contract-scoped endpoint in the platform dbgjs cache location."
         },
         "dbgjs.serviceExecutable": {
           "type": "string",

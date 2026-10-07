@@ -13,6 +13,7 @@ const { values: { check = false, cli } } = parseArgs({
 });
 
 const interfaces = [
+	["dev.dbgjs.discovery.v1", "DiscoveryApi"],
 	["dev.dbgjs.cdp-debugger", "ServiceApi"],
 	["dev.dbgjs.context", "ContextApi"],
 	["dev.dbgjs.source", "SourceApi"],
@@ -84,7 +85,12 @@ try {
 		linkrpc, "codegen", "--input", bundlePath, "--names", namesPath,
 		"--output", temporaryOutput,
 	]);
-	const generated = generatedHeader + readFileSync(temporaryOutput, "utf8");
+	const fingerprint = capture(executable, ["--contract-fingerprint"]).trim();
+	if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+		throw new Error("dbgjs-service returned an invalid contract fingerprint");
+	}
+	const generated = generatedHeader + readFileSync(temporaryOutput, "utf8")
+		+ `\nexport const serviceContractFingerprint = ${JSON.stringify(fingerprint)};\n`;
 	const output = join(outputDirectory, "interfaces.ts");
 	if (check) {
 		if (!existsSync(output) || readFileSync(output, "utf8") !== generated) {

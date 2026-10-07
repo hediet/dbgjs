@@ -60,6 +60,8 @@ pub struct LocalServiceEndpoint {
     pub process_id: u32,
     pub transport: LocalTransportEndpoint,
     pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<service_api::ServiceDescription>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,29 +75,44 @@ pub fn default_state_file() -> PathBuf {
     if let Some(path) = env::var_os("DBGJS_SERVICE_STATE") {
         return PathBuf::from(path);
     }
+    default_service_directory()
+        .join("services")
+        .join(service_api::service_description().contract_fingerprint)
+        .join("service.json")
+}
+
+pub fn default_service_directory() -> PathBuf {
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         return PathBuf::from(local_app_data)
-            .join("dbgjs")
-            .join("service.json");
+            .join("dbgjs");
     }
     if let Some(runtime_dir) = env::var_os("XDG_RUNTIME_DIR") {
         return PathBuf::from(runtime_dir)
-            .join("dbgjs")
-            .join("service.json");
+            .join("dbgjs");
     }
     if let Some(home) = env::var_os("HOME") {
         return PathBuf::from(home)
             .join(".cache")
-            .join("dbgjs")
-            .join("service.json");
+            .join("dbgjs");
     }
     env::temp_dir()
         .join(format!("dbgjs-{}", std::process::id()))
-        .join("service.json")
 }
 
 pub fn persistent_state_file(endpoint_file: &Path) -> PathBuf {
-    endpoint_file.with_extension("contexts.json")
+    persistent_endpoint_file(endpoint_file).with_extension("contexts.json")
+}
+
+pub fn selection_state_file(endpoint_file: &Path) -> PathBuf {
+    persistent_endpoint_file(endpoint_file).with_extension("selection.json")
+}
+
+fn persistent_endpoint_file(endpoint_file: &Path) -> PathBuf {
+    if env::var_os("DBGJS_SERVICE_STATE").is_none() && endpoint_file == default_state_file() {
+        default_service_directory().join("service.json")
+    } else {
+        endpoint_file.to_owned()
+    }
 }
 
 pub fn startup_error_file(endpoint_file: &Path) -> PathBuf {
@@ -163,6 +180,7 @@ async fn serve_named_pipe(
             pipe_name: pipe_name.clone(),
         },
         token,
+        description: Some(service_api::service_description()),
     };
     write_endpoint(state_file, &endpoint)?;
 
@@ -217,6 +235,7 @@ async fn serve_unix_socket(
             path: socket_path.clone(),
         },
         token,
+        description: Some(service_api::service_description()),
     };
     write_endpoint(state_file, &endpoint)?;
 
@@ -274,16 +293,22 @@ async fn connect_endpoint_with_validation(
     endpoint: &LocalServiceEndpoint,
     validate_interface: bool,
 ) -> Result<DbgServiceClient, LocalRpcError> {
+    connect_connection(open_endpoint_connection(endpoint).await?, validate_interface).await
+}
+
+pub(super) async fn open_endpoint_connection(
+    endpoint: &LocalServiceEndpoint,
+) -> Result<LinkRpcConnection, LocalRpcError> {
     match &endpoint.transport {
         #[cfg(windows)]
         LocalTransportEndpoint::NamedPipe { pipe_name } => {
             let stream = open_named_pipe(pipe_name).await?;
-            connect_stream(stream, &endpoint.token, validate_interface).await
+            stream_connection(stream, &endpoint.token).await
         }
         #[cfg(unix)]
         LocalTransportEndpoint::UnixSocket { path } => {
             let stream = tokio::net::UnixStream::connect(path).await?;
-            connect_stream(stream, &endpoint.token, validate_interface).await
+            stream_connection(stream, &endpoint.token).await
         }
         _ => Err(LocalRpcError::UnsupportedTransport(
             endpoint.transport.clone(),
@@ -312,6 +337,7 @@ async fn open_named_pipe(
     }
 }
 
+#[cfg(test)]
 async fn connect_stream<S>(
     stream: S,
     token: &str,
@@ -320,11 +346,27 @@ async fn connect_stream<S>(
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
+    connect_connection(stream_connection(stream, token).await?, validate_interface).await
+}
+
+async fn stream_connection<S>(
+    stream: S,
+    token: &str,
+) -> Result<LinkRpcConnection, LocalRpcError>
+where
+    S: AsyncRead + AsyncWrite + Send + 'static,
+{
     let transport = NdjsonTransport::from_stream(stream);
     transport
         .write_preamble(&Preamble::new(Some(token.to_owned())))
         .await?;
-    let connection = LinkRpcConnection::new(Box::new(transport));
+    Ok(LinkRpcConnection::new(Box::new(transport)))
+}
+
+async fn connect_connection(
+    connection: LinkRpcConnection,
+    validate_interface: bool,
+) -> Result<DbgServiceClient, LocalRpcError> {
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
     if validate_interface {
@@ -354,6 +396,12 @@ where
 }
 
 pub async fn connect_existing(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
+    timeout(STARTUP_TIMEOUT, connect_existing_inner(state_file))
+        .await
+        .map_err(|_| LocalRpcError::Rpc("Service connection and contract validation timed out".into()))?
+}
+
+async fn connect_existing_inner(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
     let endpoint = read_endpoint(state_file)?;
     let client = connect_endpoint(&endpoint).await?;
     let info = client
@@ -401,10 +449,8 @@ pub async fn ensure_service(state_file: &Path) -> Result<DbgServiceClient, Local
     }
     match connect_existing(state_file).await {
         Ok(client) => return Ok(client),
-        Err(LocalRpcError::InterfaceHashMismatch { .. } | LocalRpcError::InterfaceMissing(_)) => {
-            shutdown_incompatible_service(state_file).await?;
-        }
-        Err(_) => {}
+        Err(error) if error.is_stale_endpoint() => {}
+        Err(error) => return Err(error),
     }
 
     let startup_error = startup_error_file(state_file);
@@ -443,40 +489,6 @@ pub async fn ensure_service(state_file: &Path) -> Result<DbgServiceClient, Local
     Err(LocalRpcError::StartupTimeout {
         last_error: last_error.map(Box::new),
     })
-}
-
-async fn shutdown_incompatible_service(state_file: &Path) -> Result<(), LocalRpcError> {
-    timeout(STARTUP_TIMEOUT, async {
-        let endpoint = read_endpoint(state_file)?;
-        let client = connect_endpoint_with_validation(&endpoint, false).await?;
-        let info = client
-            .service
-            .service_info()
-            .await
-            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-        if info.process_id != endpoint.process_id {
-            return Err(LocalRpcError::EndpointOwnerChanged {
-                expected: endpoint.process_id,
-                actual: info.process_id,
-            });
-        }
-        client
-            .service
-            .shutdown()
-            .await
-            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-        loop {
-            if connect_endpoint_with_validation(&endpoint, false)
-                .await
-                .is_err()
-            {
-                return Ok(());
-            }
-            sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .map_err(|_| LocalRpcError::StartupTimeout { last_error: None })?
 }
 
 pub fn read_endpoint(path: &Path) -> Result<LocalServiceEndpoint, LocalRpcError> {
@@ -686,6 +698,13 @@ pub enum LocalRpcError {
     UnixSocketPathTooLong,
     #[error("local service transport is unsupported on this platform: {0:?}")]
     UnsupportedTransport(LocalTransportEndpoint),
+}
+
+impl LocalRpcError {
+    pub(super) fn is_stale_endpoint(&self) -> bool {
+        matches!(self, Self::Io(error)
+            if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused))
+    }
 }
 
 #[cfg(test)]

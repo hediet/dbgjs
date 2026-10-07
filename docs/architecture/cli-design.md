@@ -12,13 +12,39 @@ Update shell commands, `JSDBG_*` environment variables to `DBGJS_*`, and
 VS Code settings and launch configurations from `jsdbg` to `dbgjs`.
 There are no old-name aliases.
 
-The renamed tool deliberately starts with fresh state: on Windows it uses
-`%LOCALAPPDATA%\dbgjs\service.json`; on Unix it uses
-`$XDG_RUNTIME_DIR/dbgjs/service.json` or
-`$HOME/.cache/dbgjs/service.json`. `DBGJS_SERVICE_STATE` overrides
-the endpoint path. Saved contexts and captures in the old state location are
-not migrated or deleted. Stop the old service using the old CLI if it is still
-running.
+The per-user service directory is `%LOCALAPPDATA%\dbgjs` on Windows,
+`$XDG_RUNTIME_DIR/dbgjs` or `$HOME/.cache/dbgjs` on Unix. Default endpoints
+live in `services/<contract-fingerprint>/service.json` below this directory.
+The SHA-256 fingerprint covers every application interface ID and schema hash,
+including the stable `dev.dbgjs.discovery.v1` metadata interface. Registration
+order, binary version, and build commit do not affect it. TypeScript receives
+the Rust-computed fingerprint through contract generation.
+
+`DBGJS_SERVICE_STATE`, `dbgjs-service --state-file`, and the VS Code
+`dbgjs.serviceStatePath` setting select exact endpoint paths. Connections still
+validate the expected contract; an incompatible service is never automatically
+shut down or replaced.
+
+`dbgjs [--json] service list` enumerates the default registry, the legacy
+unversioned endpoint, and `DBGJS_SERVICE_STATE` when set. It authenticates
+bounded discovery probes and reports running, stale, unreachable, or invalid
+records. Output includes compatibility, PID, build version, and contracts, but
+never authentication tokens. Arbitrary custom endpoints are not globally
+discoverable; `dbgjs-service --list --state-file <path>` includes a supplied one.
+
+The VS Code extension connects to a matching service or starts one if no
+service is running. If only incompatible services are running, it reports the
+conflict without starting another service. `dbgjs: Show Services` displays
+discovery diagnostics; `dbgjs: Start Compatible Service` explicitly allows
+parallel startup. Invalid records and inconclusive probes block automatic
+startup rather than being treated as proof that no service exists.
+The CLI's `dbgjs service start` explicitly ensures its contract-scoped service;
+ordinary debugger commands continue to ensure that service as needed.
+
+Default persistent debugger state remains at `service.contexts.json` in the
+per-user directory; custom endpoints retain their adjacent contexts file.
+Persistent-state formats, migration, and concurrent-writer semantics are not
+changed by service discovery. The `--stdio` service remains isolated.
 
 ## Status
 

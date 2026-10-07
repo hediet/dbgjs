@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { defaultServiceDirectory } from "./daemonClient.js";
+import { serviceContractFingerprint } from "./generated/interfaces.js";
 
 const serviceStartupTimeoutMs = 15_000;
 
@@ -12,17 +14,52 @@ export interface DaemonProcessOptions {
 	readonly log?: (message: string) => void;
 }
 
-export async function ensureDaemonProcess(options: DaemonProcessOptions): Promise<void> {
+export async function ensureDaemonProcess(
+	options: DaemonProcessOptions,
+	allowParallelService = false,
+): Promise<void> {
+	await runDaemonCommand(options, [
+		"--ensure",
+		...(allowParallelService ? [] : ["--refuse-incompatible"]),
+	]);
+}
+
+export async function listDaemonServices(options: DaemonProcessOptions): Promise<string> {
+	return runDaemonCommand(options, ["--list"]);
+}
+
+async function runDaemonCommand(options: DaemonProcessOptions, command: readonly string[]): Promise<string> {
 	const executable = await resolveDaemonExecutable(options);
-	options.log?.(`Starting daemon check: ${executable} --ensure --state-file ${options.stateFile}`);
-	const child = spawn(executable, ["--ensure", "--state-file", options.stateFile], {
+	const args = [
+		...command, "--state-file", options.stateFile,
+		"--expected-contract", serviceContractFingerprint,
+		"--registry-directory", defaultServiceDirectory(options.environment),
+	];
+	options.log?.(`Running service command: ${executable} ${args.join(" ")}`);
+	const child = spawn(executable, args, {
 		env: options.environment ?? process.env,
-		stdio: ["ignore", "ignore", "pipe"],
+		stdio: ["ignore", "pipe", "pipe"],
 		windowsHide: true,
 	});
 	child.stderr.setEncoding("utf8");
+	child.stdout.setEncoding("utf8");
 	let stderr = "";
+	let stdout = "";
+	let outputExceeded = false;
+	child.stdout.on("data", (chunk: string) => {
+		if (stdout.length + chunk.length > 1024 * 1024) {
+			outputExceeded = true;
+			child.kill();
+		} else {
+			stdout += chunk;
+		}
+	});
 	child.stderr.on("data", (chunk: string) => {
+		if (stderr.length + chunk.length > 64 * 1024) {
+			outputExceeded = true;
+			child.kill();
+			return;
+		}
 		stderr += chunk;
 		for (const line of chunk.trimEnd().split(/\r?\n/)) {
 			options.log?.(`daemon stderr: ${line}`);
@@ -30,13 +67,17 @@ export async function ensureDaemonProcess(options: DaemonProcessOptions): Promis
 	});
 
 	const exitCode = await waitForExit(child, serviceStartupTimeoutMs);
+	if (outputExceeded) {
+		throw new Error("dbgjs-service discovery output exceeded its limit");
+	}
 	options.log?.(`Daemon check exited with code ${exitCode ?? "null"}`);
 	if (exitCode !== 0) {
 		const detail = stderr.trim();
 		throw new Error(
-			`Failed to start dbgjs-service (exit code ${exitCode})${detail ? `: ${detail}` : ""}`,
+			`dbgjs-service command failed (exit code ${exitCode})${detail ? `: ${detail}` : ""}`,
 		);
 	}
+	return stdout;
 }
 
 export async function resolveDaemonExecutable(
@@ -93,7 +134,7 @@ function waitForExit(
 			clearTimeout(timer);
 			reject(error);
 		});
-		child.once("exit", (code) => {
+		child.once("close", (code) => {
 			clearTimeout(timer);
 			resolvePromise(code);
 		});

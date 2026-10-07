@@ -51,6 +51,21 @@ export function activate(context: vscode.ExtensionContext): DbgjsExtensionApi {
 		vscode.commands.registerCommand("dbgjs.copyContextId", async () => {
 			await vscode.env.clipboard.writeText(controller.contextId);
 		}),
+		vscode.commands.registerCommand("dbgjs.showServices", async () => {
+			try {
+				output.appendLine(await controller.showServices());
+				output.show(true);
+			} catch (error) {
+				await vscode.window.showErrorMessage(`Failed to list dbgjs services: ${errorMessage(error)}`);
+			}
+		}),
+		vscode.commands.registerCommand("dbgjs.startCompatibleService", async () => {
+			try {
+				await controller.startCompatibleService();
+			} catch (error) {
+				await vscode.window.showErrorMessage(`Failed to start compatible dbgjs service: ${errorMessage(error)}`);
+			}
+		}),
 		vscode.debug.registerDebugAdapterDescriptorFactory("dbgjs", {
 			createDebugAdapterDescriptor: (session) =>
 				new vscode.DebugAdapterInlineImplementation(
@@ -73,9 +88,17 @@ export function activate(context: vscode.ExtensionContext): DbgjsExtensionApi {
 		void vscode.window.showWarningMessage(
 			`dbgjs daemon is unavailable: ${errorMessage(error)}`,
 			"Retry",
+			"Show Services",
+			"Start Compatible Service",
 		).then((selection) => {
 			if (selection === "Retry") {
 				void vscode.commands.executeCommand("dbgjs.refreshTargets");
+			}
+			if (selection === "Show Services") {
+				void vscode.commands.executeCommand("dbgjs.showServices");
+			}
+			if (selection === "Start Compatible Service") {
+				void vscode.commands.executeCommand("dbgjs.startCompatibleService");
 			}
 		});
 	});
