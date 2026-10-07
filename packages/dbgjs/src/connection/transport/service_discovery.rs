@@ -393,7 +393,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn legacy_services_are_discovered_without_shutting_them_down() {
-        use super::super::local_rpc::LocalTransportEndpoint;
+        use super::super::local_rpc::{LocalTransportEndpoint, ensure_service};
         use linkrpc::prelude::{LinkRpcConnection, RegisterOptions};
         use linkrpc_tokio::ndjson::NdjsonTransport;
         use std::sync::Arc;
@@ -413,21 +413,31 @@ mod tests {
         )
         .unwrap();
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let transport = NdjsonTransport::from_stream(stream);
-            let preamble = transport.read_preamble().await.unwrap().unwrap();
-            assert_eq!(preamble.token.as_deref(), Some("legacy-test-token"));
-            let connection = LinkRpcConnection::new(Box::new(transport));
-            connection
-                .register_service(
-                    Arc::new(LegacyApiServer::new(Arc::new(Legacy))),
-                    RegisterOptions::default(),
-                )
-                .unwrap();
-            connection.enable_reflection();
-            connection.run().await;
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let transport = NdjsonTransport::from_stream(stream);
+                    let preamble = transport.read_preamble().await.unwrap().unwrap();
+                    assert_eq!(preamble.token.as_deref(), Some("legacy-test-token"));
+                    let connection = LinkRpcConnection::new(Box::new(transport));
+                    connection
+                        .register_service(
+                            Arc::new(LegacyApiServer::new(Arc::new(Legacy))),
+                            RegisterOptions::default(),
+                        )
+                        .unwrap();
+                    connection.enable_reflection();
+                    connection.run().await;
+                });
+            }
         });
-        let services = list_services(directory.path(), None, "current-contract")
+        let description = service_api::service_description();
+        let current_state = directory
+            .path()
+            .join("services")
+            .join(&description.contract_fingerprint)
+            .join("service.json");
+        let services = list_services(directory.path(), None, &description.contract_fingerprint)
             .await
             .unwrap();
         assert_eq!(services.len(), 1);
@@ -437,6 +447,46 @@ mod tests {
             services[0].description.as_ref().unwrap().interfaces.len(),
             1
         );
-        server.await.unwrap();
+        assert!(check_startup_policy(&services, &current_state, true).is_err());
+        assert!(!current_state.exists());
+        assert!(matches!(
+            ensure_service(&directory.path().join("service.json")).await,
+            Err(LocalRpcError::InterfaceHashMismatch { .. })
+        ));
+        let (shutdown, receiver) = watch::channel(false);
+        let current_path = current_state.clone();
+        let current_server = tokio::spawn(async move {
+            serve_local(&current_path, shutdown, receiver)
+                .await
+                .unwrap();
+        });
+        let client = timeout(Duration::from_secs(5), async {
+            loop {
+                if current_state.exists() {
+                    break connect_existing(&current_state).await.unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let services = list_services(directory.path(), None, &description.contract_fingerprint)
+            .await
+            .unwrap();
+        assert_eq!(services.len(), 2);
+        assert!(
+            services
+                .iter()
+                .all(|service| service.status == ServiceStatus::Running)
+        );
+        assert_eq!(
+            services.iter().filter(|service| service.compatible).count(),
+            1
+        );
+        assert!(check_startup_policy(&services, &current_state, true).is_ok());
+        client.service.shutdown().await.unwrap();
+        current_server.await.unwrap();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
     }
 }
