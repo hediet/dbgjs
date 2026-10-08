@@ -983,7 +983,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
     let near_hits = run(&[
         "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
     ]);
-    let text = near_hits["value"].as_str().or_else(|| near_hits["preview"]["preview"].as_str())
+    let text = near_hits.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {near_hits}"));
     assert!(text.contains("formatted") && text.contains("raw-near"), "{text}");
     let raw_exact = run(&[
@@ -1005,7 +1005,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
         "target", "eval",
         "JSON.stringify({mappingHits,controlHits})", "--connection", "node",
     ]);
-    let text = hits["value"].as_str().or_else(|| hits["preview"]["preview"].as_str())
+    let text = hits.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {hits}"));
     assert!(text.contains("formatted"), "{text}");
     assert!(text.contains("raw-near"), "{text}");
@@ -1017,7 +1017,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
     let after = run(&[
         "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
     ]);
-    let text = after["value"].as_str().or_else(|| after["preview"]["preview"].as_str())
+    let text = after.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {after}"));
     assert_eq!(text.matches("raw-exact").count(), 1, "{text}");
     assert!(text.matches("formatted").count() >= 3, "{text}");
@@ -1227,7 +1227,7 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
             assert_eq!(shown["target"]["targetId"], target_id, "{shown}");
             let evaluated = command(&["target", "eval", "identity"]);
             assert!(
-                evaluated["preview"]["preview"]
+                evaluated
                     .as_str()
                     .unwrap()
                     .contains(target_id),
@@ -2526,7 +2526,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "$node-root:runtime-a",
         ],
     );
-    assert_eq!(evaluated["preview"]["preview"], "42");
+    assert_eq!(evaluated, 42);
     for selector in [
         "runtime-a/$node-root:runtime-a",
         "runtime-a/$node-root:runtime-a@1",
@@ -2572,7 +2572,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 selector,
             ],
         );
-        assert_eq!(result["preview"]["preview"], "42");
+        assert_eq!(result, 42);
     }
     for expression in [
         "'x'.repeat(4096)",
@@ -2598,8 +2598,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         } else {
             "x".repeat(4096)
         };
-        assert_eq!(full["preview"]["preview"], expected);
-        assert_eq!(full["preview"]["truncated"], false);
+        assert_eq!(full, expected);
         assert!(!contains_reference(&full));
         let bounded = run_json(
             &cli,
@@ -2617,8 +2616,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 "runtime-a/$node-root:runtime-a",
             ],
         );
-        assert_eq!(bounded["preview"]["preview"], &expected[..200]);
-        assert_eq!(bounded["preview"]["truncated"], true);
+        assert_eq!(bounded["$dbgjs"]["truncated"], true);
     }
     let truncated = run_human_in(
         &cli,
@@ -2628,7 +2626,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &[
             "target",
             "eval",
-            "'x'.repeat(4096)",
+            "'x'.repeat(20000)",
             "--context",
             &context,
             "--target",
@@ -2636,7 +2634,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         ],
     );
     assert!(truncated.0.success());
-    assert!(String::from_utf8_lossy(&truncated.1).contains("--full"));
+    assert!(String::from_utf8_lossy(&truncated.1).contains("truncated"));
     run_json(
         &cli,
         &service,
@@ -3210,7 +3208,7 @@ fn cli_service_connects_to_live_cdp() {
             &target_id,
         ],
     );
-    assert_eq!(positional_eval["preview"]["preview"], "42");
+    assert_eq!(positional_eval, 42);
 
     let stdin_eval = run_json_with_stdin(
         &cli,
@@ -3229,7 +3227,7 @@ fn cli_service_connects_to_live_cdp() {
         ],
         b"40\n  + 2\n",
     );
-    assert_eq!(stdin_eval["preview"]["preview"], "42");
+    assert_eq!(stdin_eval, 42);
 
     let bounded_eval = run_json(
         &cli,

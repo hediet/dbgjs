@@ -148,8 +148,7 @@ export async function recordConnections({ cli, service, output }) {
 			assert.equal(target.target.targetId, connection.targets[0].targetId);
 		}, { maxOutputLines: 14 });
 		const pid = await json(["target", "eval", "process.pid"]);
-		assert.equal(pid.preview.kind, "number");
-		assert.equal(pid.preview.preview, String(node.pid), "Attach must inspect the already-running fixture process.");
+		assert.equal(pid, node.pid, "Attach must inspect the already-running fixture process.");
 		const curlOptions = {
 			executable: process.platform === "win32" ? "curl.exe" : "curl",
 			displayExecutable: process.platform === "win32" ? "curl.exe" : "curl",

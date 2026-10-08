@@ -172,16 +172,6 @@ impl OutputFormat {
         matches!(self, Self::Json)
     }
 
-    pub fn print_eval(&self, value: &ValueSnapshot, full: bool) -> Result<(), serde_json::Error> {
-        self.print(value)?;
-        if matches!(self, Self::Human) {
-            if let Some(guidance) = eval_truncation_guidance(value, full) {
-                println!("{guidance}");
-            }
-        }
-        Ok(())
-    }
-
     pub fn from_arguments(arguments: &mut Vec<String>) -> Self {
         if arguments
             .first()
@@ -4275,14 +4265,6 @@ fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
     render_value_preview(&evaluation.preview)
 }
 
-fn eval_truncation_guidance(value: &ValueSnapshot, full: bool) -> Option<&'static str> {
-    value.preview.truncated.then_some(if full {
-        "Preview remains incomplete in --full mode because this value cannot be safely represented in full. Evaluate JSON.stringify(value) to render a JSON-serializable value."
-    } else {
-        "Preview truncated; rerun target eval with --full or --max-preview-length <n>. For objects, evaluate JSON.stringify(value) to request JSON serialization."
-    })
-}
-
 fn render_value_snapshot(value: &ValueSnapshot) -> String {
     value
         .class_name
@@ -4320,7 +4302,7 @@ fn render_value_preview(value: &dbgjs::api::service_api::ValuePreviewSnapshot) -
     format!("{}{truncated}{}", terminal_text(preview), render_object_source(&value.source))
 }
 
-fn render_object_source(source: &dbgjs::debugger::object_inspection::ObjectSourceSnapshot) -> String {
+pub(crate) fn render_object_source(source: &dbgjs::debugger::object_inspection::ObjectSourceSnapshot) -> String {
     let mut output = String::new();
     if source.has_conflicting_locations() {
         output.push_str("\n  source conflict: location evidence disagrees; all positions retained");
@@ -4651,7 +4633,7 @@ mod tests {
         BoundedTree, CoverageEntry, CoverageMetrics, CoverageTreeStyle, HeapClassOutputOptions,
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
         aggregate_coverage_entries, bounded_source_search_snapshot, breakpoint_diagnostic_lines, coverage_entries, effective_file_metrics,
-        eval_truncation_guidance, heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
+        heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
         page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
         render_heap_classes_human, render_source_search, render_uncompacted_source_graph,
@@ -4826,7 +4808,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_truncation_guidance_distinguishes_preview_limits_from_full_mode() {
+    fn legacy_preview_preserves_explicit_truncation() {
         let value = ValueSnapshot {
             selector: ValueSelector::Expression {
                 expression: "value".to_owned(),
@@ -4847,12 +4829,6 @@ mod tests {
             promise: None,
         };
 
-        assert!(eval_truncation_guidance(&value, false).unwrap().contains("--full"));
-        assert!(
-            eval_truncation_guidance(&value, true)
-                .unwrap()
-                .contains("cannot be safely represented")
-        );
         assert_eq!(
             serde_json::to_value(&value).unwrap()["preview"],
             serde_json::json!({
@@ -5919,6 +5895,7 @@ mod tests {
         outgoing_reference_count: u64,
     ) -> HeapNodeSnapshot {
         HeapNodeSnapshot {
+            description: None,
             reference: reference.to_owned(),
             node_index: 0,
             node_type: node_type.to_owned(),

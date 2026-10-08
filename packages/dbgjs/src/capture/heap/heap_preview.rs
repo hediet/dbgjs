@@ -1,6 +1,7 @@
 //! Bounded, snapshot-only descriptions. No live evaluation or accessor calls.
 
 use crate::capture::heap::heap_graph::{AnalysisError, HeapGraph, NodeIndex};
+use crate::api::value::{DescribedProperty, ValueDescription};
 
 const STRING_CHARS: usize = 20;
 const NAME_CHARS: usize = 32;
@@ -8,61 +9,54 @@ const MAX_PROPERTIES: usize = 3;
 const MAX_SCANNED_EDGES: usize = 64;
 const MAX_PREVIEW_CHARS: usize = 512;
 
-pub(crate) fn heap_preview(graph: &HeapGraph, node: NodeIndex) -> Result<String, AnalysisError> {
-    let summary = graph.node_summary(node)?;
-    let is_array = summary.node_type == "array"
-        || (summary.node_type == "object" && summary.raw_name == "Array");
-    if !is_array && summary.node_type != "object" {
-        return atom(graph, node);
-    }
-    let mut output = if is_array {
-        "Array [".to_owned()
-    } else {
-        format!("{} {{", escaped(summary.raw_name, NAME_CHARS, false))
-    };
-    let mut shown = 0;
+/// Heap edges describe captured data, not the current state of a materialized live object.
+pub(crate) fn heap_description(graph: &HeapGraph, node: NodeIndex, capture_id: Option<&str>) -> Result<ValueDescription, AnalysisError> {
+    let mut value = heap_atom(graph, node, capture_id)?;
+    value.origin = Some("heapSnapshot".into());
+    if !matches!(value.kind.as_str(), "object" | "array") { return Ok(value); }
     let mut scanned = 0;
-    let mut omitted = false;
-    for reference in graph.outgoing_references(node)?.take(MAX_SCANNED_EDGES) {
+    for edge in graph.outgoing_references(node)?.take(MAX_SCANNED_EDGES) {
         scanned += 1;
-        if !matches!(reference.edge_type, "property" | "element")
-            || reference.name == Some("__proto__")
-        {
+        if !matches!(edge.edge_type, "property" | "element") || edge.name == Some("__proto__") { continue; }
+        if value.properties.len() == MAX_PROPERTIES { value.truncated = true; break; }
+        if graph.node_summary(edge.target)?.raw_name == "system / AccessorPair" {
             continue;
         }
-        let target = graph.node_summary(reference.target)?;
-        // V8 represents accessors as AccessorPair nodes, not data values.
-        if target.raw_name == "system / AccessorPair" {
-            continue;
-        }
-        if shown == MAX_PROPERTIES {
-            omitted = true;
-            break;
-        }
-        let label = reference.name.map_or_else(
-            || reference.name_or_index.to_string(),
-            |name| format!("\"{}\"", escaped(name, STRING_CHARS, false)),
-        );
-        let entry = format!("{label}: {}", atom(graph, reference.target)?);
-        if output.chars().count() + entry.chars().count() + 7 > MAX_PREVIEW_CHARS {
-            omitted = true;
-            break;
-        }
-        if shown > 0 {
-            output.push_str(", ");
-        }
-        output.push_str(&entry);
-        shown += 1;
+        let child = heap_atom(graph, edge.target, capture_id)?;
+        value.properties.push(DescribedProperty {
+            name: edge.name.map(|name| name.chars().take(STRING_CHARS).collect()).unwrap_or_else(|| edge.name_or_index.to_string()),
+            value: child,
+        });
     }
-    omitted |= scanned == MAX_SCANNED_EDGES && summary.outgoing_references > scanned;
-    if omitted {
-        if shown > 0 {
-            output.push_str(", ");
-        }
-        output.push_str("...");
+    value.truncated |= scanned == MAX_SCANNED_EDGES && graph.node_summary(node)?.outgoing_references > scanned;
+    // A heap snapshot omits some immediate primitives and array holes. Never claim exact JSON.
+    value.incomplete = true;
+    Ok(value)
+}
+
+fn heap_atom(graph: &HeapGraph, node: NodeIndex, capture_id: Option<&str>) -> Result<ValueDescription, AnalysisError> {
+    let summary = graph.node_summary(node)?;
+    let kind = match summary.node_type {
+        "closure" => "function",
+        "object" if summary.raw_name == "Array" => "array",
+        "concatenated string" | "sliced string" => "string",
+        other => other,
+    };
+    let mut value = ValueDescription::new(kind);
+    value.summary = Some(atom(graph, node)?);
+    value.reference = capture_id.map(|capture| format!("{capture}#{}", summary.heap_object_id));
+    value.identity = value.reference.clone();
+    if let Some(text) = graph.reconstructed_string(node, Some(STRING_CHARS))? {
+        value.value = Some(serde_json::Value::String(text.value));
+        value.truncated = text.truncated || !text.exact_prefix;
+    } else if matches!(kind, "object" | "array") {
+        value.incomplete = true;
     }
-    output.push(if is_array { ']' } else { '}' });
-    Ok(output)
+    Ok(value)
+}
+
+pub(crate) fn heap_preview(graph: &HeapGraph, node: NodeIndex) -> Result<String, AnalysisError> {
+    Ok(heap_description(graph, node, None)?.inline(MAX_PREVIEW_CHARS))
 }
 
 fn atom(graph: &HeapGraph, node: NodeIndex) -> Result<String, AnalysisError> {

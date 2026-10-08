@@ -1,4 +1,5 @@
 use super::*;
+use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 #[async_trait::async_trait]
 impl TargetDebuggerApi for DebuggerService {
@@ -366,6 +367,22 @@ impl TargetDebuggerApi for DebuggerService {
             .evaluate(pause_epoch, frame_index, expression)
             .await
             .map_err(TargetError::from)
+    }
+
+    async fn value_operation(
+        &self,
+        _ctx: &CallCtx,
+        target_ref: TargetRef,
+        operation: ValueOperation,
+        options: DescribeOptions,
+        timeout_ms: u64,
+    ) -> Result<ValueDescription, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
+        self.target_debugger(
+            &target_ref.connection.context_id,
+            &target_ref.connection.connection_id,
+            &target_ref.target_id,
+        ).await?.value_operation(operation, options, timeout_ms).await.map_err(TargetError::from)
     }
 
     async fn get_scope_variables(

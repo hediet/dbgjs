@@ -4,8 +4,8 @@ default-members = ["packages/dbgjs"]
 resolver = "3"
 
 [workspace.dependencies]
-linkrpc = "=0.3.0-next.20260923.1"
-linkrpc-tokio = "=0.3.0-next.20260923.1"
+linkrpc = "=0.3.0-next.20261008.1"
+linkrpc-tokio = "=0.3.0-next.20261008.1"
 
 [profile.dev]
 debug = 1

@@ -11,6 +11,7 @@ use std::time::Duration;
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
 use dbgjs::api::service_api::ContextKind;
+use dbgjs::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 use dbgjs::service::context_identity::{
     ContextIdentity, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
@@ -19,7 +20,7 @@ use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
 use dbgjs::connection::transport::local_rpc::{connect_existing, default_state_file, ensure_service};
 use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
 use dbgjs::debugger::promise_debugging::{
-    DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
+    DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH,
 };
 use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
@@ -316,24 +317,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&state_file).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             let value = rpc(client
                 .targets
-                .inspect_value(
+                .value_operation(
                     scope.target_ref(),
-                    pause_epoch(&snapshot),
-                    ValueSelector::Expression {
+                    ValueOperation::Evaluate {
                         expression: options.expression,
-                        allow_side_effects: true,
+                        retain: options.retain,
+                        await_result: options.await_result,
                     },
-                    ValueInspectionOptions {
-                        max_preview_length: options.max_preview_length,
-                        max_properties: DEFAULT_VALUE_PROPERTY_LIMIT,
-                        retain_references: false,
-                    },
+                    options.describe_options,
+                    options.timeout_ms,
                 )
                 .await)?;
-            output.print_eval(&value, options.full)?;
+            print_owned_value(output, &value, options.json, options.json_expect, options.describe, options.max_output_bytes)?;
         }
         [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
@@ -453,6 +450,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let result = run_relay_stdio(&relay.websocket_url).await;
             let _ = client.relay.close_relay(relay.id).await;
             result?;
+        }
+        [value, operation, reference, arguments @ ..]
+            if value == "value" && matches!(operation.as_str(), "show" | "children" | "await" | "release") =>
+        {
+            let mut arguments = arguments.to_vec();
+            arguments.push("null".into());
+            let options = parse_eval_options(&arguments, io::empty())?;
+            let operation = match operation.as_str() {
+                "show" => ValueOperation::Show { reference: reference.clone() },
+                "children" => ValueOperation::Children { reference: reference.clone() },
+                "await" => ValueOperation::Await { reference: reference.clone() },
+                _ => ValueOperation::Release { reference: reference.clone() },
+            };
+            let client = ensure_service(&state_file).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let value = rpc(client.targets.value_operation(scope.target_ref(), operation,
+                options.describe_options, options.timeout_ms).await)?;
+            print_owned_value(output, &value, options.json, options.json_expect, options.describe, options.max_output_bytes)?;
         }
         [value, arguments @ ..] if value == "value" => {
             let options = parse_value_options(arguments)?;
@@ -6556,17 +6571,67 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
 
 struct EvalOptions {
     expression: String,
-    max_preview_length: u32,
-    full: bool,
+    retain: bool,
+    await_result: bool,
+    timeout_ms: u64,
+    describe_options: DescribeOptions,
+    json: bool,
+    json_expect: bool,
+    describe: bool,
+    max_output_bytes: usize,
 }
 
 fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOptions, io::Error> {
     let mut expression = Vec::new();
     let mut max_preview_length = None;
     let mut full = false;
+    let mut retain = false;
+    let mut await_result = false;
+    let mut timeout_ms = 2000;
+    let mut describe_options = DescribeOptions::default();
+    let mut json = false;
+    let mut json_expect = false;
+    let mut describe = false;
+    let mut max_output_bytes = 65_536;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--retain" => retain = true,
+            "--await" => await_result = true,
+            "--json" => json = true,
+            "--json-expect" => json_expect = true,
+            "--describe" => describe = true,
+            "--max-output-bytes" => {
+                index += 1;
+                max_output_bytes = parse_u32_option(arguments, index, "--max-output-bytes")? as usize;
+                if max_output_bytes < 128 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "--max-output-bytes must be at least 128"));
+                }
+            }
+            "--timeout" => {
+                index += 1;
+                let text = arguments.get(index).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "--timeout requires a duration"))?;
+                let (number, scale) = if let Some(number) = text.strip_suffix("ms") { (number, 1.0) }
+                    else if let Some(number) = text.strip_suffix('s') { (number, 1000.0) }
+                    else { (text.as_str(), 1.0) };
+                let milliseconds = number.parse::<f64>().unwrap_or(f64::NAN) * scale;
+                if !milliseconds.is_finite() || !(0.0..=86_400_000.0).contains(&milliseconds) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "timeout must be between 0ms and 86400s"));
+                }
+                timeout_ms = milliseconds.ceil() as u64;
+            }
+            "--max-depth" | "--max-properties" | "--max-nodes" | "--max-string-length" | "--start" => {
+                let flag = arguments[index].as_str();
+                index += 1;
+                let value = parse_u32_option(arguments, index, flag)?;
+                match flag {
+                    "--max-depth" => describe_options.max_depth = value,
+                    "--max-properties" => describe_options.max_properties = value,
+                    "--max-nodes" => describe_options.max_nodes = value,
+                    "--start" => describe_options.start = value,
+                    _ => describe_options.max_string_length = value,
+                }
+            }
             "--full" => full = true,
             "--max-preview-length" => {
                 index += 1;
@@ -6587,15 +6652,64 @@ fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOpti
             "--full and --max-preview-length cannot be combined",
         ));
     }
+    if describe && (json || json_expect) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "--describe cannot be combined with --json or --json-expect"));
+    }
     Ok(EvalOptions {
         expression: read_eval_expression(&expression, stdin)?,
-        max_preview_length: if full {
-            u32::MAX
-        } else {
-            max_preview_length.unwrap_or(DEFAULT_VALUE_PREVIEW_LENGTH)
+        retain, await_result, timeout_ms, json, json_expect, describe, max_output_bytes,
+        describe_options: DescribeOptions {
+            max_string_length: if full { u32::MAX } else { max_preview_length.unwrap_or(describe_options.max_string_length) },
+            ..describe_options
         },
-        full,
     })
+}
+
+fn print_owned_value(output: OutputFormat, value: &ValueDescription, json: bool, exact: bool, describe: bool, max_bytes: usize)
+    -> Result<(), Box<dyn std::error::Error>> {
+    if exact && value.kind == "rejection" {
+        return Err(io::Error::other(format!("evaluation rejected: {}", value.display())).into());
+    }
+    let mut text = if describe {
+        serde_json::to_string_pretty(value)?
+    } else if output.is_json() || json || exact {
+        let json = value.json(exact).map_err(|error| io::Error::other(
+            format!("{error}{}", value.reference.as_ref().map(|reference|
+                format!("; retained reference: {reference}")).unwrap_or_default())
+        ))?;
+        serde_json::to_string(&json)?
+    } else if let Some(scalar) = &value.value {
+        let mut text = scalar.as_str().map(str::to_owned).unwrap_or_else(|| scalar.to_string());
+        if let Some(reference) = &value.reference { text.push_str(&format!("\n{reference}")); }
+        if value.truncated { text.push_str("\n... (truncated)"); }
+        text
+    } else {
+        format!("{}{}", value.display(), output::render_object_source(&value.source))
+    };
+    if !describe && !output.is_json() && !json && !exact
+        && value.state.as_deref() == Some("pending")
+        && let Some(reference) = &value.reference
+    {
+        text.push_str(&format!("\nStill running; continue with: dbgjs value await {reference} --timeout 2s"));
+    }
+    if text.len() + 1 > max_bytes {
+        if exact || describe {
+            return Err(io::Error::other("value exceeds --max-output-bytes; increase the limit to export it").into());
+        }
+        text = if output.is_json() || json {
+            serde_json::to_string(&serde_json::json!({"$dbgjs": {
+                "kind": "limit", "truncated": true, "reference": value.reference
+            }}))?
+        } else {
+            format!("Output truncated by --max-output-bytes.{}", value.reference.as_ref()
+                .map(|r| format!(" Inspect {r} with a larger limit.")).unwrap_or_default())
+        };
+    }
+    println!("{text}");
+    if value.kind == "rejection" {
+        return Err(io::Error::other("evaluation rejected").into());
+    }
+    Ok(())
 }
 
 fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<String, io::Error> {
@@ -7125,8 +7239,14 @@ commands:
   dbgjs target wait running [target scope]
   dbgjs target resume [--epoch <epoch>] [target scope]
   dbgjs target step into|over|out [--epoch <epoch>] [target scope]
-  dbgjs target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
-    '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
+  dbgjs target eval <expression|-> [--await] [--timeout <duration>] [--retain] [value output options] [target scope]
+    '-' reads stdin; top-level await preserves explicit JavaScript awaits; timeouts return reusable continuations
+  dbgjs value show|children|await|release <reference> [--timeout <duration>] [value output options] [target scope]
+    await observes the same promise/evaluation, never reruns it; release does not cancel target JavaScript
+    output options: --json (best effort), --json-expect (exact export), --describe (structured debugger description)
+    limits: --max-depth <0..64>, --max-properties <n>, --max-nodes <n>, --max-string-length <n>, --max-output-bytes <n>
+    --max-preview-length is a string-limit alias; --full removes that limit, not the other inspection/output limits
+    --start <index> selects a page of root children; pages of live objects are not atomic snapshots
   dbgjs playwright <program|-> [target scope]
     exposes the selected target as `page`; use return for results; console logs go to stderr
     '-' reads the program from stdin
@@ -7516,20 +7636,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(full.expression, "JSON.stringify(value)");
-        assert_eq!(full.max_preview_length, u32::MAX);
-        assert!(full.full);
+        assert_eq!(full.describe_options.max_string_length, u32::MAX);
         let bounded = parse_eval_options(
             &arguments(&["answer", "--max-preview-length", "2000"]),
             "".as_bytes(),
         )
         .unwrap();
         assert_eq!(bounded.expression, "answer");
-        assert_eq!(bounded.max_preview_length, 2000);
-        assert!(!bounded.full);
+        assert_eq!(bounded.describe_options.max_string_length, 2000);
         let default = parse_eval_options(&arguments(&["-1"]), "".as_bytes()).unwrap();
-        assert_eq!(default.max_preview_length, 120);
+        assert_eq!(default.describe_options.max_string_length, 10000);
         assert_eq!(default.expression, "-1");
-        assert!(!default.full);
         assert_eq!(
             parse_eval_options(&arguments(&["--counter"]), "".as_bytes())
                 .unwrap()

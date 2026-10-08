@@ -1732,6 +1732,9 @@ pub struct HeapNodeLocationSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeapNodeSnapshot {
+    /// Captured state only. Live source evidence remains separately labeled in `source`.
+    #[serde(default)]
+    pub description: Option<ValueDescription>,
     pub reference: String,
     pub node_index: u32,
     pub node_type: String,
@@ -2227,3 +2230,4 @@ mod tests {
         }
     }
 }
+pub use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};

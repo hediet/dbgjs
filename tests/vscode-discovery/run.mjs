@@ -135,14 +135,14 @@ try {
 	const rendererId = rendererState.target.targetId;
 	assert.match(rendererId, /^renderer-\d+$/);
 	const rendererUrl = await command(["target", "eval", "location.href", "--full"]);
-	assert.equal(rendererUrl.preview.preview, page.url(), "PID attachment must select the page, not an OOPIF.");
+	assert.equal(rendererUrl, page.url(), "PID attachment must select the page, not an OOPIF.");
 	await command(["target", "attach", "--target", `$node-root:process-tree-${codeProcess.pid}`]);
 	const attachedViaElectron = await command([
 		"target", "eval",
 		`process.mainModule.require("electron").webContents.fromId(${Number(rendererId.slice("renderer-".length))}).debugger.isAttached()`,
 		"--target", `$node-root:process-tree-${codeProcess.pid}`,
 	]);
-	assert.equal(attachedViaElectron.preview.preview, "false", "Renderer attachment must use browser CDP, not webContents.debugger.");
+	assert.equal(attachedViaElectron, false, "Renderer attachment must use browser CDP, not webContents.debugger.");
 	const externalResult = await externalSession.send("Runtime.evaluate", { expression: "location.href", returnByValue: true });
 	assert.equal(externalResult.result.value, page.url(), "The independent renderer session must remain usable.");
 	await command(["target", "release", "--target", rendererId]);
@@ -157,11 +157,10 @@ try {
 	browserClient = undefined;
 	await command(["process", "attach", String(extensionHost.processId), "--context", ":vscode-discovery-e2e", "--set"]);
 	const identity = await command(["target", "eval", "process.pid"]);
-	assert.equal(identity.preview.kind, "number");
-	assert.equal(identity.preview.preview, String(ready.pid), "Process attachment must reach the discovered extension host.");
+	assert.equal(identity, ready.pid, "Process attachment must reach the discovered extension host.");
 	const evaluation = await command(["target", "eval", "globalThis.__dbgjsVscodeFixture.compute(20)"]);
-	transcript.push({ command: "target eval compute(20)", result: evaluation.preview });
-	assert.equal(evaluation.preview.preview, "41");
+	transcript.push({ command: "target eval compute(20)", result: evaluation });
+	assert.equal(evaluation, 41);
 
 	const line = fixtureSource.split("\n").findIndex((text) => text.includes("return doubled + 1")) + 1;
 	assert.ok(line > 0);
@@ -181,15 +180,15 @@ try {
 	assert.equal(paused.pause.frames[0].projected.location.sourceUrl, authoredUrl);
 	assert.equal(paused.pause.frames[0].projected.location.line, line);
 	const local = await command(["target", "eval", "doubled"]);
-	assert.equal(local.preview.preview, "40");
-	transcript.push({ command: "target eval doubled", result: local.preview });
+	assert.equal(local, 40);
+	transcript.push({ command: "target eval doubled", result: local });
 	await command(["target", "resume"]);
 	let completed;
 	await poll("fixture result after resume", async () => {
 		completed = await command(["target", "eval", "globalThis.__dbgjsVscodeFixture.result"]);
-		return completed.preview.preview === "41";
+		return completed === 41;
 	});
-	transcript.push({ command: "target eval result", result: completed.preview });
+	transcript.push({ command: "target eval result", result: completed });
 	if (process.platform === "win32") {
 		let renderer;
 		await poll("fixture renderer window discovery", async () => {

@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
+mod owned_values;
+use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 use crate::capture::cpu::{
     CpuProfileFunctionKey, cpu_profile_function, cpu_profile_function_key,
@@ -456,6 +458,38 @@ impl TargetDebuggerHandle {
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn value_operation(
+        &self,
+        mut operation: ValueOperation,
+        options: DescribeOptions,
+        timeout_ms: u64,
+    ) -> Result<ValueDescription, TargetDebuggerError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(86_400_000));
+        let mut waiting = matches!(operation, ValueOperation::Await { .. }
+            | ValueOperation::Evaluate { await_result: true, .. });
+        loop {
+            let awaited_reference = match &operation {
+                ValueOperation::Await { reference } => Some(reference.clone()),
+                _ => None,
+            };
+            let (response, receiver) = oneshot::channel();
+            self.commands.send(TargetCommand::OwnedValue {
+                operation, options: options.clone(), response,
+            }).await.map_err(|_| TargetDebuggerError::Stopped)?;
+            let value = receiver.await.map_err(|_| TargetDebuggerError::Stopped)??;
+            if value.kind == "promise" && awaited_reference.as_ref().is_some_and(|reference| value.reference.as_ref() != Some(reference)) {
+                return Ok(value);
+            }
+            waiting |= value.kind == "evaluation";
+            if !waiting || value.state.as_deref() != Some("pending") || tokio::time::Instant::now() >= deadline {
+                return Ok(value);
+            }
+            let reference = value.reference.clone().ok_or_else(|| TargetDebuggerError::Evaluation("pending value has no reference".into()))?;
+            operation = ValueOperation::Await { reference };
+            tokio::time::sleep_until((tokio::time::Instant::now() + Duration::from_millis(20)).min(deadline)).await;
+        }
     }
 
     pub async fn source_content(
@@ -1098,6 +1132,11 @@ impl BreakpointOwnership {
 }
 
 enum TargetCommand {
+    OwnedValue {
+        operation: ValueOperation,
+        options: DescribeOptions,
+        response: oneshot::Sender<Result<ValueDescription, TargetDebuggerError>>,
+    },
     SetBreakpoints {
         lifetime: BreakpointLifetime,
         breakpoints: Vec<TargetBreakpointSpec>,
@@ -1324,6 +1363,7 @@ async fn run_target(
     idle_disconnect_blocked: Arc<AtomicBool>,
 ) {
     let mut breakpoint_owners = BTreeMap::<String, BreakpointOwnership>::new();
+    let mut owned_values = owned_values::OwnedValues::default();
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
@@ -1349,6 +1389,10 @@ async fn run_target(
             idle_disconnect_blocked.store(true, Ordering::SeqCst);
         }
         match next {
+            Next::Command(Some(TargetCommand::OwnedValue { operation, options, response })) => {
+                let result = owned_values.execute(&mut driver, &session_key, operation, &options).await;
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::SetBreakpoints {
                 lifetime,
                 breakpoints,
@@ -2504,6 +2548,7 @@ async fn run_target(
             }
             Next::Command(None) => break,
             Next::Event(Ok(_)) => {
+                owned_values.invalidate(&driver).await;
                 publish_snapshot(
                     &snapshots,
                     &pause_events,
@@ -2539,6 +2584,7 @@ async fn run_target(
     for capture in heap_captures.into_values() {
         let _ = tokio::fs::remove_file(capture.path).await;
     }
+    owned_values.release_all(&driver).await;
 }
 
 fn complete_source_search_batch<T>(
@@ -3045,7 +3091,11 @@ fn heap_node_snapshot(
             column: location.column,
         })
         .collect();
+    let source = heap_object_source(graph, node, capture)?;
+    let mut description = crate::capture::heap::heap_preview::heap_description(graph, node, Some(capture_id)).map_err(heap_analysis_error)?;
+    description.source = source.clone();
     Ok(HeapNodeSnapshot {
+        description: Some(description),
         reference: heap_node_reference(capture_id, summary.heap_object_id),
         node_index: node.0,
         node_type: summary.node_type.to_owned(),
@@ -3058,7 +3108,7 @@ fn heap_node_snapshot(
         outgoing_reference_count: summary.outgoing_references as u64,
         incoming_reference_count: summary.incoming_references as u64,
         locations,
-        source: heap_object_source(graph, node, capture)?,
+        source,
         immediate_dominator: dominators
             .and_then(|analysis| analysis.immediate_dominator(node))
             .map(|dominator| {
@@ -5157,6 +5207,7 @@ async fn evaluate(
         true,
         crate::debugger::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
         Some(OBJECT_GROUP),
+        None,
     )
     .await;
     let snapshot = match result {
@@ -5204,6 +5255,7 @@ async fn evaluate(
 struct EvaluatedRemote {
     remote: RuntimeRemoteObject,
     preview_truncated: bool,
+    container_id: Option<String>,
 }
 
 async fn evaluate_remote(
@@ -5215,6 +5267,7 @@ async fn evaluate_remote(
     allow_side_effects: bool,
     max_preview_length: u32,
     object_group: Option<&str>,
+    timeout_ms: Option<u64>,
 ) -> Result<EvaluatedRemote, TargetDebuggerError> {
     let container_expression = evaluation_container_expression(&expression);
     let result = if let Some(pause_epoch) = pause_epoch {
@@ -5230,6 +5283,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.timeout = timeout_ms.map(|ms| ms as f64);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
@@ -5259,6 +5313,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.timeout = timeout_ms.map(|ms| ms as f64);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
@@ -5293,6 +5348,17 @@ async fn evaluate_remote(
     let container_id = result.object_id.ok_or_else(|| {
         TargetDebuggerError::Evaluation("target did not return the evaluation container".to_owned())
     })?;
+    project_evaluation_container(driver, session_key, pause_epoch, container_id, max_preview_length, object_group).await
+}
+
+async fn project_evaluation_container(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    container_id: String,
+    max_preview_length: u32,
+    object_group: Option<&str>,
+) -> Result<EvaluatedRemote, TargetDebuggerError> {
     let mut projection_params =
         RuntimeCallFunctionOnParams::new(bounded_projection_function(max_preview_length));
     projection_params.object_id = Some(container_id.clone());
@@ -5329,7 +5395,7 @@ async fn evaluate_remote(
             "target did not return the bounded evaluation envelope".to_owned(),
         )
     })?;
-    let projection =
+    let mut projection =
         get_object_property_descriptors(driver, session_key, pause_epoch, envelope_id.clone())
             .await
             .and_then(|(properties, _)| evaluated_remote_from_envelope(&properties));
@@ -5341,6 +5407,10 @@ async fn evaluate_remote(
             (Ok(_), Err(error)) | (Err(error), _) => Err(error),
         }
     } else {
+        release_evaluation_objects(driver, std::iter::once(envelope_id)).await?;
+        if let Ok(value) = &mut projection {
+            value.container_id = Some(container_id);
+        }
         projection
     }
 }
@@ -5465,6 +5535,7 @@ fn evaluated_remote_from_envelope(
         return Ok(EvaluatedRemote {
             remote: value.clone(),
             preview_truncated: false,
+            container_id: None,
         });
     }
     let mut remote = match kind {
@@ -5507,6 +5578,7 @@ fn evaluated_remote_from_envelope(
     }
     Ok(EvaluatedRemote {
         remote,
+        container_id: None,
         preview_truncated: property("__dbgjsTruncated")
             .and_then(|value| value.value.as_ref())
             .and_then(serde_json::Value::as_bool)
@@ -5620,6 +5692,7 @@ async fn inspect_value(
                 allow_side_effects,
                 options.max_preview_length,
                 object_group,
+                None,
             )
             .await?;
             (

@@ -21,16 +21,7 @@
   },
   {
     "command": "target eval compute(20)",
-    "result": {
-      "kind": "number",
-      "preview": "41",
-      "truncated": false,
-      "reference": null,
-      "source": {
-        "locations": [],
-        "diagnostics": []
-      }
-    }
+    "result": 41
   },
   {
     "command": "breakpoint set fixture",
@@ -67,28 +58,10 @@
   },
   {
     "command": "target eval doubled",
-    "result": {
-      "kind": "number",
-      "preview": "40",
-      "truncated": false,
-      "reference": null,
-      "source": {
-        "locations": [],
-        "diagnostics": []
-      }
-    }
+    "result": 40
   },
   {
     "command": "target eval result",
-    "result": {
-      "kind": "number",
-      "preview": "41",
-      "truncated": false,
-      "reference": null,
-      "source": {
-        "locations": [],
-        "diagnostics": []
-      }
-    }
+    "result": 41
   }
 ]

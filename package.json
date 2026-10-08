@@ -38,11 +38,11 @@
     "test:vscode-coverage-benchmark": "node --test scripts/vscode-coverage-benchmark.test.mjs"
   },
   "config": {
-    "linkrpcRustCodegenVersion": "0.3.0-next.20261006.1"
+    "linkrpcRustCodegenVersion": "0.3.0-next.20261008.1"
   },
   "devDependencies": {
     "@hediet/dbgjs": "^0.1.0-next.20260915.3",
-    "@hediet/linkrpc-cli": "0.0.3-next.20260923.1",
+    "@hediet/linkrpc-cli": "0.0.3-next.20261008.1",
     "@playwright/test": "^1.62.1",
     "@vscode/test-electron": "2.5.2",
     "devtools-protocol": "0.0.1677763",

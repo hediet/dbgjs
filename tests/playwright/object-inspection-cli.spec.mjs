@@ -81,11 +81,11 @@ setInterval(() => {}, 1000);
 		}
 		const getters = await json(["value", "globalThis.__getterCalls"]);
 		expect(getters.preview.preview).toBe("0");
-		const evaluated = await json(["target", "eval", "globalThis.__inspection.fn"]);
-		expect(evaluated.preview.source.locations.some((location) =>
+		const evaluated = await json(["target", "eval", "globalThis.__inspection.fn", "--describe"]);
+		expect(evaluated.source.locations.some((location) =>
 			location.position.resolved.sourceUrl.includes("provider-with-resolvable-full-path.js"),
 		)).toBe(true);
-		expect(evaluated.preview.reference).toBeNull();
+		expect(evaluated.reference).toBeNull();
 		await json(["value", "globalThis.__inspection.accessorConstructor"]);
 		const getterCheck = await json(["value", "globalThis.__getterCalls"]);
 		expect(getterCheck.preview.preview).toBe("0");
