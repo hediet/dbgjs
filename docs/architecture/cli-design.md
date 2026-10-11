@@ -73,6 +73,15 @@ The first executable vertical slice now validates:
 Strict attachment stealing and selected-page Playwright programs are also
 implemented through the same target identities and lifecycle checks.
 
+`process attach` establishes or reuses a connection before resolving and attaching
+the requested target. If that later phase fails, the command exits nonzero,
+reports the original error and the retained connection's current state and targets,
+and supplies a scoped `target list` command. Newly created and reused connections
+are both retained; a failed attachment does not change the default target selection
+or force takeover. Errors go to stderr with empty stdout, including under `--json`;
+there is no success-shaped JSON result for a failed attachment. A failure before
+connection setup succeeds is reported as such, without claiming a usable connection.
+
 Selected Electron pages without an upstream browser-context ID receive a stable
 context ID at the Playwright proxy boundary. This client-facing identity is used
 consistently in target discovery and attachment metadata, without being forwarded

@@ -4448,7 +4448,7 @@ fn playwright_channel(channel: &PlaywrightChannel) -> &'static str {
     }
 }
 
-fn connection_status(status: &ConnectionStatus) -> String {
+pub(super) fn connection_status(status: &ConnectionStatus) -> String {
     match status {
         ConnectionStatus::Disconnected => "disconnected".to_owned(),
         ConnectionStatus::Connecting => "connecting".to_owned(),

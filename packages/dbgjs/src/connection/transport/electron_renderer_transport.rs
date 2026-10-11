@@ -16,7 +16,10 @@ use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::time::timeout;
 
 use crate::cdp::CdpClient;
-use crate::cdp::{RuntimeCallArgument, RuntimeCallFunctionOnParams, RuntimeEvaluateParams};
+use crate::cdp::{
+    RuntimeCallArgument, RuntimeCallFunctionOnParams, RuntimeEvaluateParams,
+    RuntimeRemoteObjectSubtype,
+};
 use crate::connection::transport::cdp_transport::{ManagedCdpTransport, closed_transport_error};
 use crate::connection::transport::session_transport::CdpEnvelope;
 
@@ -120,7 +123,8 @@ impl ElectronRendererBridge {
                     .unwrap_or(exception.text)
             )));
         }
-        if response.result.value == Some(serde_json::Value::Null) {
+        // CDP's JSON null deserializes to None in the optional value field.
+        if response.result.subtype == Some(RuntimeRemoteObjectSubtype::Null) {
             return Ok(None);
         }
         let object_id = response
@@ -809,11 +813,97 @@ fn transport_error(message: impl Into<String>) -> TransportError {
 
 #[cfg(test)]
 mod tests {
-    use linkrpc::prelude::MessageTransport;
+    use linkrpc::connection::channel::{Channel, RejectingHandler};
+    use linkrpc::prelude::{JsonRpcMessage, MessageTransport};
+    use linkrpc::protocol::jsonrpc::RequestId;
+    use linkrpc::transport::memory::transport_pair_of;
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
 
     use super::*;
+
+    async fn install_with_response(
+        response: Value,
+    ) -> Result<Option<Arc<ElectronRendererBridge>>, TransportError> {
+        let (client_raw, runtime_raw) = transport_pair_of::<JsonRpcMessage>();
+        let channel = Channel::new(Box::new(client_raw), Box::new(RejectingHandler));
+        let client = CdpClient::root(channel.clone());
+        let channel_loop = tokio::spawn(async move { channel.run().await });
+        let runtime = tokio::spawn(async move {
+            let JsonRpcMessage::Request(request) = runtime_raw.recv().await.unwrap() else {
+                panic!("expected Runtime.evaluate");
+            };
+            assert_eq!(request.method, "Runtime.evaluate");
+            let params = request.params.unwrap();
+            assert_eq!(params["returnByValue"], false);
+            assert_eq!(params["awaitPromise"], true);
+            let RequestId::Number(id) = request.id else {
+                panic!("expected numeric CDP request ID");
+            };
+            let envelope: CdpEnvelope = serde_json::from_value(json!({
+                "id": id,
+                "result": response,
+            }))
+            .unwrap();
+            runtime_raw.send(envelope.message).await.unwrap();
+        });
+        let result = timeout(
+            Duration::from_secs(5),
+            ElectronRendererBridge::install(client, false),
+        )
+        .await;
+        runtime.await.unwrap();
+        channel_loop.abort();
+        result.expect("bridge installation must finish")
+    }
+
+    #[tokio::test]
+    async fn bridge_install_skips_deserialized_cdp_null() {
+        for remote in [
+            json!({ "type": "object", "subtype": "null", "value": null }),
+            json!({ "type": "object", "subtype": "null" }),
+        ] {
+            let result = install_with_response(json!({ "result": remote })).await;
+            assert!(matches!(result, Ok(None)), "expected non-Electron fallback");
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_install_rejects_non_null_results_without_object_ids() {
+        for remote in [
+            json!({ "type": "undefined" }),
+            json!({ "type": "string", "value": "unexpected" }),
+            json!({ "type": "object" }),
+            json!({ "type": "object", "subtype": "array", "value": [] }),
+        ] {
+            let result = install_with_response(json!({ "result": remote })).await;
+            let Err(error) = result else {
+                panic!("unexpected bridge result was accepted");
+            };
+            assert!(
+                error.to_string().contains("renderer bridge did not return a remote object"),
+                "{error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bridge_install_preserves_exceptions_with_null_results() {
+        let result = install_with_response(json!({
+            "result": { "type": "object", "subtype": "null", "value": null },
+            "exceptionDetails": {
+                "exceptionId": 1,
+                "text": "bridge installation failed",
+                "lineNumber": 0,
+                "columnNumber": 0,
+            },
+        }))
+        .await;
+        let Err(error) = result else {
+            panic!("bridge exception was ignored");
+        };
+        assert!(error.to_string().contains("bridge installation failed"), "{error}");
+    }
 
     #[tokio::test]
     async fn socket_transport_round_trips_cdp_and_closes_with_acknowledgement() {

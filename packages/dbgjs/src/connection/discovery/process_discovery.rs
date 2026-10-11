@@ -1327,7 +1327,18 @@ fn is_node_process(process: &WindowsProcess) -> bool {
             || command.contains("--node-ipc")
             || command.contains("bootstrap-fork")
             || command.contains("tsserver.js")
-            || command.contains("typingsinstaller.js"))
+            || command.contains("typingsinstaller.js")
+            || is_packaged_vscode_executable(&name) && is_copilot_sdk_bootstrap(&command))
+}
+
+fn is_copilot_sdk_bootstrap(command: &str) -> bool {
+    // This SDK preload runs in Electron's environment-only Node mode.
+    command
+        .replace('\\', "/")
+        .split_once("/@github/copilot-sdk-win32-x64/preloads/extension_bootstrap.mjs")
+        .is_some_and(|(_, suffix)| {
+            suffix.is_empty() || suffix.starts_with('"') || suffix.starts_with(char::is_whitespace)
+        })
 }
 
 fn is_attachable_vscode_process(process: &WindowsProcess) -> bool {
@@ -1840,6 +1851,61 @@ mod tests {
         );
 
         assert_eq!(non_javascript_process_role(&process), ProcessRole::Copilot);
+    }
+
+    #[test]
+    fn recognizes_copilot_sdk_bootstrap_as_node_not_vscode_main() {
+        for command in [
+            r#""Code - Insiders.exe" "C:\Program Files\Microsoft VS Code Insiders\resources\app\node_modules.asar.unpacked\@github\copilot-sdk-win32-x64\preloads\extension_bootstrap.mjs""#,
+            r#""Code - Insiders.exe" "C:/Program Files/Microsoft VS Code Insiders/resources/app/node_modules.asar.unpacked/@github/copilot-sdk-win32-x64/preloads/extension_bootstrap.mjs""#,
+        ] {
+            let sdk = process(12, 11, "Code - Insiders.exe", command);
+            assert!(!is_vscode_main_candidate(&sdk), "{command}");
+            assert!(is_node_process(&sdk), "{command}");
+            assert_eq!(process_role(&sdk), ProcessRole::Copilot);
+            let trees = vscode_process_trees(vec![
+                process(10, 1, "Code - Insiders.exe", r#""Code - Insiders.exe""#),
+                process(
+                    11,
+                    10,
+                    "Code - Insiders.exe",
+                    r#""Code - Insiders.exe" --type=utility --utility-sub-type=node.mojom.NodeService --inspect-port=0"#,
+                ),
+                sdk.clone(),
+            ]);
+            assert_eq!(trees.len(), 1);
+            assert_eq!(trees[0].root_process_id, 10);
+            assert_eq!(trees[0].processes[0].role, ProcessRole::VscodeMain);
+            assert_eq!(trees[0].processes[1].role, ProcessRole::ExtensionHost);
+            let child = &trees[0].processes[2];
+            assert_eq!(child.process_id, 12);
+            assert_eq!(child.parent_process_id, Some(11));
+            assert_eq!(child.role, ProcessRole::Copilot);
+            assert!(child.attachable);
+            assert_ne!(child.debug_target_id.as_deref(), Some("$node-root"));
+
+            let node = process_trees(vec![sdk], ProcessRootKind::Node);
+            assert_eq!(node.len(), 1);
+            assert_eq!(node[0].root_process_id, 12);
+        }
+    }
+
+    #[test]
+    fn does_not_infer_node_mode_from_arbitrary_vscode_file_paths() {
+        for path in [
+            r"C:\work\copilot\project.js",
+            r"C:\work\preloads\extension_bootstrap.mjs",
+            r"C:\work\@github\copilot-sdk-win32-x64\preloads\extension_bootstrap.mjs.txt",
+        ] {
+            let main = process(
+                10,
+                1,
+                "Code - Insiders.exe",
+                &format!(r#""Code - Insiders.exe" "{path}""#),
+            );
+            assert!(is_vscode_main_candidate(&main), "{path}");
+            assert!(!is_node_process(&main), "{path}");
+        }
     }
 
     #[test]

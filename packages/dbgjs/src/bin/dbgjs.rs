@@ -1198,6 +1198,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .connections
                 .iter()
                 .find(|connection| connection.id == connection_id);
+            let reused = existing.is_some();
             let connected = existing.is_some_and(|connection| {
                 matches!(
                     connection.status,
@@ -1223,7 +1224,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .await)?;
             }
-            if !connected
+            let context = if !connected
                 || existing.is_some_and(|connection| connection.configuration != configuration)
             {
                 rpc(client
@@ -1242,52 +1243,74 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
                     })
-                    .await)?;
-            }
-            let target_id = match target {
-                ProcessAttachTarget::Renderer(selector) => {
-                    resolve_renderer_target_id(&client, &context_id, &connection_id, selector)
-                        .await?
-                }
-                ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
-                    synthetic_node_target_id(&connection_id)
-                }
-                ProcessAttachTarget::Target(target_id) => target_id,
+                    .await)?
+            } else {
+                context
             };
-            if target_id != synthetic_node_target_id(&connection_id) {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                loop {
-                    let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
-                    if context.target_forest.iter().any(|node| {
-                        node.connection_id == connection_id && node.target.target_id == target_id
-                    }) {
-                        break;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Err(format!(
-                            "renderer target {target_id} was not published within 10 seconds"
-                        )
-                        .into());
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
+            let connection = context.connections.iter()
+                .find(|connection| connection.id == connection_id)
+                .ok_or_else(|| io::Error::other("process connection disappeared during setup"))?;
+            if !matches!(connection.status, ConnectionStatus::Connected { .. }) {
+                return Err(io::Error::other(format!(
+                    "process connection setup failed for {connection_id:?} in context {context_id:?}: {}",
+                    output::connection_status(&connection.status),
+                )).into());
             }
-            let result = rpc(client
-                .targets
-                .attach_target(
-                    dbgjs::api::service_api::TargetRef {
-                        connection: dbgjs::api::service_api::ConnectionRef {
-                            context_id: context_id.clone(),
-                            connection_id: connection_id.clone(),
+            let attachment = async {
+                let target_id = match target {
+                    ProcessAttachTarget::Renderer(selector) => {
+                        resolve_renderer_target_id(&client, &context_id, &connection_id, selector)
+                            .await?
+                    }
+                    ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
+                        synthetic_node_target_id(&connection_id)
+                    }
+                    ProcessAttachTarget::Target(target_id) => target_id,
+                };
+                if target_id != synthetic_node_target_id(&connection_id) {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    loop {
+                        let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
+                        if context.target_forest.iter().any(|node| {
+                            node.connection_id == connection_id && node.target.target_id == target_id
+                        }) {
+                            break;
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            return Err(format!(
+                                "renderer target {target_id} was not published within 10 seconds"
+                            )
+                            .into());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+                let result = rpc(client
+                    .targets
+                    .attach_target(
+                        dbgjs::api::service_api::TargetRef {
+                            connection: dbgjs::api::service_api::ConnectionRef {
+                                context_id: context_id.clone(),
+                                connection_id: connection_id.clone(),
+                            },
+                            target_id: target_id.clone(),
                         },
-                        target_id: target_id.clone(),
-                    },
-                    TargetAttachOptions {
-                        force: options.force,
-                        expected_connection_generation: None,
-                    },
-                )
-                .await)?;
+                        TargetAttachOptions {
+                            force: options.force,
+                            expected_connection_generation: None,
+                        },
+                    )
+                    .await)?;
+                Ok::<_, Box<dyn std::error::Error>>((target_id, result))
+            }.await;
+            let (target_id, result) = match attachment {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(process_attach_failure(
+                        &client, &context_id, &connection_id, reused, error,
+                    ).await.into());
+                }
+            };
             if options.set_default {
                 select_scope(
                     &selection_file,
@@ -5727,6 +5750,36 @@ async fn print_breakpoint_result(
 enum ProcessAttachTarget {
     Target(String),
     Renderer(RendererAttachSelector),
+}
+
+async fn process_attach_failure(
+    client: &DbgServiceClient,
+    context_id: &str,
+    connection_id: &str,
+    reused: bool,
+    error: Box<dyn std::error::Error>,
+) -> io::Error {
+    let details = match rpc(client.contexts.get_context(context_id.to_owned()).await) {
+        Ok(context) => match context.connections.iter().find(|connection| connection.id == connection_id) {
+            Some(connection) => {
+                let targets = context.target_forest.iter()
+                    .filter(|node| node.connection_id == connection_id)
+                    .map(|node| format!("  {:?}", node.target.target_id))
+                    .collect::<Vec<_>>();
+                format!(
+                    "{} connection {:?} in context {:?} is retained (status: {}).\nAvailable targets:\n{}",
+                    if reused { "reused" } else { "new" }, connection_id, context_id, output::connection_status(&connection.status),
+                    if targets.is_empty() { "  (none currently published)".to_owned() } else { targets.join("\n") },
+                )
+            }
+            None => "The connection is no longer present.".to_owned(),
+        },
+        Err(status_error) => format!("Could not refresh retained connection state: {status_error}"),
+    };
+    io::Error::other(format!(
+        "process connection setup succeeded, but target attachment failed: {error}\n{details}\nInspect with: dbgjs target list --context {:?} --connection {:?}\nDefault selection was not changed.",
+        format!(":{context_id}"), connection_id,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
