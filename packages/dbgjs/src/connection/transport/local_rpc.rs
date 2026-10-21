@@ -9,9 +9,13 @@ use std::time::{Duration, Instant};
 
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
-use linkrpc::prelude::{CallCtx, DirectoryServiceClient, LinkRpcConnection};
+use linkrpc::prelude::{
+    CallCtx, DirectoryServiceClient, LinkRpcConnection, MessageTransport,
+};
 use linkrpc_tokio::ndjson::{NdjsonTransport, Preamble};
+use linkrpc_tokio::{connect_to_hub, ConnectOptions, RetryOptions};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
 use tokio::time::{sleep, timeout};
@@ -21,7 +25,64 @@ use crate::api::service_api::{self, DbgServiceClient, ServiceApi};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn serve_stdio() -> Result<(), LocalRpcError> {
+/// Where the CLI finds the debugger service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServiceTarget {
+    /// The per-user local daemon, started on demand; `state_file` records its endpoint.
+    Local { state_file: PathBuf },
+    /// A service reached through a LinkRPC endpoint, typically a hub.
+    Remote(RemoteServiceEndpoint),
+}
+
+/// A LinkRPC endpoint URI (as in `LINKRPC_ENDPOINT`) plus the service id the debugger service
+/// is mounted under there. Without a service id, the service is addressed at the root.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServiceEndpoint {
+    pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+}
+
+impl ServiceTarget {
+    /// Connect, starting the local daemon if necessary.
+    pub async fn ensure(&self) -> Result<DbgServiceClient, LocalRpcError> {
+        match self {
+            ServiceTarget::Local { state_file } => ensure_service(state_file).await,
+            ServiceTarget::Remote(remote) => connect_remote(remote).await,
+        }
+    }
+
+    /// Connect without starting the local daemon.
+    pub async fn connect_existing(&self) -> Result<DbgServiceClient, LocalRpcError> {
+        match self {
+            ServiceTarget::Local { state_file } => connect_existing(state_file).await,
+            ServiceTarget::Remote(remote) => connect_remote(remote).await,
+        }
+    }
+}
+
+pub async fn connect_remote(
+    remote: &RemoteServiceEndpoint,
+) -> Result<DbgServiceClient, LocalRpcError> {
+    let connection = connect_to_hub(ConnectOptions {
+        endpoint: Some(remote.endpoint.clone()),
+        ..ConnectOptions::default()
+    })
+    .await
+    .map_err(|error| LocalRpcError::RemoteConnect(error.to_string()))?;
+    let run = connection.clone();
+    tokio::spawn(async move { run.run().await });
+    let service_id = remote.service_id.clone().unwrap_or_default();
+    validate_interfaces(&DirectoryServiceClient::with_service(
+        connection.clone(),
+        service_id.clone(),
+    ))
+    .await?;
+    Ok(DbgServiceClient::with_service(connection, &service_id))
+}
+
+pub async fn serve_stdio(service_id: Option<String>) -> Result<(), LocalRpcError> {
     let state_directory = tempfile::Builder::new().prefix("dbgjs-stdio-").tempdir()?;
     let (shutdown_sender, mut shutdown_receiver) = watch::channel(false);
     let service = Arc::new(DebuggerService::load(
@@ -32,6 +93,7 @@ pub async fn serve_stdio() -> Result<(), LocalRpcError> {
     let connection = service_connection(
         NdjsonTransport::new(tokio::io::stdin(), tokio::io::stdout()),
         service.clone(),
+        service_id.as_deref(),
     )?;
     tokio::select! {
         () = connection.run() => {},
@@ -53,6 +115,81 @@ pub async fn serve_stdio() -> Result<(), LocalRpcError> {
     drop(service);
     state_directory.close()?;
     Ok(())
+}
+
+const GRANTED_SERVICE_ID_INTERFACE: &str = "hubGrantedServiceId";
+
+/// Serve as a participant of the hub named by `LINKRPC_ENDPOINT` / `LINKRPC_TOKEN` (as a hub
+/// daemon passes to its services). The service is mounted under `service_id`, or else under the
+/// namespace the hub granted this connection, and claimed there so the hub routes it here.
+/// Contexts persist in `state_file`'s contexts file.
+pub async fn serve_hub(
+    service_id: Option<String>,
+    state_file: &Path,
+) -> Result<(), LocalRpcError> {
+    let (shutdown_sender, mut shutdown_receiver) = watch::channel(false);
+    let service = Arc::new(DebuggerService::load(
+        shutdown_sender,
+        persistent_state_file(state_file),
+    )?);
+    service.supervise_idle_connections();
+    let connection = connect_env_endpoint_with_retry().await?;
+    let run = connection.clone();
+    let running = tokio::spawn(async move { run.run().await });
+    let service_id = match service_id {
+        Some(service_id) => service_id,
+        None => granted_namespace(&connection).await?,
+    };
+    register_service(&connection, service.clone(), Some(&service_id))?;
+    connection
+        .call_member(
+            None,
+            GRANTED_SERVICE_ID_INTERFACE,
+            "register",
+            json!({ "serviceId": service_id }),
+        )
+        .await
+        .map_err(|error| LocalRpcError::Rpc(format!("claim '{service_id}': {error:?}")))?;
+    eprintln!("dbgjs-service: serving '{service_id}' on the hub");
+    tokio::select! {
+        _ = running => {},
+        _ = shutdown_receiver.wait_for(|shutdown| *shutdown) => {},
+    }
+    Ok(())
+}
+
+async fn connect_env_endpoint_with_retry() -> Result<LinkRpcConnection, LocalRpcError> {
+    let retry = RetryOptions::default();
+    let mut attempt = 1;
+    loop {
+        match connect_to_hub(ConnectOptions::default()).await {
+            Ok(connection) => return Ok(connection),
+            Err(error) if attempt >= retry.attempts => {
+                return Err(LocalRpcError::RemoteConnect(error.to_string()));
+            }
+            Err(_) => {
+                attempt += 1;
+                sleep(retry.delay).await;
+            }
+        }
+    }
+}
+
+async fn granted_namespace(connection: &LinkRpcConnection) -> Result<String, LocalRpcError> {
+    let granted = connection
+        .call_member(None, GRANTED_SERVICE_ID_INTERFACE, "get", json!({}))
+        .await
+        .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+    granted
+        .get("grantedServiceIdNamespace")
+        .and_then(serde_json::Value::as_str)
+        .filter(|namespace| !namespace.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            LocalRpcError::Rpc(
+                "the hub granted no service id namespace; pass --service-id".to_owned(),
+            )
+        })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -331,29 +468,33 @@ where
     let run = connection.clone();
     tokio::spawn(async move { run.run().await });
     if validate_interface {
-        let directory = DirectoryServiceClient::new(connection.clone());
-        for expected in service_api::interfaces() {
-            let listing = directory
-                .list(Some(expected.id().to_owned()), None, None, None, None)
-                .await
-                .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-            let Some(actual) = listing
-                .items
-                .iter()
-                .find(|item| item.interface_id == expected.id())
-            else {
-                return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
-            };
-            if actual.interface_hash != expected.schema_hash() {
-                return Err(LocalRpcError::InterfaceHashMismatch {
-                    interface_id: expected.id().to_owned(),
-                    expected: expected.schema_hash().to_owned(),
-                    actual: actual.interface_hash.clone(),
-                });
-            }
-        }
+        validate_interfaces(&DirectoryServiceClient::new(connection.clone())).await?;
     }
     Ok(DbgServiceClient::new(connection))
+}
+
+async fn validate_interfaces(directory: &DirectoryServiceClient) -> Result<(), LocalRpcError> {
+    for expected in service_api::interfaces() {
+        let listing = directory
+            .list(Some(expected.id().to_owned()), None, None, None, None)
+            .await
+            .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+        let Some(actual) = listing
+            .items
+            .iter()
+            .find(|item| item.interface_id == expected.id())
+        else {
+            return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
+        };
+        if actual.interface_hash != expected.schema_hash() {
+            return Err(LocalRpcError::InterfaceHashMismatch {
+                interface_id: expected.id().to_owned(),
+                expected: expected.schema_hash().to_owned(),
+                actual: actual.interface_hash.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub async fn connect_existing(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
@@ -500,19 +641,33 @@ async fn serve_peer(
         return Err(LocalRpcError::AuthenticationFailed);
     }
 
-    let connection = service_connection(transport, service)?;
+    let connection = service_connection(transport, service, None)?;
     connection.run().await;
     Ok(())
 }
 
 fn service_connection(
-    transport: NdjsonTransport,
+    transport: impl MessageTransport + 'static,
     service: Arc<DebuggerService>,
+    service_id: Option<&str>,
 ) -> Result<LinkRpcConnection, LocalRpcError> {
     let connection = LinkRpcConnection::new(Box::new(transport));
-    service_api::register(&connection, service)?;
-    connection.enable_reflection();
+    register_service(&connection, service, service_id)?;
     Ok(connection)
+}
+
+/// Register the debugger service (under `service_id`, if any) plus reflection for it.
+fn register_service(
+    connection: &LinkRpcConnection,
+    service: Arc<DebuggerService>,
+    service_id: Option<&str>,
+) -> Result<(), LocalRpcError> {
+    service_api::register(connection, service, service_id)?;
+    connection.enable_reflection();
+    if let Some(service_id) = service_id {
+        connection.enable_reflection_for(service_id);
+    }
+    Ok(())
 }
 
 fn write_endpoint(path: &Path, endpoint: &LocalServiceEndpoint) -> Result<(), LocalRpcError> {
@@ -633,6 +788,8 @@ pub enum LocalRpcError {
     Connection(#[from] linkrpc::connection::hub_connection::ConnError),
     #[error("local service authentication failed")]
     AuthenticationFailed,
+    #[error("failed to connect to the remote debugger service: {0}")]
+    RemoteConnect(String),
     #[error("local service does not expose required LinkRPC interface '{0}'")]
     InterfaceMissing(String),
     #[error(
