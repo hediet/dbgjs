@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, rm, writeFile, appendFile } from "node:fs/promises";
+import { mkdir, rm, writeFile, appendFile, readFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
 import { chromium, expect, test } from "@playwright/test";
 import {
@@ -200,6 +200,54 @@ test("selected page runs bounded Playwright programs through dbgjs", async () =>
 			auxiliarySessionTitle: "dbgjs Playwright E2E",
 			pageTitleAfterDetach: "dbgjs Playwright E2E",
 		});
+		const videoPath = join(stateDirectory, "selected-page.webm");
+		const recording = JSON.parse(await runCli(
+			[
+				"playwright",
+				`let frames = 0;
+				await page.screencast.start({
+					path: ${JSON.stringify(videoPath)},
+					size: { width: 640, height: 480 },
+					onFrame: () => { frames++; },
+				});
+				try {
+					for (const color of ["red", "green", "blue"]) {
+						await page.locator("#marker").evaluate((element, color) => {
+							element.style.background = color;
+						}, color);
+						await page.waitForTimeout(200);
+					}
+				} finally {
+					await page.screencast.stop();
+				}
+				if (frames < 2) throw new Error("No changing screencast frames received");
+				return { receivedFrames: frames >= 2, automaticVideo: page.video() };`,
+				...scope,
+			],
+			environment,
+		));
+		expect(recording).toEqual({ receivedFrames: true, automaticVideo: null });
+		const videoBytes = await readFile(videoPath);
+		expect(videoBytes.subarray(0, 4).toString("hex")).toBe("1a45dfa3");
+		const videoPage = await browserContext.newPage();
+		try {
+			await videoPage.setContent(
+				`<video src="data:video/webm;base64,${videoBytes.toString("base64")}"></video>`,
+			);
+			const metadata = await videoPage.locator("video").evaluate(async (video) => {
+				await new Promise((resolve, reject) => {
+					if (video.readyState >= 2) return resolve();
+					video.addEventListener("loadeddata", resolve, { once: true });
+					video.addEventListener("error", () => reject(new Error("WebM decode failed")), { once: true });
+				});
+				return { width: video.videoWidth, height: video.videoHeight, duration: video.duration };
+			});
+			expect(metadata.width).toBe(640);
+			expect(metadata.height).toBe(480);
+			expect(metadata.duration).toBeGreaterThan(0);
+		} finally {
+			await videoPage.close();
+		}
 		const rejected = JSON.parse(
 			await runCli(
 				[

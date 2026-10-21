@@ -127,6 +127,9 @@ jobs:
         run: npx playwright test tests/playwright/value-evaluation.spec.mjs tests/playwright/process-attach-cli.spec.mjs
       - name: Test bounded Playwright helper phases
         run: node --test tests/playwright-page-helper.test.mjs
+      - name: Install Playwright video encoder
+        if: runner.os == 'Windows'
+        run: npx playwright install ffmpeg
       - name: Test isolated Electron process-tree webview
         if: runner.os == 'Windows'
         env:
@@ -374,6 +377,10 @@ jobs:
         run: npm run test:readme:render
       - name: Install Playwright Chromium
         run: npx playwright install chromium
+      - name: Test attached-page video recording
+        env:
+          DBGJS_TEST_BIN_DIR: target/debug
+        run: npx playwright test tests/playwright/playwright-page-cli.spec.mjs
       - name: Replay the generated README
         run: npm run test:readme
       - name: Upload README investigation evidence

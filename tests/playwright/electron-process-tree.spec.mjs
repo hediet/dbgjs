@@ -197,6 +197,30 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		);
 		expect(result.edited).toBe("edited in the isolated webview");
 
+		const videoPath = join(root, "electron-renderer.webm");
+		const recording = JSON.parse(await command([
+			"--json", "playwright", `
+				let frames = 0;
+				await page.screencast.start({
+					path: ${JSON.stringify(videoPath)},
+					size: { width: 640, height: 480 },
+					onFrame: () => { frames++; },
+				});
+				try {
+					for (const color of ["red", "green", "blue"]) {
+						await page.evaluate(color => { document.body.style.background = color; }, color);
+						await page.waitForTimeout(200);
+					}
+				} finally {
+					await page.screencast.stop();
+				}
+				if (frames < 2) throw new Error("Electron screencast did not deliver changing frames");
+				return { receivedFrames: frames >= 2, automaticVideo: page.video() };
+			`, ...scope,
+		], env, 35_000));
+		expect(recording).toEqual({ receivedFrames: true, automaticVideo: null });
+		expect((await readFile(videoPath)).subarray(0, 4).toString("hex")).toBe("1a45dfa3");
+
 		const attach = JSON.parse(await command([
 			"--json", "target", "cdp", "Target.attachToTarget",
 			"--params", JSON.stringify({ targetId: nativeTargetId, flatten: true }),

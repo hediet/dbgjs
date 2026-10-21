@@ -909,13 +909,16 @@ fn is_page_session_method(method: &str) -> bool {
                 | "printToPDF"
                 | "reload"
                 | "removeScriptToEvaluateOnNewDocument"
+                | "screencastFrameAck"
                 | "setBypassCSP"
                 | "setDocumentContent"
                 | "setFontFamilies"
                 | "setFontSizes"
                 | "setInterceptFileChooserDialog"
                 | "setLifecycleEventsEnabled"
+                | "startScreencast"
                 | "stopLoading"
+                | "stopScreencast"
         ),
         "Runtime" => matches!(
             name,
@@ -1962,6 +1965,51 @@ mod tests {
             panic!("expected client reply")
         };
         serde_json::from_str(&text).unwrap()
+    }
+
+    #[test]
+    fn screencast_commands_and_frame_ids_stay_page_scoped() {
+        for (method, params) in [
+            ("Page.startScreencast", json!({ "format": "jpeg" })),
+            ("Page.screencastFrameAck", json!({ "sessionId": 42 })),
+            ("Page.stopScreencast", json!({})),
+        ] {
+            let request = json!({
+                "id": 1, "method": method, "sessionId": "selected-session", "params": params
+            });
+            let ClientAction::Forward(message) = client_request(
+                text(request.clone()),
+                &scope(),
+                &mut HashMap::new(),
+                &HashMap::new(),
+            )
+            .unwrap() else {
+                panic!("{method} was not forwarded");
+            };
+            assert_eq!(parse_data_message(message).unwrap().unwrap(), request);
+
+            for session in [None, Some("unrelated-session"), Some("browser-broker")] {
+                let mut scope = scope();
+                scope.sessions.insert("browser-broker".to_owned());
+                scope
+                    .browser_broker_sessions
+                    .insert("browser-broker".to_owned());
+                let mut request = json!({ "id": 1, "method": method, "params": params });
+                if let Some(session) = session {
+                    request["sessionId"] = json!(session);
+                }
+                let response = client_response(
+                    client_request(text(request), &scope, &mut HashMap::new(), &HashMap::new())
+                        .unwrap(),
+                );
+                assert!(response.get("error").is_some(), "{method}: {session:?}");
+            }
+        }
+        let event = json!({
+            "method": "Page.screencastFrame", "sessionId": "selected-session",
+            "params": { "sessionId": 42, "data": "jpeg", "metadata": { "timestamp": 1.5 } }
+        });
+        assert_eq!(forwarded_upstream(event.clone(), &mut scope()), event);
     }
 
     #[test]

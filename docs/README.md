@@ -14,6 +14,8 @@ the **generated root README**, not to `docs/`; see
   [coverage benchmark](development/vscode-coverage-benchmark.md).
 - [Walkthroughs](walkthroughs/vscode.md): VS Code, Node, website, and
   [VS Code process debugging](walkthroughs/debugging-vscode-processes.md).
+- [Record Code OSS](../.github/skills/record-code-oss/SKILL.md): attached-renderer
+  WebM video, Playwright-managed FFmpeg setup, validation, and cleanup.
 - [Investigations](investigations/): dated debugging reports and speculative
   designs. Their commands, measurements, and proposals are historical, **not
   guarantees about the current CLI or approved feature work**.
