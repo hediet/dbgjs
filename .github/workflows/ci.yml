@@ -126,7 +126,7 @@ jobs:
           DBGJS_TEST_BIN_DIR: target/debug
         run: npx playwright test tests/playwright/value-evaluation.spec.mjs tests/playwright/process-attach-cli.spec.mjs
       - name: Test bounded Playwright helper phases
-        run: node --test tests/playwright-page-helper.test.mjs
+        run: node --test tests/playwright-page-helper.test.mjs tests/record-renderer.test.mjs
       - name: Install Playwright video encoder
         if: runner.os == 'Windows'
         run: npx playwright install ffmpeg

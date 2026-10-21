@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -86,6 +86,8 @@ pub struct TargetBreakpointSpec {
 #[derive(Clone)]
 pub struct TargetDebuggerHandle {
     idle_disconnect_blocked: Arc<AtomicBool>,
+    raw_cdp_channel: Option<linkrpc::connection::channel::Channel>,
+    raw_cdp_requests: Arc<AtomicUsize>,
     commands: mpsc::Sender<TargetCommand>,
     snapshots: watch::Receiver<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
@@ -93,6 +95,14 @@ pub struct TargetDebuggerHandle {
     heap_snapshot_progress: watch::Receiver<Option<crate::debugger::cdp_runtime::HeapSnapshotStreamProgress>>,
     raw_events: broadcast::Sender<crate::debugger::cdp_runtime::RawCdpEvent>,
     raw_event_history: Arc<std::sync::Mutex<Vec<crate::debugger::cdp_runtime::RawCdpEvent>>>,
+}
+
+struct RawCdpActivity<'a>(&'a AtomicUsize);
+
+impl Drop for RawCdpActivity<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl TargetDebuggerHandle {
@@ -147,6 +157,8 @@ impl TargetDebuggerHandle {
         let (raw_events, _) = broadcast::channel(1);
         Self {
             idle_disconnect_blocked: Arc::new(AtomicBool::new(false)),
+            raw_cdp_channel: None,
+            raw_cdp_requests: Arc::new(AtomicUsize::new(0)),
             commands,
             snapshots,
             pause_events,
@@ -176,6 +188,7 @@ impl TargetDebuggerHandle {
             source_model,
             format!("{connection_id}/{target_id}"),
         );
+        let raw_cdp_channel = session.raw_channel();
         let mut driver = DebuggerDriver::new(
             Arc::new(DebuggerState::before_connection_generation(
                 connection_generation,
@@ -221,6 +234,8 @@ impl TargetDebuggerHandle {
         ));
         Ok(Self {
             idle_disconnect_blocked,
+            raw_cdp_channel: Some(raw_cdp_channel),
+            raw_cdp_requests: Arc::new(AtomicUsize::new(0)),
             commands,
             snapshots,
             pause_events,
@@ -248,6 +263,7 @@ impl TargetDebuggerHandle {
 
     pub(crate) fn blocks_idle_disconnect(&self) -> bool {
         self.idle_disconnect_blocked.load(Ordering::SeqCst)
+            || self.raw_cdp_requests.load(Ordering::SeqCst) != 0
             || self.snapshots.borrow().pause.is_some()
     }
 
@@ -418,26 +434,21 @@ impl TargetDebuggerHandle {
         method: String,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
-        let (response, receiver) = oneshot::channel();
-        self.commands
-            .send(TargetCommand::RawCdpRequest {
-                method,
-                params,
-                response,
-            })
-            .await
-            .map_err(|_| {
-                linkrpc::prelude::JsonRpcError::new(
-                    linkrpc::prelude::error_codes::PEER_DISCONNECTED,
-                    "target debugger stopped before CDP request was sent",
-                )
-            })?;
-        receiver.await.map_err(|_| {
-            linkrpc::prelude::JsonRpcError::new(
+        let channel = self.raw_cdp_channel.as_ref().filter(|_| !self.commands.is_closed())
+            .ok_or_else(|| linkrpc::prelude::JsonRpcError::new(
                 linkrpc::prelude::error_codes::PEER_DISCONNECTED,
-                "target debugger stopped before CDP response arrived",
-            )
-        })?
+                "target debugger stopped before CDP request was sent",
+            ))?;
+        self.raw_cdp_requests.fetch_add(1, Ordering::SeqCst);
+        let _activity = RawCdpActivity(&self.raw_cdp_requests);
+        // Awaited evaluations and screencast acknowledgements must not block one another
+        // or wait for debugger source processing on the command actor.
+        tokio::time::timeout(RAW_CDP_TIMEOUT, channel.call(&method, params))
+            .await
+            .map_err(|_| linkrpc::prelude::JsonRpcError::new(
+                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
+                format!("raw CDP request '{method}' timed out after 30 seconds"),
+            ))?
     }
 
     pub async fn inspect_value(
@@ -1184,11 +1195,6 @@ enum TargetCommand {
         object_id: String,
         response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
     },
-    RawCdpRequest {
-        method: String,
-        params: serde_json::Value,
-        response: oneshot::Sender<Result<serde_json::Value, linkrpc::prelude::JsonRpcError>>,
-    },
     InspectValue {
         pause_epoch: Option<u64>,
         selector: ValueSelector,
@@ -1483,23 +1489,6 @@ async fn run_target(
                 if let Ok(snapshot) = &result {
                     publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
-                let _ = response.send(result);
-            }
-            Next::Command(Some(TargetCommand::RawCdpRequest {
-                method,
-                params,
-                response,
-            })) => {
-                let result =
-                    tokio::time::timeout(RAW_CDP_TIMEOUT, driver.raw_cdp_request(&method, params))
-                        .await
-                        .map_err(|_| {
-                            linkrpc::prelude::JsonRpcError::new(
-                                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
-                                "raw CDP request timed out after 30 seconds",
-                            )
-                        })
-                        .and_then(|result| result);
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::RemoveBreakpoint {
@@ -2547,20 +2536,22 @@ async fn run_target(
                 let _ = response.send(result);
             }
             Next::Command(None) => break,
-            Next::Event(Ok(_)) => {
+            Next::Event(Ok(changed)) => {
                 owned_values.invalidate(&driver).await;
-                publish_snapshot(
-                    &snapshots,
-                    &pause_events,
-                    snapshot_from_driver(
-                        &context_id,
-                        &connection_id,
-                        &target_id,
-                        connection_generation,
-                        &session_key,
-                        &driver,
-                    ),
-                );
+                if changed {
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
             }
 
             Next::Event(Err(error)) => {
@@ -6981,6 +6972,73 @@ mod tests {
     use crate::connection::transport::websocket_transport::CdpWebSocketTransport;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn raw_cdp_requests_are_concurrent_without_polling_debugger_commands() {
+        use linkrpc::connection::channel::{Channel, RejectingHandler};
+        use linkrpc::prelude::{JsonRpcMessage, MessageTransport};
+        use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
+        use linkrpc::transport::memory::transport_pair_of;
+        use serde_json::json;
+
+        let (transport, browser) = transport_pair_of();
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let mut handle = TargetDebuggerHandle::stub_for_tests(
+            target_snapshot(TargetDebuggerPhase::Running),
+        );
+        let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+        handle.commands = commands;
+        handle.raw_cdp_channel = Some(channel);
+
+        let mut first = Box::pin(handle.raw_cdp_request(
+            "Runtime.evaluate".into(),
+            json!({"expression": "pendingPromise", "awaitPromise": true}),
+        ));
+        assert!(futures_util::poll!(first.as_mut()).is_pending());
+        let JsonRpcMessage::Request(first_request) = tokio::time::timeout(
+            Duration::from_secs(1), browser.recv(),
+        ).await.unwrap().unwrap() else {
+            panic!("expected first raw request");
+        };
+        let mut second = Box::pin(handle.raw_cdp_request(
+            "Page.screencastFrameAck".into(),
+            json!({"sessionId": 1}),
+        ));
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        let JsonRpcMessage::Request(second_request) = tokio::time::timeout(
+            Duration::from_secs(1), browser.recv(),
+        ).await.unwrap().unwrap() else {
+            panic!("expected concurrent acknowledgement before the evaluation resolves");
+        };
+        assert!(receiver.try_recv().is_err(), "raw requests must bypass the actor");
+        assert!(handle.blocks_idle_disconnect());
+        assert_eq!(handle.raw_cdp_requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        for (request, result) in [(second_request, json!({})), (first_request, json!({"value": 42}))] {
+            browser.send(JsonRpcMessage::Response(JsonRpcResponse {
+                id: Some(request.id),
+                payload: ResponsePayload::Result(result),
+            })).await.unwrap();
+        }
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), second).await.unwrap().unwrap(), json!({}));
+        assert!(handle.blocks_idle_disconnect());
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), first).await.unwrap().unwrap(), json!({"value": 42}));
+        assert!(!handle.blocks_idle_disconnect());
+
+        let mut cancelled = Box::pin(handle.raw_cdp_request("Runtime.evaluate".into(), json!({})));
+        assert!(futures_util::poll!(cancelled.as_mut()).is_pending());
+        assert!(handle.blocks_idle_disconnect());
+        drop(cancelled);
+        assert!(!handle.blocks_idle_disconnect(), "cancellation must release activity");
+        drop(receiver);
+        let error = handle.raw_cdp_request("Runtime.evaluate".into(), json!({})).await.unwrap_err();
+        assert_eq!(error.code, linkrpc::prelude::error_codes::PEER_DISCONNECTED);
+        task.abort();
+    }
 
     #[test]
     fn breakpoint_lifetimes_keep_context_revisions_separate_from_target_generation() {

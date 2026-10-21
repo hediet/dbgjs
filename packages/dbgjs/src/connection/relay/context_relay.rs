@@ -151,6 +151,7 @@ async fn run_target_relay(
             handle: handle.clone(),
             replay_channel: replay_channel.clone(),
             replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            domain_initialization: Mutex::new(()),
             nested_replay: None,
             replayed_children: AtomicBool::new(false),
         }),
@@ -510,6 +511,7 @@ impl ContextRelayState {
                     handle: handle.clone(),
                     replay_channel: replay_channel.clone(),
                     replayed_domains: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+                    domain_initialization: Mutex::new(()),
                     nested_replay: Some((Arc::downgrade(self), connection_id.to_owned())),
                     replayed_children: AtomicBool::new(false),
                 }),
@@ -990,6 +992,7 @@ struct TargetForwardingHandler {
     handle: TargetDebuggerHandle,
     replay_channel: Arc<OnceLock<Channel>>,
     replayed_domains: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    domain_initialization: Mutex<()>,
     nested_replay: Option<(std::sync::Weak<ContextRelayState>, String)>,
     replayed_children: AtomicBool,
 }
@@ -1006,7 +1009,8 @@ struct NestedSessionForwardingHandler {
 #[async_trait]
 impl RequestHandler for NestedSessionForwardingHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
-        self.session.lock().await.raw_request(&method, params).await
+        let channel = self.session.lock().await.raw_channel();
+        channel.call(&method, params).await
     }
 }
 
@@ -1014,6 +1018,13 @@ impl RequestHandler for NestedSessionForwardingHandler {
 impl RequestHandler for TargetForwardingHandler {
     async fn handle_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
         let replay_domain = method.strip_suffix(".enable").map(str::to_owned);
+        // Replayed contexts must not overtake an earlier frame-tree response.
+        // Awaited evaluations and input/ack requests remain fully concurrent.
+        let _initialization = if replay_domain.is_some() || method == "Page.getFrameTree" {
+            Some(self.domain_initialization.lock().await)
+        } else {
+            None
+        };
         let replay_children = method == "Target.setAutoAttach"
             && params.get("autoAttach").and_then(Value::as_bool) == Some(true)
             && !self.replayed_children.swap(true, Ordering::Relaxed);

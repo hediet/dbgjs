@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 import electron from "electron";
 import { expect, test } from "@playwright/test";
 import { run } from "./live-test-harness.mjs";
+import { recordRenderer } from "../../scripts/record-renderer.mjs";
 
 const suffix = process.platform === "win32" ? ".exe" : "";
 const binaries = process.env.DBGJS_TEST_BIN_DIR ?? "target/debug";
@@ -122,6 +124,57 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 			"--connection", "tree", "--target", renderer.targetId,
 		];
 		await command(["--json", "target", "attach", ...scope], env);
+		const ffmpegRevision = JSON.parse(await readFile(
+			resolve("node_modules/playwright-core/browsers.json"), "utf8",
+		)).browsers.find((browser) => browser.name === "ffmpeg").revision;
+		const ffmpegRoot = process.env.PLAYWRIGHT_BROWSERS_PATH === "0"
+			? resolve("node_modules/playwright-core/.local-browsers")
+			: process.env.PLAYWRIGHT_BROWSERS_PATH ??
+				(process.platform === "win32" ? join(process.env.LOCALAPPDATA, "ms-playwright")
+					: process.platform === "darwin" ? join(homedir(), "Library", "Caches", "ms-playwright")
+						: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "ms-playwright"));
+		const ffmpegExecutable = process.platform === "win32" ? "ffmpeg-win64.exe"
+			: process.platform === "darwin" ? "ffmpeg-mac" : "ffmpeg-linux";
+		const nativeVideo = join(root, "native-renderer.webm");
+		const nativeRecording = await recordRenderer({
+			dbgjs: cli, scope,
+			env: { ...env, DBGJS_PLAYWRIGHT_PACKAGE: join(root, "no-playwright.mjs") },
+			ffmpeg: join(ffmpegRoot, `ffmpeg-${ffmpegRevision}`, ffmpegExecutable),
+			output: nativeVideo, durationMs: 2000,
+			onReady: async (relay) => {
+				const started = Date.now();
+				await relay.call("Runtime.evaluate", {
+					expression: "globalThis.__rawPromise = new Promise(resolve => globalThis.__resolveRaw = resolve)",
+				});
+				const pending = relay.call("Runtime.evaluate", {
+					expression: "globalThis.__rawPromise", awaitPromise: true, returnByValue: true,
+				});
+				const resolved = relay.call("Runtime.evaluate", {
+					expression: "globalThis.__resolveRaw(42); document.body.style.background = 'lightblue'",
+				});
+				const [value] = await Promise.all([pending, resolved]);
+				assert.equal(value.result.value, 42);
+				assert.ok(Date.now() - started < 2000, "raw CDP must not serialize awaited evaluations");
+				for (const color of ["coral", "lightgreen", "lightblue"]) {
+					await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+					await relay.call("Runtime.evaluate", {
+						expression: `document.body.style.background = ${JSON.stringify(color)}`,
+					});
+					await relay.call("Page.captureScreenshot", { format: "png" });
+				}
+			},
+		});
+		assert.ok(nativeRecording.capturedFrames >= 2);
+		assert.equal(nativeRecording.encodedFrames, 50);
+		const originalVideo = await readFile(nativeVideo);
+		assert.equal(originalVideo.subarray(0, 4).toString("hex"), "1a45dfa3");
+		await assert.rejects(recordRenderer({
+			dbgjs: cli, scope,
+			env: { ...env, DBGJS_PLAYWRIGHT_PACKAGE: join(root, "no-playwright.mjs") },
+			ffmpeg: join(ffmpegRoot, `ffmpeg-${ffmpegRevision}`, ffmpegExecutable),
+			output: nativeVideo, durationMs: 40,
+		}), /EEXIST/);
+		assert.deepEqual(await readFile(nativeVideo), originalVideo);
 		await refreshTargets(env);
 		assert.ok(!inventory.some((entry) => entry.targetType === "browser"),
 			"fixture must exercise the Electron renderer bridge, not a browser CDP fallback");
@@ -201,6 +254,7 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 		const recording = JSON.parse(await command([
 			"--json", "playwright", `
 				let frames = 0;
+				await page.setViewportSize({ width: 640, height: 480 });
 				await page.screencast.start({
 					path: ${JSON.stringify(videoPath)},
 					size: { width: 640, height: 480 },
@@ -209,6 +263,7 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 				try {
 					for (const color of ["red", "green", "blue"]) {
 						await page.evaluate(color => { document.body.style.background = color; }, color);
+						await page.screenshot();
 						await page.waitForTimeout(200);
 					}
 				} finally {

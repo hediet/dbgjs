@@ -404,6 +404,10 @@ impl CdpDebuggerSession {
         &self.client
     }
 
+    pub(crate) fn raw_channel(&self) -> Channel {
+        self.channel.clone()
+    }
+
     pub async fn raw_request(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
         self.channel.call(method, params).await
     }
