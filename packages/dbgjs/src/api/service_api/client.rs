@@ -18,6 +18,13 @@ macro_rules! service_bundle {
                     $($field: $client::new(connection.clone()),)+
                 }
             }
+
+            /// Address the service mounted under `service_id` (root when empty).
+            pub fn with_service(connection: LinkRpcConnection, service_id: &str) -> Self {
+                Self {
+                    $($field: $client::with_service(connection.clone(), service_id),)+
+                }
+            }
         }
 
         pub fn interfaces() -> Vec<InterfaceDefinition> {
@@ -27,13 +34,17 @@ macro_rules! service_bundle {
         pub fn register<S>(
             connection: &LinkRpcConnection,
             service: Arc<S>,
+            service_id: Option<&str>,
         ) -> Result<(), ConnError>
         where
             S: $($api +)+ 'static,
         {
             $(connection.register_service(
                 Arc::new($server::new(service.clone())),
-                RegisterOptions::default(),
+                RegisterOptions {
+                    service_id: service_id.map(str::to_owned),
+                    ..RegisterOptions::default()
+                },
             )?;)+
             Ok(())
         }

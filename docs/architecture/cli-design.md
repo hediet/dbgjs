@@ -20,6 +20,37 @@ the endpoint path. Saved contexts and captures in the old state location are
 not migrated or deleted. Stop the old service using the old CLI if it is still
 running.
 
+## Remote services
+
+The CLI can use a debugger service behind any LinkRPC endpoint instead of the
+local daemon, for example one running on another machine of a LinkRPC hub.
+Resolution order: `--service-endpoint <uri>` / `--service-id <id>`, then
+`DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID`, then the nearest
+`dbgjs service bind` binding of the cwd or an ancestor, then the local daemon.
+`--service-endpoint local` forces the local daemon. A `--service-id` alone
+replaces the service id of the endpoint resolved from the env or a binding.
+Bindings live in the CLI's selection store next to context bindings; contexts
+themselves live in whichever service is selected.
+
+The endpoint uses LinkRPC endpoint URI syntax. Until Rust LinkRPC signs calls,
+reach a hub with `forwardChecking` through the LinkRPC CLI's signing proxy:
+
+```sh
+dbgjs service bind \
+  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio" \
+  --service-id hediet/tablet/dbgjs
+dbgjs context create :tablet "Tablet" --set
+```
+
+On the serving machine, `dbgjs-service --hub` registers the service under the
+namespace the hub granted it (for a hub daemon service named `dbgjs`,
+`<hubServiceId>/dbgjs`) or under `--service-id`, with contexts persisted next
+to the local daemon's state as `service.hub.contexts.json`. Alternatively,
+`dbgjs-service --stdio --service-id <id>` can be served with
+`linkrpc hub proxy --claim <id> --outbound none --target-endpoint-cmd-stdio …`.
+Paths in commands (sources, launched programs, captures) refer to the serving
+machine.
+
 ## Status
 
 This document defines the architecture, terminology, and required behavior of a
