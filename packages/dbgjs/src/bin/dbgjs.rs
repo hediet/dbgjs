@@ -7398,7 +7398,7 @@ fn usage() -> &'static str {
     "usage: dbgjs [--json] [--service-endpoint <uri|local>] [--service-id <id>] <command>
 
   --service-endpoint/--service-id select a debugger service behind a LinkRPC endpoint
-  (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio`) instead of
+  (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign`) instead of
   the local daemon; DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID and `service bind` set defaults.
 
 commands:
