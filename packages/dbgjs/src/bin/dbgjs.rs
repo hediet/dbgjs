@@ -1169,22 +1169,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let mut trees =
-                dbgjs::connection::discovery::process_discovery::discover_process_trees(options.root_kind, options.stats)
-                    .await?;
-            if options.full {
-                dbgjs::connection::discovery::process_discovery::populate_process_tree_targets(&mut trees).await;
-                if let Ok(client) = connect_existing(&service_target).await
-                    && let Ok(contexts) = client.contexts.list_contexts(None).await
-                {
-                    let mut snapshots = Vec::new();
-                    for context in contexts {
-                        if let Ok(snapshot) = client.contexts.get_context(context.id).await {
-                            snapshots.push(snapshot);
-                        }
+            let client = ensure_service(&service_target).await?;
+            let mut trees = rpc(
+                client
+                    .service
+                    .discover_process_trees(Some(options.root_kind), options.stats, options.full)
+                    .await,
+            )?;
+            if options.full
+                && let Ok(contexts) = client.contexts.list_contexts(None).await
+            {
+                let mut snapshots = Vec::new();
+                for context in contexts {
+                    if let Ok(snapshot) = client.contexts.get_context(context.id).await {
+                        snapshots.push(snapshot);
                     }
-                    output::project_process_tree_target_attachments(&mut trees, &snapshots);
                 }
+                output::project_process_tree_target_attachments(&mut trees, &snapshots);
             }
             output.print_process_trees(
                 &trees,
@@ -1201,18 +1202,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_process_attach_options(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let discovered = if matches!(
+            let client = ensure_service(&service_target).await?;
+            let root_kind = matches!(
                 options.locator,
                 ProcessAttachLocator::VscodeProcess { .. }
                     | ProcessAttachLocator::VscodeWindow { .. }
-            ) {
-                dbgjs::connection::discovery::process_discovery::discover_vscode_process_trees(false).await?
-            } else {
-                dbgjs::connection::discovery::process_discovery::discover_recognized_process_trees().await?
-            };
+            )
+            .then_some(ProcessRootKind::Vscode);
+            let discovered = rpc(
+                client
+                    .service
+                    .discover_process_trees(root_kind, false, false)
+                    .await,
+            )?;
             let (connection_id, configuration, target) =
                 process_attach_destination(options.locator, &discovered)?;
-            let client = ensure_service(&service_target).await?;
             let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
             let existing = context
                 .connections
