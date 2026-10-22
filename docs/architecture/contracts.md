@@ -360,7 +360,7 @@ and failures, and is not the input to code generation.
 The npm runtime and CLI resolve from the public npm registry. Rust LinkRPC
 dependencies resolve from public crates.io packages. The root
 `[workspace.dependencies]` pins `linkrpc` and `linkrpc-tokio` to the exact
-published runtime version `=0.3.0-next.20260923.1`; the runtime and protocol
+published runtime version `=0.3.0-next.20261022.1`; the runtime and protocol
 crate inherit these dependencies. `Cargo.lock` also locks the transitive
 macro crate and registry checksums.
 Ordinary installs and CI do not need access to the private LinkRPC Git
