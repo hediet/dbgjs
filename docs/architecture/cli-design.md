@@ -24,13 +24,18 @@ running.
 
 The CLI can use a debugger service behind any LinkRPC endpoint instead of the
 local daemon, for example one running on another machine of a LinkRPC hub.
-Resolution order: `--service-endpoint <uri>` / `--service-id <id>`, then
-`DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID`, then the nearest
-`dbgjs service bind` binding of the cwd or an ancestor, then the local daemon.
+Contexts live in a service; the CLI records which service each context lives
+in. `context create` and `set context` remember the service they used, so a
+command reaches a context's service whichever way the context is selected:
+`--context`, a cwd binding (`--set`), or a path context at or above the cwd.
+The chain is cwd (or `--context`) → context → service.
+
+Resolution order for the service: `--service-endpoint <uri>` /
+`--service-id <id>`, then `DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID`, then
+the recorded service of the selected context, then the local daemon.
 `--service-endpoint local` forces the local daemon. A `--service-id` alone
-replaces the service id of the endpoint resolved from the env or a binding.
-Bindings live in the CLI's selection store next to context bindings; contexts
-themselves live in whichever service is selected.
+replaces the service id of the resolved endpoint. Local path contexts are still
+found by asking the local daemon; deleting a context drops its record.
 
 The endpoint uses LinkRPC endpoint URI syntax. Until Rust LinkRPC signs calls,
 reach a hub with `forwardChecking` through the LinkRPC CLI's proxy, which
@@ -38,10 +43,10 @@ re-signs the CLI's calls with the LinkRPC Hub identity only because `--sign` is
 passed (add `--principal <spec>` to choose another identity):
 
 ```sh
-dbgjs service bind \
+dbgjs context create :tablet "Tablet" --set \
   --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign" \
   --service-id hediet/tablet/dbgjs
-dbgjs context create :tablet "Tablet" --set
+dbgjs process list --vscode     # lists the tablet's processes
 ```
 
 On the serving machine, `dbgjs-service --hub` registers the service under the
