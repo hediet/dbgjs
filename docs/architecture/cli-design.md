@@ -38,13 +38,13 @@ replaces the service id of the resolved endpoint. Local path contexts are still
 found by asking the local daemon; deleting a context drops its record.
 
 The endpoint uses LinkRPC endpoint URI syntax. Until Rust LinkRPC signs calls,
-reach a hub with `forwardChecking` through the LinkRPC CLI's proxy, which
-re-signs the CLI's calls with the LinkRPC Hub identity only because `--sign` is
-passed (add `--principal <spec>` to choose another identity):
+reach a hub with `forwardChecking` through the LinkRPC CLI's proxy. It signs
+nothing by default; `--sign-as` makes it re-sign the CLI's calls with the
+LinkRPC Hub identity (or `--sign-as <principal>` for another one):
 
 ```sh
 dbgjs context create :tablet "Tablet" --set \
-  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign" \
+  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as" \
   --service-id hediet/tablet/dbgjs
 dbgjs process list --vscode     # lists the tablet's processes
 ```
