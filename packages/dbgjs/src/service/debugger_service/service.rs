@@ -18,6 +18,33 @@ impl ServiceApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))
     }
 
+    async fn discover_process_trees(
+        &self,
+        _ctx: &CallCtx,
+        root_kind: Option<crate::api::service_api::ProcessRootKind>,
+        include_stats: bool,
+        include_targets: bool,
+    ) -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError> {
+        use crate::connection::discovery::process_discovery;
+        let mut trees = match root_kind {
+            Some(root_kind) => {
+                process_discovery::discover_process_trees(root_kind, include_stats).await
+            }
+            None if include_stats => {
+                return Err(JsonRpcError::new(
+                    error_codes::INVALID_PARAMS,
+                    "include_stats requires a root_kind",
+                ));
+            }
+            None => process_discovery::discover_recognized_process_trees().await,
+        }
+        .map_err(|error| internal_error(error.to_string()))?;
+        if include_targets {
+            process_discovery::populate_process_tree_targets(&mut trees).await;
+        }
+        Ok(trees)
+    }
+
     async fn get_process_projection(
         &self,
         _ctx: &CallCtx,
