@@ -33,11 +33,13 @@ Bindings live in the CLI's selection store next to context bindings; contexts
 themselves live in whichever service is selected.
 
 The endpoint uses LinkRPC endpoint URI syntax. Until Rust LinkRPC signs calls,
-reach a hub with `forwardChecking` through the LinkRPC CLI's signing proxy:
+reach a hub with `forwardChecking` through the LinkRPC CLI's proxy, which
+re-signs the CLI's calls with the LinkRPC Hub identity only because `--sign` is
+passed (add `--principal <spec>` to choose another identity):
 
 ```sh
 dbgjs service bind \
-  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio" \
+  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign" \
   --service-id hediet/tablet/dbgjs
 dbgjs context create :tablet "Tablet" --set
 ```
@@ -47,9 +49,10 @@ namespace the hub granted it (for a hub daemon service named `dbgjs`,
 `<hubServiceId>/dbgjs`) or under `--service-id`, with contexts persisted next
 to the local daemon's state as `service.hub.contexts.json`. Alternatively,
 `dbgjs-service --stdio --service-id <id>` can be served with
-`linkrpc hub proxy --claim <id> --outbound none --target-endpoint-cmd-stdio …`.
-Paths in commands (sources, launched programs, captures) refer to the serving
-machine.
+`linkrpc hub proxy --claim <id> --no-outbound --target-endpoint-cmd-stdio …`.
+Process discovery for `process list` and `process attach` runs in the service,
+so it lists the serving machine's processes. Paths in commands (sources,
+launched programs, captures) also refer to the serving machine.
 
 ## Status
 
