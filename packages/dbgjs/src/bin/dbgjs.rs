@@ -166,23 +166,35 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let selection_file = local_state_file.with_extension("selection.json");
     let cwd = env::current_dir()?;
     let normalized_cwd = normalize_absolute_path(&cwd)?;
-    let service_target = resolve_service_target(
-        &service_options,
-        &service_options_from_env(),
-        local_state_file,
-        &load_selection_store(&selection_file, &normalized_cwd)?,
-        &normalized_cwd,
-    )?;
-    if !is_context_create(&arguments)
+    let creating_context = is_context_create(&arguments);
+    if !creating_context
         && let Some(expression) = scope_options.context.take()
     {
         scope_options.context = Some(resolve_context_expression(&expression, &cwd)?.id);
-    } else if command_requires_context(&arguments) {
+    }
+    // A context being created lives where the options say; any other context determines its service.
+    let service_target = {
+        let store = load_selection_store(&selection_file, &normalized_cwd)?;
+        let context = (!creating_context)
+            .then(|| cli_side_context(&store, &normalized_cwd, scope_options.context.as_deref()))
+            .flatten();
+        resolve_service_target(
+            &service_options,
+            &service_options_from_env(),
+            local_state_file,
+            &store,
+            context.as_deref(),
+        )?
+    };
+    if !creating_context
+        && scope_options.context.is_none()
+        && command_requires_context(&arguments)
+    {
         let client = ensure_service(&service_target).await?;
         scope_options.context =
             Some(resolve_implicit_context(&client, &selection_file, &normalized_cwd).await?);
     }
-    if !is_context_create(&arguments)
+    if !creating_context
         && let Some(context) = scope_options.context.as_deref()
     {
         activate_selection_scope(&selection_file, &normalized_cwd, context)?;
@@ -217,6 +229,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let context_id = required_option("--context", scope_options.context.as_ref())?;
             let client = ensure_service(&service_target).await?;
             rpc(client.contexts.get_context(context_id.clone()).await)?;
+            record_context_service(&selection_file, &normalized_cwd, &context_id, Some(&service_target))?;
             select_context(&selection_file, &context_id)?;
             println!("Context: {context_id}");
         }
@@ -1155,18 +1168,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = connect_existing(&service_target).await?;
             output.print(&rpc(client.service.shutdown().await)?)?;
         }
-        [service, bind] if service == "service" && bind == "bind" => {
-            let remote = service_options.explicit_remote()?.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "service bind requires --service-endpoint <uri> [--service-id <id>]",
-                )
-            })?;
-            bind_service(&selection_file, &normalized_cwd, Some(remote))?;
-        }
-        [service, unbind] if service == "service" && unbind == "unbind" => {
-            bind_service(&selection_file, &normalized_cwd, None)?;
-        }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
             let client = ensure_service(&service_target).await?;
@@ -1386,6 +1387,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     context_id.clone(), timeout.ok_or_else(|| io::Error::other("a context timeout cannot inherit"))?,
                 ).await)?;
             }
+            record_context_service(&selection_file, &normalized_cwd, &context_id, Some(&service_target))?;
             if set_default {
                 select_context(&selection_file, &context_id)?;
             }
@@ -1426,6 +1428,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .contexts
                 .delete_context(context_id.clone(), mutation)
                 .await)?;
+            record_context_service(&selection_file, &normalized_cwd, &context_id, None)?;
             output.print_context_deleted(&context_id, deleted)?;
         }
         [context, relay, options @ ..] if context == "context" && relay == "relay" => {
@@ -2180,8 +2183,9 @@ struct SelectionStore {
     schema_version: u32,
     #[serde(default)]
     cwd_bindings: BTreeMap<String, String>,
+    /// Context id → the remote service it lives in. Contexts without an entry are local.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    service_bindings: BTreeMap<String, RemoteServiceEndpoint>,
+    context_services: BTreeMap<String, RemoteServiceEndpoint>,
     #[serde(default)]
     active_scopes: BTreeMap<String, String>,
     #[serde(default)]
@@ -3011,21 +3015,21 @@ fn extract_service_options(arguments: &mut Vec<String>) -> Result<ServiceOptions
 }
 
 /// Resolve where the debugger service lives: explicit options, then the
-/// `DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID` env options, then the nearest `service bind`
-/// binding of the cwd or an ancestor, then the local daemon.
+/// `DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID` env options, then the service recorded for
+/// `context` (see [`cli_side_context`]), then the local daemon.
 fn resolve_service_target(
     options: &ServiceOptions,
     env_options: &ServiceOptions,
     local_state_file: std::path::PathBuf,
     store: &SelectionStore,
-    cwd: &str,
+    context: Option<&str>,
 ) -> Result<ServiceTarget, io::Error> {
     let remote = if options.endpoint.is_some() {
         options.explicit_remote()?
     } else if env_options.endpoint.is_some() {
         env_options.explicit_remote()?
     } else {
-        nearest_service_binding(store, cwd).cloned()
+        context.and_then(|context| store.context_services.get(context)).cloned()
     };
     Ok(match remote {
         Some(mut remote) => {
@@ -3037,7 +3041,7 @@ fn resolve_service_target(
         None if options.endpoint.is_none() && options.service_id.is_some() => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "--service-id requires a service endpoint (--service-endpoint, DBGJS_SERVICE_ENDPOINT, or 'dbgjs service bind')",
+                "--service-id requires a service endpoint (--service-endpoint, DBGJS_SERVICE_ENDPOINT, or a context created on a remote service)",
             ));
         }
         None => ServiceTarget::Local {
@@ -3053,27 +3057,40 @@ fn service_options_from_env() -> ServiceOptions {
     }
 }
 
-fn nearest_service_binding<'a>(
-    store: &'a SelectionStore,
-    cwd: &str,
-) -> Option<&'a RemoteServiceEndpoint> {
+/// The context the CLI can determine without asking a service, used to pick the service: the
+/// explicit `--context`, else the nearest cwd binding, else the nearest ancestor path context
+/// recorded on a remote service. Path contexts of the local daemon are found by asking it.
+fn cli_side_context(store: &SelectionStore, cwd: &str, explicit: Option<&str>) -> Option<String> {
+    if let Some(explicit) = explicit {
+        return Some(explicit.to_owned());
+    }
+    if let Some((_, context)) = nearest_binding(store, cwd) {
+        return Some(context.clone());
+    }
     path_and_parents(cwd)
         .ok()?
         .into_iter()
-        .find_map(|directory| store.service_bindings.get(&directory))
+        .find(|directory| store.context_services.contains_key(directory))
 }
 
-/// Bind (or with `None`, unbind) the service used from `cwd` and its descendants.
-fn bind_service(
+/// Record that `context_id` lives in `service_target` (local contexts have no entry).
+fn record_context_service(
     selection_file: &Path,
     cwd: &str,
-    remote: Option<RemoteServiceEndpoint>,
+    context_id: &str,
+    service_target: Option<&ServiceTarget>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut store = load_selection_store(selection_file, cwd)?;
-    match remote {
-        Some(remote) => store.service_bindings.insert(cwd.to_owned(), remote),
-        None => store.service_bindings.remove(cwd),
-    };
+    match service_target {
+        Some(ServiceTarget::Remote(remote)) => {
+            store
+                .context_services
+                .insert(context_id.to_owned(), remote.clone());
+        }
+        Some(ServiceTarget::Local { .. }) | None => {
+            store.context_services.remove(context_id);
+        }
+    }
     write_selection_store(selection_file, &store)
 }
 
@@ -7399,15 +7416,15 @@ fn usage() -> &'static str {
 
   --service-endpoint/--service-id select a debugger service behind a LinkRPC endpoint
   (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign`) instead of
-  the local daemon; DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID and `service bind` set defaults.
+  the local daemon. Contexts created or set with them remember their service, so later commands
+  that select such a context (by --context, a cwd binding, or its path) use it without the options;
+  DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID override this.
 
 commands:
   dbgjs --version | -V | version
     reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
   dbgjs daemon view [--context <id> | --all-contexts]
   dbgjs service status|stop
-  dbgjs service bind --service-endpoint <uri> [--service-id <id>]
-  dbgjs service unbind
   dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process attach <process-reference> [--context <id>] [--set] [--force]
@@ -7556,7 +7573,7 @@ mod tests {
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
         png_dimensions, read_eval_expression, read_playwright_program, resolve_service_target,
-        resolve_target_scope, select_implicit_context, split_heap_reference_cli,
+        resolve_target_scope, cli_side_context, select_implicit_context, split_heap_reference_cli,
         target_list_output,
     };
     use super::{
@@ -9229,7 +9246,7 @@ mod tests {
     }
 
     #[test]
-    fn service_target_prefers_options_then_env_then_nearest_binding() {
+    fn service_target_prefers_options_then_env_then_the_context_service() {
         let local = std::path::PathBuf::from("/state/service.json");
         let remote = |endpoint: &str, service_id: Option<&str>| {
             ServiceTarget::Remote(RemoteServiceEndpoint {
@@ -9242,41 +9259,69 @@ mod tests {
             service_id: service_id.map(str::to_owned),
         };
         let mut store = SelectionStore::default();
-        store.service_bindings.insert(
-            "/work/shop".into(),
+        store.context_services.insert(
+            "pc2".into(),
             RemoteServiceEndpoint {
-                endpoint: "bound".into(),
-                service_id: Some("hub/bound".into()),
+                endpoint: "hub".into(),
+                service_id: Some("hediet/pc2/dbgjs".into()),
             },
         );
-        let resolve = |explicit: &ServiceOptions, env: &ServiceOptions, cwd: &str| {
-            resolve_service_target(explicit, env, local.clone(), &store, cwd)
+        let resolve = |explicit: &ServiceOptions, env: &ServiceOptions, context: Option<&str>| {
+            resolve_service_target(explicit, env, local.clone(), &store, context)
         };
         let none = ServiceOptions::default();
         let env = options(Some("env"), Some("hub/env"));
 
         assert_eq!(
-            resolve(&options(Some("flag"), None), &env, "/work/shop").unwrap(),
+            resolve(&options(Some("flag"), None), &env, Some("pc2")).unwrap(),
             remote("flag", None)
         );
-        assert_eq!(resolve(&none, &env, "/work/shop").unwrap(), remote("env", Some("hub/env")));
+        assert_eq!(resolve(&none, &env, Some("pc2")).unwrap(), remote("env", Some("hub/env")));
         assert_eq!(
-            resolve(&none, &none, "/work/shop/ui").unwrap(),
-            remote("bound", Some("hub/bound"))
+            resolve(&none, &none, Some("pc2")).unwrap(),
+            remote("hub", Some("hediet/pc2/dbgjs"))
         );
         assert_eq!(
-            resolve(&options(None, Some("hub/other")), &none, "/work/shop").unwrap(),
-            remote("bound", Some("hub/other"))
+            resolve(&options(None, Some("hub/other")), &none, Some("pc2")).unwrap(),
+            remote("hub", Some("hub/other"))
         );
         assert_eq!(
-            resolve(&options(Some("local"), None), &env, "/work/shop").unwrap(),
+            resolve(&options(Some("local"), None), &env, Some("pc2")).unwrap(),
             ServiceTarget::Local { state_file: local.clone() }
         );
         assert_eq!(
-            resolve(&none, &none, "/elsewhere").unwrap(),
+            resolve(&none, &none, Some("local-context")).unwrap(),
             ServiceTarget::Local { state_file: local.clone() }
         );
-        assert!(resolve(&options(None, Some("hub/x")), &none, "/elsewhere").is_err());
+        assert!(resolve(&options(None, Some("hub/x")), &none, None).is_err());
+    }
+
+    #[test]
+    fn cli_side_context_prefers_explicit_then_binding_then_mapped_path_context() {
+        let mut store = SelectionStore::default();
+        store.context_services.insert(
+            "/work/shop".into(),
+            RemoteServiceEndpoint {
+                endpoint: "hub".into(),
+                service_id: None,
+            },
+        );
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", Some("explicit")).as_deref(),
+            Some("explicit")
+        );
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", None).as_deref(),
+            Some("/work/shop")
+        );
+        store
+            .cwd_bindings
+            .insert("/work/shop/ui".into(), "pc2".into());
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", None).as_deref(),
+            Some("pc2")
+        );
+        assert_eq!(cli_side_context(&store, "/elsewhere", None), None);
     }
 
     #[test]
