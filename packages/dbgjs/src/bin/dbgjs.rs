@@ -7415,7 +7415,7 @@ fn usage() -> &'static str {
     "usage: dbgjs [--json] [--service-endpoint <uri|local>] [--service-id <id>] <command>
 
   --service-endpoint/--service-id select a debugger service behind a LinkRPC endpoint
-  (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign`) instead of
+  (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as`) instead of
   the local daemon. Contexts created or set with them remember their service, so later commands
   that select such a context (by --context, a cwd binding, or its path) use it without the options;
   DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID override this.
