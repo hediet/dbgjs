@@ -6,6 +6,7 @@ mod coverage;
 mod cpu_profiler;
 mod heap_profiler;
 mod relay;
+mod screencast;
 mod service;
 mod source;
 mod target_debugger;

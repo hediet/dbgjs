@@ -3160,6 +3160,167 @@ namespace $contract8 {
 export const RelayApi: typeof $contract8.definition = $contract8.definition;
 
 namespace $contract9 {
+    const ConnectionRefSchema = z.object({
+        connectionId: z.string(),
+        contextId: z.string(),
+    });
+    
+    const ScreencastFormatSchema = z.enum(["jpeg", "png"]);
+    
+    /**
+     * `Page.ScreencastFrameMetadata`: maps frame pixels to page CSS pixels for input.
+     */
+    const ScreencastFrameMetadataSchema = z.object({
+        deviceHeight: z.number(),
+        deviceWidth: z.number(),
+        offsetTop: z.number(),
+        pageScaleFactor: z.number(),
+        scrollOffsetX: z.number(),
+        scrollOffsetY: z.number(),
+        timestamp: z.union([
+            z.number(),
+            z.null(),
+        ]).optional(),
+    }).describe("`Page.ScreencastFrameMetadata`: maps frame pixels to page CSS pixels for input.");
+    
+    const ScreencastMouseButtonSchema = z.enum(["none", "left", "middle", "right"]);
+    
+    const ScreencastMouseEventTypeSchema = z.enum(["mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"]);
+    
+    const ScreencastKeyEventTypeSchema = z.enum(["keyDown", "keyUp", "rawKeyDown", "char"]);
+    
+    const ScreencastInputSchema = z.discriminatedUnion("kind", [
+        z.object({
+            frameId: z.int(),
+            kind: z.literal("frameAck"),
+        }).describe("The client finished presenting `frame_id`; the browser may send the next frame."),
+        z.object({
+            kind: z.literal("resize"),
+            maxHeight: z.int(),
+            maxWidth: z.int(),
+        }).describe("Restarts the screencast with a new maximum frame size."),
+        z.object({
+            button: ScreencastMouseButtonSchema.optional(),
+            /**
+             * Bit field of pressed buttons: left 1, right 2, middle 4.
+             */
+            buttons: z.int().describe("Bit field of pressed buttons: left 1, right 2, middle 4.").optional(),
+            clickCount: z.int().optional(),
+            deltaX: z.number().optional(),
+            deltaY: z.number().optional(),
+            kind: z.literal("mouse"),
+            /**
+             * Bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.
+             */
+            modifiers: z.int().describe("Bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.").optional(),
+            type: ScreencastMouseEventTypeSchema,
+            x: z.number(),
+            y: z.number(),
+        }).describe("`Input.dispatchMouseEvent` in page CSS pixels."),
+        z.object({
+            autoRepeat: z.boolean().optional(),
+            code: z.string(),
+            key: z.string(),
+            kind: z.literal("key"),
+            modifiers: z.int().optional(),
+            text: z.union([
+                z.string(),
+                z.null(),
+            ]).optional(),
+            type: ScreencastKeyEventTypeSchema,
+            windowsVirtualKeyCode: z.union([
+                z.uint32(),
+                z.null(),
+            ]).optional(),
+        }).describe("`Input.dispatchKeyEvent`."),
+    ]);
+    
+    const ScreencastMessageSchema = z.discriminatedUnion("kind", [
+        z.object({
+            dataBase64: z.string(),
+            frameId: z.int(),
+            kind: z.literal("frame"),
+            mediaType: z.string(),
+            metadata: ScreencastFrameMetadataSchema,
+        }),
+        z.object({
+            kind: z.literal("visibility"),
+            visible: z.boolean(),
+        }),
+    ]);
+    
+    /**
+     * Maximum frame size in device pixels. The page keeps its own viewport; frames are scaled down.
+     */
+    const ScreencastSizeSchema = z.object({
+        maxHeight: z.int(),
+        maxWidth: z.int(),
+    }).describe("Maximum frame size in device pixels. The page keeps its own viewport; frames are scaled down.");
+    
+    const ScreencastOptionsSchema = z.object({
+        format: ScreencastFormatSchema,
+        /**
+         * JPEG quality in `0..=100`; ignored for PNG.
+         */
+        quality: z.union([
+            z.int(),
+            z.null(),
+        ]).describe("JPEG quality in `0..=100`; ignored for PNG.").optional(),
+        size: z.union([
+            ScreencastSizeSchema,
+            z.null(),
+        ]).optional(),
+    });
+    
+    const ScreencastSummarySchema = z.object({
+        frames: z.int(),
+    });
+    
+    const TargetRefSchema = z.object({
+        connection: ConnectionRefSchema,
+        targetId: z.string(),
+    });
+    
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.screencast\",\"hash\":\"b0d51e0074d10a37\",\"description\":\"A view-and-control stream of one page target. Clients receive rendered frames and may send\\npointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.\",\"methods\":{\"screencast\":{\"params\":{\"type\":\"object\",\"required\":[\"options\",\"targetRef\"],\"properties\":{\"options\":{\"$ref\":\"#/components/schemas/ScreencastOptions\"},\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ScreencastSummary\"},\"clientStream\":{\"$ref\":\"#/components/schemas/ScreencastInput\"},\"serverStream\":{\"$ref\":\"#/components/schemas/ScreencastMessage\"},\"description\":\"Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\\ninput stream. At most one frame is unacknowledged: the next frame is produced only after\\nthe client sends `frameAck` for the previous one. Hidden or minimized windows may produce\\nno frames; `visibility` reports such changes when the browser does. Not exclusive: other\\ndebugging of the target continues. Fails if the target detaches or frames are lost.\"}},\"components\":{\"schemas\":{\"ConnectionRef\":{\"type\":\"object\",\"required\":[\"connectionId\",\"contextId\"],\"properties\":{\"connectionId\":{\"type\":\"string\"},\"contextId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"ScreencastFormat\":{\"type\":\"string\",\"enum\":[\"jpeg\",\"png\"]},\"ScreencastFrameMetadata\":{\"description\":\"`Page.ScreencastFrameMetadata`: maps frame pixels to page CSS pixels for input.\",\"type\":\"object\",\"required\":[\"deviceHeight\",\"deviceWidth\",\"offsetTop\",\"pageScaleFactor\",\"scrollOffsetX\",\"scrollOffsetY\"],\"properties\":{\"deviceHeight\":{\"type\":\"number\"},\"deviceWidth\":{\"type\":\"number\"},\"offsetTop\":{\"type\":\"number\"},\"pageScaleFactor\":{\"type\":\"number\"},\"scrollOffsetX\":{\"type\":\"number\"},\"scrollOffsetY\":{\"type\":\"number\"},\"timestamp\":{\"anyOf\":[{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastInput\":{\"oneOf\":[{\"description\":\"The client finished presenting `frame_id`; the browser may send the next frame.\",\"type\":\"object\",\"required\":[\"frameId\",\"kind\"],\"properties\":{\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frameAck\"}},\"additionalProperties\":false},{\"description\":\"Restarts the screencast with a new maximum frame size.\",\"type\":\"object\",\"required\":[\"kind\",\"maxHeight\",\"maxWidth\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"resize\"},\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchMouseEvent` in page CSS pixels.\",\"type\":\"object\",\"required\":[\"kind\",\"type\",\"x\",\"y\"],\"properties\":{\"button\":{\"$ref\":\"#/components/schemas/ScreencastMouseButton\"},\"buttons\":{\"description\":\"Bit field of pressed buttons: left 1, right 2, middle 4.\",\"type\":\"integer\"},\"clickCount\":{\"type\":\"integer\"},\"deltaX\":{\"type\":\"number\"},\"deltaY\":{\"type\":\"number\"},\"kind\":{\"type\":\"string\",\"const\":\"mouse\"},\"modifiers\":{\"description\":\"Bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.\",\"type\":\"integer\"},\"type\":{\"$ref\":\"#/components/schemas/ScreencastMouseEventType\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchKeyEvent`.\",\"type\":\"object\",\"required\":[\"code\",\"key\",\"kind\",\"type\"],\"properties\":{\"autoRepeat\":{\"type\":\"boolean\"},\"code\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\",\"const\":\"key\"},\"modifiers\":{\"type\":\"integer\"},\"text\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"type\":{\"$ref\":\"#/components/schemas/ScreencastKeyEventType\"},\"windowsVirtualKeyCode\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastKeyEventType\":{\"type\":\"string\",\"enum\":[\"keyDown\",\"keyUp\",\"rawKeyDown\",\"char\"]},\"ScreencastMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"dataBase64\",\"frameId\",\"kind\",\"mediaType\",\"metadata\"],\"properties\":{\"dataBase64\":{\"type\":\"string\"},\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frame\"},\"mediaType\":{\"type\":\"string\"},\"metadata\":{\"$ref\":\"#/components/schemas/ScreencastFrameMetadata\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"kind\",\"visible\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"visibility\"},\"visible\":{\"type\":\"boolean\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastMouseButton\":{\"type\":\"string\",\"enum\":[\"none\",\"left\",\"middle\",\"right\"]},\"ScreencastMouseEventType\":{\"type\":\"string\",\"enum\":[\"mousePressed\",\"mouseReleased\",\"mouseMoved\",\"mouseWheel\"]},\"ScreencastOptions\":{\"type\":\"object\",\"required\":[\"format\"],\"properties\":{\"format\":{\"$ref\":\"#/components/schemas/ScreencastFormat\"},\"quality\":{\"description\":\"JPEG quality in `0..=100`; ignored for PNG.\",\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint8\"},{\"type\":\"null\"}]},\"size\":{\"anyOf\":[{\"$ref\":\"#/components/schemas/ScreencastSize\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastSize\":{\"description\":\"Maximum frame size in device pixels. The page keeps its own viewport; frames are scaled down.\",\"type\":\"object\",\"required\":[\"maxHeight\",\"maxWidth\"],\"properties\":{\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"ScreencastSummary\":{\"type\":\"object\",\"required\":[\"frames\"],\"properties\":{\"frames\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"TargetRef\":{\"type\":\"object\",\"required\":[\"connection\",\"targetId\"],\"properties\":{\"connection\":{\"$ref\":\"#/components/schemas/ConnectionRef\"},\"targetId\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    
+    /**
+     * A view-and-control stream of one page target. Clients receive rendered frames and may send
+     * pointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.
+     */
+    export const definition = new InterfaceDefinition(
+        {
+            id: "dev.dbgjs.screencast",
+            description: "A view-and-control stream of one page target. Clients receive rendered frames and may send\npointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.",
+            hash: "b0d51e0074d10a37",
+        },
+        {
+            /**
+             * Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its
+             * input stream. At most one frame is unacknowledged: the next frame is produced only after
+             * the client sends `frameAck` for the previous one. Hidden or minimized windows may produce
+             * no frames; `visibility` reports such changes when the browser does. Not exclusive: other
+             * debugging of the target continues. Fails if the target detaches or frames are lost.
+             */
+            screencast: requestType(
+                z.object({
+                    options: ScreencastOptionsSchema,
+                    targetRef: TargetRefSchema,
+                }),
+                ScreencastSummarySchema,
+                {
+                    description: "Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\ninput stream. At most one frame is unacknowledged: the next frame is produced only after\nthe client sends `frameAck` for the previous one. Hidden or minimized windows may produce\nno frames; `visibility` reports such changes when the browser does. Not exclusive: other\ndebugging of the target continues. Fails if the target detaches or frames are lost.",
+                },
+            ).withStream({
+                client: ScreencastInputSchema,
+                server: ScreencastMessageSchema,
+            }),
+        },
+        { frozenSchema: wireSchema },
+    );
+}
+export const ScreencastApi: typeof $contract9.definition = $contract9.definition;
+
+namespace $contract10 {
     const SourceSuffixRewriteSnapshotSchema = z.object({
         from: z.string(),
         to: z.string(),
@@ -3536,9 +3697,9 @@ namespace $contract9 {
         { frozenSchema: wireSchema },
     );
 }
-export const SourceApi: typeof $contract9.definition = $contract9.definition;
+export const SourceApi: typeof $contract10.definition = $contract10.definition;
 
-namespace $contract10 {
+namespace $contract11 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -5105,9 +5266,9 @@ namespace $contract10 {
         { frozenSchema: wireSchema },
     );
 }
-export const TargetDebuggerApi: typeof $contract10.definition = $contract10.definition;
+export const TargetDebuggerApi: typeof $contract11.definition = $contract11.definition;
 
-namespace $contract11 {
+namespace $contract12 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.defaults\",\"hash\":\"4a6e3a1c5d66ba45\",\"description\":\"Reflection: preset default service / interface on this connection.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"listBindings\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"bindings\"],\"properties\":{\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"prefix\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"prefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5143,9 +5304,9 @@ namespace $contract11 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDefaultsInterface: typeof $contract11.definition = $contract11.definition;
+export const hubrpcDefaultsInterface: typeof $contract12.definition = $contract12.definition;
 
-namespace $contract12 {
+namespace $contract13 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"15ff914ddf2c3802\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"limit\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]},\"serviceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"timeoutMs\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceDescription\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\"}},{\"type\":\"null\"}]}},\"additionalProperties\":false}},\"nextCursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"truncated\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5209,9 +5370,9 @@ namespace $contract12 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDirectoryInterface: typeof $contract12.definition = $contract12.definition;
+export const hubrpcDirectoryInterface: typeof $contract13.definition = $contract13.definition;
 
-namespace $contract13 {
+namespace $contract14 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.schemas\",\"hash\":\"df0a50d964f417c3\",\"description\":\"Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"required\":[\"interfaceId\"],\"properties\":{\"hash\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"schema\"],\"properties\":{\"schema\":{\"description\":\"A full `LinkRpcInterfaceSchema`.\"}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5243,7 +5404,7 @@ namespace $contract13 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcSchemasInterface: typeof $contract13.definition = $contract13.definition;
+export const hubrpcSchemasInterface: typeof $contract14.definition = $contract14.definition;
 
 export const BrowserAutomationApiRoot: QualifiedInterfaceTarget<typeof BrowserAutomationApi> = interfaceTarget(BrowserAutomationApi, { serviceId: "" });
 export const CaptureApiRoot: QualifiedInterfaceTarget<typeof CaptureApi> = interfaceTarget(CaptureApi, { serviceId: "" });
@@ -5254,6 +5415,7 @@ export const CoverageApiRoot: QualifiedInterfaceTarget<typeof CoverageApi> = int
 export const CpuProfilerApiRoot: QualifiedInterfaceTarget<typeof CpuProfilerApi> = interfaceTarget(CpuProfilerApi, { serviceId: "" });
 export const HeapProfilerApiRoot: QualifiedInterfaceTarget<typeof HeapProfilerApi> = interfaceTarget(HeapProfilerApi, { serviceId: "" });
 export const RelayApiRoot: QualifiedInterfaceTarget<typeof RelayApi> = interfaceTarget(RelayApi, { serviceId: "" });
+export const ScreencastApiRoot: QualifiedInterfaceTarget<typeof ScreencastApi> = interfaceTarget(ScreencastApi, { serviceId: "" });
 export const SourceApiRoot: QualifiedInterfaceTarget<typeof SourceApi> = interfaceTarget(SourceApi, { serviceId: "" });
 export const TargetDebuggerApiRoot: QualifiedInterfaceTarget<typeof TargetDebuggerApi> = interfaceTarget(TargetDebuggerApi, { serviceId: "" });
 export const hubrpcDefaultsRoot: QualifiedInterfaceTarget<typeof hubrpcDefaultsInterface> = interfaceTarget(hubrpcDefaultsInterface, { serviceId: "" });

@@ -19,6 +19,8 @@ mod relay;
 pub use relay::*;
 mod browser_automation;
 pub use browser_automation::*;
+mod screencast;
+pub use screencast::*;
 mod coverage;
 pub use coverage::*;
 mod cpu_profiler;
