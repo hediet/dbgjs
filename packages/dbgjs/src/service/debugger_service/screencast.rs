@@ -25,7 +25,41 @@ impl ScreencastApi for DebuggerService {
         } = target_ref;
         let debugger = self
             .target_debugger(&context_id, &connection_id, &target_id)
-            .await?;
+            .await;
+        // A discovered but unattached page is attached only for this screencast, like an
+        // embedded-frame screenshot, and released afterwards so it doesn't appear attached.
+        let (debugger, owned) = match debugger {
+            Ok(debugger) => (debugger, None),
+            Err(_) => {
+                let owner_id = format!(
+                    "screencast-{}",
+                    random_instance_id().map_err(|error| internal_error(error.to_string()))?
+                );
+                let (debugger, created) = self
+                    .relay_ensure_attached(&owner_id, &context_id, &connection_id, &target_id)
+                    .await?;
+                (debugger, created.then_some(owner_id))
+            }
+        };
+        let result = self.run_screencast(ctx, &debugger, options, &mut input, output).await;
+        if let Some(owner_id) = owned {
+            let target_id = debugger.snapshot().target_id;
+            self.relay_release_attachment(&owner_id, &context_id, &connection_id, &target_id, &debugger)
+                .await;
+        }
+        result
+    }
+}
+
+impl DebuggerService {
+    async fn run_screencast(
+        &self,
+        ctx: &CallCtx,
+        debugger: &TargetDebuggerHandle,
+        options: ScreencastOptions,
+        input: &mut StreamReceiver<ScreencastInput>,
+        output: StreamSender<ScreencastMessage>,
+    ) -> Result<ScreencastSummary, JsonRpcError> {
         let (input_sender, input_receiver) = mpsc::channel(16);
         let (output_sender, mut output_receiver) = mpsc::channel(1);
         let run = debugger.screencast(options, input_receiver, output_sender);
