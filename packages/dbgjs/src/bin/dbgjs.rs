@@ -7095,7 +7095,7 @@ async fn run_playwright_program(
         .into());
     }
     let playwright_package = dbgjs::connection::providers::find_playwright_package()?;
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = dbgjs::connection::providers::node_executable::resolve_node_executable()?;
     let mut child = TokioCommand::new(&node)
         .arg("--input-type=module")
         .arg("--eval")

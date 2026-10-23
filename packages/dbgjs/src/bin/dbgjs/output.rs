@@ -2111,32 +2111,41 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         if tree_index != 0 {
             println!();
         }
-        let mut details = vec![format!(
-            "{} attachable processes",
-            tree.processes
-                .iter()
-                .filter(|process| process.attachable)
-                .count()
-        )];
-        if !tree.targets.is_empty() {
-            details.push(format!("{} discovered targets", tree.targets.len()));
-        }
-        if tree.runtime_metadata_available {
-            details.push("window metadata available".to_owned());
-        }
-        println!(
-            "{} process tree {}  ({})",
-            process_root_kind(tree.root_kind),
-            tree.root_process_id,
-            details.join("; "),
-        );
-        for line in lines {
+        for line in process_tree_heading(tree).into_iter().chain(lines) {
             println!("{line}");
         }
-        if let Some(error) = &tree.target_discovery_error {
-            println!("  target discovery incomplete: {}", terminal_text(error));
-        }
     }
+}
+
+/// The summary line of one process tree, followed by a warning when target discovery failed,
+/// because its windows and debug targets are then missing from the tree below.
+fn process_tree_heading(tree: &ProcessTreeSnapshot) -> Vec<String> {
+    let mut details = vec![format!(
+        "{} attachable processes",
+        tree.processes
+            .iter()
+            .filter(|process| process.attachable)
+            .count()
+    )];
+    if !tree.targets.is_empty() {
+        details.push(format!("{} discovered targets", tree.targets.len()));
+    }
+    if tree.runtime_metadata_available {
+        details.push("window metadata available".to_owned());
+    }
+    let mut heading = vec![format!(
+        "{} process tree {}  ({})",
+        process_root_kind(tree.root_kind),
+        tree.root_process_id,
+        details.join("; "),
+    )];
+    if let Some(error) = &tree.target_discovery_error {
+        heading.push(format!(
+            "  warning: target discovery failed, so windows and debug targets are missing: {}",
+            terminal_text(error)
+        ));
+    }
+    heading
 }
 
 #[derive(Clone)]
@@ -4634,7 +4643,7 @@ mod tests {
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
         aggregate_coverage_entries, bounded_source_search_snapshot, breakpoint_diagnostic_lines, coverage_entries, effective_file_metrics,
         heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
-        page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
+        page_logs, process_tree_heading, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
         render_heap_classes_human, render_source_search, render_uncompacted_source_graph,
         render_value_snapshot,
@@ -5433,6 +5442,28 @@ mod tests {
         assert!(pruned.iter().any(|line| line.contains("pruned")));
         assert!(complete.len() > 5);
         assert!(complete.iter().all(|line| !line.contains("pruned")));
+    }
+
+    #[test]
+    fn process_tree_heading_warns_when_target_discovery_failed() {
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
+            runtime_metadata_available: false,
+            targets: Vec::new(),
+            targets_observed: true,
+            target_discovery_error: Some("Node.js was not found".to_owned()),
+            processes: vec![process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None)],
+        };
+
+        assert_eq!(
+            process_tree_heading(&tree),
+            vec![
+                "VS Code process tree 1  (1 attachable processes)",
+                "  warning: target discovery failed, so windows and debug targets are missing: \
+                 Node.js was not found",
+            ]
+        );
     }
 
     #[test]
