@@ -2673,7 +2673,7 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
         (Some("context" | "state" | "events" | "source" | "capture"), _)
         | (Some("breakpoint"), _)
         | (Some("daemon"), Some("view"))
-        | (Some("process"), Some("attach"))
+        | (Some("process"), Some("list" | "attach"))
         | (Some("set"), Some("context" | "workspace")) => ScopeOptionKind {
             context: true,
             connection: false,
@@ -2701,6 +2701,9 @@ fn command_requires_context(arguments: &[String]) -> bool {
             if context == "context" && matches!(operation.as_str(), "create" | "list")
     ) && !matches!(
         arguments,
+        [process, list, ..] if process == "process" && list == "list"
+    ) && !matches!(
+        arguments,
         [daemon, view, options @ ..]
             if daemon == "daemon"
                 && view == "view"
@@ -2722,14 +2725,29 @@ fn parse_daemon_view_options(arguments: &[String]) -> Result<bool, io::Error> {
     }
 }
 
+const SCOPE_OPTIONS: [&str; 3] = ["--context", "--connection", "--target"];
+
+/// The command words of `arguments`: scope options may precede the command
+/// (`dbgjs --context :x process list`), so skip leading option/value pairs.
+fn command_words(arguments: &[String]) -> &[String] {
+    let mut command = arguments;
+    while let [option, _value, rest @ ..] = command
+        && SCOPE_OPTIONS.contains(&option.as_str())
+    {
+        command = rest;
+    }
+    command
+}
+
 fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io::Error> {
-    let kind = scope_option_kind(arguments);
+    let command = command_words(arguments);
+    let kind = scope_option_kind(command);
     let preserve_delimiter = matches!(
-        arguments.as_slice(),
+        command,
         [connection, add, stdio, ..]
             if connection == "connection" && add == "add" && stdio == "--stdio"
     ) || matches!(
-        arguments.as_slice(),
+        command,
         [target, eval, ..] if target == "target" && eval == "eval"
     );
     let mut options = ScopeOptions::default();
@@ -2765,6 +2783,15 @@ fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io
         }
         *slot = Some(arguments.remove(index + 1));
         arguments.remove(index);
+    }
+    if let Some(option) = arguments
+        .first()
+        .filter(|argument| SCOPE_OPTIONS.contains(&argument.as_str()))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{option} is not accepted by this command"),
+        ));
     }
     Ok(options)
 }
@@ -7412,21 +7439,23 @@ fn rpc<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, io::Error> {
 }
 
 fn usage() -> &'static str {
-    "usage: dbgjs [--json] [--service-endpoint <uri|local>] [--service-id <id>] <command>
+    "usage: dbgjs [--json] [--service-endpoint <uri|local>] [--service-id <id>] [--context <id>] <command>
 
   --service-endpoint/--service-id select a debugger service behind a LinkRPC endpoint
   (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as`) instead of
   the local daemon. Contexts created or set with them remember their service, so later commands
   that select such a context (by --context, a cwd binding, or its path) use it without the options;
-  DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID override this.
+  DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID override this. Commands that accept --context (and
+  --connection/--target) also accept it before the command name. `process list --context <id>`
+  lists the processes of the machine running that context's service.
 
 commands:
   dbgjs --version | -V | version
     reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
   dbgjs daemon view [--context <id> | --all-contexts]
   dbgjs service status|stop
-  dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process list --root <vscode|node|electron|browser> [--context <id>] [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process list --vscode [--context <id>] [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process attach <process-reference> [--context <id>] [--set] [--force]
   dbgjs context list
   dbgjs context create <path|:id> [display-name] [--set] [--idle-timeout <duration|inf>]
@@ -7558,7 +7587,8 @@ mod tests {
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, RemoteServiceEndpoint, ResolvedScope,
         ScopeOptions, SelectionStore, ServiceOptions, ServiceTarget, TargetListOptions,
-        activate_selection_scope, apply_scope_selection, connection_list_output,
+        activate_selection_scope, apply_scope_selection, command_requires_context,
+        connection_list_output,
         extract_scope_options, extract_service_options, load_selection_store,
         parse_attach_options,
         parse_chrome_options, parse_connection_list_options, parse_context_create_options,
@@ -8189,6 +8219,34 @@ mod tests {
                 root_pid: 100,
                 window_id: 7,
             }
+        );
+    }
+
+    #[test]
+    fn process_list_accepts_an_optional_context_after_or_before_the_command() {
+        for mut args in [
+            arguments(&["process", "list", "--vscode", "--context", ":mac"]),
+            arguments(&["--context", ":mac", "process", "list", "--vscode"]),
+        ] {
+            let scope = extract_scope_options(&mut args).unwrap();
+            assert_eq!(
+                (scope.context.as_deref(), args.as_slice()),
+                (Some(":mac"), arguments(&["process", "list", "--vscode"]).as_slice())
+            );
+            assert!(!command_requires_context(&args));
+        }
+        let mut attach = arguments(&["--context", ":mac", "process", "attach", "p:1"]);
+        assert_eq!(
+            extract_scope_options(&mut attach).unwrap().context.as_deref(),
+            Some(":mac")
+        );
+        assert_eq!(attach, arguments(&["process", "attach", "p:1"]));
+        assert!(command_requires_context(&attach));
+        assert_eq!(
+            extract_scope_options(&mut arguments(&["--target", "t", "process", "list"]))
+                .unwrap_err()
+                .to_string(),
+            "--target is not accepted by this command"
         );
     }
 

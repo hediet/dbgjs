@@ -1900,6 +1900,55 @@ fn cli_persists_ordered_source_formatting_rules() {
 }
 
 #[test]
+fn process_commands_use_the_service_recorded_for_an_explicit_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let endpoint = format!(
+        "cmd-stdio:?argv={}&argv=--stdio&argv=--service-id&argv=test%2Fremote",
+        percent_encode(service.to_str().unwrap())
+    );
+    run_json_in(&cli, &service, &state_file, root, &[
+        "context", "create", ":remote", "--service-endpoint", &endpoint,
+        "--service-id", "test/remote",
+    ]);
+
+    for arguments in [
+        &["process", "list", "--root", "node", "--context", ":remote"][..],
+        &["--context", ":remote", "process", "list", "--vscode"],
+    ] {
+        assert!(run_json_in(&cli, &service, &state_file, root, arguments).is_array());
+    }
+    // Each command spawns a fresh stdio service, so `:remote` no longer exists there. Only the
+    // recorded remote service can report that; the local daemon was never started.
+    let process = format!("p:{}", std::process::id());
+    let (status, stdout, stderr) = run_in(&cli, &service, &state_file, root, &[
+        "process", "attach", &process, "--context", ":remote",
+    ]);
+    assert!(!status.success(), "{}", String::from_utf8_lossy(&stdout));
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("context 'remote' does not exist"),
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(!state_file.exists(), "the local daemon must not be started");
+}
+
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(byte).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+#[test]
 fn service_ensure_starts_the_shared_daemon() {
     let state_file = std::env::temp_dir().join(format!(
         "dbgjs-service-ensure-{}-{}.json",
