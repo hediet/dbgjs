@@ -24,7 +24,8 @@ use dbgjs::debugger::promise_debugging::{
 };
 use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
-    ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
+    ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, DesktopWindowSnapshot,
+    EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
     HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, IdleTimeout, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, ProcessRootKind,
@@ -591,20 +592,54 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?;
             println!("Typed {text:?}");
         }
+        [screenshot, list] if screenshot == "screenshot" && list == "displays" => {
+            reject_target_scope_for_desktop(&scope_options)?;
+            let client = ensure_service(&service_target).await?;
+            output.print(&rpc(client.desktop.list_displays().await)?)?;
+        }
+        [screenshot, list] if screenshot == "screenshot" && list == "windows" => {
+            reject_target_scope_for_desktop(&scope_options)?;
+            let client = ensure_service(&service_target).await?;
+            output.print(&rpc(client.desktop.list_windows().await)?)?;
+        }
         [screenshot, capture, options @ ..]
             if screenshot == "screenshot" && capture == "capture" =>
         {
             let options = parse_screenshot_capture_options(options)?;
             let client = ensure_service(&service_target).await?;
-            let scope =
-                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
-            let snapshot = rpc(client.browser.capture_screenshot(scope.target_ref()).await)?;
+            let snapshot = match &options.source {
+                ScreenshotSource::Target => {
+                    let scope = resolve_scope(
+                        &client,
+                        &load_selection(&selection_file)?,
+                        &scope_options,
+                    )
+                    .await?;
+                    rpc(client.browser.capture_screenshot(scope.target_ref()).await)?
+                }
+                ScreenshotSource::Display(display_id) => {
+                    reject_target_scope_for_desktop(&scope_options)?;
+                    rpc(client.desktop.capture_display(*display_id).await)?
+                }
+                ScreenshotSource::Window(selector) => {
+                    reject_target_scope_for_desktop(&scope_options)?;
+                    let window_id = match selector {
+                        WindowSelector::Id(window_id) => *window_id,
+                        selector => {
+                            selector
+                                .select(&rpc(client.desktop.list_windows().await)?)?
+                                .id
+                        }
+                    };
+                    rpc(client.desktop.capture_window(window_id).await)?
+                }
+            };
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(&snapshot.data_base64)
                 .map_err(|error| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("debug target returned invalid screenshot data: {error}"),
+                        format!("the debugger service returned invalid screenshot data: {error}"),
                     )
                 })?;
             let (width, height) = png_dimensions(&bytes)?;
@@ -2708,7 +2743,7 @@ fn command_requires_context(arguments: &[String]) -> bool {
     ) && !matches!(
         arguments,
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace")
-    )
+    ) && !is_desktop_screenshot_command(arguments)
 }
 
 fn parse_daemon_view_options(arguments: &[String]) -> Result<bool, io::Error> {
@@ -3107,6 +3142,93 @@ async fn connect_existing(
 #[derive(Debug, PartialEq, Eq)]
 struct ScreenshotCaptureOptions {
     output: Option<std::path::PathBuf>,
+    source: ScreenshotSource,
+}
+
+/// What `screenshot capture` captures: the selected debug target's page (the default), or the
+/// service host's native desktop.
+#[derive(Debug, PartialEq, Eq)]
+enum ScreenshotSource {
+    Target,
+    /// `None` is the primary display.
+    Display(Option<u32>),
+    Window(WindowSelector),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WindowSelector {
+    Id(u32),
+    Pid(u32),
+    /// Case-insensitive substring of the window title or application name.
+    Text(String),
+}
+
+impl WindowSelector {
+    fn parse(value: &str) -> Result<Self, io::Error> {
+        if let Some(id) = value.strip_prefix("id:") {
+            Ok(Self::Id(parse_u32("window ID", id)?))
+        } else if let Some(pid) = value.strip_prefix("pid:") {
+            Ok(Self::Pid(parse_u32("process ID", pid)?))
+        } else if value.is_empty() {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--window requires id:<window-id>, pid:<process-id>, or title text",
+            ))
+        } else {
+            Ok(Self::Text(value.strip_prefix("title:").unwrap_or(value).to_owned()))
+        }
+    }
+
+    /// The unique listed window this selector matches.
+    fn select<'a>(
+        &self,
+        windows: &'a [DesktopWindowSnapshot],
+    ) -> Result<&'a DesktopWindowSnapshot, io::Error> {
+        let matches = windows
+            .iter()
+            .filter(|window| match self {
+                Self::Id(id) => window.id == *id,
+                Self::Pid(pid) => window.pid == *pid,
+                Self::Text(text) => {
+                    let text = text.to_lowercase();
+                    window.title.to_lowercase().contains(&text)
+                        || window.app_name.to_lowercase().contains(&text)
+                }
+            })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [window] => Ok(window),
+            [] => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no visible window matches {self}; list them with `dbgjs screenshot windows`"),
+            )),
+            candidates => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} windows match {self}; select one with --window id:<window-id>:\n{}",
+                    candidates.len(),
+                    candidates
+                        .iter()
+                        .map(|window| format!(
+                            "  id:{}  pid:{}  {}: {:?}",
+                            window.id, window.pid, window.app_name, window.title
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for WindowSelector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Id(id) => write!(formatter, "id:{id}"),
+            Self::Pid(pid) => write!(formatter, "pid:{pid}"),
+            Self::Text(text) => write!(formatter, "{text:?}"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -3383,20 +3505,53 @@ fn parse_screenshot_capture_options(
     arguments: &[String],
 ) -> Result<ScreenshotCaptureOptions, io::Error> {
     let mut output = None;
+    let mut screen = false;
+    let mut display = None;
+    let mut window = None;
     let mut index = 0;
     while index < arguments.len() {
-        match arguments[index].as_str() {
+        let argument = arguments[index].as_str();
+        let repeated = || {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{argument} may only be specified once"),
+            )
+        };
+        let value = || {
+            arguments.get(index + 1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{argument} requires a value"),
+                )
+            })
+        };
+        match argument {
             "--output" => {
                 if output.is_some() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "--output may only be specified once",
-                    ));
+                    return Err(repeated());
                 }
-                let value = arguments.get(index + 1).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "--output requires a value")
-                })?;
-                output = Some(value.into());
+                output = Some(value()?.into());
+                index += 2;
+            }
+            "--screen" => {
+                if screen {
+                    return Err(repeated());
+                }
+                screen = true;
+                index += 1;
+            }
+            "--display" => {
+                if display.is_some() {
+                    return Err(repeated());
+                }
+                display = Some(parse_u32("display ID", value()?)?);
+                index += 2;
+            }
+            "--window" => {
+                if window.is_some() {
+                    return Err(repeated());
+                }
+                window = Some(WindowSelector::parse(value()?)?);
                 index += 2;
             }
             argument => {
@@ -3407,7 +3562,46 @@ fn parse_screenshot_capture_options(
             }
         }
     }
-    Ok(ScreenshotCaptureOptions { output })
+    let source = match (screen || display.is_some(), window) {
+        (false, None) => ScreenshotSource::Target,
+        (true, None) => ScreenshotSource::Display(display),
+        (false, Some(window)) => ScreenshotSource::Window(window),
+        (true, Some(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--window cannot be combined with --screen or --display",
+            ));
+        }
+    };
+    Ok(ScreenshotCaptureOptions { output, source })
+}
+
+/// Whether `arguments` address the service host's native desktop instead of a debug target.
+fn is_desktop_screenshot_command(arguments: &[String]) -> bool {
+    match arguments {
+        [screenshot, operation, options @ ..] if screenshot == "screenshot" => {
+            match operation.as_str() {
+                "displays" | "windows" => true,
+                "capture" => options
+                    .iter()
+                    .any(|option| matches!(option.as_str(), "--screen" | "--display" | "--window")),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `--context` still selects the service (and so the host) to capture; target and connection
+/// selectors have no meaning for the host's desktop.
+fn reject_target_scope_for_desktop(scope_options: &ScopeOptions) -> Result<(), io::Error> {
+    if scope_options.target.is_some() || scope_options.connection.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--screen, --display, and --window capture the service host's desktop and do not accept --target or --connection",
+        ));
+    }
+    Ok(())
 }
 
 fn default_screenshot_path() -> std::path::PathBuf {
@@ -3438,7 +3632,7 @@ fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), io::Error> {
     if bytes.len() < 24 || &bytes[..8] != PNG_SIGNATURE || &bytes[12..16] != b"IHDR" {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "debug target returned an invalid PNG screenshot",
+            "the debugger service returned an invalid PNG screenshot",
         ));
     }
     let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
@@ -3446,7 +3640,7 @@ fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32), io::Error> {
     if width == 0 || height == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "debug target returned an empty PNG screenshot",
+            "the debugger service returned an empty PNG screenshot",
         ));
     }
     Ok((width, height))
@@ -7503,6 +7697,13 @@ commands:
   dbgjs target click <css-selector> [target scope]
   dbgjs target type <text> [target scope]
   dbgjs screenshot capture [--output <path>] [target scope]
+  dbgjs screenshot capture --screen [--display <display-id>] [--output <path>] [--context <id>]
+  dbgjs screenshot capture --window <id:<window-id>|pid:<process-id>|title-text> [--output <path>] [--context <id>]
+  dbgjs screenshot displays|windows [--context <id>]
+    --screen/--display/--window capture the native desktop of the machine running the debugger
+    service (OS dialogs and other apps included), not a debug target; --context only selects the service.
+    The service must run in the signed-in user's desktop session; macOS needs Screen Recording permission.
+    Linux is not supported yet.
   dbgjs coverage start [target scope]
   dbgjs coverage capture [--id <name>] [--path-prefix <prefix> | --path-glob <glob>] [--max-lines <count>] [--all] [--no-trim] [target scope]
     source-map projection and enrichment happen when viewing with coverage show
@@ -7557,7 +7758,8 @@ mod tests {
         AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
         DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, RemoteServiceEndpoint, ResolvedScope,
-        ScopeOptions, SelectionStore, ServiceOptions, ServiceTarget, TargetListOptions,
+        ScopeOptions, ScreenshotSource, SelectionStore, ServiceOptions, ServiceTarget,
+        TargetListOptions, WindowSelector, command_requires_context,
         activate_selection_scope, apply_scope_selection, connection_list_output,
         extract_scope_options, extract_service_options, load_selection_store,
         parse_attach_options,
@@ -7583,7 +7785,8 @@ mod tests {
     use dbgjs::api::service_api::ContextKind;
     use dbgjs::api::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
-        ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
+        ContextSnapshot, ContextSummary, DesktopWindowSnapshot, HeapEdgePolicy, HeapPathCost,
+        HeapPathDirection,
         ProcessRootKind, ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot,
         ResourceSnapshot, SourceFormattingMode, SourceViewPreference, TargetSnapshot,
         ValueSelector,
@@ -8005,6 +8208,78 @@ mod tests {
             Some(std::path::PathBuf::from("renderer.png"))
         );
         assert_eq!(parse_screenshot_capture_options(&[]).unwrap().output, None);
+    }
+
+    #[test]
+    fn parses_desktop_screenshot_sources() {
+        let source = |values: &[&str]| parse_screenshot_capture_options(&arguments(values)).unwrap().source;
+        assert_eq!(source(&[]), ScreenshotSource::Target);
+        assert_eq!(source(&["--screen"]), ScreenshotSource::Display(None));
+        assert_eq!(source(&["--display", "7"]), ScreenshotSource::Display(Some(7)));
+        assert_eq!(source(&["--screen", "--display", "7"]), ScreenshotSource::Display(Some(7)));
+        assert_eq!(source(&["--window", "id:42"]), ScreenshotSource::Window(WindowSelector::Id(42)));
+        assert_eq!(source(&["--window", "pid:9"]), ScreenshotSource::Window(WindowSelector::Pid(9)));
+        assert_eq!(
+            source(&["--window", "title:pid:9"]),
+            ScreenshotSource::Window(WindowSelector::Text("pid:9".into()))
+        );
+        assert_eq!(
+            source(&["--window", "Notepad"]),
+            ScreenshotSource::Window(WindowSelector::Text("Notepad".into()))
+        );
+        for invalid in [
+            &["--screen", "--window", "Notepad"][..],
+            &["--display", "primary"],
+            &["--window", "id:x"],
+            &["--window", ""],
+            &["--window"],
+            &["--screen", "--screen"],
+        ] {
+            assert!(parse_screenshot_capture_options(&arguments(invalid)).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn desktop_screenshots_do_not_require_a_context() {
+        assert!(command_requires_context(&arguments(&["screenshot", "capture"])));
+        assert!(!command_requires_context(&arguments(&["screenshot", "capture", "--screen"])));
+        assert!(!command_requires_context(&arguments(&["screenshot", "capture", "--window", "x"])));
+        assert!(!command_requires_context(&arguments(&["screenshot", "windows"])));
+        assert!(!command_requires_context(&arguments(&["screenshot", "displays"])));
+    }
+
+    #[test]
+    fn selects_a_unique_desktop_window() {
+        let window = |id, pid, app_name: &str, title: &str| DesktopWindowSnapshot {
+            id,
+            pid,
+            app_name: app_name.into(),
+            title: title.into(),
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+            is_minimized: false,
+            is_focused: false,
+        };
+        let windows = [
+            window(1, 10, "Code", "main.rs - Visual Studio Code"),
+            window(2, 10, "Code", "Save changes?"),
+            window(3, 20, "Notepad", "notes.txt - Notepad"),
+        ];
+        let select = |selector: WindowSelector| selector.select(&windows).map(|window| window.id);
+        assert_eq!(select(WindowSelector::Pid(20)).unwrap(), 3);
+        assert_eq!(select(WindowSelector::Text("SAVE".into())).unwrap(), 2);
+        assert_eq!(select(WindowSelector::Text("notepad".into())).unwrap(), 3);
+        assert_eq!(select(WindowSelector::Id(1)).unwrap(), 1);
+        assert_eq!(
+            select(WindowSelector::Pid(10)).unwrap_err().to_string(),
+            "2 windows match pid:10; select one with --window id:<window-id>:\n  id:1  pid:10  Code: \"main.rs - Visual Studio Code\"\n  id:2  pid:10  Code: \"Save changes?\""
+        );
+        assert_eq!(
+            select(WindowSelector::Text("Notes app".into())).unwrap_err().to_string(),
+            "no visible window matches \"Notes app\"; list them with `dbgjs screenshot windows`"
+        );
     }
 
     #[test]

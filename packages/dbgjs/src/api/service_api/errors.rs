@@ -216,6 +216,26 @@ pub enum CaptureError {
     Generic(RpcCallError),
 }
 
+/// Recoverable failures of native desktop capture on the service host.
+#[derive(Debug, linkrpc::ApplicationError)]
+#[rpc_error(display)]
+pub enum DesktopError {
+    #[rpc_error(message = "native desktop capture is not supported on {platform} yet")]
+    Unsupported { platform: String },
+    #[rpc_error(message = "{reason}")]
+    PermissionDenied { reason: String },
+    #[rpc_error(message = "display {display_id} does not exist")]
+    DisplayNotFound { display_id: u32 },
+    #[rpc_error(message = "window {window_id} does not exist or is no longer visible")]
+    WindowNotFound { window_id: u32 },
+    #[rpc_error(message = "window {window_id} is minimized and cannot be captured")]
+    WindowMinimized { window_id: u32 },
+    #[rpc_error(message = "desktop capture failed: {reason}")]
+    CaptureFailed { reason: String },
+    #[rpc_error(generic)]
+    Generic(RpcCallError),
+}
+
 // Shared service helpers also serve legacy, generic-only capabilities. Decode
 // their structured wire errors here, without inferring cases from message text.
 macro_rules! service_error_conversions {
@@ -241,6 +261,7 @@ service_error_conversions!(
     CpuProfilerError,
     HeapProfilerError,
     CaptureError,
+    DesktopError,
 );
 
 #[cfg(test)]

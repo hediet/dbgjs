@@ -60,6 +60,7 @@ service_bundle! {
     cdp: cdp_access_api => CdpAccessApi, CdpAccessApiClient, CdpAccessApiServer;
     relay: relay_api => RelayApi, RelayApiClient, RelayApiServer;
     browser: browser_automation_api => BrowserAutomationApi, BrowserAutomationApiClient, BrowserAutomationApiServer;
+    desktop: desktop_api => DesktopApi, DesktopApiClient, DesktopApiServer;
     coverage: coverage_api => CoverageApi, CoverageApiClient, CoverageApiServer;
     cpu: cpu_profiler_api => CpuProfilerApi, CpuProfilerApiClient, CpuProfilerApiServer;
     heap: heap_profiler_api => HeapProfilerApi, HeapProfilerApiClient, HeapProfilerApiServer;

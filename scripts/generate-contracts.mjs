@@ -21,6 +21,7 @@ const interfaces = [
 	["dev.dbgjs.cdp-access", "CdpAccessApi"],
 	["dev.dbgjs.relay", "RelayApi"],
 	["dev.dbgjs.browser-automation", "BrowserAutomationApi"],
+	["dev.dbgjs.desktop", "DesktopApi"],
 	["dev.dbgjs.coverage", "CoverageApi"],
 	["dev.dbgjs.cpu-profiler", "CpuProfilerApi"],
 	["dev.dbgjs.heap-profiler", "HeapProfilerApi"],
