@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use atomic_write_file::AtomicWriteFile;
 use fs2::FileExt;
 use linkrpc::prelude::{
-    CallCtx, DirectoryServiceClient, LinkRpcConnection, MessageTransport,
+    CallCtx, DirectoryListParams, DirectoryServiceClient, LinkRpcConnection, MessageTransport,
 };
 use linkrpc_tokio::ndjson::{NdjsonTransport, Preamble};
 use linkrpc_tokio::{connect_to_hub, ConnectOptions, RetryOptions};
@@ -476,7 +476,10 @@ where
 async fn validate_interfaces(directory: &DirectoryServiceClient) -> Result<(), LocalRpcError> {
     for expected in service_api::interfaces() {
         let listing = directory
-            .list(Some(expected.id().to_owned()), None, None, None, None)
+            .list(DirectoryListParams {
+                interface_id: Some(expected.id().to_owned()),
+                ..Default::default()
+            })
             .await
             .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
         let Some(actual) = listing
