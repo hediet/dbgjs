@@ -49,6 +49,16 @@ dbgjs context create :tablet "Tablet" --set \
 dbgjs process list --vscode     # lists the tablet's processes
 ```
 
+To drive several machines from one directory, select the context per command
+instead of binding the cwd. `--context` may follow or precede the command:
+
+```sh
+dbgjs context create :mac "Mac" --service-endpoint "<uri>" --service-id hediet/mac/dbgjs
+dbgjs process list --vscode --context :mac     # the Mac's processes
+dbgjs --context :tablet process list --vscode  # the tablet's processes
+dbgjs process attach w:4242/1 --context :mac --set
+```
+
 On the serving machine, `dbgjs-service --hub` registers the service under the
 namespace the hub granted it (for a hub daemon service named `dbgjs`,
 `<hubServiceId>/dbgjs`) or under `--service-id`, with contexts persisted next
