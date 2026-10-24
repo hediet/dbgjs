@@ -3,7 +3,8 @@ use dbgjs::api::service_api::{
     CaptureSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
     CompactedSourceNodeSnapshot, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
     ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileFunctionSnapshot,
-    CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, HeapAggregateSnapshot,
+    CpuProfileSnapshot, DesktopWindowSnapshot, DisplaySnapshot, EvaluationSnapshot,
+    FrameProjectionSnapshot, HeapAggregateSnapshot,
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
     HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointRemovalResult,
@@ -655,6 +656,47 @@ fn page_logs(
 
 pub trait HumanOutput {
     fn print_human(&self);
+}
+
+impl HumanOutput for Vec<DisplaySnapshot> {
+    fn print_human(&self) {
+        for display in self {
+            println!(
+                "{}  {}x{} at {},{}  scale {}{}  {}",
+                display.id,
+                display.width,
+                display.height,
+                display.x,
+                display.y,
+                display.scale_factor,
+                if display.is_primary { "  primary" } else { "" },
+                display.name,
+            );
+        }
+    }
+}
+
+impl HumanOutput for Vec<DesktopWindowSnapshot> {
+    fn print_human(&self) {
+        for window in self {
+            let state = match (window.is_minimized, window.is_focused) {
+                (true, _) => "  minimized",
+                (false, true) => "  focused",
+                (false, false) => "",
+            };
+            println!(
+                "id:{}  pid:{}  {}x{} at {},{}{state}  {}: {:?}",
+                window.id,
+                window.pid,
+                window.width,
+                window.height,
+                window.x,
+                window.y,
+                window.app_name,
+                window.title,
+            );
+        }
+    }
 }
 
 impl HumanOutput for ServiceInfo {

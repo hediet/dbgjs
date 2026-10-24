@@ -39,7 +39,9 @@ async fn stdio_reflects_every_service_contract_and_exits_on_eof_without_persiste
             );
         }
     }
-    assert_eq!(methods.len(), 89);
+    assert_eq!(methods.len(), 93);
+    assert!(methods.contains("capture_display"));
+    assert!(methods.contains("capture_window"));
     assert!(methods.contains("discover_process_trees"));
     assert!(methods.contains("value_operation"));
     assert!(methods.contains("remove_logpoint"));

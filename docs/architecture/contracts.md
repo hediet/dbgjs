@@ -11,7 +11,7 @@ with the daemon's API in a shared export bundle.
 | Chrome DevTools Protocol | The `devtools-protocol` version pinned in the root npm lockfile, plus explicit compatibility overrides in [`cdp-adapter.mjs`](../../scripts/cdp-adapter.mjs) | Checked-in Rust domain traits, shared types, and bare-prefix targets |
 | CLI, daemon, and extension RPC | The annotated Rust traits in [`service_api/`](../../packages/dbgjs/src/api/service_api/) and shared serializable models in [`service_api.rs`](../../packages/dbgjs/src/api/service_api.rs) | Live daemon reflection, temporarily exported as an endpoint contract for TypeScript generation |
 
-The daemon advertises its eleven capabilities and LinkRPC discovery interfaces.
+The daemon advertises its twelve capabilities and LinkRPC discovery interfaces.
 It does not advertise imported CDP domain interfaces on its own RPC connection.
 Shared wire models, including `ContextKind`, belong to `api::service_api`;
 service context-identity helpers and CLI/TUI consumers use those same types.
@@ -26,7 +26,7 @@ flowchart TD
     CdpGen --> Generated["Checked-in generated Rust + bare domain targets"]
     Generated --> CdpMacro["LinkRPC trait macro: preserves schema and hash"]
     CdpMacro --> Cdp["Per-domain CDP clients + providers + server adapters"]
-    Traits["11 authored service traits + shared Rust models"] --> Macro["LinkRPC trait macro"]
+    Traits["12 authored service traits + shared Rust models"] --> Macro["LinkRPC trait macro"]
     Macro --> Rust["Rust capability clients + provider traits + server adapters"]
     Macro --> Daemon["dbgjs-service --stdio: isolated instance + reflection"]
     Daemon --> Export["LinkRPC CLI: contract export"]
@@ -84,11 +84,12 @@ processes or databases.
 | `cdp` | `CdpAccessApi` | Raw CDP requests |
 | `relay` | `RelayApi` | CDP relay and Playwright proxy lifecycle |
 | `browser` | `BrowserAutomationApi` | Click, type, screenshot |
+| `desktop` | `DesktopApi` | Service host's native displays and windows: list, capture |
 | `coverage` | `CoverageApi` | Live coverage lifecycle |
 | `cpu` | `CpuProfilerApi` | CPU profiling |
 | `heap` | `HeapProfilerApi` | Heap capture, streaming progress, selection, graph queries, comparison |
 
-The Rust [`DbgServiceClient`](../../packages/dbgjs/src/api/service_api/client.rs) composes all eleven
+The Rust [`DbgServiceClient`](../../packages/dbgjs/src/api/service_api/client.rs) composes all twelve
 generated clients over one connection:
 
 ```rust,ignore
