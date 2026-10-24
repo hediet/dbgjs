@@ -30,7 +30,8 @@ test("native recorder streams timestamped MKV and uses only explicit external en
 	const http = createServer((request, response) => {
 		if (request.url.startsWith("/capture.")) {
 			const type = request.url.endsWith(".mkv") ? "video/x-matroska"
-				: request.url.endsWith(".webm") ? "video/webm" : "video/mp4";
+				: request.url.endsWith(".webm") ? "video/webm"
+					: /\.a?png$/.test(request.url) ? "image/png" : "video/mp4";
 			response.writeHead(200, { "Content-Type": type, "Content-Length": video.length });
 			response.end(video);
 		} else {
@@ -92,6 +93,61 @@ test("native recorder streams timestamped MKV and uses only explicit external en
 			decoded: false, error: 4,
 			message: "PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no supported streams",
 		});
+
+		// APNG: written natively from the browser's PNG frames and decoded by Chromium itself.
+		const apng = join(root, "capture.apng");
+		await command(["target", "record", "--output", apng, "--duration-ms", "700", ...scope]);
+		video = await readFile(apng);
+		const animation = await browser.newPage();
+		let image;
+		try {
+			await animation.goto(origin);
+			image = await animation.evaluate(async () => {
+				const bytes = await (await fetch("/capture.apng")).arrayBuffer();
+				const decoder = new ImageDecoder({ data: bytes, type: "image/png" });
+				await decoder.tracks.ready;
+				await decoder.completed;
+				const track = decoder.tracks.selectedTrack;
+				if (!track) {
+					return { tracks: decoder.tracks.length, complete: decoder.complete };
+				}
+				const frames = [];
+				for (let frameIndex = 0; frameIndex < track.frameCount; frameIndex++) {
+					const { image } = await decoder.decode({ frameIndex });
+					const canvas = new OffscreenCanvas(image.displayWidth, image.displayHeight);
+					const context = canvas.getContext("2d");
+					context.drawImage(image, 0, 0);
+					const [red, green, blue] = context.getImageData(100, 100, 1, 1).data;
+					frames.push({
+						width: image.displayWidth, height: image.displayHeight, durationUs: image.duration,
+						color: red > 200 && green < 160 ? "coral" : red < 200 && blue > 200 ? "lightblue" : `${red},${green},${blue}`,
+					});
+					image.close();
+				}
+				// <img> is how VS Code's image preview shows `*.png`.
+				const element = new Image();
+				element.src = "/capture.apng";
+				await element.decode();
+				return {
+					animated: track.animated, frameCount: track.frameCount, repetitionCount: track.repetitionCount,
+					frames, element: { width: element.naturalWidth, height: element.naturalHeight },
+				};
+			});
+		} finally {
+			await animation.close();
+		}
+		console.log("Chromium APNG decoding:", JSON.stringify({ ...image, frames: image.frames.length }));
+		expect(image).toMatchObject({ animated: true, repetitionCount: Infinity, element: { width: 1280, height: 720 } });
+		expect(image.frameCount).toBeGreaterThanOrEqual(3);
+		expect(new Set(image.frames.map((frame) => `${frame.width}x${frame.height}`))).toEqual(new Set(["1280x720"]));
+		expect(new Set(image.frames.map((frame) => frame.color))).toEqual(new Set(["coral", "lightblue"]));
+		const totalMs = image.frames.reduce((sum, frame) => sum + frame.durationUs, 0) / 1000;
+		expect(totalMs).toBeGreaterThanOrEqual(650);
+		expect(totalMs).toBeLessThan(1500);
+		await command(["target", "record", "--output", join(root, "capture.png"), "--duration-ms", "200", ...scope]);
+		const pngBytes = await readFile(join(root, "capture.png"));
+		assert.equal(pngBytes.subarray(1, 4).toString(), "PNG");
+		assert.equal(pngBytes.subarray(37, 41).toString(), "acTL");
 
 		const capture = async (extra) => {
 			const child = spawn(cli, ["target", "record", ...extra, "--duration-ms", "300", ...scope], {
@@ -208,6 +264,8 @@ test("native recorder streams timestamped MKV and uses only explicit external en
 			["--output", join(root, "bad.webm"), "--ffmpeg", join(root, "missing-ffmpeg")],
 			["--output", join(root, "bad.webm"), "--ffmpeg", encoder, "--ffmpeg-args", '["-c:v","nonexistent-codec"]'],
 			["--output", join(root, "bad.mkv"), "--format", "webm"],
+			["--output", apng],
+			["--output", join(root, "bad.png"), "--format", "mkv"],
 		]) {
 			const result = await run(cli, ["target", "record", ...extra, "--duration-ms", "100", ...scope], env);
 			assert.notEqual(result.code, 0, result.output);

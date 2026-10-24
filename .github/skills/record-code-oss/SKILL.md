@@ -1,13 +1,14 @@
 ---
 name: record-code-oss
-description: Record Code OSS or VS Code with the native dbgjs target record CLI. Use for MJPEG MKV streams without dependencies, external FFmpeg WebM/MP4 encoding, binary stdout, UI demos, recording validation, and cleanup.
+description: Record Code OSS or VS Code with the native dbgjs target record CLI. Use for MJPEG MKV streams and animated PNG (APNG) files without dependencies, external FFmpeg WebM/MP4 encoding, binary stdout, UI demos, recording validation, and cleanup.
 ---
 
 # Record Code OSS with dbgjs
 
 Record the selected workbench renderer, not the whole desktop. Use
 `dbgjs target record`: the CLI receives JPEG CDP frames and emits timestamped
-MJPEG-in-Matroska directly. MKV needs no Node, consumer scripts, Playwright,
+MJPEG-in-Matroska directly, or receives PNG frames and writes an animated PNG.
+MKV/APNG need no Node, consumer scripts, Playwright,
 FFmpeg, or browser remote-debugging port when using the process bridge.
 WebM/MP4 optionally spawn an explicit external FFmpeg executable; it is never
 bundled, downloaded automatically, or linked into dbgjs.
@@ -193,6 +194,20 @@ After selecting the renderer, record without any encoder:
 if ($LASTEXITCODE -ne 0) { throw 'Native dbgjs recording failed' }
 ```
 
+For a file that Chrome and VS Code open directly, still without an encoder,
+record an animated PNG. `.png` (or `.apng`) selects it; VS Code's image preview
+registers `*.png` but not `*.apng`:
+
+```powershell
+& $dbgjs target record --output (Join-Path $recordingRoot 'code-oss.png') --duration-ms 10000
+```
+
+APNG reuses the browser's own lossless PNG screencast frames with per-frame
+millisecond delays and loops forever. It is an image: no seek, pause or
+controls, and it is large (a 7-second 1563x1355 Code OSS demo: 184 frames,
+16 MB). Keep clips short. It requires file output (the frame count is
+written last) and a fixed renderer size.
+
 For encoded output:
 
 ```powershell
@@ -202,9 +217,9 @@ For encoded output:
     --ffmpeg $fullFfmpeg --duration-ms 10000
 ```
 
-Format rules: `.mkv`, `.webm`, or `.mp4` selects the format. `--format` may
-confirm it but must not contradict an extension. For an extensionless path or
-`--output -`, explicitly pass `--format mkv|webm|mp4`. Binary stdout never
+Format rules: `.mkv`, `.webm`, `.mp4`, `.apng` or `.png` selects the format.
+`--format` may confirm it but must not contradict an extension. For an
+extensionless path or `--output -`, explicitly pass `--format mkv|webm|mp4`. Binary stdout never
 contains progress/JSON; diagnostics go to stderr. Use a binary-safe pipe:
 Windows PowerShell 5.1 text pipelines corrupt bytes, so pipe through `cmd`
 there. Live preview in VLC:
@@ -402,7 +417,7 @@ window size to avoid scaling/padding. PNG is a separate still, not the video.
 | `dbgjs screenshot capture --output <path>` or `page.screenshot()` | One rendered frame | No |
 | Playwright tracing with screenshots/snapshots | Debug actions, DOM and timeline in Trace Viewer | No, a trace ZIP is not a WebM |
 | dbgjs CDP wire recordings / test transcripts | Protocol analysis and replay | No |
-| `dbgjs target record` | Native MJPEG MKV or externally encoded WebM/MP4, without Playwright | Yes, with a compatible codec/player |
+| `dbgjs target record` | Native MJPEG MKV or animated PNG, or externally encoded WebM/MP4, without Playwright | Yes, with a compatible codec/player |
 | Optional Node helper through `dbgjs target relay --stdio` and FFmpeg | Scripted renderer video and simultaneous CDP actions | Yes |
 | `page.screencast.start({ path: '*.webm' })` then `stop()` | Existing renderer video | Yes |
 | `recordVideo` at Playwright/Electron launch/context creation | Automatically record pages owned from creation | Yes, but not a retrofit for this attached window |
@@ -445,43 +460,35 @@ npx playwright test record-cli.spec.mjs playwright-page-cli.spec.mjs electron-pr
 The browser test checks frame delivery, final WebM decoding/dimensions/duration,
 `page.video() === null`, and that unrelated pages remain usable. The Electron
 test checks actual renderer-bridge frame delivery and finalized WebM output on
-Windows. The CLI test checks native MKV, binary stdout, external encoding,
-real Chromium playback, bounded stalled-pipe failure, and no-clobber cleanup.
+Windows. The CLI test checks native MKV and APNG, binary stdout, external encoding,
+real Chromium playback/decoding, bounded stalled-pipe failure, and no-clobber cleanup.
 Use filename selectors as shown: Playwright treats arguments as regular
 expressions, so literal Windows backslash paths do not select tests reliably.
 
+### Validation evidence (2026-10-24, Windows)
+
+- APNG: Chromium's `ImageDecoder` decoded a recorded APNG as an infinitely
+  looping animation with lossless frames and the recorded duration; `<img>`
+  loaded it. A 7-second Code OSS APNG (184 frames) played as an animation in
+  VS Code Insiders' image preview (Electron 43) and in Chrome 151: screenshots
+  one second apart all differed and showed the typing progress. Do not test
+  animation with canvas `drawImage()`: it always paints an animated image's
+  first frame. Code OSS source checkouts may lack a compiled `media-preview`
+  extension (blank Image Preview); `--disable-extensions` also disables it.
+
 ### Validation evidence (2026-10-22, Windows)
 
-- Native recording CLI: all 128 CLI unit tests and the dedicated recording
-  integration test passed. MKV decoded with FFmpeg, but Chromium rejected its
-  MJPEG track. WebM/MP4 played in Chromium at 1280x720; independent decoding
-  and timestamp/duration probes passed. Fragmented MP4 stdout decoded too.
-  The native Electron process-bridge test also recorded CLI MKV without a
-  Playwright runtime and decoded it to PNG.
-- A deliberately undrained native stdout pipe failed and the process exited
-  within its bound. Missing encoders, invalid codecs, conflicting format flags,
-  and existing files failed without publishing partial/replacement files.
-- Keep output cadence explicit in custom encoder argv: a missing track frame
-  rate can make FFmpeg infer 1000 fps and VFR H.264 B-frames can yield a muxed
-  duration shorter than the final presentation timestamp. The tested presets
-  use 25 fps, and MP4 disables B-frames.
-- All 41 targeted Rust relay tests passed.
-- Both targeted Playwright tests above passed with Playwright 1.62.1.
-- After fixing raw-channel concurrency and ignored-event snapshots, all
-  537 active Rust library tests passed (5 environment/benchmark tests ignored).
-- The actual Code OSS native relay changed from roughly 5 seconds per simple
-  request to 2..3 milliseconds after setup. A pending promise and the request
-  resolving it completed concurrently without Playwright.
-- The native recorder saved a 7-second WebM through dbgjs with
-  `DBGJS_PLAYWRIGHT_PACKAGE` deliberately pointing at a nonexistent file.
-  The final run captured 28 compositor frames and encoded 175 samples.
-  Its H.264 MP4 conversion decoded fully: 7 seconds, 1920x1080, 175 frames.
-  Decoded middle/final frames showed progressive typing in the real workbench.
-- Hosted CI for the relay change passed, including the Windows recording checks.
-- The actual source-built Code OSS workbench ran after the targeted native
-  repairs above, without changing unrelated source edits. Electron 42.8.1,
-  Chromium 148.0.7778.280, Playwright 1.62.1 and managed FFmpeg revision 1011
-  were used.
+- Recording CLI: MKV decoded with FFmpeg; Chromium rejected its MJPEG track.
+  WebM/MP4 played in Chromium; decoding, timestamp/duration probes, fragmented
+  MP4 stdout and native Electron process-bridge MKV capture all passed.
+- An undrained stdout pipe failed within its bound. Missing encoders, invalid
+  codecs, conflicting formats and existing files failed without publishing.
+- Keep output cadence explicit in custom encoder argv: without a track frame
+  rate FFmpeg may infer 1000 fps, and VFR H.264 B-frames can shorten the muxed
+  duration. The presets use 25 fps, and MP4 disables B-frames.
+- After the raw-channel/snapshot fixes, simple Code OSS relay requests dropped
+  from about 5 seconds to 2..3 ms; a pending promise and its resolving request
+  completed concurrently. Library tests and hosted CI passed.
 
 References: [Playwright Screencast](https://playwright.dev/docs/api/class-screencast),
 [videos](https://playwright.dev/docs/videos),

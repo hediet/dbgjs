@@ -186,13 +186,18 @@ still require a WebSocket CDP endpoint.
 
 ### Renderer recording
 
-`dbgjs target record --output <path|-> [--format mkv|webm|mp4]
+`dbgjs target record --output <path|-> [--format mkv|webm|mp4|apng]
 [--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>]
 [target scope]` records a selected renderer through the existing target relay.
 
 - MKV is timestamped MJPEG-in-Matroska, muxed by the CLI without an encoder.
   This is streamable, but a player must support both Matroska and MJPEG:
   VLC plays files and live stdout pipes; browsers reject the MJPEG codec.
+- APNG (`.apng`, or `.png` so that image viewers registering only `*.png` open
+  it) requests PNG screencast frames and rewrites their chunks into an animated
+  PNG with per-frame delays, without decoding or encoding. Chrome and VS Code's
+  image preview play it. It needs file output, because the frame count is
+  patched in after recording, and every frame must share the first PNG header.
 - WebM (VP8) and MP4 (H.264/yuv420p) require an explicit external FFmpeg path.
   dbgjs never installs, bundles, or links FFmpeg. It pipes Matroska into the
   executable's stdin. `--ffmpeg-args` replaces preset encoding arguments with a

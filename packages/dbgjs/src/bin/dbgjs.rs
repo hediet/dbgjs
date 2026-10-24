@@ -7511,7 +7511,7 @@ commands:
   dbgjs target watch <expression> [target scope]
   dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   dbgjs target relay --stdio [target scope]
-  dbgjs target record --output <path|-> [--format mkv|webm|mp4] [--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>] [target scope]
+  dbgjs target record --output <path|-> [--format mkv|webm|mp4|apng] [--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>] [target scope]
   dbgjs value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs target logpoint <id> <source> <line> <column> <expression> [--require-installed [--timeout-ms <ms>]] [target scope]

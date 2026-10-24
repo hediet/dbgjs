@@ -81,6 +81,33 @@ enum Format {
     Mkv,
     Webm,
     Mp4,
+    Apng,
+}
+
+impl Format {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "mkv" => Some(Self::Mkv),
+            "webm" => Some(Self::Webm),
+            "mp4" => Some(Self::Mp4),
+            "apng" => Some(Self::Apng),
+            _ => None,
+        }
+    }
+
+    // `.png` maps to APNG so image viewers that only register `*.png` open it.
+    fn from_extension(extension: &str) -> Option<Self> {
+        if extension == "png" {
+            Some(Self::Apng)
+        } else {
+            Self::parse(extension)
+        }
+    }
+
+    /// Written by dbgjs itself; WebM/MP4 need an external encoder.
+    fn is_native(self) -> bool {
+        matches!(self, Self::Mkv | Self::Apng)
+    }
 }
 
 impl Options {
@@ -116,25 +143,22 @@ impl Options {
                 .and_then(|value| value.to_str())
                 .map(str::to_ascii_lowercase)
         };
-        let explicit = values.get("--format").copied();
-        let inferred = extension
-            .as_deref()
-            .filter(|value| matches!(*value, "mkv" | "webm" | "mp4"));
-        if let (Some(format), Some(extension)) = (explicit, extension.as_deref())
-            && format != extension
+        let explicit = values
+            .get("--format")
+            .map(|value| {
+                Format::parse(value)
+                    .ok_or_else(|| invalid("--format must be mkv, webm, mp4 or apng"))
+            })
+            .transpose()?;
+        let inferred = extension.as_deref().and_then(Format::from_extension);
+        if let (Some(format), Some(_)) = (explicit, extension.as_deref())
+            && inferred != Some(format)
         {
             return Err(invalid("--format conflicts with the output file extension"));
         }
-        let format = match explicit.or(inferred) {
-            Some("mkv") => Format::Mkv,
-            Some("webm") => Format::Webm,
-            Some("mp4") => Format::Mp4,
-            _ => {
-                return Err(invalid(
-                    "use .mkv/.webm/.mp4 or specify --format (required for stdout)",
-                ));
-            }
-        };
+        let format = explicit.or(inferred).ok_or_else(|| {
+            invalid("use .mkv/.webm/.mp4/.apng/.png or specify --format (required for stdout)")
+        })?;
         let duration = values
             .get("--duration-ms")
             .map(|value| {
@@ -160,14 +184,19 @@ impl Options {
         if let Some(arguments) = &ffmpeg_args {
             validate_encoder_args(arguments)?;
         }
-        if format != Format::Mkv && ffmpeg.is_none() {
+        if format == Format::Apng && output == "-" {
+            return Err(invalid(
+                "APNG requires file output: its frame count is written after recording",
+            ));
+        }
+        if !format.is_native() && ffmpeg.is_none() {
             return Err(invalid(
                 "WebM/MP4 encoding requires an explicit --ffmpeg executable",
             ));
         }
-        if format == Format::Mkv && (ffmpeg.is_some() || ffmpeg_args.is_some()) {
+        if format.is_native() && (ffmpeg.is_some() || ffmpeg_args.is_some()) {
             return Err(invalid(
-                "native MJPEG MKV does not use --ffmpeg or --ffmpeg-args",
+                "native MKV and APNG do not use --ffmpeg or --ffmpeg-args",
             ));
         }
         Ok(Self {
@@ -199,21 +228,25 @@ pub(super) async fn run(endpoint: &str, options: Options) -> Result<()> {
         async move { channel.run().await }
     });
     let mut started = false;
+    let image_format = if options.format == Format::Apng {
+        "png"
+    } else {
+        "jpeg"
+    };
+    let mut muxer = Muxer::new(options.format);
     let recording = async {
         call(&channel, "Page.enable", json!({})).await?;
         call(&channel, "Page.bringToFront", json!({})).await?;
         call(&channel, "Page.startScreencast",
-            json!({"format": "jpeg", "quality": 85, "everyNthFrame": 1})).await?;
+            json!({"format": image_format, "quality": 85, "everyNthFrame": 1})).await?;
         started = true;
         // Request an initial compositor update even when the page is static.
-        call(&channel, "Page.captureScreenshot", json!({"format": "jpeg"})).await?;
+        call(&channel, "Page.captureScreenshot", json!({"format": image_format})).await?;
         eprintln!("Recording {:?}; Ctrl+C stops and finalizes the recording.", options.format);
         let stop = tokio::signal::ctrl_c();
         tokio::pin!(stop);
         let first_deadline = Instant::now() + Duration::from_secs(5);
         let mut first_time = None;
-        let mut last_frame = None;
-        let mut last_timestamp = 0;
         let mut count = 0_u64;
         let mut dimensions = None;
         let mut end = None;
@@ -250,32 +283,29 @@ pub(super) async fn run(endpoint: &str, options: Options) -> Result<()> {
                     let session_id = event.get("sessionId").and_then(Value::as_i64)
                         .ok_or_else(|| invalid("screencast frame has no sessionId"))?;
                     let frame = base64::engine::general_purpose::STANDARD.decode(data)?;
-                    let size = jpeg_dimensions(&frame)?;
+                    let size = muxer.dimensions(&frame)?;
                     if dimensions.is_some_and(|dimensions| dimensions != size) {
                         return Err(invalid("renderer dimensions changed during recording; keep its size fixed").into());
                     }
                     let origin = *first_time.get_or_insert_with(Instant::now);
                     if count == 0 {
-                        let (width, height) = size;
                         dimensions = Some(size);
-                        sink.write(&matroska_header(width, height)).await?;
                         end = options.duration.map(|duration| origin.checked_add(duration)
                             .ok_or_else(|| invalid("--duration-ms is too large"))).transpose()?;
                     }
                     let timestamp = origin.elapsed().as_millis() as u64;
-                    sink.write(&matroska_frame(timestamp, &frame)).await?;
-                    last_timestamp = timestamp;
-                    last_frame = Some(frame);
+                    sink.write(&muxer.frame(timestamp, size, frame)?).await?;
                     count += 1;
                     call(&channel, "Page.screencastFrameAck", json!({"sessionId": session_id})).await?;
                 }
             }
         }
-        let frame = last_frame.ok_or_else(|| io::Error::other("recording stopped without a frame"))?;
-        let elapsed = first_time.unwrap().elapsed().as_millis() as u64;
-        sink.write(&matroska_frame(elapsed.max(last_timestamp + 1), &frame)).await?;
+        let first_time = first_time.ok_or_else(|| io::Error::other("recording stopped without a frame"))?;
+        let elapsed = first_time.elapsed().as_millis() as u64;
+        let (tail, patch) = muxer.finish(elapsed)?;
+        sink.write(&tail).await?;
         eprintln!("Captured {count} frames in {elapsed} ms.");
-        Ok::<_, Box<dyn std::error::Error>>(())
+        Ok::<_, Box<dyn std::error::Error>>(patch)
     }.await;
     let mut cleanup = if started {
         call(&channel, "Page.stopScreencast", json!({}))
@@ -302,7 +332,7 @@ pub(super) async fn run(endpoint: &str, options: Options) -> Result<()> {
             Err(io::Error::other(format!("{error}; recording cleanup: {cleanup}")).into())
         }
         (Err(error), _) | (_, Err(error)) => Err(error),
-        _ => sink.finish().await,
+        (Ok(patch), Ok(())) => sink.finish(patch).await,
     };
     if result.is_err() {
         if let Err(cleanup) = sink.cancel().await {
@@ -417,7 +447,7 @@ impl Sink {
                 match options.format {
                     Format::Webm => "webm",
                     Format::Mp4 => "mp4",
-                    Format::Mkv => unreachable!(),
+                    Format::Mkv | Format::Apng => unreachable!(),
                 },
             ]);
             if options.format == Format::Mp4 && options.output == "-" {
@@ -478,7 +508,7 @@ impl Sink {
         Ok(())
     }
 
-    async fn finish(&mut self) -> Result<()> {
+    async fn finish(&mut self, patch: Option<Patch>) -> Result<()> {
         if let Some(writer) = self.writer.take() {
             timeout(IO_TIMEOUT, writer.shutdown()).await??;
         }
@@ -498,11 +528,20 @@ impl Sink {
                 .into());
             }
         }
-        if let Some(staged) = self.staged.take() {
+        if let Some(mut staged) = self.staged.take() {
             if staged.as_file().metadata()?.len() == 0 {
                 return Err(io::Error::other("encoder produced an empty recording").into());
             }
+            if let Some(patch) = patch {
+                use std::io::{Seek, SeekFrom, Write};
+                let file = staged.as_file_mut();
+                file.seek(SeekFrom::Start(patch.offset))?;
+                file.write_all(&patch.bytes)?;
+                file.sync_all()?;
+            }
             staged.persist_noclobber(&self.output)?;
+        } else if patch.is_some() {
+            return Err(invalid("this recording format requires file output").into());
         }
         Ok(())
     }
@@ -583,7 +622,7 @@ fn encoder_args(options: &Options) -> Vec<String> {
             "-tune",
             "zerolatency",
         ],
-        Format::Mkv => unreachable!(),
+        Format::Mkv | Format::Apng => unreachable!(),
     };
     arguments.iter().map(|value| value.to_string()).collect()
 }
@@ -646,9 +685,264 @@ fn jpeg_dimensions(jpeg: &[u8]) -> io::Result<(u16, u16)> {
     Err(invalid("JPEG screencast frame has no valid dimensions"))
 }
 
+/// Turns timestamped screencast frames into output bytes.
+enum Muxer {
+    /// MJPEG Matroska; keeps the last frame to repeat it at the end time.
+    Matroska(Option<(u64, Vec<u8>)>),
+    Apng(Apng),
+}
+
+/// Bytes to overwrite at `offset` once the whole recording has been written.
+struct Patch {
+    offset: u64,
+    bytes: Vec<u8>,
+}
+
+impl Muxer {
+    fn new(format: Format) -> Self {
+        match format {
+            Format::Apng => Self::Apng(Apng::default()),
+            Format::Mkv | Format::Webm | Format::Mp4 => Self::Matroska(None),
+        }
+    }
+
+    fn dimensions(&self, frame: &[u8]) -> io::Result<(u32, u32)> {
+        match self {
+            Self::Matroska(_) => jpeg_dimensions(frame).map(|(w, h)| (w.into(), h.into())),
+            Self::Apng(_) => png_dimensions(frame),
+        }
+    }
+
+    fn frame(&mut self, timestamp: u64, size: (u32, u32), frame: Vec<u8>) -> io::Result<Vec<u8>> {
+        match self {
+            Self::Matroska(last) => {
+                let mut bytes = if last.is_none() {
+                    matroska_header(size.0, size.1)
+                } else {
+                    Vec::new()
+                };
+                bytes.extend(matroska_frame(timestamp, &frame));
+                *last = Some((timestamp, frame));
+                Ok(bytes)
+            }
+            Self::Apng(apng) => apng.frame(timestamp, &frame),
+        }
+    }
+
+    /// Ends the recording at `end` ms, so a static tail keeps its duration.
+    fn finish(&mut self, end: u64) -> io::Result<(Vec<u8>, Option<Patch>)> {
+        match self {
+            Self::Matroska(last) => {
+                let (timestamp, frame) = last
+                    .take()
+                    .ok_or_else(|| io::Error::other("recording stopped without a frame"))?;
+                Ok((matroska_frame(end.max(timestamp + 1), &frame), None))
+            }
+            Self::Apng(apng) => apng.finish(end).map(|(bytes, patch)| (bytes, Some(patch))),
+        }
+    }
+}
+
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+// acTL directly follows the signature and the 25-byte IHDR chunk.
+const ACTL_DATA_OFFSET: u64 = 8 + 25 + 8;
+
+/// Animated PNG built from the browser's own PNG frames: no image encoding happens here.
+/// Each frame is shown until the next one arrives, so the per-frame delay is only known
+/// once the following frame (or the end) arrives; one frame is therefore held back.
+#[derive(Default)]
+struct Apng {
+    /// IHDR payload of the first frame; every later frame must match it.
+    ihdr: Vec<u8>,
+    pending: Option<(u64, Vec<Vec<u8>>)>,
+    sequence: u32,
+    frames: u32,
+}
+
+impl Apng {
+    fn frame(&mut self, timestamp: u64, png: &[u8]) -> io::Result<Vec<u8>> {
+        let chunks = png_chunks(png)?;
+        let ihdr = chunks[0].1;
+        let image_data: Vec<Vec<u8>> = chunks
+            .iter()
+            .filter(|(kind, _)| kind == b"IDAT")
+            .map(|(_, data)| data.to_vec())
+            .collect();
+        if image_data.is_empty() {
+            return Err(invalid("PNG screencast frame has no image data"));
+        }
+        let mut bytes = Vec::new();
+        if self.ihdr.is_empty() {
+            if ihdr[9] == 3 {
+                return Err(invalid("palette PNG screencast frames are not supported"));
+            }
+            self.ihdr = ihdr.to_vec();
+            bytes.extend(PNG_SIGNATURE);
+            bytes.extend(png_chunk(b"IHDR", ihdr));
+            // Frame count placeholder, patched by `finish`; zero plays loops forever.
+            bytes.extend(png_chunk(b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0]));
+            for (kind, data) in chunks
+                .iter()
+                .skip(1)
+                .take_while(|(kind, _)| kind != b"IDAT")
+            {
+                if !matches!(kind, b"acTL" | b"fcTL" | b"fdAT") {
+                    bytes.extend(png_chunk(kind, data));
+                }
+            }
+        } else if self.ihdr != ihdr {
+            return Err(invalid("screencast PNG format changed during recording"));
+        }
+        if let Some((previous, data)) = self.pending.take() {
+            bytes.extend(self.encode(timestamp.saturating_sub(previous), data));
+        }
+        self.pending = Some((timestamp, image_data));
+        Ok(bytes)
+    }
+
+    fn finish(&mut self, end: u64) -> io::Result<(Vec<u8>, Patch)> {
+        let (timestamp, data) = self
+            .pending
+            .take()
+            .ok_or_else(|| io::Error::other("recording stopped without a frame"))?;
+        let mut bytes = self.encode(end.saturating_sub(timestamp), data);
+        bytes.extend(png_chunk(b"IEND", &[]));
+        let control = [self.frames.to_be_bytes(), 0_u32.to_be_bytes()].concat();
+        let crc = crc32(&[b"acTL", &control]);
+        let patch = Patch {
+            offset: ACTL_DATA_OFFSET,
+            bytes: [control, crc.to_be_bytes().to_vec()].concat(),
+        };
+        Ok((bytes, patch))
+    }
+
+    fn encode(&mut self, delay_ms: u64, image_data: Vec<Vec<u8>>) -> Vec<u8> {
+        let (numerator, denominator) = apng_delay(delay_ms);
+        let mut control = Vec::with_capacity(26);
+        control.extend(self.next_sequence().to_be_bytes());
+        control.extend(&self.ihdr[..8]);
+        control.extend([0; 8]);
+        control.extend(numerator.to_be_bytes());
+        control.extend(denominator.to_be_bytes());
+        // Dispose: none; blend: source. Every frame covers the whole image.
+        control.extend([0, 0]);
+        let mut bytes = png_chunk(b"fcTL", &control);
+        for data in image_data {
+            if self.frames == 0 {
+                bytes.extend(png_chunk(b"IDAT", &data));
+            } else {
+                let sequenced = [self.next_sequence().to_be_bytes().to_vec(), data].concat();
+                bytes.extend(png_chunk(b"fdAT", &sequenced));
+            }
+        }
+        self.frames += 1;
+        bytes
+    }
+
+    fn next_sequence(&mut self) -> u32 {
+        self.sequence += 1;
+        self.sequence - 1
+    }
+}
+
+/// Frame delay as an exact millisecond fraction when it fits, coarser otherwise.
+fn apng_delay(ms: u64) -> (u16, u16) {
+    let ms = ms.max(1);
+    for denominator in [1000_u64, 100, 10, 1] {
+        let numerator = (ms * denominator + 500) / 1000;
+        if numerator <= u16::MAX.into() {
+            return (numerator.max(1) as u16, denominator as u16);
+        }
+    }
+    (u16::MAX, 1)
+}
+
+/// PNG chunks up to IEND; the first is always a 13-byte IHDR.
+fn png_chunks(png: &[u8]) -> io::Result<Vec<([u8; 4], &[u8])>> {
+    let truncated = || invalid("truncated PNG screencast frame");
+    let body = png
+        .strip_prefix(&PNG_SIGNATURE)
+        .ok_or_else(|| invalid("invalid PNG screencast frame"))?;
+    let mut chunks = Vec::new();
+    let mut offset = 0_usize;
+    loop {
+        let header = body.get(offset..offset + 8).ok_or_else(truncated)?;
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+        let kind: [u8; 4] = header[4..].try_into().unwrap();
+        let data_end = offset
+            .checked_add(8)
+            .and_then(|start| start.checked_add(length))
+            .ok_or_else(truncated)?;
+        let data = body.get(offset + 8..data_end).ok_or_else(truncated)?;
+        if body.len() < data_end + 4 {
+            return Err(truncated());
+        }
+        offset = data_end + 4;
+        if &kind == b"IEND" {
+            break;
+        }
+        chunks.push((kind, data));
+    }
+    match chunks.first() {
+        Some((kind, data)) if kind == b"IHDR" && data.len() == 13 => Ok(chunks),
+        _ => Err(invalid("PNG screencast frame has no valid IHDR")),
+    }
+}
+
+fn png_dimensions(png: &[u8]) -> io::Result<(u32, u32)> {
+    let ihdr = png_chunks(png)?[0].1;
+    let width = u32::from_be_bytes(ihdr[..4].try_into().unwrap());
+    let height = u32::from_be_bytes(ihdr[4..8].try_into().unwrap());
+    if width == 0 || height == 0 {
+        return Err(invalid("PNG screencast frame has no valid dimensions"));
+    }
+    Ok((width, height))
+}
+
+fn png_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(data.len()).expect("PNG chunk exceeds 4 GiB");
+    [
+        &length.to_be_bytes()[..],
+        kind,
+        data,
+        &crc32(&[kind, data]).to_be_bytes(),
+    ]
+    .concat()
+}
+
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0_u32; 256];
+    let mut index = 0;
+    while index < 256 {
+        let mut value = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            value = if value & 1 != 0 {
+                0xedb8_8320 ^ (value >> 1)
+            } else {
+                value >> 1
+            };
+            bit += 1;
+        }
+        table[index] = value;
+        index += 1;
+    }
+    table
+};
+
+fn crc32(parts: &[&[u8]]) -> u32 {
+    let mut crc = !0_u32;
+    for part in parts {
+        for byte in *part {
+            crc = CRC32_TABLE[((crc ^ u32::from(*byte)) & 0xff) as usize] ^ (crc >> 8);
+        }
+    }
+    !crc
+}
+
 // Streaming Matroska: an unknown-size segment, one MJPEG track, and independently
 // timestamped clusters. No index or seekable output is needed.
-fn matroska_header(width: u16, height: u16) -> Vec<u8> {
+fn matroska_header(width: u32, height: u32) -> Vec<u8> {
     let header = element(
         0x1a45dfa3,
         [
@@ -760,8 +1054,21 @@ mod tests {
                 .format,
             Format::Mkv
         );
+        for output in ["demo.apng", "demo.png", "demo.PNG"] {
+            assert_eq!(parse(&["--output", output]).unwrap().format, Format::Apng);
+        }
+        assert_eq!(
+            parse(&["--output", "demo.png", "--format", "apng"])
+                .unwrap()
+                .format,
+            Format::Apng
+        );
         for arguments in [
             vec!["--output", "-"],
+            vec!["--output", "-", "--format", "apng"],
+            vec!["--output", "a.png", "--format", "mkv"],
+            vec!["--output", "a.apng", "--ffmpeg", "ffmpeg"],
+            vec!["--output", "a.mkv", "--format", "gif"],
             vec!["--output", "a.webm"],
             vec!["--output", "a.mp4"],
             vec![
@@ -833,5 +1140,100 @@ mod tests {
         );
         assert!(jpeg_dimensions(&[0xff, 0xd8, 0xff, 0xc0, 0xff, 0xff]).is_err());
         assert!(jpeg_dimensions(&[]).is_err());
+    }
+
+    fn test_png(color_type: u8, marker: u8) -> Vec<u8> {
+        [
+            PNG_SIGNATURE.to_vec(),
+            png_chunk(b"IHDR", &[0, 0, 0, 4, 0, 0, 0, 2, 8, color_type, 0, 0, 0]),
+            png_chunk(b"sRGB", &[0]),
+            png_chunk(b"IDAT", &[marker]),
+            png_chunk(b"IDAT", &[marker, marker]),
+            png_chunk(b"IEND", &[]),
+        ]
+        .concat()
+    }
+
+    /// All chunks including IEND, asserting that every CRC is valid.
+    fn checked_chunks(png: &[u8]) -> Vec<(String, Vec<u8>)> {
+        assert!(png.starts_with(&PNG_SIGNATURE));
+        let mut chunks = Vec::new();
+        let mut offset = 8;
+        while offset < png.len() {
+            let length = u32::from_be_bytes(png[offset..offset + 4].try_into().unwrap()) as usize;
+            let kind = &png[offset + 4..offset + 8];
+            let data = &png[offset + 8..offset + 8 + length];
+            let crc = &png[offset + 8 + length..offset + 12 + length];
+            assert_eq!(crc32(&[kind, data]).to_be_bytes(), crc);
+            chunks.push((String::from_utf8(kind.to_vec()).unwrap(), data.to_vec()));
+            offset += 12 + length;
+        }
+        chunks
+    }
+
+    #[test]
+    fn apng_reuses_browser_png_data_with_sequenced_frames_and_patched_count() {
+        assert_eq!(crc32(&[b"123456789"]), 0xcbf4_3926);
+        let mut muxer = Muxer::new(Format::Apng);
+        assert_eq!(muxer.dimensions(&test_png(6, 1)).unwrap(), (4, 2));
+        let mut file = muxer.frame(0, (4, 2), test_png(6, 1)).unwrap();
+        file.extend(muxer.frame(40, (4, 2), test_png(6, 2)).unwrap());
+        file.extend(muxer.frame(70_040, (4, 2), test_png(6, 3)).unwrap());
+        let (tail, patch) = muxer.finish(70_100).unwrap();
+        file.extend(tail);
+        let patch = patch.unwrap();
+        let offset = patch.offset as usize;
+        file[offset..offset + patch.bytes.len()].copy_from_slice(&patch.bytes);
+
+        let chunks = checked_chunks(&file);
+        let kinds: Vec<_> = chunks.iter().map(|(kind, _)| kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "IHDR", "acTL", "sRGB", "fcTL", "IDAT", "IDAT", "fcTL", "fdAT", "fdAT", "fcTL",
+                "fdAT", "fdAT", "IEND"
+            ]
+        );
+        assert_eq!(chunks[1].1, [0, 0, 0, 3, 0, 0, 0, 0]);
+        let controls: Vec<_> = chunks
+            .iter()
+            .filter(|(kind, _)| kind == "fcTL")
+            .map(|(_, data)| {
+                let field = |at: usize| u16::from_be_bytes([data[at], data[at + 1]]);
+                (data[3], &data[4..12], (field(20), field(22)))
+            })
+            .collect();
+        let size: &[u8] = &[0, 0, 0, 4, 0, 0, 0, 2];
+        assert_eq!(
+            controls,
+            [
+                (0, size, (40, 1000)),
+                (1, size, (7000, 100)),
+                (4, size, (60, 1000))
+            ]
+        );
+        let sequenced: Vec<_> = chunks
+            .iter()
+            .filter(|(kind, _)| kind == "fdAT")
+            .map(|(_, data)| (data[3], data[4..].to_vec()))
+            .collect();
+        assert_eq!(
+            sequenced,
+            [(2, vec![2]), (3, vec![2, 2]), (5, vec![3]), (6, vec![3, 3])]
+        );
+
+        let mut changed = Muxer::new(Format::Apng);
+        changed.frame(0, (4, 2), test_png(6, 1)).unwrap();
+        assert!(changed.frame(10, (4, 2), test_png(2, 1)).is_err());
+        assert!(
+            Muxer::new(Format::Apng)
+                .frame(0, (4, 2), test_png(3, 1))
+                .is_err()
+        );
+        assert!(png_dimensions(&test_png(6, 1)[..40]).is_err());
+        assert_eq!(apng_delay(0), (1, 1000));
+        assert_eq!(apng_delay(65_535), (65_535, 1000));
+        assert_eq!(apng_delay(65_536), (6554, 100));
+        assert_eq!(apng_delay(u64::from(u32::MAX)), (u16::MAX, 1));
     }
 }
