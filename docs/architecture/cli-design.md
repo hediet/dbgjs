@@ -184,6 +184,33 @@ still require a WebSocket CDP endpoint.
 
 ## Relay
 
+### Renderer recording
+
+`dbgjs target record --output <path|-> [--format mkv|webm|mp4]
+[--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>]
+[target scope]` records a selected renderer through the existing target relay.
+
+- MKV is timestamped MJPEG-in-Matroska, muxed by the CLI without an encoder.
+  This is streamable, but a player must support both Matroska and MJPEG.
+- WebM (VP8) and MP4 (H.264/yuv420p) require an explicit external FFmpeg path.
+  dbgjs never installs, bundles, or links FFmpeg. It pipes Matroska into the
+  executable's stdin. `--ffmpeg-args` replaces preset encoding arguments with a
+  JSON array of encoding option/value pairs, not a shell command. Additional
+  input/output paths and container flags are rejected. Defaults use 25 fps
+  with one-second keyframes; MP4 also disables encoder lookahead/B-frame latency.
+- The extension infers format; a conflicting `--format` is an error.
+  An extensionless destination or binary stdout (`--output -`) requires it.
+  MP4 stdout is fragmented; file output is ordinary MP4.
+- Ctrl+C or an optional positive `--duration-ms` stops capture and finalizes
+  output. Files are staged and published without overwriting; failure removes
+  staged output. Stdout is binary-only; diagnostics use stderr. Downstream pipe
+  failure, encoder errors and capture/cleanup timeouts are reported.
+- Recording leases the selected renderer and releases the lease on completion.
+  It does not close the external application. Keep the window visible and its
+  dimensions fixed; resizing fails explicitly rather than emitting a mismatched track.
+
+### CDP transport
+
 `dbgjs context relay --stdio [--context <id>]` and
 `dbgjs target relay --stdio [target scope]` expose a context or a single
 target as CDP over the same compact newline-delimited JSON framing described

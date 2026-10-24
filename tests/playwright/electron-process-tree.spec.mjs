@@ -135,6 +135,18 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 						: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "ms-playwright"));
 		const ffmpegExecutable = process.platform === "win32" ? "ffmpeg-win64.exe"
 			: process.platform === "darwin" ? "ffmpeg-mac" : "ffmpeg-linux";
+		const cliVideo = join(root, "native-cli.mkv");
+		await command(["target", "record", "--output", cliVideo, "--duration-ms", "700", ...scope], {
+			...env, DBGJS_PLAYWRIGHT_PACKAGE: join(root, "no-playwright.mjs"),
+		});
+		const cliBytes = await readFile(cliVideo);
+		assert.equal(cliBytes.subarray(0, 4).toString("hex"), "1a45dfa3");
+		assert.ok(cliBytes.includes(Buffer.from("V_MJPEG")));
+		const cliImage = join(root, "native-cli.png");
+		const cliDecode = await run(join(ffmpegRoot, `ffmpeg-${ffmpegRevision}`, ffmpegExecutable),
+			["-hide_banner", "-loglevel", "error", "-i", cliVideo, "-frames:v", "1", cliImage], {});
+		assert.equal(cliDecode.code, 0, cliDecode.output);
+		assert.equal((await readFile(cliImage)).subarray(1, 4).toString(), "PNG");
 		const nativeVideo = join(root, "native-renderer.webm");
 		const nativeRecording = await recordRenderer({
 			dbgjs: cli, scope,

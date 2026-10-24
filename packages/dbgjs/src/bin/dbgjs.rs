@@ -46,6 +46,8 @@ mod daemon_view;
 mod output;
 #[path = "dbgjs/idle_timeout.rs"]
 mod idle_timeout;
+#[path = "dbgjs/record.rs"]
+mod record;
 
 use idle_timeout::extract_idle_timeout_option;
 
@@ -461,6 +463,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .await)?
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        [target, operation, options @ ..] if target == "target" && operation == "record" => {
+            let options = record::Options::parse(options)?;
+            let client = ensure_service(&service_target).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let relay = rpc(client.relay.open_target_relay(scope.target_ref()).await)?;
+            let result = record::run(&relay.websocket_url, options).await;
+            let cleanup = tokio::time::timeout(
+                Duration::from_secs(5), client.relay.close_relay(relay.id),
+            ).await;
+            let cleanup_error = match cleanup {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("recording relay cleanup failed: {error}")),
+                Err(_) => Some("recording relay cleanup exceeded 5 seconds".into()),
+            };
+            playwright_result_with_cleanup(result, cleanup_error)?;
         }
         [target, relay, options @ ..] if target == "target" && relay == "relay" => {
             parse_relay_options(options)?;
@@ -7492,6 +7511,7 @@ commands:
   dbgjs target watch <expression> [target scope]
   dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   dbgjs target relay --stdio [target scope]
+  dbgjs target record --output <path|-> [--format mkv|webm|mp4] [--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>] [target scope]
   dbgjs value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs target logpoint <id> <source> <line> <column> <expression> [--require-installed [--timeout-ms <ms>]] [target scope]
