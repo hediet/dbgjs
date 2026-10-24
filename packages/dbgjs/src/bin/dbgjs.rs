@@ -1728,13 +1728,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&service_target).await?;
-            output.print(&rpc(client
+            let context = rpc(client
                 .contexts
                 .connect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
-                    connection_id: connection_id,
+                    connection_id: connection_id.clone(),
                 })
-                .await)?)?;
+                .await)?;
+            require_connected(&context, &connection_id)?;
+            output.print(&context)?;
         }
         [connection, disconnect] if connection == "connection" && disconnect == "disconnect" => {
             let (context_id, connection_id) =
@@ -6191,6 +6193,19 @@ async fn wait_for_renderer_target_id(
     ).into()))
 }
 
+fn require_connected(context: &ContextSnapshot, connection_id: &str) -> Result<(), io::Error> {
+    let connection = context.connections.iter()
+        .find(|connection| connection.id == connection_id)
+        .ok_or_else(|| io::Error::other(format!("connection '{connection_id}' disappeared during setup")))?;
+    if !matches!(connection.status, ConnectionStatus::Connected { .. }) {
+        return Err(io::Error::other(format!(
+            "connection '{connection_id}' did not connect: {}; configuration retained for inspection/retry",
+            output::connection_status(&connection.status),
+        )));
+    }
+    Ok(())
+}
+
 async fn add_connection(
     context_id: &str,
     connection_id: &str,
@@ -6241,6 +6256,7 @@ async fn add_connection(
                 connection_id: connection_id.to_owned(),
             })
             .await)?;
+        require_connected(&connected, connection_id)?;
         if wait_for_initial_process_tree {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             let mut last_target_ids = Vec::new();

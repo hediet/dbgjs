@@ -1,7 +1,7 @@
 	import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { open, readFile, readdir, readlink, rm } from "node:fs/promises";
-import { basename, join, posix } from "node:path";
+import { basename, isAbsolute, join, posix } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
@@ -37,7 +37,7 @@ async function main() {
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
 	}
-	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners);
+	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners, root);
 	const browser = await browserForPid(rootPid, listeners);
 	process.stdout.write(`${JSON.stringify({
 		endpoint: rootEndpoint,
@@ -488,7 +488,7 @@ async function discoverChromiumTargets(processesInScope, allProcesses, discovere
 	return discoveries.flat();
 }
 
-async function ensureRootEndpoint(pid, listeners) {
+async function ensureRootEndpoint(pid, listeners, root) {
 	const inspector = await inspectorForPid(pid, listeners);
 	if (inspector) {
 		knownEndpoints.set(pid, inspector);
@@ -499,8 +499,49 @@ async function ensureRootEndpoint(pid, listeners) {
 		knownEndpoints.set(pid, browser.endpoint);
 		return browser.endpoint;
 	}
+	if (root && isBrowserProcess(root)) {
+		return approvalBrowserEndpoint(root, listeners);
+	}
 	// Electron's browser endpoint cannot evaluate the main-process renderer bridge.
 	return ensureInspector(pid, listeners);
+}
+
+function isBrowserProcess(candidate) {
+	return /^(?:chrome|chrome-headless-shell|chromium|msedge|brave|brave-browser|opera|google-chrome(?:-stable)?)(?:\.exe)?$/i.test(candidate.name)
+		&& !/(?:^|\s)"?--type[=\s]/.test(candidate.commandLine);
+}
+
+async function approvalBrowserEndpoint(root, listeners) {
+	const instructions = "In Chrome 144+, open chrome://inspect/#remote-debugging, enable "
+		+ "'Allow remote debugging for this browser instance', then retry and approve Chrome's native Allow dialog.";
+	// Approval-gated Chrome deliberately returns 404 for /json/version and /json/list.
+	// Read only this process's explicit profile, never guess the user's normal profile.
+	const args = root.commandLine.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((arg) => arg.replaceAll('"', "")) ?? [];
+	const index = args.findIndex((arg) => arg === "--user-data-dir" || arg.startsWith("--user-data-dir="));
+	const directory = index < 0 ? undefined : args[index] === "--user-data-dir"
+		? args[index + 1] : args[index].slice("--user-data-dir=".length);
+	if (!directory || !isAbsolute(directory)) {
+		throw new Error(`browser process ${root.pid} has no discoverable CDP endpoint. ${instructions} `
+			+ "Automatic discovery requires an absolute --user-data-dir for a disposable profile; "
+			+ "otherwise use 'dbgjs connection add <ws-endpoint> --connection <id> --connect'.");
+	}
+	const file = join(directory, "DevToolsActivePort");
+	let contents;
+	try {
+		contents = await readFile(file, "utf8");
+	} catch (error) {
+		throw new Error(`cannot read browser endpoint ${file}: ${error.message}. ${instructions}`, { cause: error });
+	}
+	const [portText, path, ...extra] = contents.trim().split(/\r?\n/);
+	const port = Number(portText);
+	if (!/^\d+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535
+		|| !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(path ?? "") || extra.length) {
+		throw new Error(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in Chrome`);
+	}
+	if (!listeners.some((listener) => listener.pid === root.pid && listener.port === port)) {
+		throw new Error(`browser endpoint ${file} is stale: process ${root.pid} does not own listening port ${port}. ${instructions}`);
+	}
+	return `ws://127.0.0.1:${port}${path}`;
 }
 
 async function browserForPid(pid, listeners) {
