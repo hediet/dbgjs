@@ -121,7 +121,9 @@ jobs:
         run: cargo build --locked --workspace --bins
       - name: Test workspace
         run: cargo test --locked --workspace
-      - name: Test evaluation and process attachment CLI against Node.js
+      - name: Install Chromium for existing-browser process attachment
+        run: npx playwright install --with-deps chromium
+      - name: Test evaluation and process attachment CLI against Node.js and Chromium
         env:
           DBGJS_TEST_BIN_DIR: target/debug
         run: npx playwright test tests/playwright/value-evaluation.spec.mjs tests/playwright/process-attach-cli.spec.mjs
