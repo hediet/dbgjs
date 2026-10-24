@@ -46,7 +46,7 @@ test("single-process connection preserves an independently started browser's CDP
 			browser.kill();
 			await exited;
 		}
-		await rm(directory, { recursive: true, force: true });
+		await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}
 });
 
