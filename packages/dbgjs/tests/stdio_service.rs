@@ -82,6 +82,35 @@ async fn stdio_reflects_every_service_contract_and_exits_on_eof_without_persiste
 }
 
 #[tokio::test]
+async fn stdio_directory_watch_runs_until_the_caller_cancels() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut child, mut output) = spawn(directory.path(), &directory.path().join("unused.json"));
+    send_frame(
+        &mut child,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "hubrpc.directory::watch", "params": {} }),
+    )
+    .await;
+    send_frame(
+        &mut child,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "$stream::send",
+            "params": { "requestId": 1, "dir": "toCallee", "control": { "type": "cancel" } }
+        }),
+    )
+    .await;
+    let response = loop {
+        let message = read_frame(&mut output).await;
+        if message["id"] == 1 {
+            break message;
+        }
+    };
+    assert_eq!(response, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }));
+    drop(child.stdin.take());
+    assert!(timeout(Duration::from_secs(10), child.wait()).await.unwrap().unwrap().success());
+}
+
+#[tokio::test]
 async fn stdio_returns_a_structured_application_error_response() {
     let directory = tempfile::tempdir().unwrap();
     let (mut child, mut output) = spawn(directory.path(), &directory.path().join("unused.json"));
@@ -189,19 +218,30 @@ async fn request_response(
     method: &str,
     params: Value,
 ) -> Value {
-    let frame = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+    send_frame(
+        child,
+        json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
+    )
+    .await;
+    let response = read_frame(output).await;
+    assert_eq!(response["id"], 1);
+    response
+}
+
+async fn send_frame(child: &mut Child, frame: Value) {
     let input = child.stdin.as_mut().unwrap();
     input
         .write_all(format!("{frame}\n").as_bytes())
         .await
         .unwrap();
     input.flush().await.unwrap();
+}
+
+async fn read_frame(output: &mut Lines<BufReader<ChildStdout>>) -> Value {
     let line = timeout(Duration::from_secs(10), output.next_line())
         .await
         .unwrap()
         .unwrap()
         .expect("daemon responds");
-    let response: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(response["id"], 1);
-    response
+    serde_json::from_str(&line).unwrap()
 }
