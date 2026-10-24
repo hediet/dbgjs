@@ -205,20 +205,30 @@ For encoded output:
 Format rules: `.mkv`, `.webm`, or `.mp4` selects the format. `--format` may
 confirm it but must not contradict an extension. For an extensionless path or
 `--output -`, explicitly pass `--format mkv|webm|mp4`. Binary stdout never
-contains progress/JSON; diagnostics go to stderr. Use a binary-safe pipe (old
-Windows PowerShell text pipelines corrupt bytes). An example for a POSIX shell:
+contains progress/JSON; diagnostics go to stderr. Use a binary-safe pipe:
+Windows PowerShell 5.1 text pipelines corrupt bytes, so pipe through `cmd`
+there. Live preview in VLC:
 
 ```sh
 dbgjs target record --output - --format mkv | vlc -
 ```
 
+```powershell
+cmd /d /c "dbgjs target record --output - --format mkv | `"C:\Program Files\VideoLAN\VLC\vlc.exe`" -"
+```
+
 MKV is a streamable Matroska container carrying `V_MJPEG`, not a WebM file.
-Do not assume that a browser's WebM support implies MJPEG codec support.
-Test real decoding, not just `canPlayType`, file extension or container parsing.
-The bundled Playwright Chromium was tested with a real HTTP-served MKV:
-`<video>` rejected it with `DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (media error 4).
-FFmpeg decoded the same MJPEG stream. Use WebM/MP4 for browser playback;
-VLC's MJPEG/Matroska support has not been validated by this workflow.
+Browsers decode only an allowlist of web codecs (VP8/VP9/AV1/H.264 and similar),
+which excludes MJPEG; supporting Matroska/WebM containers does not change that.
+The bundled Playwright Chromium rejected a real HTTP-served MKV with
+`DEMUXER_ERROR_NO_SUPPORTED_STREAMS` (media error 4). Use WebM/MP4 for browsers.
+VLC 3.0.24 (`winget install --id VideoLAN.VLC --exact`, signed by VideoLAN)
+played recorded MKV files and a live `cmd` pipe from `dbgjs target record`
+(`mkv` demuxer, `avcodec` MJPEG decoder). Its stdin log may include
+`cannot find any cluster or chapter, damaged file ?` from an early probe
+before playback succeeds; check for `Received first picture` instead.
+To prove decoding without a screenshot, add VLC's scene filter:
+`--video-filter=scene --scene-path=<dir> --scene-format=png --scene-ratio=10`.
 MP4 stdout uses fragmented MP4, because ordinary MP4 requires seekable output.
 File output uses ordinary MP4 and is published only after finalization.
 

@@ -191,7 +191,8 @@ still require a WebSocket CDP endpoint.
 [target scope]` records a selected renderer through the existing target relay.
 
 - MKV is timestamped MJPEG-in-Matroska, muxed by the CLI without an encoder.
-  This is streamable, but a player must support both Matroska and MJPEG.
+  This is streamable, but a player must support both Matroska and MJPEG:
+  VLC plays files and live stdout pipes; browsers reject the MJPEG codec.
 - WebM (VP8) and MP4 (H.264/yuv420p) require an explicit external FFmpeg path.
   dbgjs never installs, bundles, or links FFmpeg. It pipes Matroska into the
   executable's stdin. `--ffmpeg-args` replaces preset encoding arguments with a
