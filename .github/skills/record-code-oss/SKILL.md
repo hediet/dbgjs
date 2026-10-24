@@ -225,11 +225,17 @@ File output uses ordinary MP4 and is published only after finalization.
 To replace encoder preset arguments, use a JSON string array:
 
 ```powershell
+$encoderArgs = '["-r","25","-c:v","libx264","-crf","18","-pix_fmt","yuv420p"]'
+if ($PSVersionTable.PSVersion -lt [version]'7.3' -or $PSNativeCommandArgumentPassing -eq 'Legacy') {
+    $encoderArgs = $encoderArgs.Replace('"', '\"')
+}
 & $dbgjs target record --output (Join-Path $recordingRoot 'custom.mp4') `
-    --ffmpeg $fullFfmpeg --ffmpeg-args '["-r","25","-c:v","libx264","-crf","18","-pix_fmt","yuv420p"]' `
+    --ffmpeg $fullFfmpeg --ffmpeg-args $encoderArgs `
     --duration-ms 10000
 ```
 
+Legacy PowerShell strips embedded native-argument quotes unless escaped; the
+conditional preserves JSON on both legacy and modern PowerShell.
 These are option/value pairs, never shell source. They replace encoding defaults and
 are placed between the fixed Matroska input and output format/destination.
 Additional inputs, container flags and output filenames are rejected.
