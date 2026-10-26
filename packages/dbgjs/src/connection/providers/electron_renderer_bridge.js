@@ -1,4 +1,4 @@
-async (token, independent = false) => {
+async (token) => {
 	const electronRequire = typeof require === "function"
 		? require
 		: process?.mainModule?.require?.bind(process.mainModule);
@@ -7,11 +7,9 @@ async (token, independent = false) => {
 	}
 	const { app, BrowserWindow, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
-	const registryKey = Symbol.for("dbgjs.rendererBridge");
-	const previous = globalThis[registryKey];
-	if (!independent && previous?.owner === "dbgjs" && typeof previous.bridge?.dispose === "function") {
-		await previous.bridge.dispose("replaced by a new dbgjs bridge");
-	}
+	// Bridges of several dbgjs services coexist in one Electron app: each owns only the renderers it
+	// attaches (a second attach of the same webContents fails as "already attached"), and disposes
+	// itself when its control socket closes or its handshake times out, so none can outlive its owner.
 
 	const maxMessageBytes = 128 * 1024 * 1024;
 	const maxBufferedBytes = 128 * 1024 * 1024;
@@ -844,9 +842,6 @@ async (token, independent = false) => {
 				controlSocket.destroy();
 			}
 			await serverClosed;
-			if (globalThis[registryKey]?.bridge === this) {
-				delete globalThis[registryKey];
-			}
 		},
 	};
 	for (const contents of webContents.getAllWebContents()) {
@@ -854,9 +849,6 @@ async (token, independent = false) => {
 	}
 	app.on("web-contents-created", onAppWebContentsCreated);
 	app.on("browser-window-created", onAppBrowserWindowCreated);
-	if (!independent) {
-		globalThis[registryKey] = { owner: "dbgjs", token, bridge };
-	}
 	controlTimer = setTimeout(() => {
 		if (!controlSocket) {
 			void bridge.dispose("renderer bridge control handshake timed out");
