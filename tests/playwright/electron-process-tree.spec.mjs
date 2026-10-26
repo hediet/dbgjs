@@ -373,13 +373,11 @@ test("isolated Electron process tree projects an OOPIF webview and its inner doc
 			sibling: "sibling",
 			replacement: "webview",
 		});
-		const stalled = await run(cli, [
-			"--json", "playwright", "await new Promise(() => {})", ...scope,
-		], env, { timeoutMs: 35_000 });
-		assert.equal(stalled.timedOut, false, "execution must end at its own deadline");
-		assert.notEqual(stalled.code, 0, "unresolved program must fail");
-		assert.match(stalled.output, /executing.*deadline/i);
-		assert.doesNotMatch(stalled.output, /wss?:\/\/127\.0\.0\.1/);
+		const outlasting = JSON.parse(await command([
+			"--json", "playwright",
+			"await page.waitForTimeout(33_000); return await page.title();", ...scope,
+		], env, 60_000));
+		assert.equal(outlasting, "Fixture host", "a program may run past the setup deadline");
 		await command(["--json", "target", "show", ...scope], env);
 	} catch (error) {
 		let startupState;
