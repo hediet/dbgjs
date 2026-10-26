@@ -66,7 +66,8 @@ pub enum ScreencastMessage {
     Visibility { visible: bool },
 }
 
-/// `Page.ScreencastFrameMetadata`: maps frame pixels to page CSS pixels for input.
+/// `Page.ScreencastFrameMetadata`. `deviceWidth` × `deviceHeight` is the frame's coordinate
+/// space for mouse input, in device-independent pixels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreencastFrameMetadata {
@@ -97,7 +98,9 @@ pub enum ScreencastInput {
     Key(ScreencastKeyInput),
 }
 
-/// `Input.dispatchMouseEvent` in page CSS pixels.
+/// `Input.dispatchMouseEvent`. `x`/`y` are in the frame's coordinate space (`deviceWidth` ×
+/// `deviceHeight` device-independent pixels); the service converts them to the page's CSS
+/// pixels, which differ when the page is zoomed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreencastMouseInput {

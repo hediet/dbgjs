@@ -5,6 +5,8 @@ use crate::api::service_api::{
 };
 use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 const INPUT_QUEUE: usize = 256;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -33,7 +35,9 @@ impl TargetDebuggerHandle {
             ).await;
         });
         let (dispatch, dispatch_queue) = mpsc::channel(INPUT_QUEUE);
-        let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), dispatch_queue));
+        // Set whenever the page zoom may have changed; the dispatcher then re-reads it before the next mouse event.
+        let zoom_stale = Arc::new(AtomicBool::new(true));
+        let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), dispatch_queue, zoom_stale.clone()));
         let mut frames = 0u64;
         let mut pending_frame = None;
         let mut viewport_overridden = false;
@@ -72,6 +76,7 @@ impl TargetDebuggerHandle {
                             break Err(error);
                         }
                         viewport_overridden = true;
+                        zoom_stale.store(true, Ordering::SeqCst);
                     }
                     Some(ScreencastInput::ResetViewport) => {
                         if viewport_overridden {
@@ -79,6 +84,7 @@ impl TargetDebuggerHandle {
                                 break Err(error);
                             }
                             viewport_overridden = false;
+                            zoom_stale.store(true, Ordering::SeqCst);
                         }
                     }
                     Some(command) => {
@@ -98,6 +104,8 @@ impl TargetDebuggerHandle {
                             if let ScreencastMessage::Frame { frame_id, .. } = &frame {
                                 pending_frame = Some(*frame_id);
                             }
+                            // A zoom change repaints, so every zoom change is followed by a frame.
+                            zoom_stale.store(true, Ordering::SeqCst);
                             frames += 1;
                             if output.send(frame).await.is_err() {
                                 break Ok(());
@@ -185,10 +193,20 @@ impl TargetDebuggerHandle {
 async fn dispatch_input(
     target: TargetDebuggerHandle,
     mut queue: mpsc::Receiver<ScreencastInput>,
+    zoom_stale: Arc<AtomicBool>,
 ) -> Result<(), JsonRpcError> {
+    let mut zoom = 1.0;
     while let Some(command) = queue.recv().await {
         let (method, params) = match command {
-            ScreencastInput::Mouse(mouse) => ("Input.dispatchMouseEvent", serde_json::to_value(mouse)),
+            ScreencastInput::Mouse(mut mouse) => {
+                if zoom_stale.swap(false, Ordering::SeqCst) {
+                    zoom = page_zoom(&target).await?;
+                }
+                // Frame coordinates are device-independent pixels; Input.dispatchMouseEvent takes CSS pixels.
+                mouse.x /= zoom;
+                mouse.y /= zoom;
+                ("Input.dispatchMouseEvent", serde_json::to_value(mouse))
+            }
             ScreencastInput::Key(key) => ("Input.dispatchKeyEvent", serde_json::to_value(key)),
             ScreencastInput::FrameAck { .. }
             | ScreencastInput::Resize(_)
@@ -200,6 +218,16 @@ async fn dispatch_input(
     }
     // The screencast loop owns the sender; it ending means the loop already finished.
     std::future::pending().await
+}
+
+/// The page's CSS-to-device-independent pixel ratio (e.g. 1.2 for a page zoomed to 120%).
+async fn page_zoom(target: &TargetDebuggerHandle) -> Result<f64, JsonRpcError> {
+    let metrics = target.raw_cdp_request("Page.getLayoutMetrics".into(), json!({})).await?;
+    // Chromium before 92 omits `zoom`; such pages were never zoomed for input purposes.
+    Ok(metrics.pointer("/cssVisualViewport/zoom")
+        .and_then(Value::as_f64)
+        .filter(|zoom| zoom.is_finite() && *zoom > 0.0)
+        .unwrap_or(1.0))
 }
 
 /// CDP rejects explicit `null` for optional input fields.
@@ -257,6 +285,11 @@ mod tests {
     impl<T: MessageTransport> FakeBrowser<T> {
         /// Receives the next CDP request and answers it with `{}`.
         async fn answer(&self) -> (String, Value) {
+            self.answer_with(json!({})).await
+        }
+
+        /// Receives the next CDP request and answers it with `result`.
+        async fn answer_with(&self, result: Value) -> (String, Value) {
             let JsonRpcMessage::Request(JsonRpcRequest { id, method, params }) =
                 tokio::time::timeout(Duration::from_secs(2), self.transport.recv())
                     .await
@@ -267,7 +300,7 @@ mod tests {
             };
             self.transport.send(JsonRpcMessage::Response(JsonRpcResponse {
                 id: Some(id),
-                payload: ResponsePayload::Result(json!({})),
+                payload: ResponsePayload::Result(result),
             })).await.unwrap();
             (method, params.unwrap_or(Value::Null))
         }
@@ -349,6 +382,7 @@ mod tests {
             button: ScreencastMouseButton::Left,
             buttons: 1, click_count: 1, delta_x: 0.0, delta_y: 0.0, modifiers: 0,
         })).await.unwrap();
+        assert_eq!(browser.answer().await.0, "Page.getLayoutMetrics");
         assert_eq!(browser.answer().await, ("Input.dispatchMouseEvent".into(), json!({
             "type": "mousePressed", "x": 10.0, "y": 20.0, "button": "left", "buttons": 1,
             "clickCount": 1, "deltaX": 0.0, "deltaY": 0.0, "modifiers": 0,
@@ -410,6 +444,80 @@ mod tests {
         assert_eq!(browser.answer().await.0, "Emulation.clearDeviceMetricsOverride");
         assert_eq!(browser.answer().await.0, "Page.stopScreencast");
         assert_eq!(run.await.unwrap().unwrap(), ScreencastSummary { frames: 0 });
+        channel_task.abort();
+    }
+
+    #[tokio::test]
+    async fn screencast_converts_mouse_input_to_css_pixels_of_a_zoomed_page() {
+        let (transport, browser) = transport_pair_of();
+        let browser = FakeBrowser { transport: browser };
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let channel_task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let mut handle = TargetDebuggerHandle::stub_for_tests(
+            super::super::tests::target_snapshot(TargetDebuggerPhase::Running),
+        );
+        let (raw_events, _) = broadcast::channel(16);
+        handle.raw_events = raw_events.clone();
+        handle.raw_cdp_channel = Some(channel);
+        let (commands, _command_receiver) = mpsc::channel(1);
+        handle.commands = commands;
+
+        let (input, input_receiver) = mpsc::channel(8);
+        let (output, mut frames) = mpsc::channel(8);
+        let run = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle.screencast(
+                    ScreencastOptions { format: ScreencastFormat::Jpeg, quality: None, size: None },
+                    input_receiver,
+                    output,
+                ).await
+            }
+        });
+        browser.answer().await;
+        browser.answer().await;
+        browser.answer().await;
+        let mouse_move = |x, y| ScreencastInput::Mouse(ScreencastMouseInput {
+            event_type: ScreencastMouseEventType::MouseMoved,
+            x, y,
+            button: ScreencastMouseButton::None,
+            buttons: 0, click_count: 0, delta_x: 0.0, delta_y: 0.0, modifiers: 0,
+        });
+        let dispatched_at = |(method, params): (String, Value)| {
+            assert_eq!(method, "Input.dispatchMouseEvent");
+            (params["x"].as_f64().unwrap(), params["y"].as_f64().unwrap())
+        };
+
+        // A page zoomed to 120%: frame (480, 360) is CSS (400, 300).
+        input.send(mouse_move(480.0, 360.0)).await.unwrap();
+        assert_eq!(
+            browser.answer_with(json!({ "cssVisualViewport": { "zoom": 1.2 } })).await.0,
+            "Page.getLayoutMetrics",
+        );
+        let (x, y) = dispatched_at(browser.answer().await);
+        assert!((x - 400.0).abs() < 1e-9 && (y - 300.0).abs() < 1e-9, "dispatched at ({x}, {y})");
+
+        // The zoom is cached until the next frame.
+        input.send(mouse_move(120.0, 60.0)).await.unwrap();
+        let (x, y) = dispatched_at(browser.answer().await);
+        assert!((x - 100.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9, "dispatched at ({x}, {y})");
+
+        // A frame may follow a zoom change, so the zoom is read again.
+        raw_events.send(frame_event("native-session", 1)).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), frames.recv()).await.unwrap().unwrap();
+        input.send(mouse_move(480.0, 360.0)).await.unwrap();
+        assert_eq!(
+            browser.answer_with(json!({ "cssVisualViewport": { "zoom": 1.0 } })).await.0,
+            "Page.getLayoutMetrics",
+        );
+        assert_eq!(dispatched_at(browser.answer().await), (480.0, 360.0));
+
+        drop(input);
+        assert_eq!(browser.answer().await.0, "Page.stopScreencast");
+        run.await.unwrap().unwrap();
         channel_task.abort();
     }
 
