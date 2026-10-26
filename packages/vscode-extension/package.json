@@ -238,6 +238,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run compile && node --test dist/test/unit.test.cjs",
     "test:heap-streaming": "npm run typecheck && npm run compile && node --test dist/test/heapStreaming.test.cjs",
+    "test:screencast-streaming": "npm run typecheck && npm run compile && node --test dist/test/screencastStreaming.test.cjs",
     "test:vscode": "npm run compile && node test/runIntegration.mjs"
   },
   "dependencies": {

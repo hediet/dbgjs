@@ -38,4 +38,10 @@ await Promise.all([
 		outfile: "dist/test/heapStreaming.test.cjs",
 		format: "cjs",
 	}),
+	build({
+		...shared,
+		entryPoints: ["src/test/screencastStreaming.test.ts"],
+		outfile: "dist/test/screencastStreaming.test.cjs",
+		format: "cjs",
+	}),
 ]);
