@@ -49,6 +49,16 @@ dbgjs context create :tablet "Tablet" --set \
 dbgjs process list --vscode     # lists the tablet's processes
 ```
 
+To drive several machines from one directory, select the context per command
+instead of binding the cwd. `--context` may follow or precede the command:
+
+```sh
+dbgjs context create :mac "Mac" --service-endpoint "<uri>" --service-id hediet/mac/dbgjs
+dbgjs process list --vscode --context :mac     # the Mac's processes
+dbgjs --context :tablet process list --vscode  # the tablet's processes
+dbgjs process attach w:4242/1 --context :mac --set
+```
+
 On the serving machine, `dbgjs-service --hub` registers the service under the
 namespace the hub granted it (for a hub daemon service named `dbgjs`,
 `<hubServiceId>/dbgjs`) or under `--service-id`, with contexts persisted next
@@ -183,6 +193,39 @@ it when the connection disconnects. Browser-root Playwright programs currently
 still require a WebSocket CDP endpoint.
 
 ## Relay
+
+### Renderer recording
+
+`dbgjs target record --output <path|-> [--format mkv|webm|mp4|apng]
+[--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>]
+[target scope]` records a selected renderer through the existing target relay.
+
+- MKV is timestamped MJPEG-in-Matroska, muxed by the CLI without an encoder.
+  This is streamable, but a player must support both Matroska and MJPEG:
+  VLC plays files and live stdout pipes; browsers reject the MJPEG codec.
+- APNG (`.apng`, or `.png` so that image viewers registering only `*.png` open
+  it) requests PNG screencast frames and rewrites their chunks into an animated
+  PNG with per-frame delays, without decoding or encoding. Chrome and VS Code's
+  image preview play it. It needs file output, because the frame count is
+  patched in after recording, and every frame must share the first PNG header.
+- WebM (VP8) and MP4 (H.264/yuv420p) require an explicit external FFmpeg path.
+  dbgjs never installs, bundles, or links FFmpeg. It pipes Matroska into the
+  executable's stdin. `--ffmpeg-args` replaces preset encoding arguments with a
+  JSON array of encoding option/value pairs, not a shell command. Additional
+  input/output paths and container flags are rejected. Defaults use 25 fps
+  with one-second keyframes; MP4 also disables encoder lookahead/B-frame latency.
+- The extension infers format; a conflicting `--format` is an error.
+  An extensionless destination or binary stdout (`--output -`) requires it.
+  MP4 stdout is fragmented; file output is ordinary MP4.
+- Ctrl+C or an optional positive `--duration-ms` stops capture and finalizes
+  output. Files are staged and published without overwriting; failure removes
+  staged output. Stdout is binary-only; diagnostics use stderr. Downstream pipe
+  failure, encoder errors and capture/cleanup timeouts are reported.
+- Recording leases the selected renderer and releases the lease on completion.
+  It does not close the external application. Keep the window visible and its
+  dimensions fixed; resizing fails explicitly rather than emitting a mismatched track.
+
+### CDP transport
 
 `dbgjs context relay --stdio [--context <id>]` and
 `dbgjs target relay --stdio [target scope]` expose a context or a single

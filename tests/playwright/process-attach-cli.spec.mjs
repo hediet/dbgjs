@@ -4,8 +4,51 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { expect, test } from "@playwright/test";
-import { run } from "./live-test-harness.mjs";
+import { chromium, expect, test } from "@playwright/test";
+import { allocatePort, readCdpEndpoint, run } from "./live-test-harness.mjs";
+
+test("single-process connection preserves an independently started browser's CDP topology", async () => {
+	test.setTimeout(90_000);
+	const binaries = process.env.DBGJS_TEST_BIN_DIR ?? "target/debug";
+	const suffix = process.platform === "win32" ? ".exe" : "";
+	const cli = resolve(binaries, `dbgjs${suffix}`);
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-browser-attach-"));
+	const environment = {
+		DBGJS_SERVICE_EXE: resolve(binaries, `dbgjs-service${suffix}`),
+		DBGJS_SERVICE_STATE: join(directory, "service.json"),
+	};
+	const port = await allocatePort();
+	const browser = spawn(process.env.DBGJS_CHROME_EXECUTABLE ?? chromium.executablePath(), [
+		"--headless=new", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
+		`--user-data-dir=${join(directory, "profile")}`, `--remote-debugging-port=${port}`,
+		"data:text/html,<title>Existing browser</title><p>untouched</p>",
+	], { stdio: "ignore" });
+	const exited = once(browser, "exit");
+	const command = async args => {
+		const result = await run(cli, args, environment, { timeoutMs: 30_000 });
+		expect(result.code, result.output).toBe(0);
+		return result.stdout;
+	};
+	try {
+		await readCdpEndpoint(port);
+		await command(["context", "create", ":browser", "--set"]);
+		await command(["connection", "add", "--process", String(browser.pid),
+			"--connection", "chrome", "--connect"]);
+		expect(await command(["target", "eval", "document.title",
+			"--connection", "chrome", "--target", "Existing browser"])).toContain("Existing browser");
+		await command(["connection", "disconnect", "--connection", "chrome"]);
+		expect(browser.exitCode).toBeNull();
+		expect(browser.signalCode).toBeNull();
+		expect(await readCdpEndpoint(port)).toContain("/devtools/browser/");
+	} finally {
+		await run(cli, ["service", "stop"], environment, { timeoutMs: 10_000 });
+		if (browser.exitCode === null && browser.signalCode === null) {
+			browser.kill();
+			await exited;
+		}
+		await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	}
+});
 
 test("process attachment failures retain usable connections without changing selection", async ({}, testInfo) => {
 	test.setTimeout(180_000);
@@ -69,6 +112,15 @@ test("process attachment failures retain usable connections without changing sel
 		expect(unavailable.code).not.toBe(0);
 		expect(unavailable.stderr).not.toContain("Available targets:");
 		expect(unavailable.stderr).toContain("process connection setup failed");
+		expect(await readFile(selectionFile, "utf8")).toBe(selected);
+		const failedAdd = await command(["connection", "add", "--process", String(fixture.pid),
+			"--connection", "unavailable", "--connect"]);
+		expect(failedAdd.code).not.toBe(0);
+		expect(failedAdd.stdout).toBe("");
+		expect(failedAdd.stderr).toContain("did not connect");
+		const failedRetry = await command(["connection", "connect", "--connection", "unavailable"]);
+		expect(failedRetry.code).not.toBe(0);
+		expect(failedRetry.stderr).toContain("configuration retained");
 		expect(await readFile(selectionFile, "utf8")).toBe(selected);
 	} finally {
 		await run(cli, ["service", "stop"], environment, { timeoutMs: 10_000 });

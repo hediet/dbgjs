@@ -121,7 +121,9 @@ jobs:
         run: cargo build --locked --workspace --bins
       - name: Test workspace
         run: cargo test --locked --workspace
-      - name: Test evaluation and process attachment CLI against Node.js
+      - name: Install Chromium for existing-browser process attachment
+        run: npx playwright install --with-deps chromium
+      - name: Test evaluation and process attachment CLI against Node.js and Chromium
         env:
           DBGJS_TEST_BIN_DIR: target/debug
         run: npx playwright test tests/playwright/value-evaluation.spec.mjs tests/playwright/process-attach-cli.spec.mjs
@@ -376,11 +378,14 @@ jobs:
       - name: Validate README rendering and recording
         run: npm run test:readme:render
       - name: Install Playwright Chromium
-        run: npx playwright install chromium
+        run: npx playwright install chromium ffmpeg
+      - name: Install external FFmpeg for recording tests
+        run: choco install ffmpeg --no-progress -y
       - name: Test attached-page video recording
         env:
           DBGJS_TEST_BIN_DIR: target/debug
-        run: npx playwright test tests/playwright/playwright-page-cli.spec.mjs
+          DBGJS_TEST_FFMPEG: C:\ProgramData\chocolatey\bin\ffmpeg.exe
+        run: npx playwright test tests/playwright/playwright-page-cli.spec.mjs tests/playwright/record-cli.spec.mjs
       - name: Replay the generated README
         run: npm run test:readme
       - name: Upload README investigation evidence

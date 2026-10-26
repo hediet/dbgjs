@@ -3,7 +3,7 @@ import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, posix } from "node:path";
+import { basename, isAbsolute, join, posix } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
@@ -15,7 +15,7 @@ const source = (await readFile(new URL("../packages/dbgjs/src/connection/provide
 function helper(rootPid = process.pid, overrides = {}) {
 	return new Function(
 		"execFileCallback", "randomUUID", "open", "readFile", "readdir", "readlink", "rm",
-		"basename", "join", "posix", "tmpdir", "promisify", "testRootPid", "overrides",
+		"basename", "isAbsolute", "join", "posix", "tmpdir", "promisify", "testRootPid", "overrides",
 		`${source}
 		if (overrides.fetchJson) fetchJson = overrides.fetchJson;
 		if (overrides.ensureInspector) ensureInspector = overrides.ensureInspector;
@@ -24,8 +24,44 @@ function helper(rootPid = process.pid, overrides = {}) {
 			processInstanceId, electronFusePath, electronInspectorFuseEnabled,
 			assertElectronInspectorSignalSupported };`,
 	)(execFileCallback, randomUUID, open, readFile, readdir, readlink, rm,
-		basename, join, posix, tmpdir, promisify, rootPid, overrides);
+		basename, isAbsolute, join, posix, tmpdir, promisify, rootPid, overrides);
 }
+
+test("approval-gated Chrome discovers only its explicit profile and owned listener", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs chrome profile "));
+	const file = join(directory, "DevToolsActivePort");
+	const api = helper(42, {
+		fetchJson: async () => undefined,
+		ensureInspector: async () => assert.fail("never activate a Node inspector in Chrome"),
+	});
+	const listeners = [{ pid: 42, port: 9222 }];
+	const root = { pid: 42, name: "chrome.exe" };
+	try {
+		await writeFile(file, "9222\r\n/devtools/browser/abc-123\r\n");
+		for (const commandLine of [
+			`chrome.exe --user-data-dir="${directory}"`,
+			`chrome.exe "--user-data-dir=${directory}"`,
+			`chrome.exe --user-data-dir "${directory}"`,
+		]) {
+			assert.equal(await api.ensureRootEndpoint(42, listeners, { ...root, commandLine }),
+				"ws://127.0.0.1:9222/devtools/browser/abc-123");
+		}
+		root.commandLine = `chrome.exe --user-data-dir="${directory}"`;
+		await assert.rejects(api.ensureRootEndpoint(42, [{ pid: 99, port: 9222 }], root), /does not own/);
+		for (const contents of ["0\n/devtools/browser/id", "65536\n/devtools/browser/id",
+			"9222\n//other-host/path", "9222\n/devtools/browser/id?query", "9222\n/devtools/browser/id\nextra"]) {
+			await writeFile(file, contents);
+			await assert.rejects(api.ensureRootEndpoint(42, listeners, root), /invalid browser endpoint/);
+		}
+		await rm(file);
+		await assert.rejects(api.ensureRootEndpoint(42, listeners, root), /cannot read browser endpoint.*chrome:\/\/inspect/);
+		for (const commandLine of ["chrome.exe", "chrome.exe --user-data-dir=relative"]) {
+			await assert.rejects(api.ensureRootEndpoint(42, listeners, { ...root, commandLine }), /absolute --user-data-dir/);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 test("Electron with browser-only CDP activates the main-process inspector, not the browser endpoint", async () => {
 	const listeners = [{ pid: 42, port: 1234 }];

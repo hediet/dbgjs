@@ -343,7 +343,8 @@ impl ConnectionRuntime {
                     ],
                 )
                 .await?;
-                (launch.endpoint, Some(launch.child), true, launch.events)
+                let direct_debugger = !launch.endpoint.contains("/devtools/browser/");
+                (launch.endpoint, Some(launch.child), direct_debugger, launch.events)
             }
             ConnectionConfiguration::Playwright {
                 url,

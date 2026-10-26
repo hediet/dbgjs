@@ -14,9 +14,11 @@ the **generated root README**, not to `docs/`; see
   [coverage benchmark](development/vscode-coverage-benchmark.md).
 - [Walkthroughs](walkthroughs/vscode.md): VS Code, Node, website, and
   [VS Code process debugging](walkthroughs/debugging-vscode-processes.md).
+- [Attach to running Chrome](walkthroughs/attach-running-chrome.md): disposable
+  profiles, native approval, PID discovery, and whole-desktop recording.
 - [Record Code OSS](../.github/skills/record-code-oss/SKILL.md): attached-renderer
-  WebM video through native dbgjs CDP (no Playwright runtime), managed FFmpeg
-  setup, validation, and cleanup.
+  native `target record` MJPEG MKV streaming and animated PNG files without
+  dependencies, optional external FFmpeg WebM/MP4 encoding, validation, and cleanup.
 - [Investigations](investigations/): dated debugging reports and speculative
   designs. Their commands, measurements, and proposals are historical, **not
   guarantees about the current CLI or approved feature work**.
