@@ -203,8 +203,8 @@ async fn dispatch_input(
                     zoom = page_zoom(&target).await?;
                 }
                 // Frame coordinates are device-independent pixels; Input.dispatchMouseEvent takes CSS pixels.
-                mouse.x /= zoom;
-                mouse.y /= zoom;
+                mouse.x = to_css_pixels(mouse.x, zoom);
+                mouse.y = to_css_pixels(mouse.y, zoom);
                 ("Input.dispatchMouseEvent", serde_json::to_value(mouse))
             }
             ScreencastInput::Key(key) => ("Input.dispatchKeyEvent", serde_json::to_value(key)),
@@ -228,6 +228,12 @@ async fn page_zoom(target: &TargetDebuggerHandle) -> Result<f64, JsonRpcError> {
         .and_then(Value::as_f64)
         .filter(|zoom| zoom.is_finite() && *zoom > 0.0)
         .unwrap_or(1.0))
+}
+
+/// Rounded to 1/1000 px: Chromium reports zoom as a float32 (1.2 is 1.2000000477), so 960 / zoom
+/// would be 799.99997, which the page's integer `clientX` truncates to 799.
+fn to_css_pixels(frame_pixels: f64, zoom: f64) -> f64 {
+    (frame_pixels / zoom * 1000.0).round() / 1000.0
 }
 
 /// CDP rejects explicit `null` for optional input fields.
@@ -491,19 +497,17 @@ mod tests {
             (params["x"].as_f64().unwrap(), params["y"].as_f64().unwrap())
         };
 
-        // A page zoomed to 120%: frame (480, 360) is CSS (400, 300).
-        input.send(mouse_move(480.0, 360.0)).await.unwrap();
+        // A page zoomed to 120% (reported as float32): frame (960, 600) is CSS (800, 500).
+        input.send(mouse_move(960.0, 600.0)).await.unwrap();
         assert_eq!(
-            browser.answer_with(json!({ "cssVisualViewport": { "zoom": 1.2 } })).await.0,
+            browser.answer_with(json!({ "cssVisualViewport": { "zoom": 1.2000000476837158 } })).await.0,
             "Page.getLayoutMetrics",
         );
-        let (x, y) = dispatched_at(browser.answer().await);
-        assert!((x - 400.0).abs() < 1e-9 && (y - 300.0).abs() < 1e-9, "dispatched at ({x}, {y})");
+        assert_eq!(dispatched_at(browser.answer().await), (800.0, 500.0));
 
         // The zoom is cached until the next frame.
         input.send(mouse_move(120.0, 60.0)).await.unwrap();
-        let (x, y) = dispatched_at(browser.answer().await);
-        assert!((x - 100.0).abs() < 1e-9 && (y - 50.0).abs() < 1e-9, "dispatched at ({x}, {y})");
+        assert_eq!(dispatched_at(browser.answer().await), (100.0, 50.0));
 
         // A frame may follow a zoom change, so the zoom is read again.
         raw_events.send(frame_event("native-session", 1)).unwrap();
