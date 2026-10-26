@@ -4,6 +4,7 @@ mod cdp_access;
 mod context;
 mod coverage;
 mod cpu_profiler;
+mod desktop;
 mod heap_profiler;
 mod relay;
 mod screencast;

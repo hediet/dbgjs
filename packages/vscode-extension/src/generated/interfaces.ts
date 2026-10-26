@@ -2028,6 +2028,134 @@ namespace $contract6 {
 export const CpuProfilerApi: typeof $contract6.definition = $contract6.definition;
 
 namespace $contract7 {
+    const ConnectionRefSchema = z.object({
+        connectionId: z.string(),
+        contextId: z.string(),
+    });
+    
+    const DesktopCloseReasonSchema = z.literal("closed");
+    
+    const DesktopAttachResultSchema = z.object({
+        reason: DesktopCloseReasonSchema,
+    });
+    
+    /**
+     * CSS viewport dimensions and the device pixel ratio to apply to them.
+     */
+    const DesktopViewportSchema = z.object({
+        devicePixelRatio: z.number(),
+        height: z.int(),
+        width: z.int(),
+    }).describe("CSS viewport dimensions and the device pixel ratio to apply to them.");
+    
+    const DesktopClientMessageSchema = z.discriminatedUnion("t", [
+        z.object({
+            data: z.string(),
+            t: z.literal("data"),
+        }),
+        z.object({
+            bytes: z.int(),
+            t: z.literal("credit"),
+        }),
+        z.object({
+            t: z.literal("viewport"),
+            viewport: DesktopViewportSchema,
+        }),
+    ]);
+    
+    const DesktopProtocolSchema = z.literal("rfb");
+    
+    const DesktopInfoSchema = z.object({
+        available: z.boolean(),
+        protocol: DesktopProtocolSchema,
+        title: z.string(),
+    });
+    
+    /**
+     * How the page follows the client's viewport.
+     */
+    const DesktopLayoutSchema = z.union([
+        z.literal("fit").describe("The page keeps its own layout; the desktop is the page scaled down to fit the viewport."),
+        z.literal("resize").describe("The page is laid out at the viewport size and pixel ratio until the desktop closes."),
+    ]).describe("How the page follows the client's viewport.");
+    
+    const DesktopOptionsSchema = z.object({
+        layout: DesktopLayoutSchema.optional(),
+    });
+    
+    const DesktopServerMessageSchema = z.discriminatedUnion("t", [
+        z.object({
+            t: z.literal("ready"),
+        }),
+        z.object({
+            data: z.string(),
+            t: z.literal("data"),
+        }),
+        z.object({
+            bytes: z.int(),
+            t: z.literal("credit"),
+        }),
+    ]);
+    
+    const TargetRefSchema = z.object({
+        connection: ConnectionRefSchema,
+        targetId: z.string(),
+    });
+    
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.desktop\",\"hash\":\"d9bc7f7351bceacb\",\"description\":\"A page target served as a remote desktop: the RFB (VNC) protocol, framed like\\n`linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.\",\"methods\":{\"attach\":{\"params\":{\"type\":\"object\",\"required\":[\"options\",\"targetRef\"],\"properties\":{\"options\":{\"$ref\":\"#/components/schemas/DesktopOptions\"},\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/DesktopAttachResult\"},\"clientStream\":{\"$ref\":\"#/components/schemas/DesktopClientMessage\"},\"serverStream\":{\"$ref\":\"#/components/schemas/DesktopServerMessage\"},\"description\":\"Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates\\nthe call) until the caller cancels or ends its input stream. The server sends `ready`\\nbefore data. Data messages carry canonical base64 of at most 16384 bytes. Each direction\\nstarts with 262144 bytes of credit; sending data consumes credit, and the receiver returns\\ncredit only after consuming the bytes. The client sends its viewport (CSS pixels and device\\npixel ratio) over the stream; how the page follows it depends on `options.layout`.\\nNot exclusive: other debugging of the target continues.\"},\"info\":{\"params\":{\"type\":\"object\",\"required\":[\"targetRef\"],\"properties\":{\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/DesktopInfo\"},\"description\":\"The target's title and that its desktop speaks RFB.\"}},\"components\":{\"schemas\":{\"ConnectionRef\":{\"type\":\"object\",\"required\":[\"connectionId\",\"contextId\"],\"properties\":{\"connectionId\":{\"type\":\"string\"},\"contextId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"DesktopAttachResult\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"$ref\":\"#/components/schemas/DesktopCloseReason\"}},\"additionalProperties\":false},\"DesktopClientMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"data\",\"t\"],\"properties\":{\"data\":{\"type\":\"string\"},\"t\":{\"type\":\"string\",\"const\":\"data\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"bytes\",\"t\"],\"properties\":{\"bytes\":{\"type\":\"integer\"},\"t\":{\"type\":\"string\",\"const\":\"credit\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"t\",\"viewport\"],\"properties\":{\"t\":{\"type\":\"string\",\"const\":\"viewport\"},\"viewport\":{\"$ref\":\"#/components/schemas/DesktopViewport\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"t\"}},\"DesktopCloseReason\":{\"type\":\"string\",\"const\":\"closed\"},\"DesktopInfo\":{\"type\":\"object\",\"required\":[\"available\",\"protocol\",\"title\"],\"properties\":{\"available\":{\"type\":\"boolean\"},\"protocol\":{\"$ref\":\"#/components/schemas/DesktopProtocol\"},\"title\":{\"type\":\"string\"}},\"additionalProperties\":false},\"DesktopLayout\":{\"description\":\"How the page follows the client's viewport.\",\"oneOf\":[{\"description\":\"The page keeps its own layout; the desktop is the page scaled down to fit the viewport.\",\"type\":\"string\",\"const\":\"fit\"},{\"description\":\"The page is laid out at the viewport size and pixel ratio until the desktop closes.\",\"type\":\"string\",\"const\":\"resize\"}]},\"DesktopOptions\":{\"type\":\"object\",\"properties\":{\"layout\":{\"$ref\":\"#/components/schemas/DesktopLayout\"}},\"additionalProperties\":false},\"DesktopProtocol\":{\"type\":\"string\",\"const\":\"rfb\"},\"DesktopServerMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"t\"],\"properties\":{\"t\":{\"type\":\"string\",\"const\":\"ready\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"data\",\"t\"],\"properties\":{\"data\":{\"type\":\"string\"},\"t\":{\"type\":\"string\",\"const\":\"data\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"bytes\",\"t\"],\"properties\":{\"bytes\":{\"type\":\"integer\"},\"t\":{\"type\":\"string\",\"const\":\"credit\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"t\"}},\"DesktopViewport\":{\"description\":\"CSS viewport dimensions and the device pixel ratio to apply to them.\",\"type\":\"object\",\"required\":[\"devicePixelRatio\",\"height\",\"width\"],\"properties\":{\"devicePixelRatio\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"width\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"TargetRef\":{\"type\":\"object\",\"required\":[\"connection\",\"targetId\"],\"properties\":{\"connection\":{\"$ref\":\"#/components/schemas/ConnectionRef\"},\"targetId\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    
+    /**
+     * A page target served as a remote desktop: the RFB (VNC) protocol, framed like
+     * `linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.
+     */
+    export const definition = new InterfaceDefinition(
+        {
+            id: "dev.dbgjs.desktop",
+            description: "A page target served as a remote desktop: the RFB (VNC) protocol, framed like\n`linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.",
+            hash: "d9bc7f7351bceacb",
+        },
+        {
+            /**
+             * Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates
+             * the call) until the caller cancels or ends its input stream. The server sends `ready`
+             * before data. Data messages carry canonical base64 of at most 16384 bytes. Each direction
+             * starts with 262144 bytes of credit; sending data consumes credit, and the receiver returns
+             * credit only after consuming the bytes. The client sends its viewport (CSS pixels and device
+             * pixel ratio) over the stream; how the page follows it depends on `options.layout`.
+             * Not exclusive: other debugging of the target continues.
+             */
+            attach: requestType(
+                z.object({
+                    options: DesktopOptionsSchema,
+                    targetRef: TargetRefSchema,
+                }),
+                DesktopAttachResultSchema,
+                {
+                    description: "Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates\nthe call) until the caller cancels or ends its input stream. The server sends `ready`\nbefore data. Data messages carry canonical base64 of at most 16384 bytes. Each direction\nstarts with 262144 bytes of credit; sending data consumes credit, and the receiver returns\ncredit only after consuming the bytes. The client sends its viewport (CSS pixels and device\npixel ratio) over the stream; how the page follows it depends on `options.layout`.\nNot exclusive: other debugging of the target continues.",
+                },
+            ).withStream({
+                client: DesktopClientMessageSchema,
+                server: DesktopServerMessageSchema,
+            }),
+            /**
+             * The target's title and that its desktop speaks RFB.
+             */
+            info: requestType(
+                z.object({
+                    targetRef: TargetRefSchema,
+                }),
+                DesktopInfoSchema,
+                {
+                    description: "The target's title and that its desktop speaks RFB.",
+                },
+            ),
+        },
+        { frozenSchema: wireSchema },
+    );
+}
+export const DesktopApi: typeof $contract7.definition = $contract7.definition;
+
+namespace $contract8 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -3064,9 +3192,9 @@ namespace $contract7 {
         { frozenSchema: wireSchema },
     );
 }
-export const HeapProfilerApi: typeof $contract7.definition = $contract7.definition;
+export const HeapProfilerApi: typeof $contract8.definition = $contract8.definition;
 
-namespace $contract8 {
+namespace $contract9 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3157,9 +3285,9 @@ namespace $contract8 {
         { frozenSchema: wireSchema },
     );
 }
-export const RelayApi: typeof $contract8.definition = $contract8.definition;
+export const RelayApi: typeof $contract9.definition = $contract9.definition;
 
-namespace $contract9 {
+namespace $contract10 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3335,9 +3463,9 @@ namespace $contract9 {
         { frozenSchema: wireSchema },
     );
 }
-export const ScreencastApi: typeof $contract9.definition = $contract9.definition;
+export const ScreencastApi: typeof $contract10.definition = $contract10.definition;
 
-namespace $contract10 {
+namespace $contract11 {
     const SourceSuffixRewriteSnapshotSchema = z.object({
         from: z.string(),
         to: z.string(),
@@ -3714,9 +3842,9 @@ namespace $contract10 {
         { frozenSchema: wireSchema },
     );
 }
-export const SourceApi: typeof $contract10.definition = $contract10.definition;
+export const SourceApi: typeof $contract11.definition = $contract11.definition;
 
-namespace $contract11 {
+namespace $contract12 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -5283,9 +5411,9 @@ namespace $contract11 {
         { frozenSchema: wireSchema },
     );
 }
-export const TargetDebuggerApi: typeof $contract11.definition = $contract11.definition;
+export const TargetDebuggerApi: typeof $contract12.definition = $contract12.definition;
 
-namespace $contract12 {
+namespace $contract13 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.defaults\",\"hash\":\"4a6e3a1c5d66ba45\",\"description\":\"Reflection: preset default service / interface on this connection.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"listBindings\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"bindings\"],\"properties\":{\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"prefix\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"prefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5321,9 +5449,9 @@ namespace $contract12 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDefaultsInterface: typeof $contract12.definition = $contract12.definition;
+export const hubrpcDefaultsInterface: typeof $contract13.definition = $contract13.definition;
 
-namespace $contract13 {
+namespace $contract14 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"fde86a77878692e3\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"timeoutMs\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"reachableServiceIds\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"rootPrincipalSets\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"principal\"],\"properties\":{\"principal\":{\"type\":\"string\"},\"transitive\":{\"type\":\"boolean\"}},\"additionalProperties\":false}}},\"serviceDescription\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"additionalProperties\":false}},\"nextCursor\":{\"type\":\"string\"},\"truncated\":{\"type\":\"boolean\"}},\"additionalProperties\":false}},\"watch\":{\"params\":{\"type\":\"object\",\"properties\":{\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"serverStream\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}}");
     
     /**
@@ -5399,9 +5527,9 @@ namespace $contract13 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDirectoryInterface: typeof $contract13.definition = $contract13.definition;
+export const hubrpcDirectoryInterface: typeof $contract14.definition = $contract14.definition;
 
-namespace $contract14 {
+namespace $contract15 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.schemas\",\"hash\":\"df0a50d964f417c3\",\"description\":\"Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"required\":[\"interfaceId\"],\"properties\":{\"hash\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"schema\"],\"properties\":{\"schema\":{\"description\":\"A full `LinkRpcInterfaceSchema`.\"}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5433,7 +5561,7 @@ namespace $contract14 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcSchemasInterface: typeof $contract14.definition = $contract14.definition;
+export const hubrpcSchemasInterface: typeof $contract15.definition = $contract15.definition;
 
 export const BrowserAutomationApiRoot: QualifiedInterfaceTarget<typeof BrowserAutomationApi> = interfaceTarget(BrowserAutomationApi, { serviceId: "" });
 export const CaptureApiRoot: QualifiedInterfaceTarget<typeof CaptureApi> = interfaceTarget(CaptureApi, { serviceId: "" });
@@ -5442,6 +5570,7 @@ export const ServiceApiRoot: QualifiedInterfaceTarget<typeof ServiceApi> = inter
 export const ContextApiRoot: QualifiedInterfaceTarget<typeof ContextApi> = interfaceTarget(ContextApi, { serviceId: "" });
 export const CoverageApiRoot: QualifiedInterfaceTarget<typeof CoverageApi> = interfaceTarget(CoverageApi, { serviceId: "" });
 export const CpuProfilerApiRoot: QualifiedInterfaceTarget<typeof CpuProfilerApi> = interfaceTarget(CpuProfilerApi, { serviceId: "" });
+export const DesktopApiRoot: QualifiedInterfaceTarget<typeof DesktopApi> = interfaceTarget(DesktopApi, { serviceId: "" });
 export const HeapProfilerApiRoot: QualifiedInterfaceTarget<typeof HeapProfilerApi> = interfaceTarget(HeapProfilerApi, { serviceId: "" });
 export const RelayApiRoot: QualifiedInterfaceTarget<typeof RelayApi> = interfaceTarget(RelayApi, { serviceId: "" });
 export const ScreencastApiRoot: QualifiedInterfaceTarget<typeof ScreencastApi> = interfaceTarget(ScreencastApi, { serviceId: "" });
