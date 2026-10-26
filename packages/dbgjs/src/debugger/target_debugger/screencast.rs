@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::service_api::{
     ScreencastFormat, ScreencastFrameMetadata, ScreencastInput, ScreencastMessage,
-    ScreencastOptions, ScreencastSize, ScreencastSummary,
+    ScreencastOptions, ScreencastSize, ScreencastSummary, ScreencastViewport,
 };
 use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde_json::{Value, json};
@@ -36,6 +36,7 @@ impl TargetDebuggerHandle {
         let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), dispatch_queue));
         let mut frames = 0u64;
         let mut pending_frame = None;
+        let mut viewport_overridden = false;
         let result = loop {
             tokio::select! {
                 biased;
@@ -64,6 +65,20 @@ impl TargetDebuggerHandle {
                         }
                         if let Err(error) = self.start_screencast(&options, Some(size)).await {
                             break Err(error);
+                        }
+                    }
+                    Some(ScreencastInput::Viewport(viewport)) => {
+                        if let Err(error) = self.override_viewport(viewport).await {
+                            break Err(error);
+                        }
+                        viewport_overridden = true;
+                    }
+                    Some(ScreencastInput::ResetViewport) => {
+                        if viewport_overridden {
+                            if let Err(error) = self.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})).await {
+                                break Err(error);
+                            }
+                            viewport_overridden = false;
                         }
                     }
                     Some(command) => {
@@ -110,6 +125,12 @@ impl TargetDebuggerHandle {
         };
         dispatcher.abort();
         first_frame_kick.abort();
+        if viewport_overridden {
+            let _ = tokio::time::timeout(
+                STOP_TIMEOUT,
+                self.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})),
+            ).await;
+        }
         let _ = tokio::time::timeout(
             STOP_TIMEOUT,
             self.raw_cdp_request("Page.stopScreencast".into(), json!({})),
@@ -144,6 +165,21 @@ impl TargetDebuggerHandle {
         }
         self.raw_cdp_request("Page.startScreencast".into(), params).await.map(drop)
     }
+
+    async fn override_viewport(&self, viewport: ScreencastViewport) -> Result<(), JsonRpcError> {
+        if viewport.width == 0 || viewport.height == 0 || viewport.width > 16_384 || viewport.height > 16_384 {
+            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport size must be in 1..=16384"));
+        }
+        if !(viewport.device_scale_factor > 0.0 && viewport.device_scale_factor <= 8.0) {
+            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport deviceScaleFactor must be in (0, 8]"));
+        }
+        self.raw_cdp_request("Emulation.setDeviceMetricsOverride".into(), json!({
+            "width": viewport.width,
+            "height": viewport.height,
+            "deviceScaleFactor": viewport.device_scale_factor,
+            "mobile": false,
+        })).await.map(drop)
+    }
 }
 
 async fn dispatch_input(
@@ -154,7 +190,10 @@ async fn dispatch_input(
         let (method, params) = match command {
             ScreencastInput::Mouse(mouse) => ("Input.dispatchMouseEvent", serde_json::to_value(mouse)),
             ScreencastInput::Key(key) => ("Input.dispatchKeyEvent", serde_json::to_value(key)),
-            ScreencastInput::FrameAck { .. } | ScreencastInput::Resize(_) => continue,
+            ScreencastInput::FrameAck { .. }
+            | ScreencastInput::Resize(_)
+            | ScreencastInput::Viewport(_)
+            | ScreencastInput::ResetViewport => continue,
         };
         let params = strip_nulls(params.map_err(|error| internal_error(&error.to_string()))?);
         target.raw_cdp_request(method.into(), params).await?;
@@ -327,6 +366,50 @@ mod tests {
         drop(input);
         assert_eq!(browser.answer().await.0, "Page.stopScreencast");
         assert_eq!(run.await.unwrap().unwrap(), ScreencastSummary { frames: 1 });
+        channel_task.abort();
+    }
+
+    #[tokio::test]
+    async fn screencast_removes_its_viewport_override_when_the_stream_ends() {
+        let (transport, browser) = transport_pair_of();
+        let browser = FakeBrowser { transport: browser };
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let channel_task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let mut handle = TargetDebuggerHandle::stub_for_tests(
+            super::super::tests::target_snapshot(TargetDebuggerPhase::Running),
+        );
+        let (raw_events, _) = broadcast::channel(16);
+        handle.raw_events = raw_events;
+        handle.raw_cdp_channel = Some(channel);
+        let (commands, _command_receiver) = mpsc::channel(1);
+        handle.commands = commands;
+
+        let (input, input_receiver) = mpsc::channel(8);
+        let (output, _frames) = mpsc::channel(8);
+        let run = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle.screencast(
+                    ScreencastOptions { format: ScreencastFormat::Jpeg, quality: None, size: None },
+                    input_receiver,
+                    output,
+                ).await
+            }
+        });
+        browser.answer().await;
+        browser.answer().await;
+        browser.answer().await;
+        input.send(ScreencastInput::Viewport(ScreencastViewport { width: 800, height: 600, device_scale_factor: 1.5 })).await.unwrap();
+        assert_eq!(browser.answer().await, ("Emulation.setDeviceMetricsOverride".into(), json!({
+            "width": 800, "height": 600, "deviceScaleFactor": 1.5, "mobile": false,
+        })));
+        drop(input);
+        assert_eq!(browser.answer().await.0, "Emulation.clearDeviceMetricsOverride");
+        assert_eq!(browser.answer().await.0, "Page.stopScreencast");
+        assert_eq!(run.await.unwrap().unwrap(), ScreencastSummary { frames: 0 });
         channel_task.abort();
     }
 

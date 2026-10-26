@@ -43,6 +43,15 @@ pub struct ScreencastSize {
     pub max_height: u32,
 }
 
+/// A page viewport in CSS pixels and the device pixel ratio to render it at.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreencastViewport {
+    pub width: u32,
+    pub height: u32,
+    pub device_scale_factor: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ScreencastMessage {
@@ -79,6 +88,11 @@ pub enum ScreencastInput {
     FrameAck { frame_id: u64 },
     /// Restarts the screencast with a new maximum frame size.
     Resize(ScreencastSize),
+    /// Lays the page out at this viewport (`Emulation.setDeviceMetricsOverride`) until
+    /// `resetViewport` or the end of the stream, which always removes the override.
+    Viewport(ScreencastViewport),
+    /// Removes the viewport override set by `viewport`, restoring the page's own layout.
+    ResetViewport,
     Mouse(ScreencastMouseInput),
     Key(ScreencastKeyInput),
 }

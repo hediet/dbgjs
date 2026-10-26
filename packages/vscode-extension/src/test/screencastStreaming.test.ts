@@ -129,11 +129,23 @@ test("generated TS client drives a duplex screencast through the Rust daemon", {
 		}
 		assert.deepEqual(received, ["mousedown", "mouseup", "wheel", "keydown:a"]);
 
+		// A viewport override lays the page out at the requested size until the stream ends.
+		const framesBefore = frames.length;
+		await call.send({ kind: "viewport", width: 400, height: 300, deviceScaleFactor: 1 });
+		let overridden: (typeof frames)[number] | undefined;
+		for (let attempt = 0; attempt < 50 && !overridden; attempt++) {
+			overridden = frames.slice(framesBefore).find(frame => frame.metadata.deviceWidth === 400 && frame.metadata.deviceHeight === 300);
+			if (!overridden) await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		assert.ok(overridden, "frames follow the viewport override");
+		await call.send({ kind: "resetViewport" });
+
 		await call.cancel("test finished");
 		assert.ok(await outcome, "cancellation ends the call");
 	} finally {
 		for (const link of links) link.close();
 		if (started) await command(["service", "stop"]);
-		await rm(root, { recursive: true, force: true });
+		// The browser releases its profile directory shortly after the service stops it.
+		await rm(root, { recursive: true, force: true, maxRetries: 40, retryDelay: 250 });
 	}
 });
