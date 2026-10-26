@@ -1,3 +1,4 @@
+pub mod node_executable;
 pub mod playwright_proxy;
 
 use std::collections::BTreeMap;
@@ -34,6 +35,7 @@ use crate::api::service_api::{
 };
 use crate::connection::transport::session_transport::RawCdpSession;
 use crate::connection::transport::stdio_transport::CdpStdioTransport;
+use node_executable::{NodeExecutableNotFound, resolve_node_executable};
 use crate::service::virtual_browser_root::{TargetEndpoint, VirtualBrowserRoot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -402,6 +404,12 @@ impl ConnectionRuntime {
                 runtime_args,
                 env,
             } => {
+                // The bare default would be looked up on the service's PATH, which may lack node.
+                let runtime_executable = if runtime_executable == "node" {
+                    resolve_node_executable()?.to_string_lossy().into_owned()
+                } else {
+                    runtime_executable.clone()
+                };
                 let launch = launch_provider(
                     NODE_HELPER,
                     "Node.js",
@@ -414,7 +422,7 @@ impl ConnectionRuntime {
                                 .expect("Node.js arguments always serialize"),
                         ),
                         ("DBGJS_NODE_CWD", cwd.clone()),
-                        ("DBGJS_NODE_EXECUTABLE", runtime_executable.clone()),
+                        ("DBGJS_NODE_EXECUTABLE", runtime_executable),
                         (
                             "DBGJS_NODE_RUNTIME_ARGS",
                             serde_json::to_string(runtime_args)
@@ -1298,7 +1306,7 @@ async fn launch_playwright(
         }
         None => find_playwright_package()?,
     };
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = resolve_node_executable()?;
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
@@ -1323,7 +1331,7 @@ async fn launch_playwright(
     let mut child = command
         .spawn()
         .map_err(|source| ConnectionProviderError::Spawn {
-            executable: PathBuf::from(node),
+            executable: node,
             source,
         })?;
     let stdout = child
@@ -1379,7 +1387,7 @@ async fn launch_provider<const N: usize>(
     capture_events: bool,
     environment: [(&str, String); N],
 ) -> Result<ProviderLaunch, ConnectionProviderError> {
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = resolve_node_executable()?;
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
@@ -1398,7 +1406,7 @@ async fn launch_provider<const N: usize>(
     let mut child = command
         .spawn()
         .map_err(|source| ConnectionProviderError::Spawn {
-            executable: PathBuf::from(node),
+            executable: node,
             source,
         })?;
     let stdout = child
@@ -1641,6 +1649,8 @@ pub enum ConnectionProviderError {
     InvalidProcessId(u32),
     #[error("scoped process-tree target IDs must not be empty")]
     EmptyProcessTreeTarget,
+    #[error(transparent)]
+    NodeNotFound(#[from] NodeExecutableNotFound),
     #[error("failed to launch connection process with {executable}: {source}")]
     Spawn {
         executable: PathBuf,
