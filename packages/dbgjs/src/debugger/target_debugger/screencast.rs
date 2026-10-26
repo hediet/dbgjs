@@ -1,7 +1,8 @@
 use super::*;
 use crate::api::service_api::{
-    ScreencastFormat, ScreencastFrameMetadata, ScreencastInput, ScreencastMessage,
-    ScreencastOptions, ScreencastSize, ScreencastSummary, ScreencastViewport,
+    ScreencastFormat, ScreencastFrameMetadata, ScreencastInput, ScreencastKeyEventType,
+    ScreencastKeyInput, ScreencastMessage, ScreencastOptions, ScreencastSize, ScreencastSummary,
+    ScreencastViewport,
 };
 use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde_json::{Value, json};
@@ -242,7 +243,16 @@ async fn dispatch_input(
                 mouse.y = to_css_pixels(mouse.y, zoom);
                 ("Input.dispatchMouseEvent", serde_json::to_value(mouse))
             }
-            ScreencastInput::Key(key) => ("Input.dispatchKeyEvent", serde_json::to_value(key)),
+            ScreencastInput::Key(key) => {
+                let commands = editing_commands(&key, cfg!(target_os = "macos"));
+                let params = serde_json::to_value(key).map(|mut params| {
+                    if let Some(commands) = commands {
+                        params["commands"] = json!(commands);
+                    }
+                    params
+                });
+                ("Input.dispatchKeyEvent", params)
+            }
             ScreencastInput::FrameAck { .. }
             | ScreencastInput::Resize(_)
             | ScreencastInput::Viewport(_)
@@ -269,6 +279,27 @@ async fn page_zoom(target: &TargetDebuggerHandle) -> Result<f64, JsonRpcError> {
 /// would be 799.99997, which the page's integer `clientX` truncates to 799.
 fn to_css_pixels(frame_pixels: f64, zoom: f64) -> f64 {
     (frame_pixels / zoom * 1000.0).round() / 1000.0
+}
+
+/// On macOS the native menu, not the page, turns Cmd shortcuts into editing commands, and
+/// injected key events never reach that menu; CDP runs the command when the event names it.
+fn editing_commands(key: &ScreencastKeyInput, mac: bool) -> Option<&'static [&'static str]> {
+    const META: u32 = 4;
+    const SHIFT: u32 = 8;
+    let down = matches!(key.event_type, ScreencastKeyEventType::KeyDown | ScreencastKeyEventType::RawKeyDown);
+    if !mac || !down || key.modifiers & META == 0 {
+        return None;
+    }
+    let shift = key.modifiers & SHIFT != 0;
+    Some(match (key.code.as_str(), shift) {
+        ("KeyA", false) => &["selectAll"],
+        ("KeyC", false) => &["copy"],
+        ("KeyX", false) => &["cut"],
+        ("KeyV", false) => &["paste"],
+        ("KeyZ", false) => &["undo"],
+        ("KeyZ", true) => &["redo"],
+        _ => return None,
+    })
 }
 
 /// CDP rejects explicit `null` for optional input fields.
@@ -571,6 +602,25 @@ mod tests {
             ).await.unwrap_err();
             assert_eq!((error.code, error.message.as_str()), (error_codes::INVALID_PARAMS, "window must be in 1..=5"));
         }
+    }
+
+    #[test]
+    fn mac_cmd_shortcuts_name_their_editing_command() {
+        let key = |event_type, code: &str, modifiers| ScreencastKeyInput {
+            event_type,
+            key: code.trim_start_matches("Key").to_lowercase(),
+            code: code.into(),
+            text: None,
+            windows_virtual_key_code: None,
+            auto_repeat: false,
+            modifiers,
+        };
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::RawKeyDown, "KeyZ", 4), true), Some(&["undo"][..]));
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::RawKeyDown, "KeyZ", 12), true), Some(&["redo"][..]));
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::RawKeyDown, "KeyA", 4), true), Some(&["selectAll"][..]));
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::KeyUp, "KeyZ", 4), true), None);
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::RawKeyDown, "KeyZ", 2), true), None, "Ctrl is not Cmd");
+        assert_eq!(editing_commands(&key(ScreencastKeyEventType::RawKeyDown, "KeyZ", 4), false), None, "only macOS needs commands");
     }
 
     #[tokio::test]
