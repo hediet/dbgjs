@@ -26,6 +26,11 @@ pub struct ScreencastOptions {
     pub quality: Option<u8>,
     #[serde(default)]
     pub size: Option<ScreencastSize>,
+    /// How many frames may be on the way to the client before it acks one, in `1..=5`
+    /// (default 1). Larger windows hide the round trip on slow links: the service acks the
+    /// browser as soon as a frame can be sent and keeps at most one newer frame waiting.
+    #[serde(default)]
+    pub window: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
