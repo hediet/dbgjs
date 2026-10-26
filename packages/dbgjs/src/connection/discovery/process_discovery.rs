@@ -523,8 +523,11 @@ fn configure_background_command(_command: &mut Command) {}
 #[cfg(windows)]
 async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // Without a console, Windows PowerShell writes stdout in the OEM code page, so any
+    // non-ASCII command line would make the whole listing invalid UTF-8.
     let script = r#"
         $ErrorActionPreference = "Stop"
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
         @(Get-CimInstance Win32_Process |
             Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate,ExecutablePath) |
             ConvertTo-Json -Compress
@@ -1549,6 +1552,28 @@ mod tests {
         assert!(!current.command_line.is_empty());
         assert!(!current.creation_date.is_empty());
         assert!(!current.executable_path.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn discovers_windows_processes_with_non_ascii_command_lines() {
+        let marker = format!("dbgjs-Grüße-{}", std::process::id());
+        let mut child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("Start-Sleep 30 # {marker}")])
+            .creation_flags(0x0800_0000)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let child_id = child.id().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let processes = query_windows_processes().await;
+        child.kill().await.unwrap();
+        let child = processes
+            .unwrap()
+            .into_iter()
+            .find(|process| process.process_id == child_id)
+            .expect("the child process must be observable");
+        assert!(child.command_line.contains(&marker), "{}", child.command_line);
     }
 
     #[cfg(unix)]

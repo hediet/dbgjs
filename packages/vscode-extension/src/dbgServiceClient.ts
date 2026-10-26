@@ -8,6 +8,7 @@ import {
 	CpuProfilerApi, CpuProfilerApiRoot,
 	HeapProfilerApi, HeapProfilerApiRoot,
 	RelayApi, RelayApiRoot,
+	ScreencastApi, ScreencastApiRoot,
 	ServiceApi, ServiceApiRoot,
 	SourceApi, SourceApiRoot,
 	TargetDebuggerApi, TargetDebuggerApiRoot,
@@ -26,6 +27,7 @@ export class DbgServiceClient {
 	public readonly cdp: InterfaceClient<typeof CdpAccessApi>;
 	public readonly relay: InterfaceClient<typeof RelayApi>;
 	public readonly browser: InterfaceClient<typeof BrowserAutomationApi>;
+	public readonly screencast: InterfaceClient<typeof ScreencastApi>;
 	public readonly coverage: InterfaceClient<typeof CoverageApi>;
 	public readonly cpu: InterfaceClient<typeof CpuProfilerApi>;
 	public readonly heap: InterfaceClient<typeof HeapProfilerApi>;
@@ -39,6 +41,7 @@ export class DbgServiceClient {
 		this.cdp = connection.get(CdpAccessApiRoot);
 		this.relay = connection.get(RelayApiRoot);
 		this.browser = connection.get(BrowserAutomationApiRoot);
+		this.screencast = connection.get(ScreencastApiRoot);
 		this.coverage = connection.get(CoverageApiRoot);
 		this.cpu = connection.get(CpuProfilerApiRoot);
 		this.heap = connection.get(HeapProfilerApiRoot);

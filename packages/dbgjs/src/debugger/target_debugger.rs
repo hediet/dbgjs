@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 mod owned_values;
+mod screencast;
 use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 use crate::capture::cpu::{
@@ -7193,7 +7194,7 @@ mod tests {
         }
     }
 
-    fn target_snapshot(phase: TargetDebuggerPhase) -> TargetDebuggerSnapshot {
+    pub(super) fn target_snapshot(phase: TargetDebuggerPhase) -> TargetDebuggerSnapshot {
         TargetDebuggerSnapshot {
             context_id: "test".to_owned(),
             connection_id: "browser".to_owned(),
