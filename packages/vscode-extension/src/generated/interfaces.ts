@@ -5146,7 +5146,7 @@ namespace $contract11 {
 export const hubrpcDefaultsInterface: typeof $contract11.definition = $contract11.definition;
 
 namespace $contract12 {
-    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"15ff914ddf2c3802\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"limit\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]},\"serviceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"timeoutMs\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceDescription\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\"}},{\"type\":\"null\"}]}},\"additionalProperties\":false}},\"nextCursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"truncated\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}}}}");
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"fde86a77878692e3\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"timeoutMs\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"reachableServiceIds\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"rootPrincipalSets\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"principal\"],\"properties\":{\"principal\":{\"type\":\"string\"},\"transitive\":{\"type\":\"boolean\"}},\"additionalProperties\":false}}},\"serviceDescription\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"additionalProperties\":false}},\"nextCursor\":{\"type\":\"string\"},\"truncated\":{\"type\":\"boolean\"}},\"additionalProperties\":false}},\"watch\":{\"params\":{\"type\":\"object\",\"properties\":{\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"serverStream\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}}");
     
     /**
      * Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.
@@ -5155,56 +5155,68 @@ namespace $contract12 {
         {
             id: "hubrpc.directory",
             description: "Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.",
-            hash: "15ff914ddf2c3802",
+            hash: "fde86a77878692e3",
         },
         {
             list: requestType(
                 z.object({
-                    cursor: z.union([
-                        z.string(),
-                        z.null(),
-                    ]).optional(),
-                    interfaceId: z.union([
-                        z.string(),
-                        z.null(),
-                    ]).optional(),
-                    limit: z.union([
-                        z.uint32(),
-                        z.null(),
-                    ]).optional(),
-                    serviceId: z.union([
-                        z.string(),
-                        z.null(),
-                    ]).optional(),
-                    timeoutMs: z.union([
-                        z.uint32(),
-                        z.null(),
-                    ]).optional(),
+                    cursor: z.string().optional(),
+                    interfaceId: z.string().optional(),
+                    interfaceIdPrefix: z.string().optional(),
+                    limit: z.int().optional(),
+                    serviceId: z.string().optional(),
+                    serviceIdScopes: z.array(z.union([
+                        z.object({
+                            exact: z.string(),
+                        }),
+                        z.object({
+                            prefix: z.string(),
+                        }),
+                    ])).optional(),
+                    timeoutMs: z.int().optional(),
                 }),
                 z.object({
                     items: z.array(z.object({
                         interfaceHash: z.string(),
                         interfaceId: z.string(),
-                        serviceDescription: z.union([
-                            z.string(),
-                            z.null(),
-                        ]).optional(),
+                        reachableServiceIds: z.array(z.union([
+                            z.object({
+                                exact: z.string(),
+                            }),
+                            z.object({
+                                prefix: z.string(),
+                            }),
+                        ])).optional(),
+                        rootPrincipalSets: z.array(z.array(z.object({
+                            principal: z.string(),
+                            transitive: z.boolean().optional(),
+                        }))).optional(),
+                        serviceDescription: z.string().optional(),
                         serviceId: z.string(),
-                        tags: z.union([
-                            z.array(z.string()),
-                            z.null(),
-                        ]).optional(),
+                        tags: z.array(z.string()).optional(),
                     })),
-                    nextCursor: z.union([
-                        z.string(),
-                        z.null(),
-                    ]).optional(),
-                    truncated: z.union([
-                        z.boolean(),
-                        z.null(),
-                    ]).optional(),
+                    nextCursor: z.string().optional(),
+                    truncated: z.boolean().optional(),
                 }),
             ),
+            watch: requestType(
+                z.object({
+                    interfaceId: z.string().optional(),
+                    interfaceIdPrefix: z.string().optional(),
+                    serviceId: z.string().optional(),
+                    serviceIdScopes: z.array(z.union([
+                        z.object({
+                            exact: z.string(),
+                        }),
+                        z.object({
+                            prefix: z.string(),
+                        }),
+                    ])).optional(),
+                }),
+                z.object({}),
+            ).withStream({
+                server: z.object({}),
+            }),
         },
         { frozenSchema: wireSchema },
     );
