@@ -2028,6 +2028,180 @@ namespace $contract6 {
 export const CpuProfilerApi: typeof $contract6.definition = $contract6.definition;
 
 namespace $contract7 {
+    /**
+     * A visible top-level native window, in the same coordinate space as [`DisplaySnapshot`].
+     */
+    const DesktopWindowSnapshotSchema = z.object({
+        appName: z.string(),
+        height: z.int(),
+        /**
+         * Native handle: an `HWND` on Windows, a `CGWindowID` on macOS. Valid while the window lives.
+         */
+        id: z.int().describe("Native handle: an `HWND` on Windows, a `CGWindowID` on macOS. Valid while the window lives."),
+        isFocused: z.boolean(),
+        isMinimized: z.boolean(),
+        pid: z.int(),
+        title: z.string(),
+        width: z.int(),
+        x: z.int(),
+        y: z.int(),
+    }).describe("A visible top-level native window, in the same coordinate space as [`DisplaySnapshot`].");
+    
+    /**
+     * A display in the host's desktop coordinate space.
+     *
+     * Windows reports physical pixels; macOS reports points, so its captures are `scale_factor` times larger.
+     */
+    const DisplaySnapshotSchema = z.object({
+        height: z.int(),
+        id: z.int(),
+        isPrimary: z.boolean(),
+        name: z.string(),
+        scaleFactor: z.number(),
+        width: z.int(),
+        x: z.int(),
+        y: z.int(),
+    }).describe("A display in the host's desktop coordinate space.\n\nWindows reports physical pixels; macOS reports points, so its captures are `scale_factor` times larger.");
+    
+    const ScreenshotSnapshotSchema = z.object({
+        dataBase64: z.string(),
+        mediaType: z.string(),
+    });
+    
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.desktop\",\"hash\":\"a6da8744e8d89740\",\"description\":\"Native screen and window capture on the machine that runs the service.\\n\\nUnlike [`BrowserAutomationApi::capture_screenshot`], these operations do not use a debug\\ntarget: they capture what the service host's interactive desktop shows, including OS\\npermission prompts, native dialogs, and other applications.\",\"methods\":{\"capture_display\":{\"params\":{\"type\":\"object\",\"properties\":{\"displayId\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ScreenshotSnapshot\"},\"errors\":[{\"code\":1,\"type\":\"Unsupported\",\"message\":\"native desktop capture is not supported on {platform} yet\",\"data\":{\"type\":\"object\",\"required\":[\"platform\"],\"properties\":{\"platform\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"PermissionDenied\",\"message\":\"{reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"DisplayNotFound\",\"message\":\"display {display_id} does not exist\",\"data\":{\"type\":\"object\",\"required\":[\"display_id\"],\"properties\":{\"display_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowNotFound\",\"message\":\"window {window_id} does not exist or is no longer visible\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowMinimized\",\"message\":\"window {window_id} is minimized and cannot be captured\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"CaptureFailed\",\"message\":\"desktop capture failed: {reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}}],\"description\":\"Captures one display; `None` selects the primary display.\"},\"capture_window\":{\"params\":{\"type\":\"object\",\"required\":[\"windowId\"],\"properties\":{\"windowId\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ScreenshotSnapshot\"},\"errors\":[{\"code\":1,\"type\":\"Unsupported\",\"message\":\"native desktop capture is not supported on {platform} yet\",\"data\":{\"type\":\"object\",\"required\":[\"platform\"],\"properties\":{\"platform\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"PermissionDenied\",\"message\":\"{reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"DisplayNotFound\",\"message\":\"display {display_id} does not exist\",\"data\":{\"type\":\"object\",\"required\":[\"display_id\"],\"properties\":{\"display_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowNotFound\",\"message\":\"window {window_id} does not exist or is no longer visible\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowMinimized\",\"message\":\"window {window_id} is minimized and cannot be captured\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"CaptureFailed\",\"message\":\"desktop capture failed: {reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}}]},\"list_displays\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/DisplaySnapshot\"}},\"errors\":[{\"code\":1,\"type\":\"Unsupported\",\"message\":\"native desktop capture is not supported on {platform} yet\",\"data\":{\"type\":\"object\",\"required\":[\"platform\"],\"properties\":{\"platform\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"PermissionDenied\",\"message\":\"{reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"DisplayNotFound\",\"message\":\"display {display_id} does not exist\",\"data\":{\"type\":\"object\",\"required\":[\"display_id\"],\"properties\":{\"display_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowNotFound\",\"message\":\"window {window_id} does not exist or is no longer visible\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowMinimized\",\"message\":\"window {window_id} is minimized and cannot be captured\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"CaptureFailed\",\"message\":\"desktop capture failed: {reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}}]},\"list_windows\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/DesktopWindowSnapshot\"}},\"errors\":[{\"code\":1,\"type\":\"Unsupported\",\"message\":\"native desktop capture is not supported on {platform} yet\",\"data\":{\"type\":\"object\",\"required\":[\"platform\"],\"properties\":{\"platform\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"PermissionDenied\",\"message\":\"{reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"DisplayNotFound\",\"message\":\"display {display_id} does not exist\",\"data\":{\"type\":\"object\",\"required\":[\"display_id\"],\"properties\":{\"display_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowNotFound\",\"message\":\"window {window_id} does not exist or is no longer visible\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"WindowMinimized\",\"message\":\"window {window_id} is minimized and cannot be captured\",\"data\":{\"type\":\"object\",\"required\":[\"window_id\"],\"properties\":{\"window_id\":{\"type\":\"integer\"}},\"additionalProperties\":false}},{\"code\":1,\"type\":\"CaptureFailed\",\"message\":\"desktop capture failed: {reason}\",\"data\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"type\":\"string\"}},\"additionalProperties\":false}}],\"description\":\"Visible top-level windows, front to back.\"}},\"components\":{\"schemas\":{\"DesktopWindowSnapshot\":{\"description\":\"A visible top-level native window, in the same coordinate space as [`DisplaySnapshot`].\",\"type\":\"object\",\"required\":[\"appName\",\"height\",\"id\",\"isFocused\",\"isMinimized\",\"pid\",\"title\",\"width\",\"x\",\"y\"],\"properties\":{\"appName\":{\"type\":\"string\"},\"height\":{\"type\":\"integer\"},\"id\":{\"description\":\"Native handle: an `HWND` on Windows, a `CGWindowID` on macOS. Valid while the window lives.\",\"type\":\"integer\"},\"isFocused\":{\"type\":\"boolean\"},\"isMinimized\":{\"type\":\"boolean\"},\"pid\":{\"type\":\"integer\"},\"title\":{\"type\":\"string\"},\"width\":{\"type\":\"integer\"},\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"DisplaySnapshot\":{\"description\":\"A display in the host's desktop coordinate space.\\n\\nWindows reports physical pixels; macOS reports points, so its captures are `scale_factor` times larger.\",\"type\":\"object\",\"required\":[\"height\",\"id\",\"isPrimary\",\"name\",\"scaleFactor\",\"width\",\"x\",\"y\"],\"properties\":{\"height\":{\"type\":\"integer\"},\"id\":{\"type\":\"integer\"},\"isPrimary\":{\"type\":\"boolean\"},\"name\":{\"type\":\"string\"},\"scaleFactor\":{\"type\":\"number\"},\"width\":{\"type\":\"integer\"},\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"ScreenshotSnapshot\":{\"type\":\"object\",\"required\":[\"dataBase64\",\"mediaType\"],\"properties\":{\"dataBase64\":{\"type\":\"string\"},\"mediaType\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    
+    /**
+     * Native screen and window capture on the machine that runs the service.
+     *
+     * Unlike [`BrowserAutomationApi::capture_screenshot`], these operations do not use a debug
+     * target: they capture what the service host's interactive desktop shows, including OS
+     * permission prompts, native dialogs, and other applications.
+     */
+    export const definition = new InterfaceDefinition(
+        {
+            id: "dev.dbgjs.desktop",
+            description: "Native screen and window capture on the machine that runs the service.\n\nUnlike [`BrowserAutomationApi::capture_screenshot`], these operations do not use a debug\ntarget: they capture what the service host's interactive desktop shows, including OS\npermission prompts, native dialogs, and other applications.",
+            hash: "a6da8744e8d89740",
+        },
+        {
+            /**
+             * Captures one display; `None` selects the primary display.
+             */
+            capture_display: requestType(
+                z.object({
+                    displayId: z.union([
+                        z.uint32(),
+                        z.null(),
+                    ]).optional(),
+                }),
+                ScreenshotSnapshotSchema,
+                {
+                    description: "Captures one display; `None` selects the primary display.",
+                },
+            ).withErrors([
+                applicationError("Unsupported", { code: 1, message: "native desktop capture is not supported on {platform} yet", data: z.object({
+                    platform: z.string(),
+                }) }),
+                applicationError("PermissionDenied", { code: 1, message: "{reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+                applicationError("DisplayNotFound", { code: 1, message: "display {display_id} does not exist", data: z.object({
+                    display_id: z.int(),
+                }) }),
+                applicationError("WindowNotFound", { code: 1, message: "window {window_id} does not exist or is no longer visible", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("WindowMinimized", { code: 1, message: "window {window_id} is minimized and cannot be captured", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("CaptureFailed", { code: 1, message: "desktop capture failed: {reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+            ] as const),
+            capture_window: requestType(
+                z.object({
+                    windowId: z.int(),
+                }),
+                ScreenshotSnapshotSchema,
+            ).withErrors([
+                applicationError("Unsupported", { code: 1, message: "native desktop capture is not supported on {platform} yet", data: z.object({
+                    platform: z.string(),
+                }) }),
+                applicationError("PermissionDenied", { code: 1, message: "{reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+                applicationError("DisplayNotFound", { code: 1, message: "display {display_id} does not exist", data: z.object({
+                    display_id: z.int(),
+                }) }),
+                applicationError("WindowNotFound", { code: 1, message: "window {window_id} does not exist or is no longer visible", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("WindowMinimized", { code: 1, message: "window {window_id} is minimized and cannot be captured", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("CaptureFailed", { code: 1, message: "desktop capture failed: {reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+            ] as const),
+            list_displays: requestType(
+                z.object({}),
+                z.array(DisplaySnapshotSchema),
+            ).withErrors([
+                applicationError("Unsupported", { code: 1, message: "native desktop capture is not supported on {platform} yet", data: z.object({
+                    platform: z.string(),
+                }) }),
+                applicationError("PermissionDenied", { code: 1, message: "{reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+                applicationError("DisplayNotFound", { code: 1, message: "display {display_id} does not exist", data: z.object({
+                    display_id: z.int(),
+                }) }),
+                applicationError("WindowNotFound", { code: 1, message: "window {window_id} does not exist or is no longer visible", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("WindowMinimized", { code: 1, message: "window {window_id} is minimized and cannot be captured", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("CaptureFailed", { code: 1, message: "desktop capture failed: {reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+            ] as const),
+            /**
+             * Visible top-level windows, front to back.
+             */
+            list_windows: requestType(
+                z.object({}),
+                z.array(DesktopWindowSnapshotSchema),
+                {
+                    description: "Visible top-level windows, front to back.",
+                },
+            ).withErrors([
+                applicationError("Unsupported", { code: 1, message: "native desktop capture is not supported on {platform} yet", data: z.object({
+                    platform: z.string(),
+                }) }),
+                applicationError("PermissionDenied", { code: 1, message: "{reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+                applicationError("DisplayNotFound", { code: 1, message: "display {display_id} does not exist", data: z.object({
+                    display_id: z.int(),
+                }) }),
+                applicationError("WindowNotFound", { code: 1, message: "window {window_id} does not exist or is no longer visible", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("WindowMinimized", { code: 1, message: "window {window_id} is minimized and cannot be captured", data: z.object({
+                    window_id: z.int(),
+                }) }),
+                applicationError("CaptureFailed", { code: 1, message: "desktop capture failed: {reason}", data: z.object({
+                    reason: z.string(),
+                }) }),
+            ] as const),
+        },
+        { frozenSchema: wireSchema },
+    );
+}
+export const DesktopApi: typeof $contract7.definition = $contract7.definition;
+
+namespace $contract8 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -3064,9 +3238,9 @@ namespace $contract7 {
         { frozenSchema: wireSchema },
     );
 }
-export const HeapProfilerApi: typeof $contract7.definition = $contract7.definition;
+export const HeapProfilerApi: typeof $contract8.definition = $contract8.definition;
 
-namespace $contract8 {
+namespace $contract9 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3157,9 +3331,9 @@ namespace $contract8 {
         { frozenSchema: wireSchema },
     );
 }
-export const RelayApi: typeof $contract8.definition = $contract8.definition;
+export const RelayApi: typeof $contract9.definition = $contract9.definition;
 
-namespace $contract9 {
+namespace $contract10 {
     const SourceSuffixRewriteSnapshotSchema = z.object({
         from: z.string(),
         to: z.string(),
@@ -3536,9 +3710,9 @@ namespace $contract9 {
         { frozenSchema: wireSchema },
     );
 }
-export const SourceApi: typeof $contract9.definition = $contract9.definition;
+export const SourceApi: typeof $contract10.definition = $contract10.definition;
 
-namespace $contract10 {
+namespace $contract11 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -5105,9 +5279,9 @@ namespace $contract10 {
         { frozenSchema: wireSchema },
     );
 }
-export const TargetDebuggerApi: typeof $contract10.definition = $contract10.definition;
+export const TargetDebuggerApi: typeof $contract11.definition = $contract11.definition;
 
-namespace $contract11 {
+namespace $contract12 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.defaults\",\"hash\":\"4a6e3a1c5d66ba45\",\"description\":\"Reflection: preset default service / interface on this connection.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"listBindings\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"bindings\"],\"properties\":{\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"prefix\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"prefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5143,9 +5317,9 @@ namespace $contract11 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDefaultsInterface: typeof $contract11.definition = $contract11.definition;
+export const hubrpcDefaultsInterface: typeof $contract12.definition = $contract12.definition;
 
-namespace $contract12 {
+namespace $contract13 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"15ff914ddf2c3802\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"limit\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]},\"serviceId\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"timeoutMs\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceDescription\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"anyOf\":[{\"type\":\"array\",\"items\":{\"type\":\"string\"}},{\"type\":\"null\"}]}},\"additionalProperties\":false}},\"nextCursor\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"truncated\":{\"anyOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5209,9 +5383,9 @@ namespace $contract12 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDirectoryInterface: typeof $contract12.definition = $contract12.definition;
+export const hubrpcDirectoryInterface: typeof $contract13.definition = $contract13.definition;
 
-namespace $contract13 {
+namespace $contract14 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.schemas\",\"hash\":\"df0a50d964f417c3\",\"description\":\"Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"required\":[\"interfaceId\"],\"properties\":{\"hash\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"schema\"],\"properties\":{\"schema\":{\"description\":\"A full `LinkRpcInterfaceSchema`.\"}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5243,7 +5417,7 @@ namespace $contract13 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcSchemasInterface: typeof $contract13.definition = $contract13.definition;
+export const hubrpcSchemasInterface: typeof $contract14.definition = $contract14.definition;
 
 export const BrowserAutomationApiRoot: QualifiedInterfaceTarget<typeof BrowserAutomationApi> = interfaceTarget(BrowserAutomationApi, { serviceId: "" });
 export const CaptureApiRoot: QualifiedInterfaceTarget<typeof CaptureApi> = interfaceTarget(CaptureApi, { serviceId: "" });
@@ -5252,6 +5426,7 @@ export const ServiceApiRoot: QualifiedInterfaceTarget<typeof ServiceApi> = inter
 export const ContextApiRoot: QualifiedInterfaceTarget<typeof ContextApi> = interfaceTarget(ContextApi, { serviceId: "" });
 export const CoverageApiRoot: QualifiedInterfaceTarget<typeof CoverageApi> = interfaceTarget(CoverageApi, { serviceId: "" });
 export const CpuProfilerApiRoot: QualifiedInterfaceTarget<typeof CpuProfilerApi> = interfaceTarget(CpuProfilerApi, { serviceId: "" });
+export const DesktopApiRoot: QualifiedInterfaceTarget<typeof DesktopApi> = interfaceTarget(DesktopApi, { serviceId: "" });
 export const HeapProfilerApiRoot: QualifiedInterfaceTarget<typeof HeapProfilerApi> = interfaceTarget(HeapProfilerApi, { serviceId: "" });
 export const RelayApiRoot: QualifiedInterfaceTarget<typeof RelayApi> = interfaceTarget(RelayApi, { serviceId: "" });
 export const SourceApiRoot: QualifiedInterfaceTarget<typeof SourceApi> = interfaceTarget(SourceApi, { serviceId: "" });

@@ -45,6 +45,19 @@ reqwest = "0.12"
 jsonschema = { version = "0.33.0", default-features = false }
 tempfile = "3"
 
+# Native desktop capture (`dev.dbgjs.desktop`). Linux is not wired up yet: xcap
+# needs xcb, D-Bus, and PipeWire development libraries there.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+xcap = "0.9.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "test-util"] }
 
