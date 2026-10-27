@@ -65,6 +65,8 @@ const PLAYWRIGHT_PAGE_HELPER: &str = include_str!("../connection/providers/playw
 const COVERAGE_HINT_DELAY: Duration = Duration::from_secs(20);
 
 fn main() {
+    dbgjs::timing::init();
+    dbgjs::timing::mark("main");
     let thread = std::thread::Builder::new()
         .name("dbgjs-main".to_owned())
         .stack_size(16 * 1024 * 1024)
@@ -338,8 +340,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, eval, arguments @ ..] if target == "target" && eval == "eval" => {
             let options = parse_eval_options(arguments, io::stdin())?;
             let client = ensure_service(&service_target).await?;
+            dbgjs::timing::mark("eval: service connected");
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
+            dbgjs::timing::mark("eval: scope resolved");
             let value = rpc(client
                 .targets
                 .value_operation(
@@ -353,6 +357,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     options.timeout_ms,
                 )
                 .await)?;
+            dbgjs::timing::mark("eval: evaluated");
             print_owned_value(output, &value, options.json, options.json_expect, options.describe, options.max_output_bytes)?;
         }
         [playwright, arguments @ ..] if playwright == "playwright" => {
@@ -2091,14 +2096,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                &scope.context,
-                &scope.connection,
-                &scope.target,
+                &client,
+                &selection_file,
+                &scope,
                 TargetWaitPredicate::BreakpointInstalled {
                     breakpoint_id: breakpoint_id.clone(),
                 },
                 "30000",
-                &service_target,
                 output,
             )
             .await?;
@@ -2110,14 +2114,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                &scope.context,
-                &scope.connection,
-                &scope.target,
+                &client,
+                &selection_file,
+                &scope,
                 TargetWaitPredicate::BreakpointInstalled {
                     breakpoint_id: breakpoint_id.clone(),
                 },
                 timeout_ms,
-                &service_target,
                 output,
             )
             .await?;
@@ -2129,14 +2132,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                &scope.context,
-                &scope.connection,
-                &scope.target,
+                &client,
+                &selection_file,
+                &scope,
                 TargetWaitPredicate::Paused {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
                 "30000",
-                &service_target,
                 output,
             )
             .await?;
@@ -2148,14 +2150,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                &scope.context,
-                &scope.connection,
-                &scope.target,
+                &client,
+                &selection_file,
+                &scope,
                 TargetWaitPredicate::Paused {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
                 timeout_ms,
-                &service_target,
                 output,
             )
             .await?;
@@ -2165,12 +2166,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
-                &scope.context,
-                &scope.connection,
-                &scope.target,
+                &client,
+                &selection_file,
+                &scope,
                 TargetWaitPredicate::Running,
                 "30000",
-                &service_target,
                 output,
             )
             .await?;
@@ -3142,8 +3142,19 @@ fn record_context_service(
     write_selection_store(selection_file, &store)
 }
 
+/// One connection per CLI process: resolving the implicit context and running the command used to
+/// connect, validate and query the service twice.
 async fn ensure_service(service_target: &ServiceTarget) -> Result<DbgServiceClient, LocalRpcError> {
-    service_target.ensure().await
+    static CONNECTED: std::sync::Mutex<Option<(ServiceTarget, DbgServiceClient)>> =
+        std::sync::Mutex::new(None);
+    if let Some((target, client)) = CONNECTED.lock().unwrap().as_ref()
+        && target == service_target
+    {
+        return Ok(client.clone());
+    }
+    let client = service_target.ensure().await?;
+    *CONNECTED.lock().unwrap() = Some((service_target.clone(), client.clone()));
+    Ok(client)
 }
 
 async fn connect_existing(
@@ -6705,32 +6716,19 @@ fn parse_chrome_options(options: &[String]) -> Result<ChromeOptions, io::Error> 
 }
 
 async fn wait_target(
-    context_id: &str,
-    connection_id: &str,
-    target_id: &str,
+    client: &DbgServiceClient,
+    selection_file: &Path,
+    scope: &ResolvedScope,
     predicate: TargetWaitPredicate,
     timeout_ms: &str,
-    service_target: &ServiceTarget,
     output: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let timeout_ms = parse_u64("timeout", timeout_ms)?;
-    let client = ensure_service(service_target).await?;
     let snapshot = rpc(client
         .targets
-        .wait_target(
-            dbgjs::api::service_api::TargetRef {
-                connection: dbgjs::api::service_api::ConnectionRef {
-                    context_id: context_id.to_owned(),
-                    connection_id: connection_id.to_owned(),
-                },
-                target_id: target_id.to_owned(),
-            },
-            predicate,
-            timeout_ms,
-        )
+        .wait_target(scope.target_ref(), predicate, timeout_ms)
         .await)?;
-    output.print_target(&snapshot, target_id)?;
-    Ok(())
+    print_target_with_watches(&output, client, &load_selection(selection_file)?, scope, &snapshot).await
 }
 
 struct ProcessListOptions {

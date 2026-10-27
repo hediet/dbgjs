@@ -5,3 +5,4 @@ pub mod connection;
 pub mod debugger;
 pub mod service;
 pub mod source;
+pub mod timing;
