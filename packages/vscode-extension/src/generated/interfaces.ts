@@ -2061,6 +2061,134 @@ namespace $contract6 {
 export const CpuProfilerApi: typeof $contract6.definition = $contract6.definition;
 
 namespace $contract7 {
+    const ConnectionRefSchema = z.object({
+        connectionId: z.string(),
+        contextId: z.string(),
+    });
+    
+    const DesktopCloseReasonSchema = z.literal("closed");
+    
+    const DesktopAttachResultSchema = z.object({
+        reason: DesktopCloseReasonSchema,
+    });
+    
+    /**
+     * CSS viewport dimensions and the device pixel ratio to apply to them.
+     */
+    const DesktopViewportSchema = z.object({
+        devicePixelRatio: z.number(),
+        height: z.int(),
+        width: z.int(),
+    }).describe("CSS viewport dimensions and the device pixel ratio to apply to them.");
+    
+    const DesktopClientMessageSchema = z.discriminatedUnion("t", [
+        z.object({
+            data: z.string(),
+            t: z.literal("data"),
+        }),
+        z.object({
+            bytes: z.int(),
+            t: z.literal("credit"),
+        }),
+        z.object({
+            t: z.literal("viewport"),
+            viewport: DesktopViewportSchema,
+        }),
+    ]);
+    
+    const DesktopProtocolSchema = z.literal("rfb");
+    
+    const DesktopInfoSchema = z.object({
+        available: z.boolean(),
+        protocol: DesktopProtocolSchema,
+        title: z.string(),
+    });
+    
+    /**
+     * How the page follows the client's viewport.
+     */
+    const DesktopLayoutSchema = z.union([
+        z.literal("fit").describe("The page keeps its own layout; the desktop is the page scaled down to fit the viewport."),
+        z.literal("resize").describe("The page is laid out at the viewport size and pixel ratio until the desktop closes."),
+    ]).describe("How the page follows the client's viewport.");
+    
+    const DesktopOptionsSchema = z.object({
+        layout: DesktopLayoutSchema.optional(),
+    });
+    
+    const DesktopServerMessageSchema = z.discriminatedUnion("t", [
+        z.object({
+            t: z.literal("ready"),
+        }),
+        z.object({
+            data: z.string(),
+            t: z.literal("data"),
+        }),
+        z.object({
+            bytes: z.int(),
+            t: z.literal("credit"),
+        }),
+    ]);
+    
+    const TargetRefSchema = z.object({
+        connection: ConnectionRefSchema,
+        targetId: z.string(),
+    });
+    
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.desktop\",\"hash\":\"d9bc7f7351bceacb\",\"description\":\"A page target served as a remote desktop: the RFB (VNC) protocol, framed like\\n`linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.\",\"methods\":{\"attach\":{\"params\":{\"type\":\"object\",\"required\":[\"options\",\"targetRef\"],\"properties\":{\"options\":{\"$ref\":\"#/components/schemas/DesktopOptions\"},\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/DesktopAttachResult\"},\"clientStream\":{\"$ref\":\"#/components/schemas/DesktopClientMessage\"},\"serverStream\":{\"$ref\":\"#/components/schemas/DesktopServerMessage\"},\"description\":\"Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates\\nthe call) until the caller cancels or ends its input stream. The server sends `ready`\\nbefore data. Data messages carry canonical base64 of at most 16384 bytes. Each direction\\nstarts with 262144 bytes of credit; sending data consumes credit, and the receiver returns\\ncredit only after consuming the bytes. The client sends its viewport (CSS pixels and device\\npixel ratio) over the stream; how the page follows it depends on `options.layout`.\\nNot exclusive: other debugging of the target continues.\"},\"info\":{\"params\":{\"type\":\"object\",\"required\":[\"targetRef\"],\"properties\":{\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/DesktopInfo\"},\"description\":\"The target's title and that its desktop speaks RFB.\"}},\"components\":{\"schemas\":{\"ConnectionRef\":{\"type\":\"object\",\"required\":[\"connectionId\",\"contextId\"],\"properties\":{\"connectionId\":{\"type\":\"string\"},\"contextId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"DesktopAttachResult\":{\"type\":\"object\",\"required\":[\"reason\"],\"properties\":{\"reason\":{\"$ref\":\"#/components/schemas/DesktopCloseReason\"}},\"additionalProperties\":false},\"DesktopClientMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"data\",\"t\"],\"properties\":{\"data\":{\"type\":\"string\"},\"t\":{\"type\":\"string\",\"const\":\"data\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"bytes\",\"t\"],\"properties\":{\"bytes\":{\"type\":\"integer\"},\"t\":{\"type\":\"string\",\"const\":\"credit\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"t\",\"viewport\"],\"properties\":{\"t\":{\"type\":\"string\",\"const\":\"viewport\"},\"viewport\":{\"$ref\":\"#/components/schemas/DesktopViewport\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"t\"}},\"DesktopCloseReason\":{\"type\":\"string\",\"const\":\"closed\"},\"DesktopInfo\":{\"type\":\"object\",\"required\":[\"available\",\"protocol\",\"title\"],\"properties\":{\"available\":{\"type\":\"boolean\"},\"protocol\":{\"$ref\":\"#/components/schemas/DesktopProtocol\"},\"title\":{\"type\":\"string\"}},\"additionalProperties\":false},\"DesktopLayout\":{\"description\":\"How the page follows the client's viewport.\",\"oneOf\":[{\"description\":\"The page keeps its own layout; the desktop is the page scaled down to fit the viewport.\",\"type\":\"string\",\"const\":\"fit\"},{\"description\":\"The page is laid out at the viewport size and pixel ratio until the desktop closes.\",\"type\":\"string\",\"const\":\"resize\"}]},\"DesktopOptions\":{\"type\":\"object\",\"properties\":{\"layout\":{\"$ref\":\"#/components/schemas/DesktopLayout\"}},\"additionalProperties\":false},\"DesktopProtocol\":{\"type\":\"string\",\"const\":\"rfb\"},\"DesktopServerMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"t\"],\"properties\":{\"t\":{\"type\":\"string\",\"const\":\"ready\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"data\",\"t\"],\"properties\":{\"data\":{\"type\":\"string\"},\"t\":{\"type\":\"string\",\"const\":\"data\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"bytes\",\"t\"],\"properties\":{\"bytes\":{\"type\":\"integer\"},\"t\":{\"type\":\"string\",\"const\":\"credit\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"t\"}},\"DesktopViewport\":{\"description\":\"CSS viewport dimensions and the device pixel ratio to apply to them.\",\"type\":\"object\",\"required\":[\"devicePixelRatio\",\"height\",\"width\"],\"properties\":{\"devicePixelRatio\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"width\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"TargetRef\":{\"type\":\"object\",\"required\":[\"connection\",\"targetId\"],\"properties\":{\"connection\":{\"$ref\":\"#/components/schemas/ConnectionRef\"},\"targetId\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    
+    /**
+     * A page target served as a remote desktop: the RFB (VNC) protocol, framed like
+     * `linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.
+     */
+    export const definition = new InterfaceDefinition(
+        {
+            id: "dev.dbgjs.desktop",
+            description: "A page target served as a remote desktop: the RFB (VNC) protocol, framed like\n`linkrpc.desktop.hub.v1`, so VNC clients such as noVNC can view and control the page.",
+            hash: "d9bc7f7351bceacb",
+        },
+        {
+            /**
+             * Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates
+             * the call) until the caller cancels or ends its input stream. The server sends `ready`
+             * before data. Data messages carry canonical base64 of at most 16384 bytes. Each direction
+             * starts with 262144 bytes of credit; sending data consumes credit, and the receiver returns
+             * credit only after consuming the bytes. The client sends its viewport (CSS pixels and device
+             * pixel ratio) over the stream; how the page follows it depends on `options.layout`.
+             * Not exclusive: other debugging of the target continues.
+             */
+            attach: requestType(
+                z.object({
+                    options: DesktopOptionsSchema,
+                    targetRef: TargetRefSchema,
+                }),
+                DesktopAttachResultSchema,
+                {
+                    description: "Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates\nthe call) until the caller cancels or ends its input stream. The server sends `ready`\nbefore data. Data messages carry canonical base64 of at most 16384 bytes. Each direction\nstarts with 262144 bytes of credit; sending data consumes credit, and the receiver returns\ncredit only after consuming the bytes. The client sends its viewport (CSS pixels and device\npixel ratio) over the stream; how the page follows it depends on `options.layout`.\nNot exclusive: other debugging of the target continues.",
+                },
+            ).withStream({
+                client: DesktopClientMessageSchema,
+                server: DesktopServerMessageSchema,
+            }),
+            /**
+             * The target's title and that its desktop speaks RFB.
+             */
+            info: requestType(
+                z.object({
+                    targetRef: TargetRefSchema,
+                }),
+                DesktopInfoSchema,
+                {
+                    description: "The target's title and that its desktop speaks RFB.",
+                },
+            ),
+        },
+        { frozenSchema: wireSchema },
+    );
+}
+export const DesktopApi: typeof $contract7.definition = $contract7.definition;
+
+namespace $contract8 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -3097,9 +3225,9 @@ namespace $contract7 {
         { frozenSchema: wireSchema },
     );
 }
-export const HeapProfilerApi: typeof $contract7.definition = $contract7.definition;
+export const HeapProfilerApi: typeof $contract8.definition = $contract8.definition;
 
-namespace $contract8 {
+namespace $contract9 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3190,9 +3318,9 @@ namespace $contract8 {
         { frozenSchema: wireSchema },
     );
 }
-export const RelayApi: typeof $contract8.definition = $contract8.definition;
+export const RelayApi: typeof $contract9.definition = $contract9.definition;
 
-namespace $contract9 {
+namespace $contract10 {
     const ConnectionRefSchema = z.object({
         connectionId: z.string(),
         contextId: z.string(),
@@ -3312,6 +3440,13 @@ namespace $contract9 {
             ScreencastSizeSchema,
             z.null(),
         ]).optional(),
+        /**
+         * How many frames may be on the way to the client before it acks one, in `1..=5` (default 1). Larger windows hide the round trip on slow links: the service acks the browser as soon as a frame can be sent and keeps at most one newer frame waiting.
+         */
+        window: z.union([
+            z.int(),
+            z.null(),
+        ]).describe("How many frames may be on the way to the client before it acks one, in `1..=5` (default 1). Larger windows hide the round trip on slow links: the service acks the browser as soon as a frame can be sent and keeps at most one newer frame waiting.").optional(),
     });
     
     const ScreencastSummarySchema = z.object({
@@ -3323,7 +3458,7 @@ namespace $contract9 {
         targetId: z.string(),
     });
     
-    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.screencast\",\"hash\":\"37ae4b969cc5c9bb\",\"description\":\"A view-and-control stream of one page target. Clients receive rendered frames and may send\\npointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.\",\"methods\":{\"screencast\":{\"params\":{\"type\":\"object\",\"required\":[\"options\",\"targetRef\"],\"properties\":{\"options\":{\"$ref\":\"#/components/schemas/ScreencastOptions\"},\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ScreencastSummary\"},\"clientStream\":{\"$ref\":\"#/components/schemas/ScreencastInput\"},\"serverStream\":{\"$ref\":\"#/components/schemas/ScreencastMessage\"},\"description\":\"Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\\ninput stream. At most one frame is unacknowledged: the next frame is produced only after\\nthe client sends `frameAck` for the previous one. Hidden or minimized windows may produce\\nno frames; `visibility` reports such changes when the browser does. Not exclusive: other\\ndebugging of the target continues. Fails if the target detaches or frames are lost.\"}},\"components\":{\"schemas\":{\"ConnectionRef\":{\"type\":\"object\",\"required\":[\"connectionId\",\"contextId\"],\"properties\":{\"connectionId\":{\"type\":\"string\"},\"contextId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"ScreencastFormat\":{\"type\":\"string\",\"enum\":[\"jpeg\",\"png\"]},\"ScreencastFrameMetadata\":{\"description\":\"`Page.ScreencastFrameMetadata`. `deviceWidth` × `deviceHeight` is the frame's coordinate space for mouse input, in device-independent pixels.\",\"type\":\"object\",\"required\":[\"deviceHeight\",\"deviceWidth\",\"offsetTop\",\"pageScaleFactor\",\"scrollOffsetX\",\"scrollOffsetY\"],\"properties\":{\"deviceHeight\":{\"type\":\"number\"},\"deviceWidth\":{\"type\":\"number\"},\"offsetTop\":{\"type\":\"number\"},\"pageScaleFactor\":{\"type\":\"number\"},\"scrollOffsetX\":{\"type\":\"number\"},\"scrollOffsetY\":{\"type\":\"number\"},\"timestamp\":{\"anyOf\":[{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastInput\":{\"oneOf\":[{\"description\":\"The client finished presenting `frame_id`; the browser may send the next frame.\",\"type\":\"object\",\"required\":[\"frameId\",\"kind\"],\"properties\":{\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frameAck\"}},\"additionalProperties\":false},{\"description\":\"Restarts the screencast with a new maximum frame size.\",\"type\":\"object\",\"required\":[\"kind\",\"maxHeight\",\"maxWidth\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"resize\"},\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"description\":\"Lays the page out at this viewport (`Emulation.setDeviceMetricsOverride`) until `resetViewport` or the end of the stream, which always removes the override.\",\"type\":\"object\",\"required\":[\"deviceScaleFactor\",\"height\",\"kind\",\"width\"],\"properties\":{\"deviceScaleFactor\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"viewport\"},\"width\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"description\":\"Removes the viewport override set by `viewport`, restoring the page's own layout.\",\"type\":\"object\",\"required\":[\"kind\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"resetViewport\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchMouseEvent`. `x`/`y` are in the frame's coordinate space (`deviceWidth` × `deviceHeight` device-independent pixels); the service converts them to the page's CSS pixels, which differ when the page is zoomed.\",\"type\":\"object\",\"required\":[\"kind\",\"type\",\"x\",\"y\"],\"properties\":{\"button\":{\"$ref\":\"#/components/schemas/ScreencastMouseButton\"},\"buttons\":{\"description\":\"Bit field of pressed buttons: left 1, right 2, middle 4.\",\"type\":\"integer\"},\"clickCount\":{\"type\":\"integer\"},\"deltaX\":{\"type\":\"number\"},\"deltaY\":{\"type\":\"number\"},\"kind\":{\"type\":\"string\",\"const\":\"mouse\"},\"modifiers\":{\"description\":\"Bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.\",\"type\":\"integer\"},\"type\":{\"$ref\":\"#/components/schemas/ScreencastMouseEventType\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchKeyEvent`.\",\"type\":\"object\",\"required\":[\"code\",\"key\",\"kind\",\"type\"],\"properties\":{\"autoRepeat\":{\"type\":\"boolean\"},\"code\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\",\"const\":\"key\"},\"modifiers\":{\"type\":\"integer\"},\"text\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"type\":{\"$ref\":\"#/components/schemas/ScreencastKeyEventType\"},\"windowsVirtualKeyCode\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastKeyEventType\":{\"type\":\"string\",\"enum\":[\"keyDown\",\"keyUp\",\"rawKeyDown\",\"char\"]},\"ScreencastMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"dataBase64\",\"frameId\",\"kind\",\"mediaType\",\"metadata\"],\"properties\":{\"dataBase64\":{\"type\":\"string\"},\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frame\"},\"mediaType\":{\"type\":\"string\"},\"metadata\":{\"$ref\":\"#/components/schemas/ScreencastFrameMetadata\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"kind\",\"visible\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"visibility\"},\"visible\":{\"type\":\"boolean\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastMouseButton\":{\"type\":\"string\",\"enum\":[\"none\",\"left\",\"middle\",\"right\"]},\"ScreencastMouseEventType\":{\"type\":\"string\",\"enum\":[\"mousePressed\",\"mouseReleased\",\"mouseMoved\",\"mouseWheel\"]},\"ScreencastOptions\":{\"type\":\"object\",\"required\":[\"format\"],\"properties\":{\"format\":{\"$ref\":\"#/components/schemas/ScreencastFormat\"},\"quality\":{\"description\":\"JPEG quality in `0..=100`; ignored for PNG.\",\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint8\"},{\"type\":\"null\"}]},\"size\":{\"anyOf\":[{\"$ref\":\"#/components/schemas/ScreencastSize\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastSize\":{\"description\":\"Maximum frame size in device pixels. The page keeps its own viewport; frames are scaled down.\",\"type\":\"object\",\"required\":[\"maxHeight\",\"maxWidth\"],\"properties\":{\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"ScreencastSummary\":{\"type\":\"object\",\"required\":[\"frames\"],\"properties\":{\"frames\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"TargetRef\":{\"type\":\"object\",\"required\":[\"connection\",\"targetId\"],\"properties\":{\"connection\":{\"$ref\":\"#/components/schemas/ConnectionRef\"},\"targetId\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
+    const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.dbgjs.screencast\",\"hash\":\"e5e9556b74a848d5\",\"description\":\"A view-and-control stream of one page target. Clients receive rendered frames and may send\\npointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.\",\"methods\":{\"screencast\":{\"params\":{\"type\":\"object\",\"required\":[\"options\",\"targetRef\"],\"properties\":{\"options\":{\"$ref\":\"#/components/schemas/ScreencastOptions\"},\"targetRef\":{\"$ref\":\"#/components/schemas/TargetRef\"}},\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/ScreencastSummary\"},\"clientStream\":{\"$ref\":\"#/components/schemas/ScreencastInput\"},\"serverStream\":{\"$ref\":\"#/components/schemas/ScreencastMessage\"},\"description\":\"Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\\ninput stream. At most `options.window` frames (default 1) are unacknowledged: the client\\nsends `frameAck` for each frame it has presented to make room for the next. Hidden or\\nminimized windows may produce no frames; `visibility` reports such changes when the\\nbrowser does. Not exclusive: other debugging of the target continues. Fails if the target\\ndetaches or frames are lost.\"}},\"components\":{\"schemas\":{\"ConnectionRef\":{\"type\":\"object\",\"required\":[\"connectionId\",\"contextId\"],\"properties\":{\"connectionId\":{\"type\":\"string\"},\"contextId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"ScreencastFormat\":{\"type\":\"string\",\"enum\":[\"jpeg\",\"png\"]},\"ScreencastFrameMetadata\":{\"description\":\"`Page.ScreencastFrameMetadata`. `deviceWidth` × `deviceHeight` is the frame's coordinate space for mouse input, in device-independent pixels.\",\"type\":\"object\",\"required\":[\"deviceHeight\",\"deviceWidth\",\"offsetTop\",\"pageScaleFactor\",\"scrollOffsetX\",\"scrollOffsetY\"],\"properties\":{\"deviceHeight\":{\"type\":\"number\"},\"deviceWidth\":{\"type\":\"number\"},\"offsetTop\":{\"type\":\"number\"},\"pageScaleFactor\":{\"type\":\"number\"},\"scrollOffsetX\":{\"type\":\"number\"},\"scrollOffsetY\":{\"type\":\"number\"},\"timestamp\":{\"anyOf\":[{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastInput\":{\"oneOf\":[{\"description\":\"The client finished presenting `frame_id`; the browser may send the next frame.\",\"type\":\"object\",\"required\":[\"frameId\",\"kind\"],\"properties\":{\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frameAck\"}},\"additionalProperties\":false},{\"description\":\"Restarts the screencast with a new maximum frame size.\",\"type\":\"object\",\"required\":[\"kind\",\"maxHeight\",\"maxWidth\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"resize\"},\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"description\":\"Lays the page out at this viewport (`Emulation.setDeviceMetricsOverride`) until `resetViewport` or the end of the stream, which always removes the override.\",\"type\":\"object\",\"required\":[\"deviceScaleFactor\",\"height\",\"kind\",\"width\"],\"properties\":{\"deviceScaleFactor\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"viewport\"},\"width\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"description\":\"Removes the viewport override set by `viewport`, restoring the page's own layout.\",\"type\":\"object\",\"required\":[\"kind\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"resetViewport\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchMouseEvent`. `x`/`y` are in the frame's coordinate space (`deviceWidth` × `deviceHeight` device-independent pixels); the service converts them to the page's CSS pixels, which differ when the page is zoomed.\",\"type\":\"object\",\"required\":[\"kind\",\"type\",\"x\",\"y\"],\"properties\":{\"button\":{\"$ref\":\"#/components/schemas/ScreencastMouseButton\"},\"buttons\":{\"description\":\"Bit field of pressed buttons: left 1, right 2, middle 4.\",\"type\":\"integer\"},\"clickCount\":{\"type\":\"integer\"},\"deltaX\":{\"type\":\"number\"},\"deltaY\":{\"type\":\"number\"},\"kind\":{\"type\":\"string\",\"const\":\"mouse\"},\"modifiers\":{\"description\":\"Bit field: Alt 1, Ctrl 2, Meta 4, Shift 8.\",\"type\":\"integer\"},\"type\":{\"$ref\":\"#/components/schemas/ScreencastMouseEventType\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"additionalProperties\":false},{\"description\":\"`Input.dispatchKeyEvent`.\",\"type\":\"object\",\"required\":[\"code\",\"key\",\"kind\",\"type\"],\"properties\":{\"autoRepeat\":{\"type\":\"boolean\"},\"code\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\",\"const\":\"key\"},\"modifiers\":{\"type\":\"integer\"},\"text\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"type\":{\"$ref\":\"#/components/schemas/ScreencastKeyEventType\"},\"windowsVirtualKeyCode\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint32\"},{\"type\":\"null\"}]}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastKeyEventType\":{\"type\":\"string\",\"enum\":[\"keyDown\",\"keyUp\",\"rawKeyDown\",\"char\"]},\"ScreencastMessage\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"dataBase64\",\"frameId\",\"kind\",\"mediaType\",\"metadata\"],\"properties\":{\"dataBase64\":{\"type\":\"string\"},\"frameId\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\",\"const\":\"frame\"},\"mediaType\":{\"type\":\"string\"},\"metadata\":{\"$ref\":\"#/components/schemas/ScreencastFrameMetadata\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"kind\",\"visible\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"visibility\"},\"visible\":{\"type\":\"boolean\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"ScreencastMouseButton\":{\"type\":\"string\",\"enum\":[\"none\",\"left\",\"middle\",\"right\"]},\"ScreencastMouseEventType\":{\"type\":\"string\",\"enum\":[\"mousePressed\",\"mouseReleased\",\"mouseMoved\",\"mouseWheel\"]},\"ScreencastOptions\":{\"type\":\"object\",\"required\":[\"format\"],\"properties\":{\"format\":{\"$ref\":\"#/components/schemas/ScreencastFormat\"},\"quality\":{\"description\":\"JPEG quality in `0..=100`; ignored for PNG.\",\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint8\"},{\"type\":\"null\"}]},\"size\":{\"anyOf\":[{\"$ref\":\"#/components/schemas/ScreencastSize\"},{\"type\":\"null\"}]},\"window\":{\"description\":\"How many frames may be on the way to the client before it acks one, in `1..=5` (default 1). Larger windows hide the round trip on slow links: the service acks the browser as soon as a frame can be sent and keeps at most one newer frame waiting.\",\"anyOf\":[{\"type\":\"integer\",\"format\":\"uint8\"},{\"type\":\"null\"}]}},\"additionalProperties\":false},\"ScreencastSize\":{\"description\":\"Maximum frame size in device pixels. The page keeps its own viewport; frames are scaled down.\",\"type\":\"object\",\"required\":[\"maxHeight\",\"maxWidth\"],\"properties\":{\"maxHeight\":{\"type\":\"integer\"},\"maxWidth\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"ScreencastSummary\":{\"type\":\"object\",\"required\":[\"frames\"],\"properties\":{\"frames\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"TargetRef\":{\"type\":\"object\",\"required\":[\"connection\",\"targetId\"],\"properties\":{\"connection\":{\"$ref\":\"#/components/schemas/ConnectionRef\"},\"targetId\":{\"type\":\"string\"}},\"additionalProperties\":false}}}}");
     
     /**
      * A view-and-control stream of one page target. Clients receive rendered frames and may send
@@ -3333,15 +3468,16 @@ namespace $contract9 {
         {
             id: "dev.dbgjs.screencast",
             description: "A view-and-control stream of one page target. Clients receive rendered frames and may send\npointer and keyboard input; they cannot issue arbitrary CDP commands through this interface.",
-            hash: "37ae4b969cc5c9bb",
+            hash: "e5e9556b74a848d5",
         },
         {
             /**
              * Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its
-             * input stream. At most one frame is unacknowledged: the next frame is produced only after
-             * the client sends `frameAck` for the previous one. Hidden or minimized windows may produce
-             * no frames; `visibility` reports such changes when the browser does. Not exclusive: other
-             * debugging of the target continues. Fails if the target detaches or frames are lost.
+             * input stream. At most `options.window` frames (default 1) are unacknowledged: the client
+             * sends `frameAck` for each frame it has presented to make room for the next. Hidden or
+             * minimized windows may produce no frames; `visibility` reports such changes when the
+             * browser does. Not exclusive: other debugging of the target continues. Fails if the target
+             * detaches or frames are lost.
              */
             screencast: requestType(
                 z.object({
@@ -3350,7 +3486,7 @@ namespace $contract9 {
                 }),
                 ScreencastSummarySchema,
                 {
-                    description: "Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\ninput stream. At most one frame is unacknowledged: the next frame is produced only after\nthe client sends `frameAck` for the previous one. Hidden or minimized windows may produce\nno frames; `visibility` reports such changes when the browser does. Not exclusive: other\ndebugging of the target continues. Fails if the target detaches or frames are lost.",
+                    description: "Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its\ninput stream. At most `options.window` frames (default 1) are unacknowledged: the client\nsends `frameAck` for each frame it has presented to make room for the next. Hidden or\nminimized windows may produce no frames; `visibility` reports such changes when the\nbrowser does. Not exclusive: other debugging of the target continues. Fails if the target\ndetaches or frames are lost.",
                 },
             ).withStream({
                 client: ScreencastInputSchema,
@@ -3360,9 +3496,9 @@ namespace $contract9 {
         { frozenSchema: wireSchema },
     );
 }
-export const ScreencastApi: typeof $contract9.definition = $contract9.definition;
+export const ScreencastApi: typeof $contract10.definition = $contract10.definition;
 
-namespace $contract10 {
+namespace $contract11 {
     const SourceSuffixRewriteSnapshotSchema = z.object({
         from: z.string(),
         to: z.string(),
@@ -3739,9 +3875,9 @@ namespace $contract10 {
         { frozenSchema: wireSchema },
     );
 }
-export const SourceApi: typeof $contract10.definition = $contract10.definition;
+export const SourceApi: typeof $contract11.definition = $contract11.definition;
 
-namespace $contract11 {
+namespace $contract12 {
     type ValueDescription = { identity?: string | null | undefined; incomplete: boolean; kind: string; nextStart?: number | null | undefined; origin?: string | null | undefined; properties: Array<DescribedProperty>; reference?: string | null | undefined; result?: ValueDescription | null | undefined; source: z.infer<typeof ObjectSourceSnapshotSchema>; state?: string | null | undefined; summary?: string | null | undefined; truncated: boolean; value?: unknown | undefined; };
     type DescribedProperty = { name: string; value: ValueDescription; };
     
@@ -5308,9 +5444,9 @@ namespace $contract11 {
         { frozenSchema: wireSchema },
     );
 }
-export const TargetDebuggerApi: typeof $contract11.definition = $contract11.definition;
+export const TargetDebuggerApi: typeof $contract12.definition = $contract12.definition;
 
-namespace $contract12 {
+namespace $contract13 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.defaults\",\"hash\":\"4a6e3a1c5d66ba45\",\"description\":\"Reflection: preset default service / interface on this connection.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}},\"listBindings\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"bindings\"],\"properties\":{\"bindings\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"prefix\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"prefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"}},\"additionalProperties\":false}}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5346,9 +5482,9 @@ namespace $contract12 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDefaultsInterface: typeof $contract12.definition = $contract12.definition;
+export const hubrpcDefaultsInterface: typeof $contract13.definition = $contract13.definition;
 
-namespace $contract13 {
+namespace $contract14 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.directory\",\"hash\":\"fde86a77878692e3\",\"description\":\"Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.\",\"methods\":{\"list\":{\"params\":{\"type\":\"object\",\"properties\":{\"cursor\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"timeoutMs\":{\"type\":\"integer\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"items\"],\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"interfaceHash\",\"interfaceId\",\"serviceId\"],\"properties\":{\"interfaceHash\":{\"type\":\"string\"},\"interfaceId\":{\"type\":\"string\"},\"reachableServiceIds\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}},\"rootPrincipalSets\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"required\":[\"principal\"],\"properties\":{\"principal\":{\"type\":\"string\"},\"transitive\":{\"type\":\"boolean\"}},\"additionalProperties\":false}}},\"serviceDescription\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"additionalProperties\":false}},\"nextCursor\":{\"type\":\"string\"},\"truncated\":{\"type\":\"boolean\"}},\"additionalProperties\":false}},\"watch\":{\"params\":{\"type\":\"object\",\"properties\":{\"interfaceId\":{\"type\":\"string\"},\"interfaceIdPrefix\":{\"type\":\"string\"},\"serviceId\":{\"type\":\"string\"},\"serviceIdScopes\":{\"type\":\"array\",\"items\":{\"anyOf\":[{\"type\":\"object\",\"required\":[\"exact\"],\"properties\":{\"exact\":{\"type\":\"string\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"prefix\"],\"properties\":{\"prefix\":{\"type\":\"string\"}},\"additionalProperties\":false}]}}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"serverStream\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}}");
     
     /**
@@ -5424,9 +5560,9 @@ namespace $contract13 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcDirectoryInterface: typeof $contract13.definition = $contract13.definition;
+export const hubrpcDirectoryInterface: typeof $contract14.definition = $contract14.definition;
 
-namespace $contract14 {
+namespace $contract15 {
     const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"hubrpc.schemas\",\"hash\":\"df0a50d964f417c3\",\"description\":\"Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.\",\"methods\":{\"get\":{\"params\":{\"type\":\"object\",\"required\":[\"interfaceId\"],\"properties\":{\"hash\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"interfaceId\":{\"type\":\"string\"}},\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"required\":[\"schema\"],\"properties\":{\"schema\":{\"description\":\"A full `LinkRpcInterfaceSchema`.\"}},\"additionalProperties\":false}}}}");
     
     /**
@@ -5458,7 +5594,7 @@ namespace $contract14 {
         { frozenSchema: wireSchema },
     );
 }
-export const hubrpcSchemasInterface: typeof $contract14.definition = $contract14.definition;
+export const hubrpcSchemasInterface: typeof $contract15.definition = $contract15.definition;
 
 export const BrowserAutomationApiRoot: QualifiedInterfaceTarget<typeof BrowserAutomationApi> = interfaceTarget(BrowserAutomationApi, { serviceId: "" });
 export const CaptureApiRoot: QualifiedInterfaceTarget<typeof CaptureApi> = interfaceTarget(CaptureApi, { serviceId: "" });
@@ -5467,6 +5603,7 @@ export const ServiceApiRoot: QualifiedInterfaceTarget<typeof ServiceApi> = inter
 export const ContextApiRoot: QualifiedInterfaceTarget<typeof ContextApi> = interfaceTarget(ContextApi, { serviceId: "" });
 export const CoverageApiRoot: QualifiedInterfaceTarget<typeof CoverageApi> = interfaceTarget(CoverageApi, { serviceId: "" });
 export const CpuProfilerApiRoot: QualifiedInterfaceTarget<typeof CpuProfilerApi> = interfaceTarget(CpuProfilerApi, { serviceId: "" });
+export const DesktopApiRoot: QualifiedInterfaceTarget<typeof DesktopApi> = interfaceTarget(DesktopApi, { serviceId: "" });
 export const HeapProfilerApiRoot: QualifiedInterfaceTarget<typeof HeapProfilerApi> = interfaceTarget(HeapProfilerApi, { serviceId: "" });
 export const RelayApiRoot: QualifiedInterfaceTarget<typeof RelayApi> = interfaceTarget(RelayApi, { serviceId: "" });
 export const ScreencastApiRoot: QualifiedInterfaceTarget<typeof ScreencastApi> = interfaceTarget(ScreencastApi, { serviceId: "" });

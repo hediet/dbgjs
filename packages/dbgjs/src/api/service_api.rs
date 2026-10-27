@@ -21,6 +21,8 @@ mod browser_automation;
 pub use browser_automation::*;
 mod screencast;
 pub use screencast::*;
+mod desktop;
+pub use desktop::*;
 mod coverage;
 pub use coverage::*;
 mod cpu_profiler;

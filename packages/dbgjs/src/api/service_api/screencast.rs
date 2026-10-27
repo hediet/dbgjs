@@ -5,10 +5,11 @@ use super::*;
 #[link_rpc_interface(id = "dev.dbgjs.screencast")]
 pub trait ScreencastApi {
     /// Streams `Page.startScreencast` frames of `target_ref` until the caller cancels or ends its
-    /// input stream. At most one frame is unacknowledged: the next frame is produced only after
-    /// the client sends `frameAck` for the previous one. Hidden or minimized windows may produce
-    /// no frames; `visibility` reports such changes when the browser does. Not exclusive: other
-    /// debugging of the target continues. Fails if the target detaches or frames are lost.
+    /// input stream. At most `options.window` frames (default 1) are unacknowledged: the client
+    /// sends `frameAck` for each frame it has presented to make room for the next. Hidden or
+    /// minimized windows may produce no frames; `visibility` reports such changes when the
+    /// browser does. Not exclusive: other debugging of the target continues. Fails if the target
+    /// detaches or frames are lost.
     #[input_stream(ScreencastInput)]
     #[output_stream(ScreencastMessage)]
     async fn screencast(
@@ -26,6 +27,11 @@ pub struct ScreencastOptions {
     pub quality: Option<u8>,
     #[serde(default)]
     pub size: Option<ScreencastSize>,
+    /// How many frames may be on the way to the client before it acks one, in `1..=5`
+    /// (default 1). Larger windows hide the round trip on slow links: the service acks the
+    /// browser as soon as a frame can be sent and keeps at most one newer frame waiting.
+    #[serde(default)]
+    pub window: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

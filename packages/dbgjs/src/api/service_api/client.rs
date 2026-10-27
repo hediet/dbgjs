@@ -61,6 +61,7 @@ service_bundle! {
     relay: relay_api => RelayApi, RelayApiClient, RelayApiServer;
     browser: browser_automation_api => BrowserAutomationApi, BrowserAutomationApiClient, BrowserAutomationApiServer;
     screencast: screencast_api => ScreencastApi, ScreencastApiClient, ScreencastApiServer;
+    desktop: desktop_api => DesktopApi, DesktopApiClient, DesktopApiServer;
     coverage: coverage_api => CoverageApi, CoverageApiClient, CoverageApiServer;
     cpu: cpu_profiler_api => CpuProfilerApi, CpuProfilerApiClient, CpuProfilerApiServer;
     heap: heap_profiler_api => HeapProfilerApi, HeapProfilerApiClient, HeapProfilerApiServer;
