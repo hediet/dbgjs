@@ -283,7 +283,7 @@ impl OutputFormat {
                 if !watches.is_empty() {
                     println!("Watches:");
                     for watch in watches {
-                        println!("  {}: {}", watch.expression, render_evaluation(watch));
+                        println!("  {}: {}", watch.expression, render_watch(watch));
                     }
                 }
             }
@@ -4333,6 +4333,17 @@ fn render_evaluation(evaluation: &EvaluationSnapshot) -> String {
     render_value_preview(&evaluation.preview)
 }
 
+/// Watches list several values side by side, so strings are quoted to keep `"3.50"` distinct
+/// from `3.5`; a single evaluation result is printed raw.
+fn render_watch(evaluation: &EvaluationSnapshot) -> String {
+    match (&evaluation.value, evaluation.preview.truncated) {
+        (Some(serde_json::Value::String(text)), false) if evaluation.kind == "string" => {
+            printable_text(&serde_json::to_string(text).unwrap_or_default())
+        }
+        _ => render_evaluation(evaluation),
+    }
+}
+
 fn render_value_snapshot(value: &ValueSnapshot) -> String {
     value
         .class_name
@@ -4722,7 +4733,7 @@ mod tests {
         render_heap_classes_human, render_source_search, render_uncompacted_source_graph,
         render_value_snapshot,
         source_search_incomplete_message, source_tree_lines, style_process_label,
-        style_session_label, target_tree_selector, terminal_text,
+        style_session_label, target_tree_selector, terminal_text, render_watch,
     };
     use dbgjs::api::service_api::{
         AgentSessionSnapshot, BrowserRemoteDebugging, BrowserRootSnapshot,
@@ -4889,6 +4900,30 @@ mod tests {
             render_evaluation(&evaluation),
             render_value_snapshot(&value)
         );
+    }
+
+    #[test]
+    fn watches_quote_strings_but_keep_numbers_and_truncated_previews() {
+        let watch = |kind: &str, value: serde_json::Value, preview: &str, truncated: bool| {
+            EvaluationSnapshot {
+                expression: "x".to_owned(),
+                kind: kind.to_owned(),
+                value: Some(value),
+                unserializable_value: None,
+                description: None,
+                object_id: None,
+                preview: ValuePreviewSnapshot {
+                    kind: kind.to_owned(),
+                    preview: Some(preview.to_owned()),
+                    truncated,
+                    reference: None,
+                    source: Default::default(),
+                },
+            }
+        };
+        assert_eq!(render_watch(&watch("string", "3.50".into(), "3.50", false)), "\"3.50\"");
+        assert_eq!(render_watch(&watch("number", 3.5.into(), "3.5", false)), "3.5");
+        assert_eq!(render_watch(&watch("string", "long".into(), "lo", true)), "lo...");
     }
 
     #[test]
