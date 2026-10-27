@@ -4798,6 +4798,7 @@ mod tests {
             targets: Vec::new(),
             targets_observed: false,
             target_discovery_error: None,
+            browser: None,
         }
     }
 

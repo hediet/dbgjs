@@ -45,6 +45,9 @@ reqwest = "0.12"
 jsonschema = { version = "0.33.0", default-features = false }
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "test-util"] }
 

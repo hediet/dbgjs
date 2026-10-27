@@ -10,6 +10,7 @@
 //! auto-attach, blocked child processes), so a provider should run it exactly while someone holds
 //! a lease. The last drop releases the key, which is reported to an optional [`LeaseObserver`].
 
+pub mod browser_root;
 pub mod process_discovery;
 pub mod process_tree_source;
 

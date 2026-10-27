@@ -5962,6 +5962,7 @@ mod tests {
             }],
             targets_observed: true,
             target_discovery_error: None,
+            browser: None,
         };
         let overlapping_tree = ProcessTreeSnapshot {
             root_process_id: 200,
@@ -5977,6 +5978,7 @@ mod tests {
             targets: Vec::new(),
             targets_observed: false,
             target_discovery_error: None,
+            browser: None,
         };
         let mut state = ServiceState::default();
 
