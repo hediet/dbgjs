@@ -1277,20 +1277,43 @@ fn process_root_kind(
     }
 }
 
+/// Executable names of Chromium-based browser main processes, lowercase and without `.exe`.
+/// Covers Windows, Linux (`/proc` or `ps` names) and macOS app bundle executables. This is the
+/// single source of truth: the process-tree helper receives it as `DBGJS_BROWSER_EXECUTABLES`.
+pub const CHROMIUM_BROWSER_EXECUTABLES: &[&str] = &[
+    "chrome",
+    "chrome-headless-shell",
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "google-chrome-stable",
+    "google chrome",
+    "google chrome beta",
+    "google chrome dev",
+    "google chrome canary",
+    "google chrome for testing",
+    "msedge",
+    "microsoft-edge",
+    "microsoft edge",
+    "brave",
+    "brave-browser",
+    "brave browser",
+    "opera",
+];
+
+pub fn is_chromium_browser_executable(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    CHROMIUM_BROWSER_EXECUTABLES.contains(&name)
+}
+
+pub fn chromium_browser_executables_json() -> String {
+    serde_json::to_string(CHROMIUM_BROWSER_EXECUTABLES).expect("browser names always serialize")
+}
+
 fn is_browser_main_candidate(process: &WindowsProcess) -> bool {
-    let name = process.name.to_ascii_lowercase();
-    let command = process.command_line.to_ascii_lowercase();
-    !command.contains("--type=")
-        && matches!(
-            name.as_str(),
-            "chrome.exe"
-                | "chrome-headless-shell.exe"
-                | "chromium.exe"
-                | "msedge.exe"
-                | "brave.exe"
-                | "brave-browser.exe"
-                | "opera.exe"
-        )
+    !process.command_line.to_ascii_lowercase().contains("--type=")
+        && is_chromium_browser_executable(&process.name)
 }
 
 fn is_electron_main_candidate(
@@ -2021,6 +2044,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10, 11, 12, 13]
         );
+    }
+
+    #[test]
+    fn recognizes_chromium_browser_executables_across_platforms() {
+        for name in ["chrome.exe", "MSEDGE.EXE", "chrome", "google-chrome", "Google Chrome", "Microsoft Edge"] {
+            assert!(is_chromium_browser_executable(name), "{name}");
+        }
+        for name in ["Code.exe", "electron", "node", "Google Chrome Helper (Renderer)"] {
+            assert!(!is_chromium_browser_executable(name), "{name}");
+        }
+        assert!(CHROMIUM_BROWSER_EXECUTABLES.iter().all(|name| *name == name.to_ascii_lowercase()
+            && !name.ends_with(".exe")));
     }
 
     #[test]

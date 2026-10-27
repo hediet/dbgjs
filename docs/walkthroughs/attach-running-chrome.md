@@ -29,6 +29,14 @@ dbgjs reads that file for a recognized browser with an explicit absolute
 requests the WebSocket connection. It never edits Chrome preferences, guesses
 the normal profile, accepts consent, or launches/restarts Chrome.
 
+Recognized browsers come from one list in the service
+(`CHROMIUM_BROWSER_EXECUTABLES` in `process_discovery.rs`), covering Windows,
+Linux and macOS executable names of Chrome, Chromium, Edge, Brave and Opera.
+The profile is read from the exact argv on Linux, quote-aware on Windows, and
+up to the next ` --` switch on macOS, where `ps` joins arguments with spaces.
+Only Chrome 156 on Windows has been verified end to end; other browsers must
+offer the same request-based remote-debugging setting.
+
 In this run the UI listener used `127.0.0.1:9222`. Inspect the actual value;
 do not assume that a listener on 9222 belongs to the intended browser.
 Do not allow public/private network access in a Windows Firewall prompt for
@@ -78,7 +86,8 @@ passed at launch; it is **not** a remote-debugging or consent-bypass flag.
 & $dbgjs context create :chrome-demo 'Disposable Chrome' --set
 if ($LASTEXITCODE -ne 0) { throw 'Context creation failed' }
 & $dbgjs connection add --process $browser.Id --connection chrome --connect
-# While this waits, approve the native Chrome dialog.
+# While this waits, approve the native Chrome dialog. After 3 seconds dbgjs
+# prints a reminder to stderr; it gives up after 120 seconds without approval.
 if ($LASTEXITCODE -ne 0) { throw 'Chrome attachment failed; inspect Chrome and the error' }
 & $dbgjs target list --connection chrome
 # Copy a page target ID from the list; do not select browser_ui/worker targets.

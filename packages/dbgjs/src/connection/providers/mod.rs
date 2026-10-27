@@ -28,6 +28,7 @@ use crate::debugger::debugger_engine::SessionKey;
 use crate::connection::discovery::{
     LeaseObserver, PauseChildrenKey, PauseChildrenLease, PauseChildrenLeaseRegistry,
 };
+use crate::connection::discovery::process_discovery::chromium_browser_executables_json;
 use crate::connection::discovery::process_tree_source::ProcessTreeTargetSource;
 use crate::debugger::resource_graph::ResourceId;
 use crate::api::service_api::{
@@ -342,6 +343,7 @@ impl ConnectionRuntime {
                     [
                         ("DBGJS_PROCESS_ROOT_PID", process_id.to_string()),
                         ("DBGJS_PROCESS_MODE", "single".to_owned()),
+                        ("DBGJS_BROWSER_EXECUTABLES", chromium_browser_executables_json()),
                     ],
                 )
                 .await?;
@@ -499,6 +501,7 @@ impl ConnectionRuntime {
             [
                 ("DBGJS_PROCESS_ROOT_PID", root_pid.to_string()),
                 ("DBGJS_PROCESS_MODE", "tree".to_owned()),
+                ("DBGJS_BROWSER_EXECUTABLES", chromium_browser_executables_json()),
             ],
         )
         .await?;

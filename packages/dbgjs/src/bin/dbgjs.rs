@@ -1281,12 +1281,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         configuration,
                     )
                     .await)?;
-                rpc(client
+                rpc(with_slow_connection_hint(&connection_id, client
                     .contexts
                     .connect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
-                    })
+                    }))
                     .await)?
             } else {
                 context
@@ -1728,12 +1728,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&service_target).await?;
-            let context = rpc(client
+            let context = rpc(with_slow_connection_hint(&connection_id, client
                 .contexts
                 .connect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
                     connection_id: connection_id.clone(),
-                })
+                }))
                 .await)?;
             require_connected(&context, &connection_id)?;
             output.print(&context)?;
@@ -6220,6 +6220,24 @@ async fn wait_for_renderer_target_id(
     ).into()))
 }
 
+const SLOW_CONNECTION_HINT_DELAY: Duration = Duration::from_secs(3);
+
+/// Connecting can legitimately block on a person: request-based browser debugging holds the
+/// WebSocket handshake until the native approval dialog is answered. Say so instead of
+/// appearing hung. The hint goes to stderr so `--json` stdout stays machine-readable.
+async fn with_slow_connection_hint<F: std::future::Future>(connection_id: &str, connect: F) -> F::Output {
+    let mut connect = std::pin::pin!(connect);
+    tokio::select! {
+        output = &mut connect => return output,
+        _ = tokio::time::sleep(SLOW_CONNECTION_HINT_DELAY) => {}
+    }
+    eprintln!(
+        "dbgjs: still connecting '{connection_id}'. If the browser shows 'Allow remote debugging?', approve it there (waiting up to {} seconds).",
+        dbgjs::connection::transport::websocket_transport::CDP_HANDSHAKE_TIMEOUT.as_secs(),
+    );
+    connect.await
+}
+
 fn require_connected(context: &ContextSnapshot, connection_id: &str) -> Result<(), io::Error> {
     let connection = context.connections.iter()
         .find(|connection| connection.id == connection_id)
@@ -6276,12 +6294,12 @@ async fn add_connection(
         ).await)?;
     }
     if connect_now {
-        let mut connected = rpc(client
+        let mut connected = rpc(with_slow_connection_hint(connection_id, client
             .contexts
             .connect_connection(dbgjs::api::service_api::ConnectionRef {
                 context_id: context_id.to_owned(),
                 connection_id: connection_id.to_owned(),
-            })
+            }))
             .await)?;
         require_connected(&connected, connection_id)?;
         if wait_for_initial_process_tree {

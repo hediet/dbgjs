@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 const execFile = promisify(execFileCallback);
 const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));
 const processMode = process.env.DBGJS_PROCESS_MODE || "tree";
+// Supplied by the Rust service, which owns the list of Chromium browser executable names.
+const browserExecutables = new Set(JSON.parse(process.env.DBGJS_BROWSER_EXECUTABLES || "[]"));
 const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
@@ -507,19 +509,47 @@ async function ensureRootEndpoint(pid, listeners, root) {
 }
 
 function isBrowserProcess(candidate) {
-	return /^(?:chrome|chrome-headless-shell|chromium|msedge|brave|brave-browser|opera|google-chrome(?:-stable)?)(?:\.exe)?$/i.test(candidate.name)
-		&& !/(?:^|\s)"?--type[=\s]/.test(candidate.commandLine);
+	const name = candidate.name.toLowerCase().replace(/\.exe$/, "");
+	return browserExecutables.has(name) && !/(?:^|\s)"?--type[=\s]/.test(candidate.commandLine);
+}
+
+/// Returns the value of `--name=value` or `--name value`. Linux reads the exact NUL-separated
+/// argv; Windows command lines are quote-aware; macOS `ps` joins argv with spaces, so an
+/// unquoted value extends to the next ` --` switch to tolerate paths containing spaces.
+async function commandLineArgument(candidate, name) {
+	if (process.platform === "linux") {
+		try {
+			const args = (await readFile(`/proc/${candidate.pid}/cmdline`, "utf8")).split("\0");
+			return argumentValue(args, name);
+		} catch {}
+	}
+	return parseCommandLineArgument(candidate.commandLine, name, process.platform);
+}
+
+function parseCommandLineArgument(commandLine, name, platform) {
+	if (platform === "win32") {
+		const args = commandLine.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((arg) => arg.replaceAll('"', "")) ?? [];
+		return argumentValue(args, name);
+	}
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|\\s)${escaped}[=\\s](.+?)(?=\\s--|$)`).exec(commandLine)?.[1];
+}
+
+function argumentValue(args, name) {
+	const index = args.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+	if (index < 0) {
+		return undefined;
+	}
+	return args[index] === name ? args[index + 1] : args[index].slice(name.length + 1);
 }
 
 async function approvalBrowserEndpoint(root, listeners) {
-	const instructions = "In Chrome 144+, open chrome://inspect/#remote-debugging, enable "
-		+ "'Allow remote debugging for this browser instance', then retry and approve Chrome's native Allow dialog.";
-	// Approval-gated Chrome deliberately returns 404 for /json/version and /json/list.
+	const instructions = "If the browser supports request-based remote debugging (Chrome 144+), open "
+		+ "chrome://inspect/#remote-debugging (edge://inspect in Edge), enable 'Allow remote debugging for "
+		+ "this browser instance', then retry and approve the browser's 'Allow remote debugging?' dialog.";
+	// Approval-gated browsers deliberately return 404 for /json/version and /json/list.
 	// Read only this process's explicit profile, never guess the user's normal profile.
-	const args = root.commandLine.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((arg) => arg.replaceAll('"', "")) ?? [];
-	const index = args.findIndex((arg) => arg === "--user-data-dir" || arg.startsWith("--user-data-dir="));
-	const directory = index < 0 ? undefined : args[index] === "--user-data-dir"
-		? args[index + 1] : args[index].slice("--user-data-dir=".length);
+	const directory = await commandLineArgument(root, "--user-data-dir");
 	if (!directory || !isAbsolute(directory)) {
 		throw new Error(`browser process ${root.pid} has no discoverable CDP endpoint. ${instructions} `
 			+ "Automatic discovery requires an absolute --user-data-dir for a disposable profile; "
@@ -536,7 +566,7 @@ async function approvalBrowserEndpoint(root, listeners) {
 	const port = Number(portText);
 	if (!/^\d+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535
 		|| !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(path ?? "") || extra.length) {
-		throw new Error(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in Chrome`);
+		throw new Error(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in the browser`);
 	}
 	if (!listeners.some((listener) => listener.pid === root.pid && listener.port === port)) {
 		throw new Error(`browser endpoint ${file} is stale: process ${root.pid} does not own listening port ${port}. ${instructions}`);
