@@ -492,6 +492,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "unicode-width 0.2.0",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

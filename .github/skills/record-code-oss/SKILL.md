@@ -373,10 +373,11 @@ window size to avoid scaling/padding. PNG is a separate still, not the video.
 
 ### Important bounds and failure modes
 
-- One `dbgjs playwright` call has a 30-second outer deadline. The helper has at
-  most 27 seconds, and the proxy capability at most 24 seconds. Connection,
-  actions, encoding and saving must all fit. Aim for demos well below 20
-  seconds; lower action timeouts and include cleanup time.
+- Connecting a `dbgjs playwright` call to its page has a 30-second setup
+  deadline (the proxy's own setup expires a few seconds earlier, so its
+  diagnostics arrive first). The program itself has no deadline: it runs until
+  it settles, and closing the connection afterwards is bounded separately. Use
+  Playwright action timeouts in the program to bound waits that may hang.
 - Start/actions/stop must be in that same call. Each invocation creates and
   closes a fresh Playwright connection. A second invocation cannot stop or
   retrieve the first invocation's recording.
@@ -422,7 +423,7 @@ window size to avoid scaling/padding. PNG is a separate still, not the video.
 | `page.screencast.start({ path: '*.webm' })` then `stop()` | Existing renderer video | Yes |
 | `recordVideo` at Playwright/Electron launch/context creation | Automatically record pages owned from creation | Yes, but not a retrofit for this attached window |
 
-The native CLI is independent of the one-shot Playwright deadline. It runs until
+The native CLI is independent of `dbgjs playwright`. It runs until
 Ctrl+C or its optional duration, then finalizes before exiting. There is no
 background recording lease with separate start/stop/status commands.
 An externally launched Playwright Electron application with launch-time

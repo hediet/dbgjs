@@ -1,5 +1,6 @@
 use dbgjs::api::service_api::{
     AgentSessionSnapshot, BreakpointPendingReason, BreakpointSnapshot, BreakpointStatus,
+    BrowserRemoteDebugging, BrowserRootSnapshot,
     CaptureSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
     CompactedSourceNodeSnapshot, ConnectionConfiguration, ConnectionStatus, ConsoleMessageSnapshot,
     ContextSnapshot, ContextSummary, CoverageSnapshot, CpuProfileFunctionSnapshot,
@@ -2111,32 +2112,99 @@ fn print_process_trees_human(trees: &[ProcessTreeSnapshot], options: ProcessTree
         if tree_index != 0 {
             println!();
         }
-        let mut details = vec![format!(
-            "{} attachable processes",
-            tree.processes
-                .iter()
-                .filter(|process| process.attachable)
-                .count()
-        )];
-        if !tree.targets.is_empty() {
-            details.push(format!("{} discovered targets", tree.targets.len()));
-        }
-        if tree.runtime_metadata_available {
-            details.push("window metadata available".to_owned());
-        }
-        println!(
-            "{} process tree {}  ({})",
-            process_root_kind(tree.root_kind),
-            tree.root_process_id,
-            details.join("; "),
-        );
-        for line in lines {
+        for line in process_tree_heading(tree).into_iter().chain(lines) {
             println!("{line}");
         }
-        if let Some(error) = &tree.target_discovery_error {
-            println!("  target discovery incomplete: {}", terminal_text(error));
+    }
+}
+
+/// The summary line of one process tree, followed by a warning when target discovery failed,
+/// because its windows and debug targets are then missing from the tree below.
+fn process_tree_heading(tree: &ProcessTreeSnapshot) -> Vec<String> {
+    let mut details = vec![format!(
+        "{} attachable processes",
+        tree.processes
+            .iter()
+            .filter(|process| process.attachable)
+            .count()
+    )];
+    if !tree.targets.is_empty() {
+        details.push(format!("{} discovered targets", tree.targets.len()));
+    }
+    if tree.runtime_metadata_available {
+        details.push("window metadata available".to_owned());
+    }
+    let mut heading = vec![format!(
+        "{} process tree {}  ({})",
+        process_root_kind(tree.root_kind),
+        tree.root_process_id,
+        details.join("; "),
+    )];
+    if let Some(error) = &tree.target_discovery_error {
+        heading.push(format!(
+            "  warning: target discovery failed, so windows and debug targets are missing: {}",
+            terminal_text(error)
+        ));
+    }
+    if let Some(browser) = &tree.browser {
+        heading.extend(browser_root_lines(tree, browser));
+    }
+    heading
+}
+
+/// What a browser root offers before any debugging connection: its window titles (each the
+/// active tab), its remote-debugging state, and the next command to run.
+fn browser_root_lines(tree: &ProcessTreeSnapshot, browser: &BrowserRootSnapshot) -> Vec<String> {
+    let mut lines = browser
+        .window_titles
+        .iter()
+        .map(|title| format!("  window: \"{}\"", printable_text(title)))
+        .collect::<Vec<_>>();
+    let root_pid = tree.root_process_id;
+    let attach = format!("dbgjs connection add --process {root_pid} --connection <id> --connect");
+    let inspect_url = if tree.processes.iter().any(|process| {
+        process.process_id == root_pid && process.name.to_ascii_lowercase().starts_with("msedge")
+    }) {
+        "edge://inspect/#remote-debugging"
+    } else {
+        "chrome://inspect/#remote-debugging"
+    };
+    match &browser.remote_debugging {
+        BrowserRemoteDebugging::Off { user_data_dir } => {
+            lines.push(format!(
+                "  remote debugging: off for profile {}",
+                printable_text(user_data_dir)
+            ));
+            lines.push(format!(
+                "    to debug: open {inspect_url}, check \"Allow remote debugging for this browser instance\", then run"
+            ));
+            lines.push(format!("    {attach}"));
+        }
+        BrowserRemoteDebugging::ApprovalRequired { port } => {
+            lines.push(format!(
+                "  remote debugging: on (127.0.0.1:{port}); the browser asks to approve each new connection"
+            ));
+            lines.push(format!(
+                "    to debug: run {attach}, then click Allow in the browser"
+            ));
+        }
+        BrowserRemoteDebugging::Open { port } => {
+            lines.push(format!(
+                "  remote debugging: open port 127.0.0.1:{port} (no approval required)"
+            ));
+        }
+        BrowserRemoteDebugging::Unknown => {
+            lines.push(
+                "  remote debugging: unknown; the profile is not on the command line (normal profile?)"
+                    .to_owned(),
+            );
+            lines.push(
+                "    dbgjs finds endpoints of browsers started with an absolute --user-data-dir"
+                    .to_owned(),
+            );
         }
     }
+    lines
 }
 
 #[derive(Clone)]
@@ -4358,6 +4426,21 @@ fn terminal_text(value: &str) -> String {
     value.escape_default().to_string()
 }
 
+/// Keeps paths and window titles readable (backslashes, non-ASCII) while still neutralizing
+/// control characters that could inject terminal escape sequences.
+fn printable_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                character.escape_default().to_string()
+            } else {
+                character.to_string()
+            }
+        })
+        .collect()
+}
+
 fn connection_configuration(configuration: &ConnectionConfiguration) -> String {
     match configuration {
         ConnectionConfiguration::DirectCdp { endpoint } => {
@@ -4634,7 +4717,7 @@ mod tests {
         ProcessTreeOutputOptions, SourceTreeOutputOptions, TargetListEntry,
         aggregate_coverage_entries, bounded_source_search_snapshot, breakpoint_diagnostic_lines, coverage_entries, effective_file_metrics,
         heap_node_line, heap_path_lines, heap_reference_line, heap_show_lines, looks_minified_identifier,
-        page_logs, process_tree_lines, process_trees_json, render_compacted_source_graph,
+        page_logs, process_tree_heading, process_tree_lines, process_trees_json, render_compacted_source_graph,
         render_evaluation,
         render_heap_classes_human, render_source_search, render_uncompacted_source_graph,
         render_value_snapshot,
@@ -4642,7 +4725,8 @@ mod tests {
         style_session_label, target_tree_selector, terminal_text,
     };
     use dbgjs::api::service_api::{
-        AgentSessionSnapshot, CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
+        AgentSessionSnapshot, BrowserRemoteDebugging, BrowserRootSnapshot,
+        CompactedSourceEdgeSnapshot, CompactedSourceGraphSnapshot,
         CompactedSourceNodeSnapshot, ConsoleMessageSnapshot, CoverageFunctionSnapshot,
         CoverageRangeSnapshot, CoverageSnapshot, CoverageSourceSnapshot, EvaluationSnapshot,
         HeapClassAnalysisSnapshot, HeapClassSnapshot, HeapClassSnapshotEntry, HeapEdgePolicy,
@@ -5436,6 +5520,66 @@ mod tests {
     }
 
     #[test]
+    fn browser_heading_explains_remote_debugging_without_connecting() {
+        let tree = |remote_debugging| ProcessTreeSnapshot {
+            root_process_id: 7,
+            root_kind: ProcessRootKind::Browser,
+            runtime_metadata_available: false,
+            targets: Vec::new(),
+            targets_observed: false,
+            target_discovery_error: None,
+            browser: Some(BrowserRootSnapshot {
+                remote_debugging,
+                window_titles: vec!["Cart – Shop\u{1b}[31m - Google Chrome".to_owned()],
+            }),
+            processes: vec![process(7, None, "chrome.exe", ProcessRole::BrowserMain, None, None)],
+        };
+
+        assert_eq!(
+            process_tree_heading(&tree(BrowserRemoteDebugging::Off {
+                user_data_dir: "C:\\demo\\profile".to_owned(),
+            })),
+            vec![
+                "Browser process tree 7  (1 attachable processes)",
+                "  window: \"Cart – Shop\\u{1b}[31m - Google Chrome\"",
+                "  remote debugging: off for profile C:\\demo\\profile",
+                "    to debug: open chrome://inspect/#remote-debugging, check \"Allow remote debugging for this browser instance\", then run",
+                "    dbgjs connection add --process 7 --connection <id> --connect",
+            ]
+        );
+        assert_eq!(
+            process_tree_heading(&tree(BrowserRemoteDebugging::ApprovalRequired { port: 9222 }))[2..],
+            [
+                "  remote debugging: on (127.0.0.1:9222); the browser asks to approve each new connection",
+                "    to debug: run dbgjs connection add --process 7 --connection <id> --connect, then click Allow in the browser",
+            ]
+        );
+    }
+
+    #[test]
+    fn process_tree_heading_warns_when_target_discovery_failed() {
+        let tree = ProcessTreeSnapshot {
+            root_process_id: 1,
+            root_kind: ProcessRootKind::Vscode,
+            runtime_metadata_available: false,
+            targets: Vec::new(),
+            targets_observed: true,
+            target_discovery_error: Some("Node.js was not found".to_owned()),
+            browser: None,
+            processes: vec![process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None)],
+        };
+
+        assert_eq!(
+            process_tree_heading(&tree),
+            vec![
+                "VS Code process tree 1  (1 attachable processes)",
+                "  warning: target discovery failed, so windows and debug targets are missing: \
+                 Node.js was not found",
+            ]
+        );
+    }
+
+    #[test]
     fn process_tree_uses_virtual_window_nodes() {
         let tree = ProcessTreeSnapshot {
             root_process_id: 1,
@@ -5444,6 +5588,7 @@ mod tests {
             targets: Vec::new(),
             targets_observed: false,
             target_discovery_error: None,
+            browser: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(
@@ -5559,6 +5704,7 @@ mod tests {
             ],
             targets_observed: true,
             target_discovery_error: None,
+            browser: None,
         };
 
         assert_eq!(
@@ -5600,6 +5746,7 @@ mod tests {
             }).collect(),
             targets_observed: true,
             target_discovery_error: None,
+            browser: None,
         };
         let context = ContextSnapshot {
             idle_timeout: Default::default(),
@@ -5715,6 +5862,7 @@ mod tests {
             targets: Vec::new(),
             targets_observed: false,
             target_discovery_error: None,
+            browser: None,
             processes: vec![
                 process(1, None, "Code.exe", ProcessRole::VscodeMain, None, None),
                 process(2, Some(1), "agent-host", ProcessRole::AgentHost, None, None),

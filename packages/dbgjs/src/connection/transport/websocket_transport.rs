@@ -17,6 +17,9 @@ use crate::connection::transport::session_transport::CdpEnvelope;
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const MAX_CDP_MESSAGE_SIZE: usize = 128 * 1024 * 1024;
+/// Chromium's request-based remote debugging withholds the handshake response until the user
+/// answers the browser's native approval dialog, so this bound must leave time for a person.
+pub const CDP_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub struct CdpWebSocketTransport {
     sender: Mutex<SplitSink<Socket, Message>>,
@@ -29,12 +32,23 @@ pub struct CdpWebSocketTransport {
 
 impl CdpWebSocketTransport {
     pub async fn connect(endpoint: &str) -> Result<Self, CdpWebSocketError> {
+        Self::connect_with_handshake_timeout(endpoint, CDP_HANDSHAKE_TIMEOUT).await
+    }
+
+    pub async fn connect_with_handshake_timeout(
+        endpoint: &str,
+        handshake_timeout: std::time::Duration,
+    ) -> Result<Self, CdpWebSocketError> {
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(MAX_CDP_MESSAGE_SIZE);
         config.max_frame_size = Some(MAX_CDP_MESSAGE_SIZE);
-        let (socket, _) = connect_async_with_config(endpoint, Some(config), false)
-            .await
-            .map_err(CdpWebSocketError::Connect)?;
+        let (socket, _) = tokio::time::timeout(
+            handshake_timeout,
+            connect_async_with_config(endpoint, Some(config), false),
+        )
+        .await
+        .map_err(|_| CdpWebSocketError::HandshakeTimeout(handshake_timeout))?
+        .map_err(CdpWebSocketError::Connect)?;
         let (sender, receiver) = socket.split();
         Ok(Self {
             sender: Mutex::new(sender),
@@ -185,6 +199,12 @@ impl ManagedCdpTransport for CdpWebSocketTransport {
 pub enum CdpWebSocketError {
     #[error("failed to connect to CDP WebSocket: {0}")]
     Connect(tokio_tungstenite::tungstenite::Error),
+    #[error(
+        "CDP WebSocket handshake did not complete within {} seconds; if the browser shows an \
+         'Allow remote debugging?' dialog, approve it there and retry",
+        .0.as_secs()
+    )]
+    HandshakeTimeout(std::time::Duration),
 }
 
 #[cfg(test)]
@@ -193,6 +213,30 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, timeout};
     use tokio_tungstenite::accept_async;
+
+    #[tokio::test]
+    async fn withheld_handshake_times_out_with_approval_hint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // Accept TCP but never answer the upgrade, like a browser awaiting user approval.
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            drop(stream);
+        });
+        let error = match CdpWebSocketTransport::connect_with_handshake_timeout(
+            &format!("ws://{address}"),
+            Duration::from_millis(200),
+        )
+        .await
+        {
+            Ok(_) => panic!("withheld handshake must not connect"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, CdpWebSocketError::HandshakeTimeout(_)));
+        assert!(error.to_string().contains("Allow remote debugging?"));
+        server.abort();
+    }
 
     #[tokio::test]
     async fn explicit_close_wakes_receiver_and_closes_socket() {

@@ -18,7 +18,7 @@ use dbgjs::service::context_identity::{
 };
 use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
 use dbgjs::connection::transport::local_rpc::{default_state_file, LocalRpcError, RemoteServiceEndpoint, ServiceTarget};
-use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
+use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, SETUP_TIMEOUT as PLAYWRIGHT_SETUP_TIMEOUT};
 use dbgjs::debugger::promise_debugging::{
     DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH,
 };
@@ -357,9 +357,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
-            let deadline = tokio::time::Instant::now() + PLAYWRIGHT_EXECUTION_TIMEOUT;
+            let setup_deadline = tokio::time::Instant::now() + PLAYWRIGHT_SETUP_TIMEOUT;
             let client =
-                tokio::time::timeout_at(deadline - CLEANUP_RESERVE, ensure_service(&service_target))
+                tokio::time::timeout_at(setup_deadline - CLEANUP_RESERVE, ensure_service(&service_target))
                     .await
                     .map_err(|_| {
                         io::Error::new(
@@ -368,7 +368,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         )
                     })??;
             let scope = tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options),
             )
             .await
@@ -379,7 +379,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
             })??;
             let context = rpc(tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 client.contexts.get_context(scope.context.clone()),
             )
             .await
@@ -401,7 +401,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?
                 .generation;
             let proxy = tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 client
                     .relay
                     .open_playwright_proxy(scope.target_ref(), generation),
@@ -414,15 +414,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
             })?;
             let proxy = rpc(proxy)?;
-            let result =
-                run_playwright_program(&proxy.websocket_url, &program, &scope.target, deadline)
-                    .await;
-            let cleanup_deadline = std::cmp::min(
-                deadline,
-                tokio::time::Instant::now() + Duration::from_secs(2),
-            );
-            let cleanup = tokio::time::timeout_at(
-                cleanup_deadline,
+            let result = run_playwright_program(
+                &proxy.websocket_url,
+                &program,
+                &scope.target,
+                setup_deadline,
+            )
+            .await;
+            let cleanup = tokio::time::timeout(
+                CLEANUP_RESERVE,
                 client.relay.close_playwright_proxy(proxy.id),
             )
             .await;
@@ -1281,12 +1281,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         configuration,
                     )
                     .await)?;
-                rpc(client
+                rpc(with_slow_connection_hint(&connection_id, client
                     .contexts
                     .connect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
-                    })
+                    }))
                     .await)?
             } else {
                 context
@@ -1728,12 +1728,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
             let client = ensure_service(&service_target).await?;
-            let context = rpc(client
+            let context = rpc(with_slow_connection_hint(&connection_id, client
                 .contexts
                 .connect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
                     connection_id: connection_id.clone(),
-                })
+                }))
                 .await)?;
             require_connected(&context, &connection_id)?;
             output.print(&context)?;
@@ -6220,6 +6220,24 @@ async fn wait_for_renderer_target_id(
     ).into()))
 }
 
+const SLOW_CONNECTION_HINT_DELAY: Duration = Duration::from_secs(3);
+
+/// Connecting can legitimately block on a person: request-based browser debugging holds the
+/// WebSocket handshake until the native approval dialog is answered. Say so instead of
+/// appearing hung. The hint goes to stderr so `--json` stdout stays machine-readable.
+async fn with_slow_connection_hint<F: std::future::Future>(connection_id: &str, connect: F) -> F::Output {
+    let mut connect = std::pin::pin!(connect);
+    tokio::select! {
+        output = &mut connect => return output,
+        _ = tokio::time::sleep(SLOW_CONNECTION_HINT_DELAY) => {}
+    }
+    eprintln!(
+        "dbgjs: still connecting '{connection_id}'. If the browser shows 'Allow remote debugging?', approve it there (waiting up to {} seconds).",
+        dbgjs::connection::transport::websocket_transport::CDP_HANDSHAKE_TIMEOUT.as_secs(),
+    );
+    connect.await
+}
+
 fn require_connected(context: &ContextSnapshot, connection_id: &str) -> Result<(), io::Error> {
     let connection = context.connections.iter()
         .find(|connection| connection.id == connection_id)
@@ -6276,12 +6294,12 @@ async fn add_connection(
         ).await)?;
     }
     if connect_now {
-        let mut connected = rpc(client
+        let mut connected = rpc(with_slow_connection_hint(connection_id, client
             .contexts
             .connect_connection(dbgjs::api::service_api::ConnectionRef {
                 context_id: context_id.to_owned(),
                 connection_id: connection_id.to_owned(),
-            })
+            }))
             .await)?;
         require_connected(&connected, connection_id)?;
         if wait_for_initial_process_tree {
@@ -7143,31 +7161,29 @@ async fn run_playwright_program(
     endpoint: &str,
     program: &str,
     target_id: &str,
-    deadline: tokio::time::Instant,
+    setup_deadline: tokio::time::Instant,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-    let helper_budget = remaining
-        .saturating_sub(CLEANUP_RESERVE)
-        .min(PLAYWRIGHT_EXECUTION_TIMEOUT.saturating_sub(CLEANUP_RESERVE));
-    if helper_budget.is_zero() {
+    let setup_budget = setup_deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .saturating_sub(CLEANUP_RESERVE);
+    if setup_budget.is_zero() {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "Playwright starting exceeded its deadline",
+            format!("Playwright starting exceeded its deadline (target {target_id})"),
         )
         .into());
     }
     let playwright_package = dbgjs::connection::providers::find_playwright_package()?;
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = dbgjs::connection::providers::node_executable::resolve_node_executable()?;
     let mut child = TokioCommand::new(&node)
         .arg("--input-type=module")
         .arg("--eval")
         .arg(PLAYWRIGHT_PAGE_HELPER)
         .env("DBGJS_PLAYWRIGHT_ENDPOINT", endpoint)
         .env("DBGJS_PLAYWRIGHT_PACKAGE", playwright_package)
-        .env("DBGJS_PLAYWRIGHT_PROGRESS", "1")
         .env(
-            "DBGJS_PLAYWRIGHT_TIMEOUT_MS",
-            helper_budget.as_millis().to_string(),
+            "DBGJS_PLAYWRIGHT_SETUP_TIMEOUT_MS",
+            setup_budget.as_millis().to_string(),
         )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -7211,42 +7227,18 @@ async fn run_playwright_program(
 
     enum Completion {
         Exited(Result<std::process::ExitStatus, io::Error>),
-        TimedOut,
         OutputExceeded,
     }
-    let started = tokio::time::Instant::now();
     let completion = {
         let wait = child.wait();
         tokio::pin!(wait);
         tokio::select! {
             status = &mut wait => Completion::Exited(status),
-            _ = tokio::time::sleep_until(deadline - Duration::from_secs(2)) => Completion::TimedOut,
             Some(_) = overflow_receiver.recv() => Completion::OutputExceeded,
         }
     };
     let status = match completion {
         Completion::Exited(status) => status?,
-        Completion::TimedOut => {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
-            writer.abort();
-            stdout_reader.abort();
-            let stderr = match tokio::time::timeout(Duration::from_secs(1), stderr_reader).await {
-                Ok(Ok(Ok((stderr, _)))) => stderr,
-                _ => Vec::new(),
-            };
-            let (phase, _, _) = playwright_progress(&stderr);
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "Playwright {phase} exceeded the {}-second limit (elapsed {} ms, target {})",
-                    PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs(),
-                    started.elapsed().as_millis(),
-                    target_id,
-                ),
-            )
-            .into());
-        }
         Completion::OutputExceeded => {
             let _ = child.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
@@ -7261,7 +7253,6 @@ async fn run_playwright_program(
     let write_result = writer.await.map_err(io::Error::other)?;
     let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
     let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
-    let (_, _, stderr) = playwright_progress(&stderr);
     let result = parse_playwright_output(status, &stdout, &stderr).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -7273,41 +7264,6 @@ async fn run_playwright_program(
         eprint!("{}", String::from_utf8_lossy(&stderr));
     }
     Ok(result)
-}
-
-fn playwright_progress(stderr: &[u8]) -> (&'static str, u64, Vec<u8>) {
-    const PREFIX: &str = "DBGJS_PLAYWRIGHT_PROGRESS:";
-    let mut phase = "starting";
-    let mut elapsed_ms = 0;
-    let mut output = Vec::with_capacity(stderr.len());
-    for line in stderr.split_inclusive(|byte| *byte == b'\n') {
-        let text = std::str::from_utf8(line).unwrap_or("");
-        let progress = text
-            .strip_prefix(PREFIX)
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(value.trim_end()).ok());
-        if let Some(progress) = progress {
-            if let (Some(next), Some(elapsed)) =
-                (progress["phase"].as_str(), progress["elapsedMs"].as_u64())
-            {
-                if matches!(
-                    next,
-                    "starting" | "connecting" | "initializing" | "executing" | "closing"
-                ) {
-                    phase = match next {
-                        "starting" => "starting",
-                        "connecting" => "connecting",
-                        "initializing" => "initializing",
-                        "executing" => "executing",
-                        _ => "closing",
-                    };
-                    elapsed_ms = elapsed;
-                    continue;
-                }
-            }
-        }
-        output.extend_from_slice(line);
-    }
-    (phase, elapsed_ms, output)
 }
 
 fn parse_playwright_output(
@@ -9032,18 +8988,6 @@ mod tests {
         assert!(super::parse_playwright_output(
             status, br#"{"ok":false,"error":"script failed"}"#, b"",
         ).unwrap_err().to_string().contains("script failed"));
-    }
-
-    #[test]
-    fn playwright_progress_does_not_pollute_program_console_or_disclose_values() {
-        let (phase, elapsed, console) = super::playwright_progress(
-            b"DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"initializing\",\"elapsedMs\":12}\n\
-              user output\n\
-              DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"executing\",\"elapsedMs\":20}\n",
-        );
-        assert_eq!(phase, "executing");
-        assert_eq!(elapsed, 20);
-        assert_eq!(console, b"user output\n");
     }
 
     #[test]

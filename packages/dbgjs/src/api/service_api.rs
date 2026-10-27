@@ -82,6 +82,35 @@ pub struct ProcessTreeSnapshot {
     pub targets_observed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_discovery_error: Option<String>,
+    /// Browser-specific state, observed without opening a debugging connection, so that listing
+    /// never triggers the browser's remote-debugging approval dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserRootSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRootSnapshot {
+    pub remote_debugging: BrowserRemoteDebugging,
+    /// Titles of the browser's visible top-level windows (Windows only). Each is the title of
+    /// that window's active tab; listing all tabs requires an approved debugging connection.
+    #[serde(default)]
+    pub window_titles: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum BrowserRemoteDebugging {
+    /// The profile has no live remote-debugging endpoint.
+    Off { user_data_dir: String },
+    /// Request-based remote debugging is enabled: each new connection must be approved in the
+    /// browser's native "Allow remote debugging?" dialog.
+    ApprovalRequired { port: u16 },
+    /// A classic remote-debugging port that accepts connections without approval.
+    Open { port: u16 },
+    /// The browser uses a profile that is not on its command line (typically the normal
+    /// profile), so its endpoint cannot be located.
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
