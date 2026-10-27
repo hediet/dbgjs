@@ -551,7 +551,7 @@ async function approvalBrowserEndpoint(root, listeners) {
 	// Read only this process's explicit profile, never guess the user's normal profile.
 	const directory = await commandLineArgument(root, "--user-data-dir");
 	if (!directory || !isAbsolute(directory)) {
-		throw new Error(`browser process ${root.pid} has no discoverable CDP endpoint. ${instructions} `
+		throw userFacingError(`browser process ${root.pid} has no discoverable CDP endpoint. ${instructions} `
 			+ "Automatic discovery requires an absolute --user-data-dir for a disposable profile; "
 			+ "otherwise use 'dbgjs connection add <ws-endpoint> --connection <id> --connect'.");
 	}
@@ -560,16 +560,20 @@ async function approvalBrowserEndpoint(root, listeners) {
 	try {
 		contents = await readFile(file, "utf8");
 	} catch (error) {
-		throw new Error(`cannot read browser endpoint ${file}: ${error.message}. ${instructions}`, { cause: error });
+		if (error?.code === "ENOENT") {
+			throw userFacingError(`remote debugging is off for browser process ${root.pid} (its profile has no `
+				+ `DevToolsActivePort file). ${instructions}`, { cause: error });
+		}
+		throw userFacingError(`cannot read browser endpoint ${file}: ${error.message}. ${instructions}`, { cause: error });
 	}
 	const [portText, path, ...extra] = contents.trim().split(/\r?\n/);
 	const port = Number(portText);
 	if (!/^\d+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535
 		|| !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(path ?? "") || extra.length) {
-		throw new Error(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in the browser`);
+		throw userFacingError(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in the browser`);
 	}
 	if (!listeners.some((listener) => listener.pid === root.pid && listener.port === port)) {
-		throw new Error(`browser endpoint ${file} is stale: process ${root.pid} does not own listening port ${port}. ${instructions}`);
+		throw userFacingError(`browser endpoint ${file} is stale: process ${root.pid} does not own listening port ${port}. ${instructions}`);
 	}
 	return `ws://127.0.0.1:${port}${path}`;
 }
@@ -924,7 +928,15 @@ function required(name) {
 	return value;
 }
 
+/// An expected condition the user can act on; reported by message, without a stack trace.
+function userFacingError(message, options) {
+	const error = new Error(message, options);
+	error.userFacing = true;
+	return error;
+}
+
 function reportError(error) {
-	process.stdout.write(`${JSON.stringify({ error: String(error?.stack || error) })}\n`);
+	const message = error?.userFacing ? error.message : error?.stack || error;
+	process.stdout.write(`${JSON.stringify({ error: String(message) })}\n`);
 	process.exitCode = 1;
 }

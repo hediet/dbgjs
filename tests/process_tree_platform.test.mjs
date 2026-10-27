@@ -92,7 +92,11 @@ test("approval-gated Chrome discovers only its explicit profile and owned listen
 			await assert.rejects(api.ensureRootEndpoint(42, listeners, root), /invalid browser endpoint/);
 		}
 		await rm(file);
-		await assert.rejects(api.ensureRootEndpoint(42, listeners, root), /cannot read browser endpoint.*chrome:\/\/inspect/);
+		await assert.rejects(api.ensureRootEndpoint(42, listeners, root), (error) => {
+			assert.match(error.message, /^remote debugging is off for browser process 42 .*chrome:\/\/inspect/);
+			assert.equal(error.userFacing, true);
+			return true;
+		});
 		for (const commandLine of ["chrome.exe", "chrome.exe --user-data-dir=relative"]) {
 			await assert.rejects(api.ensureRootEndpoint(42, listeners, { ...root, commandLine }), /absolute --user-data-dir/);
 		}
