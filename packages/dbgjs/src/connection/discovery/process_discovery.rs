@@ -297,8 +297,11 @@ async fn discover_process_tree_targets(
             return Err("process tree cannot enable target discovery".to_owned());
         }
 
+        // Settles on the listed targets only: Node process targets keep appearing for seconds while
+        // inspectors activate, but the listing drops them, so they must not hold discovery up.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let mut stable_since = tokio::time::Instant::now();
+        let mut listed = process_tree_targets(observation.targets, process_ids);
         loop {
             if matches!(
                 tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed(),)
@@ -308,7 +311,11 @@ async fn discover_process_tree_targets(
                 observation = runtime
                     .observe_targets()
                     .ok_or_else(|| "process tree target source disappeared".to_owned())?;
-                stable_since = tokio::time::Instant::now();
+                let next = process_tree_targets(std::mem::take(&mut observation.targets), process_ids);
+                if next != listed {
+                    stable_since = tokio::time::Instant::now();
+                }
+                listed = next;
             }
             if stable_since.elapsed() >= Duration::from_millis(500)
                 || tokio::time::Instant::now() >= deadline
@@ -317,7 +324,7 @@ async fn discover_process_tree_targets(
             }
         }
 
-        Ok(process_tree_targets(observation.targets, process_ids))
+        Ok(listed)
     }
     .await;
     runtime.set_target_discovery(false).await;
