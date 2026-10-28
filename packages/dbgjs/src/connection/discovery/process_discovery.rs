@@ -153,11 +153,22 @@ pub async fn discover_recognized_process_trees()
     Ok(trees)
 }
 
-/// Lists each tree's targets. Roots with a connected runtime in `open` (keyed by root process ID)
-/// reuse it; others get a temporary connection that waits for the target list to settle.
+/// A process tree's connection as discovery may use it.
+pub enum ProcessTreeConnection {
+    Open {
+        runtime: std::sync::Arc<ConnectionRuntime>,
+        /// Connected for this discovery, so its targets may still be appearing.
+        just_connected: bool,
+    },
+    /// Connecting failed; discovery reports this instead of trying again.
+    Failed(String),
+}
+
+/// Lists each tree's targets. Roots in `connections` (keyed by root process ID) use that connection;
+/// others get a temporary connection that waits for the target list to settle.
 pub async fn populate_process_tree_targets(
     trees: &mut [ProcessTreeSnapshot],
-    open: &BTreeMap<u32, std::sync::Arc<ConnectionRuntime>>,
+    connections: &BTreeMap<u32, ProcessTreeConnection>,
 ) {
     let observations = join_all(trees.iter().filter(|tree| targets_observable_silently(tree)).map(|tree| {
         let root_process_id = tree.root_process_id;
@@ -166,13 +177,17 @@ pub async fn populate_process_tree_targets(
             .iter()
             .map(|process| process.process_id)
             .collect::<BTreeSet<_>>();
-        let runtime = open.get(&root_process_id).cloned();
+        let connection = connections.get(&root_process_id);
         async move {
-            let targets = match runtime {
-                Some(runtime) => match runtime.refresh_targets().await {
+            let targets = match connection {
+                Some(ProcessTreeConnection::Open { runtime, just_connected: true }) => {
+                    settled_targets(runtime, &process_ids, FRESH_SETTLE_DEADLINE).await
+                }
+                Some(ProcessTreeConnection::Open { runtime, just_connected: false }) => match runtime.refresh_targets().await {
                     Some(observation) => Ok(process_tree_targets(observation.targets, &process_ids)),
                     None => Err("process tree has no observable target source".to_owned()),
                 },
+                Some(ProcessTreeConnection::Failed(message)) => Err(message.clone()),
                 None => discover_process_tree_targets(root_process_id, &process_ids).await,
             };
             (root_process_id, targets)
@@ -195,7 +210,7 @@ pub async fn populate_process_tree_targets(
 
 /// Listing must never request approval: only browsers with an approval-free debugging port
 /// are queried. Others report their [`BrowserRemoteDebugging`] state instead of targets.
-fn targets_observable_silently(tree: &ProcessTreeSnapshot) -> bool {
+pub fn targets_observable_silently(tree: &ProcessTreeSnapshot) -> bool {
     tree.browser.as_ref().is_none_or(|browser| {
         matches!(browser.remote_debugging, BrowserRemoteDebugging::Open { .. })
     })
@@ -289,47 +304,56 @@ async fn discover_process_tree_targets(
     .await
     .map_err(|error| error.to_string())?;
     let result = async {
-        let mut observation = runtime
-            .refresh_targets()
-            .await
-            .ok_or_else(|| "process tree has no observable target source".to_owned())?;
         if !runtime.set_target_discovery(true).await {
             return Err("process tree cannot enable target discovery".to_owned());
         }
-
-        // Settles on the listed targets only: Node process targets keep appearing for seconds while
-        // inspectors activate, but the listing drops them, so they must not hold discovery up.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut stable_since = tokio::time::Instant::now();
-        let mut listed = process_tree_targets(observation.targets, process_ids);
-        loop {
-            if matches!(
-                tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed(),)
-                    .await,
-                Ok(Ok(()))
-            ) {
-                observation = runtime
-                    .observe_targets()
-                    .ok_or_else(|| "process tree target source disappeared".to_owned())?;
-                let next = process_tree_targets(std::mem::take(&mut observation.targets), process_ids);
-                if next != listed {
-                    stable_since = tokio::time::Instant::now();
-                }
-                listed = next;
-            }
-            if stable_since.elapsed() >= Duration::from_millis(500)
-                || tokio::time::Instant::now() >= deadline
-            {
-                break;
-            }
-        }
-
-        Ok(listed)
+        settled_targets(&runtime, process_ids, Duration::from_secs(5)).await
     }
     .await;
-    runtime.set_target_discovery(false).await;
-    runtime.close().await;
+    // Closing detaches from every process of the tree, which can take seconds; the listing is ready.
+    tokio::spawn(async move {
+        runtime.set_target_discovery(false).await;
+        runtime.close().await;
+    });
     result
+}
+
+/// How long a connection opened for discovery may take to report its pages.
+const FRESH_SETTLE_DEADLINE: Duration = Duration::from_secs(2);
+
+/// The listed targets of a new connection once they stopped changing for 300 ms, or at `deadline`.
+/// Settles on the listed targets only: Node process targets keep appearing for seconds while
+/// inspectors activate, but the listing drops them, so they must not hold discovery up.
+async fn settled_targets(
+    runtime: &ConnectionRuntime,
+    process_ids: &BTreeSet<u32>,
+    deadline: Duration,
+) -> Result<Vec<ProcessTargetSnapshot>, String> {
+    let mut observation = runtime
+        .refresh_targets()
+        .await
+        .ok_or_else(|| "process tree has no observable target source".to_owned())?;
+    let deadline = tokio::time::Instant::now() + deadline;
+    let mut stable_since = tokio::time::Instant::now();
+    let mut listed = process_tree_targets(std::mem::take(&mut observation.targets), process_ids);
+    loop {
+        if matches!(
+            tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed()).await,
+            Ok(Ok(()))
+        ) {
+            let next = runtime
+                .observe_targets()
+                .ok_or_else(|| "process tree target source disappeared".to_owned())?;
+            let next_listed = process_tree_targets(next.targets, process_ids);
+            if next_listed != listed {
+                stable_since = tokio::time::Instant::now();
+            }
+            listed = next_listed;
+        }
+        if stable_since.elapsed() >= Duration::from_millis(300) || tokio::time::Instant::now() >= deadline {
+            return Ok(listed);
+        }
+    }
 }
 
 /// The page targets of one process tree: its renderers and pages, not the processes themselves.

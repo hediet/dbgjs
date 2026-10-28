@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::service_api::{
-    ConnectionStatus, ContextKind, DesktopApi, DesktopAttachResult, DesktopClientMessage, DesktopInfo,
-    DesktopOptions, DesktopProtocol, DesktopServerMessage, MachineTargetRef,
+    ConnectionStatus, ContextKind, ContextSnapshot, DesktopApi, DesktopAttachResult, DesktopClientMessage, DesktopInfo,
+    DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTargetRef,
 };
 use linkrpc::prelude::StreamReceiver;
 
@@ -9,10 +9,21 @@ use linkrpc::prelude::StreamReceiver;
 const MACHINE_CONTEXT: &str = "dbgjs.machine";
 /// How long a newly connected process tree may take to report a requested target.
 const MACHINE_TARGET_TIMEOUT: Duration = Duration::from_secs(5);
+/// Machine connections close after this long without discovery or an attached desktop.
+const MACHINE_IDLE_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
-/// Serializes machine-context setup so concurrent attaches do not configure the same connection twice.
-static MACHINE_SETUP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Serializes setup per root, so concurrent callers do not configure or connect one tree twice.
+static MACHINE_SETUP: std::sync::LazyLock<std::sync::Mutex<BTreeMap<u32, Arc<tokio::sync::Mutex<()>>>>> =
+    std::sync::LazyLock::new(Default::default);
+/// Roots that could not be connected recently (e.g. WebView2 hosts without an inspector), so
+/// repeated discovery reports them without spending another connection attempt.
+static MACHINE_FAILURES: std::sync::LazyLock<std::sync::Mutex<BTreeMap<u32, (Instant, String)>>> =
+    std::sync::LazyLock::new(Default::default);
+/// How long a failed connection attempt is reported instead of retried.
+const MACHINE_FAILURE_TTL: Duration = Duration::from_secs(60);
 
+/// Serializes creating the machine context itself.
+static MACHINE_CONTEXT_SETUP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[async_trait::async_trait]
 impl DesktopApi for DebuggerService {
     async fn info(&self, ctx: &CallCtx, target: MachineTargetRef) -> Result<DesktopInfo, JsonRpcError> {
@@ -42,44 +53,74 @@ impl DesktopApi for DebuggerService {
 }
 
 impl DebuggerService {
-    /// Resolves `target` to a target of the managed machine context, connecting its process tree
-    /// if needed, and returns the target's title.
-    async fn machine_target(&self, ctx: &CallCtx, target: &MachineTargetRef) -> Result<(TargetRef, String), JsonRpcError> {
-        let connection = ConnectionRef {
-            context_id: MACHINE_CONTEXT.to_owned(),
-            connection_id: format!("root-{}", target.root_pid),
+    /// Connects `root_pid`'s process tree in the machine context unless it is connected; returns
+    /// whether this call connected it.
+    pub(super) async fn ensure_machine_connection(&self, ctx: &CallCtx, root_pid: u32) -> Result<bool, JsonRpcError> {
+        let context = self.machine_context(ctx).await?;
+        let root_setup = MACHINE_SETUP.lock().unwrap().entry(root_pid).or_default().clone();
+        let _setup = root_setup.lock().await;
+        let connection = machine_connection(root_pid);
+        let context = match ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await {
+            Ok(current) => current,
+            Err(_) => context,
         };
+        let existing = context.connections.iter().find(|candidate| candidate.id == connection.connection_id);
+        if matches!(existing.map(|candidate| &candidate.status), Some(ConnectionStatus::Connected { .. })) {
+            return Ok(false);
+        }
+        if let Some((failed_at, message)) = MACHINE_FAILURES.lock().unwrap().get(&root_pid)
+            && failed_at.elapsed() < MACHINE_FAILURE_TTL
         {
-            let _setup = MACHINE_SETUP.lock().await;
-            let context = match ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await {
-                Ok(context) => context,
-                Err(_) => ContextApi::put_context(
-                    self,
-                    ctx,
-                    MACHINE_CONTEXT.to_owned(),
-                    ContextKind::Named,
-                    Some("Machine targets (dbgjs desktops)".to_owned()),
-                ).await?,
-            };
-            let existing = context.connections.iter().find(|candidate| candidate.id == connection.connection_id);
-            let configuration = ConnectionConfiguration::ProcessTree { root_pid: target.root_pid };
-            if existing.map(|candidate| &candidate.configuration) != Some(&configuration) {
-                ContextApi::put_connection(self, ctx, connection.clone(), configuration).await?;
+            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, message.clone()));
+        }
+        let configuration = ConnectionConfiguration::ProcessTree { root_pid };
+        if existing.map(|candidate| &candidate.configuration) != Some(&configuration) {
+            ContextApi::put_connection(self, ctx, connection.clone(), configuration).await?;
+        }
+        let context = ContextApi::connect_connection(self, ctx, connection.clone()).await?;
+        match context
+            .connections
+            .iter()
+            .find(|candidate| candidate.id == connection.connection_id)
+            .map(|candidate| &candidate.status)
+        {
+            Some(ConnectionStatus::Failed { message }) => {
+                let message = format!("cannot connect to process tree {root_pid}: {message}");
+                MACHINE_FAILURES.lock().unwrap().insert(root_pid, (Instant::now(), message.clone()));
+                Err(JsonRpcError::new(error_codes::INVALID_PARAMS, message))
             }
-            if !matches!(existing.map(|candidate| &candidate.status), Some(ConnectionStatus::Connected { .. })) {
-                let context = ContextApi::connect_connection(self, ctx, connection.clone()).await?;
-                if let Some(ConnectionStatus::Failed { message }) = context
-                    .connections
-                    .iter()
-                    .find(|candidate| candidate.id == connection.connection_id)
-                    .map(|candidate| &candidate.status)
-                {
-                    return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, format!(
-                        "cannot connect to process tree {}: {message}", target.root_pid,
-                    )));
-                }
+            _ => {
+                MACHINE_FAILURES.lock().unwrap().remove(&root_pid);
+                Ok(true)
             }
         }
+    }
+
+    async fn machine_context(&self, ctx: &CallCtx) -> Result<ContextSnapshot, JsonRpcError> {
+        let _setup = MACHINE_CONTEXT_SETUP.lock().await;
+        if let Ok(context) = ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await {
+            return Ok(context);
+        }
+        ContextApi::put_context(
+            self,
+            ctx,
+            MACHINE_CONTEXT.to_owned(),
+            ContextKind::Named,
+            Some("Machine targets (dbgjs desktops and discovery)".to_owned()),
+        ).await?;
+        ContextApi::set_context_idle_timeout(
+            self,
+            ctx,
+            MACHINE_CONTEXT.to_owned(),
+            IdleTimeout::After { milliseconds: MACHINE_IDLE_TIMEOUT_MS },
+        ).await
+    }
+
+    /// Resolves `target` to a target of the machine context, connecting its process tree if
+    /// needed, and returns the target's title.
+    async fn machine_target(&self, ctx: &CallCtx, target: &MachineTargetRef) -> Result<(TargetRef, String), JsonRpcError> {
+        self.ensure_machine_connection(ctx, target.root_pid).await?;
+        let connection = machine_connection(target.root_pid);
         let deadline = tokio::time::Instant::now() + MACHINE_TARGET_TIMEOUT;
         loop {
             let context = ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await?;
@@ -96,5 +137,12 @@ impl DebuggerService {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+}
+
+fn machine_connection(root_pid: u32) -> ConnectionRef {
+    ConnectionRef {
+        context_id: MACHINE_CONTEXT.to_owned(),
+        connection_id: format!("root-{root_pid}"),
     }
 }
