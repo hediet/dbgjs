@@ -13,6 +13,8 @@ pub trait DesktopApi {
     /// starts with 262144 bytes of credit; sending data consumes credit, and the receiver returns
     /// credit only after consuming the bytes. The client sends its viewport (CSS pixels and device
     /// pixel ratio) over the stream; how the page follows it depends on `options.layout`.
+    /// `visibility` reports when the browser hides or shows the page (e.g. a minimized window);
+    /// a hidden page sends no new frames and handles input only after seconds.
     /// Not exclusive: other debugging of the target continues.
     #[input_stream(DesktopClientMessage)]
     #[output_stream(DesktopServerMessage)]
@@ -77,6 +79,7 @@ pub enum DesktopServerMessage {
     Ready,
     Data { data: String },
     Credit { bytes: u32 },
+    Visibility { visible: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

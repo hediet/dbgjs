@@ -1,14 +1,17 @@
 use super::*;
 use crate::api::service_api::{
     ScreencastFormat, ScreencastFrameMetadata, ScreencastInput, ScreencastKeyEventType,
-    ScreencastKeyInput, ScreencastMessage, ScreencastOptions, ScreencastSize, ScreencastSummary,
-    ScreencastViewport,
+    ScreencastKeyInput, ScreencastMessage, ScreencastMouseEventType, ScreencastMouseInput,
+    ScreencastOptions, ScreencastSize, ScreencastSummary, ScreencastViewport,
 };
 use linkrpc::prelude::{JsonRpcError, error_codes};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
+/// Clicks, wheel, and key events that may wait for the page; mouse moves are coalesced.
 const INPUT_QUEUE: usize = 256;
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const FIRST_FRAME_KICK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,7 +23,9 @@ impl TargetDebuggerHandle {
     /// browser renders the next frame only after the service acks the previous one, which it
     /// does as soon as that frame can be sent, so at most one newer frame waits in the service.
     /// Pointer and key input is dispatched in order on a separate task, so a blocking input
-    /// dispatch (e.g. a native context menu) does not stall frames.
+    /// dispatch (e.g. a native context menu) does not stall frames. Chromium answers input for
+    /// hidden pages (e.g. minimized windows) only after seconds, so moves waiting for dispatch
+    /// collapse into the latest one.
     pub async fn screencast(
         &self,
         options: ScreencastOptions,
@@ -42,10 +47,10 @@ impl TargetDebuggerHandle {
                 kick.raw_cdp_request("Page.captureScreenshot".into(), json!({ "format": "jpeg", "quality": 1 })),
             ).await;
         });
-        let (dispatch, dispatch_queue) = mpsc::channel(INPUT_QUEUE);
+        let pending_input = Arc::new(InputQueue::default());
         // Set whenever the page zoom may have changed; the dispatcher then re-reads it before the next mouse event.
         let zoom_stale = Arc::new(AtomicBool::new(true));
-        let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), dispatch_queue, zoom_stale.clone()));
+        let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), pending_input.clone(), zoom_stale.clone()));
         let mut frames = 0u64;
         // Frames sent to the client and not yet acked by it.
         let mut in_flight: Vec<u64> = Vec::with_capacity(window);
@@ -102,8 +107,10 @@ impl TargetDebuggerHandle {
                         }
                     }
                     Some(command) => {
-                        if dispatch.try_send(command).is_err() {
-                            break Err(invalid_state("screencast input queue overflow; input is arriving faster than the page handles it"));
+                        if !pending_input.push(command) {
+                            break Err(invalid_state(
+                                "screencast input queue overflow; clicks and keys are arriving faster than the page handles them (hidden pages handle input slowly)",
+                            ));
                         }
                     }
                 },
@@ -226,14 +233,57 @@ impl TargetDebuggerHandle {
     }
 }
 
+/// Mouse and key input waiting for the dispatcher, in order. A mouse move replaces a move queued
+/// directly before it with the same buttons and modifiers, so a slow page receives the latest
+/// pointer position instead of a growing backlog.
+#[derive(Default)]
+struct InputQueue {
+    queue: Mutex<VecDeque<ScreencastInput>>,
+    queued: Notify,
+}
+
+impl InputQueue {
+    /// Returns `false` when [`INPUT_QUEUE`] events that cannot be coalesced are already waiting.
+    fn push(&self, input: ScreencastInput) -> bool {
+        let mut queue = self.queue.lock().unwrap();
+        if let (ScreencastInput::Mouse(next), Some(ScreencastInput::Mouse(last))) = (&input, queue.back_mut()) {
+            if is_move(last) && is_move(next) && last.buttons == next.buttons && last.modifiers == next.modifiers {
+                *last = next.clone();
+                return true;
+            }
+        }
+        if queue.len() >= INPUT_QUEUE {
+            return false;
+        }
+        queue.push_back(input);
+        drop(queue);
+        self.queued.notify_one();
+        true
+    }
+
+    async fn pop(&self) -> ScreencastInput {
+        loop {
+            if let Some(input) = self.queue.lock().unwrap().pop_front() {
+                return input;
+            }
+            self.queued.notified().await;
+        }
+    }
+}
+
+fn is_move(mouse: &ScreencastMouseInput) -> bool {
+    mouse.event_type == ScreencastMouseEventType::MouseMoved
+}
+
+/// Dispatches queued input until the screencast aborts it; ends only when a dispatch fails.
 async fn dispatch_input(
     target: TargetDebuggerHandle,
-    mut queue: mpsc::Receiver<ScreencastInput>,
+    queue: Arc<InputQueue>,
     zoom_stale: Arc<AtomicBool>,
 ) -> Result<(), JsonRpcError> {
     let mut zoom = 1.0;
-    while let Some(command) = queue.recv().await {
-        let (method, params) = match command {
+    loop {
+        let (method, params) = match queue.pop().await {
             ScreencastInput::Mouse(mut mouse) => {
                 if zoom_stale.swap(false, Ordering::SeqCst) {
                     zoom = page_zoom(&target).await?;
@@ -261,8 +311,6 @@ async fn dispatch_input(
         let params = strip_nulls(params.map_err(|error| internal_error(&error.to_string()))?);
         target.raw_cdp_request(method.into(), params).await?;
     }
-    // The screencast loop owns the sender; it ending means the loop already finished.
-    std::future::pending().await
 }
 
 /// The page's CSS-to-device-independent pixel ratio (e.g. 1.2 for a page zoomed to 120%).
@@ -694,6 +742,106 @@ mod tests {
         assert_eq!(browser.answer().await.0, "Page.stopScreencast");
         run.await.unwrap().unwrap();
         channel_task.abort();
+    }
+
+    #[tokio::test]
+    async fn screencast_coalesces_moves_while_a_slow_page_handles_input() {
+        let (transport, browser) = transport_pair_of();
+        let browser = FakeBrowser { transport: browser };
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let channel_task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let mut handle = TargetDebuggerHandle::stub_for_tests(
+            super::super::tests::target_snapshot(TargetDebuggerPhase::Running),
+        );
+        let (raw_events, _) = broadcast::channel(16);
+        handle.raw_events = raw_events.clone();
+        handle.raw_cdp_channel = Some(channel);
+        let (commands, _command_receiver) = mpsc::channel(1);
+        handle.commands = commands;
+
+        let (input, input_receiver) = mpsc::channel(8);
+        let (output, _frames) = mpsc::channel(8);
+        let run = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle.screencast(
+                    ScreencastOptions { format: ScreencastFormat::Png, quality: None, size: None, window: None },
+                    input_receiver,
+                    output,
+                ).await
+            }
+        });
+        browser.answer().await;
+        browser.answer().await;
+        browser.answer().await;
+        let mouse = |event_type, x, buttons| ScreencastInput::Mouse(ScreencastMouseInput {
+            event_type,
+            x, y: 1.0,
+            button: if event_type == ScreencastMouseEventType::MouseMoved { ScreencastMouseButton::None } else { ScreencastMouseButton::Left },
+            buttons, click_count: 1, delta_x: 0.0, delta_y: 0.0, modifiers: 0,
+        });
+        let dispatched = |(method, params): (String, Value)| {
+            assert_eq!(method, "Input.dispatchMouseEvent");
+            (params["type"].as_str().unwrap().to_owned(), params["x"].as_f64().unwrap(), params["buttons"].as_u64().unwrap())
+        };
+
+        input.send(mouse(ScreencastMouseEventType::MouseMoved, 1.0, 0)).await.unwrap();
+        assert_eq!(browser.answer().await.0, "Page.getLayoutMetrics");
+        // The page has not answered the first move yet; far more input than INPUT_QUEUE arrives.
+        for x in 2..=300 {
+            input.send(mouse(ScreencastMouseEventType::MouseMoved, f64::from(x), 0)).await.unwrap();
+        }
+        input.send(mouse(ScreencastMouseEventType::MousePressed, 300.0, 1)).await.unwrap();
+        for x in 301..=310 {
+            input.send(mouse(ScreencastMouseEventType::MouseMoved, f64::from(x), 1)).await.unwrap();
+        }
+        input.send(mouse(ScreencastMouseEventType::MouseReleased, 310.0, 0)).await.unwrap();
+        input.send(mouse(ScreencastMouseEventType::MouseMoved, 311.0, 0)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let mut received = Vec::new();
+        for _ in 0..6 {
+            received.push(dispatched(browser.answer().await));
+        }
+        assert_eq!(received, [
+            ("mouseMoved".to_owned(), 1.0, 0),
+            ("mouseMoved".to_owned(), 300.0, 0),
+            ("mousePressed".to_owned(), 300.0, 1),
+            ("mouseMoved".to_owned(), 310.0, 1),
+            ("mouseReleased".to_owned(), 310.0, 0),
+            ("mouseMoved".to_owned(), 311.0, 0),
+        ]);
+
+        drop(input);
+        assert_eq!(browser.answer().await.0, "Page.stopScreencast");
+        run.await.unwrap().unwrap();
+        channel_task.abort();
+    }
+
+    #[test]
+    fn input_queue_bounds_clicks_and_keys_but_not_moves() {
+        let key = || ScreencastInput::Key(ScreencastKeyInput {
+            event_type: ScreencastKeyEventType::Char,
+            key: "a".into(), code: "KeyA".into(), text: Some("a".into()),
+            windows_virtual_key_code: None, auto_repeat: false, modifiers: 0,
+        });
+        let mouse_move = |x| ScreencastInput::Mouse(ScreencastMouseInput {
+            event_type: ScreencastMouseEventType::MouseMoved,
+            x, y: 0.0,
+            button: ScreencastMouseButton::None,
+            buttons: 0, click_count: 0, delta_x: 0.0, delta_y: 0.0, modifiers: 0,
+        });
+        let queue = InputQueue::default();
+        for _ in 0..INPUT_QUEUE - 1 {
+            assert!(queue.push(key()));
+        }
+        assert!(queue.push(mouse_move(1.0)), "the last free place takes a move");
+        assert!(queue.push(mouse_move(2.0)), "a full queue still coalesces moves");
+        assert!(!queue.push(key()), "a full queue rejects keys");
+        assert_eq!(queue.queue.lock().unwrap().back(), Some(&mouse_move(2.0)));
     }
 
     #[tokio::test]
