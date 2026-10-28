@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::service_api::{
     ConnectionStatus, ContextKind, ContextSnapshot, DesktopApi, DesktopAttachResult, DesktopClientMessage, DesktopInfo,
-    DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTargetRef,
+    DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTargetRef, MutationOptions,
 };
 use linkrpc::prelude::StreamReceiver;
 
@@ -87,6 +87,8 @@ impl DebuggerService {
             Some(ConnectionStatus::Failed { message }) => {
                 let message = format!("cannot connect to process tree {root_pid}: {message}");
                 MACHINE_FAILURES.lock().unwrap().insert(root_pid, (Instant::now(), message.clone()));
+                // Process IDs are not reused soon, so a failed root's entry would only accumulate.
+                let _ = ContextApi::delete_connection(self, ctx, connection, MutationOptions::default()).await;
                 Err(JsonRpcError::new(error_codes::INVALID_PARAMS, message))
             }
             _ => {
