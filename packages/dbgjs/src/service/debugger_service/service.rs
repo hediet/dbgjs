@@ -40,7 +40,8 @@ impl ServiceApi for DebuggerService {
         }
         .map_err(|error| internal_error(error.to_string()))?;
         if include_targets {
-            process_discovery::populate_process_tree_targets(&mut trees).await;
+            let open = self.open_process_tree_runtimes().await;
+            process_discovery::populate_process_tree_targets(&mut trees, &open).await;
         }
         Ok(trees)
     }
@@ -65,9 +66,10 @@ impl ServiceApi for DebuggerService {
             covered_processes.extend(tree.processes.iter().map(|process| process.process_id));
             true
         });
+        let open = self.open_process_tree_runtimes().await;
         for tree in &mut trees {
             if expanded.contains(&tree.root_process_id) {
-                crate::connection::discovery::process_discovery::populate_process_tree_targets(std::slice::from_mut(tree))
+                crate::connection::discovery::process_discovery::populate_process_tree_targets(std::slice::from_mut(tree), &open)
                     .await;
             }
         }
@@ -108,5 +110,25 @@ impl ServiceApi for DebuggerService {
             service.shutdown.send_replace(true);
         });
         Ok(true)
+    }
+}
+
+impl DebuggerService {
+    /// Connected process-tree runtimes of all contexts, keyed by root process ID, so discovery can
+    /// list their targets without opening another connection.
+    pub(super) async fn open_process_tree_runtimes(&self) -> BTreeMap<u32, Arc<ConnectionRuntime>> {
+        let state = self.state.lock().await;
+        let mut open = BTreeMap::new();
+        for ((context_id, connection_id), runtime) in &state.runtimes {
+            let Some(connection) = state.contexts.get(context_id).and_then(|context| context.connections.get(connection_id)) else {
+                continue;
+            };
+            if let ConnectionConfiguration::ProcessTree { root_pid } = connection.configuration {
+                if matches!(connection.status, ConnectionStatus::Connected { .. }) {
+                    open.entry(root_pid).or_insert_with(|| runtime.clone());
+                }
+            }
+        }
+        open
     }
 }

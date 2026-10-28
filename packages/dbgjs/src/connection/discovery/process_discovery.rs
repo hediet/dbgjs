@@ -153,7 +153,12 @@ pub async fn discover_recognized_process_trees()
     Ok(trees)
 }
 
-pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
+/// Lists each tree's targets. Roots with a connected runtime in `open` (keyed by root process ID)
+/// reuse it; others get a temporary connection that waits for the target list to settle.
+pub async fn populate_process_tree_targets(
+    trees: &mut [ProcessTreeSnapshot],
+    open: &BTreeMap<u32, std::sync::Arc<ConnectionRuntime>>,
+) {
     let observations = join_all(trees.iter().filter(|tree| targets_observable_silently(tree)).map(|tree| {
         let root_process_id = tree.root_process_id;
         let process_ids = tree
@@ -161,11 +166,16 @@ pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
             .iter()
             .map(|process| process.process_id)
             .collect::<BTreeSet<_>>();
+        let runtime = open.get(&root_process_id).cloned();
         async move {
-            (
-                root_process_id,
-                discover_process_tree_targets(root_process_id, &process_ids).await,
-            )
+            let targets = match runtime {
+                Some(runtime) => match runtime.refresh_targets().await {
+                    Some(observation) => Ok(process_tree_targets(observation.targets, &process_ids)),
+                    None => Err("process tree has no observable target source".to_owned()),
+                },
+                None => discover_process_tree_targets(root_process_id, &process_ids).await,
+            };
+            (root_process_id, targets)
         }
     }))
     .await
@@ -307,33 +317,40 @@ async fn discover_process_tree_targets(
             }
         }
 
-        Ok(observation
-            .targets
-            .into_iter()
-            .map(|target| ProcessTargetSnapshot {
-                process_id: target.process_id,
-                attachment: Some(if target.snapshot.attached {
-                    crate::api::service_api::TargetAttachmentState::CdpClient
-                } else {
-                    crate::api::service_api::TargetAttachmentState::Detached
-                }),
-                target: target.snapshot,
-            })
-            .filter(|target| {
-                target.process_id.is_none_or(|process_id| {
-                    process_ids.contains(&process_id)
-                        && !matches!(
-                            target.target.target_type.as_str(),
-                            "node" | "process" | "browser"
-                        )
-                })
-            })
-            .collect())
+        Ok(process_tree_targets(observation.targets, process_ids))
     }
     .await;
     runtime.set_target_discovery(false).await;
     runtime.close().await;
     result
+}
+
+/// The page targets of one process tree: its renderers and pages, not the processes themselves.
+fn process_tree_targets(
+    targets: Vec<crate::service::virtual_browser_root::HostTarget>,
+    process_ids: &BTreeSet<u32>,
+) -> Vec<ProcessTargetSnapshot> {
+    targets
+        .into_iter()
+        .map(|target| ProcessTargetSnapshot {
+            process_id: target.process_id,
+            attachment: Some(if target.snapshot.attached {
+                crate::api::service_api::TargetAttachmentState::CdpClient
+            } else {
+                crate::api::service_api::TargetAttachmentState::Detached
+            }),
+            target: target.snapshot,
+        })
+        .filter(|target| {
+            target.process_id.is_none_or(|process_id| {
+                process_ids.contains(&process_id)
+                    && !matches!(
+                        target.target.target_type.as_str(),
+                        "node" | "process" | "browser"
+                    )
+            })
+        })
+        .collect()
 }
 
 fn agent_session_query(
