@@ -28,6 +28,8 @@ const MAX_BACKLOG: usize = 64 * 1024;
 /// Frames the screencast may have in flight to the desktop.
 const FRAME_WINDOW: u8 = 2;
 const MAX_VIEWPORT: u32 = 16_384;
+/// How often the page title is checked; RFB clients show it as the desktop name.
+const TITLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Runs one desktop session until the client ends its input (`Ok`), the screencast fails, or
 /// `cancelled` resolves (`Err` with `CANCELLED`).
@@ -48,6 +50,9 @@ pub async fn serve(
     );
     tokio::pin!(screencast);
     tokio::pin!(cancelled);
+    let (title_sender, mut titles) = mpsc::channel(1);
+    // Aborted with the session, whichever way it ends.
+    let _title_watch = AbortOnDrop(tokio::spawn(watch_title(debugger.clone(), name.clone(), title_sender)));
     let mut session = Session {
         rfb: RfbServer::new(name),
         mapper: InputMapper::default(),
@@ -91,8 +96,41 @@ pub async fn serve(
                 Some(message) => session.client_message(message).await?,
                 None => session.screencast_input = None,
             },
+            Some(title) = titles.recv() => session.rfb.set_name(title),
         }
         session.pump().await?;
+    }
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Reports the page's title whenever it differs from the last one, e.g. a VS Code window title
+/// that follows the active editor. Runs until the session drops `titles`.
+async fn watch_title(debugger: TargetDebuggerHandle, mut last: String, titles: mpsc::Sender<String>) {
+    let mut interval = tokio::time::interval(TITLE_POLL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        // Target.getTargetInfo reflects `document.title` without running page script, so it works
+        // while the page is paused in a debugger.
+        let Ok(info) = debugger.raw_cdp_request("Target.getTargetInfo".into(), serde_json::json!({})).await else {
+            continue;
+        };
+        let Some(title) = info.pointer("/targetInfo/title").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if title != last {
+            last = title.to_owned();
+            if titles.send(last.clone()).await.is_err() {
+                return;
+            }
+        }
     }
 }
 

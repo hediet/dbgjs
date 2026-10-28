@@ -18,6 +18,7 @@ const ENCODING_RAW: i32 = 0;
 const ENCODING_TIGHT: i32 = 7;
 const ENCODING_ZRLE: i32 = 16;
 const PSEUDO_DESKTOP_SIZE: i32 = -223;
+const PSEUDO_DESKTOP_NAME: i32 = -307;
 const PSEUDO_QEMU_EXTENDED_KEY: i32 = -258;
 const PSEUDO_EXTENDED_DESKTOP_SIZE: i32 = -308;
 const PSEUDO_CONTINUOUS_UPDATES: i32 = -313;
@@ -63,6 +64,9 @@ pub struct RfbServer {
     compression: u8,
     desktop_size: bool,
     extended_desktop_size: bool,
+    /// The client accepts name changes (DesktopName pseudo-encoding).
+    desktop_name: bool,
+    name_changed: bool,
     continuous: bool,
     qemu_keys: bool,
     qemu_announced: bool,
@@ -88,6 +92,8 @@ impl RfbServer {
             compression: 6,
             desktop_size: false,
             extended_desktop_size: false,
+            desktop_name: false,
+            name_changed: false,
             continuous: false,
             qemu_keys: false,
             qemu_announced: false,
@@ -147,11 +153,22 @@ impl RfbServer {
         }
     }
 
+    /// Renames the desktop; clients that support it learn the new name with the next update.
+    pub fn set_name(&mut self, name: String) {
+        if name != self.name {
+            self.name = name;
+            self.name_changed = self.desktop_name;
+        }
+    }
+
     /// Whether an update is due: requested (or continuous) and something to send.
     pub fn wants_update(&self) -> bool {
         self.phase == Phase::Normal
             && (self.continuous || self.update_requested)
-            && (self.size_changed || (self.qemu_keys && !self.qemu_announced) || self.dirty.iter().any(|dirty| *dirty))
+            && (self.size_changed
+                || self.name_changed
+                || (self.qemu_keys && !self.qemu_announced)
+                || self.dirty.iter().any(|dirty| *dirty))
     }
 
     /// Appends a framebuffer update with every pending change to the output.
@@ -166,6 +183,13 @@ impl RfbServer {
         if self.size_changed {
             rects += self.write_size_announcement(&mut body);
             self.size_changed = false;
+        }
+        if self.name_changed {
+            put_rect_header(&mut body, 0, 0, 0, 0, PSEUDO_DESKTOP_NAME);
+            body.extend_from_slice(&(self.name.len() as u32).to_be_bytes());
+            body.extend_from_slice(self.name.as_bytes());
+            rects += 1;
+            self.name_changed = false;
         }
         for (x, y, width, height) in self.dirty_spans() {
             rects += self.encode_rect(x, y, width, height, &mut body);
@@ -349,6 +373,7 @@ impl RfbServer {
             .unwrap_or(ENCODING_RAW);
         self.desktop_size = encodings.contains(&PSEUDO_DESKTOP_SIZE);
         self.extended_desktop_size = encodings.contains(&PSEUDO_EXTENDED_DESKTOP_SIZE);
+        self.desktop_name = encodings.contains(&PSEUDO_DESKTOP_NAME);
         self.qemu_keys = encodings.contains(&PSEUDO_QEMU_EXTENDED_KEY);
         if let Some(level) = encodings.iter().find(|encoding| PSEUDO_COMPRESS_LEVELS.contains(encoding)) {
             self.compression = u8::try_from(level - PSEUDO_COMPRESS_LEVELS.start()).unwrap_or(6);
@@ -555,6 +580,7 @@ mod tests {
             match encoding {
                 ENCODING_RAW => offset += usize::from(rect.2) * usize::from(rect.3) * 4,
                 PSEUDO_EXTENDED_DESKTOP_SIZE => offset += 20,
+                PSEUDO_DESKTOP_NAME => offset += 4 + u32_at(update, offset) as usize,
                 _ => {}
             }
             rects.push(rect);
@@ -614,6 +640,38 @@ mod tests {
         assert!(server.wants_update(), "continuous updates need no request");
         server.write_update();
         assert_eq!(update_rects(&server.take_output()), vec![(0, 0, 2, 3, PSEUDO_EXTENDED_DESKTOP_SIZE), (0, 0, 2, 3, 0)]);
+    }
+
+    #[test]
+    fn renames_reach_clients_that_accept_desktop_names() {
+        let mut server = RfbServer::new("old".into());
+        handshake(&mut server);
+        server.set_frame(4, 4, solid(4, 4, [0, 0, 0, 255]));
+        server.take_output();
+        server.receive(&set_encodings(&[ENCODING_RAW, PSEUDO_DESKTOP_NAME])).unwrap();
+        server.receive(&[3, 1, 0, 0, 0, 0, 0, 4, 0, 4]).unwrap();
+        server.write_update();
+        server.take_output();
+        server.receive(&[3, 1, 0, 0, 0, 0, 0, 4, 0, 4]).unwrap();
+        server.set_name("old".into());
+        assert!(!server.wants_update(), "an unchanged name is no update");
+        server.set_name("Agents · new".into());
+        assert!(server.wants_update());
+        server.write_update();
+        let update = server.take_output();
+        assert_eq!(update_rects(&update), vec![(0, 0, 0, 0, PSEUDO_DESKTOP_NAME)]);
+        assert_eq!(&update[20..], "Agents · new".as_bytes());
+
+        let mut plain = RfbServer::new("old".into());
+        handshake(&mut plain);
+        plain.set_frame(4, 4, solid(4, 4, [0, 0, 0, 255]));
+        plain.take_output();
+        plain.receive(&[3, 1, 0, 0, 0, 0, 0, 4, 0, 4]).unwrap();
+        plain.write_update();
+        plain.take_output();
+        plain.receive(&[3, 1, 0, 0, 0, 0, 0, 4, 0, 4]).unwrap();
+        plain.set_name("new".into());
+        assert!(!plain.wants_update(), "clients without the pseudo-encoding keep the initial name");
     }
 
     #[test]
