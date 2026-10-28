@@ -8,7 +8,9 @@ pub trait ServiceApi {
 
     /// Discovers process trees on the service's machine: trees of `root_kind`, or of every
     /// recognized root kind when it is omitted. `include_stats` requires a `root_kind`;
-    /// `include_targets` also queries the runtime targets of every root.
+    /// `include_targets` also queries the runtime targets of every root. For that, each root is
+    /// connected in the service's `dbgjs.machine` context, which reuses connections across calls
+    /// and closes them after 10 minutes without use.
     async fn discover_process_trees(
         root_kind: Option<ProcessRootKind>,
         include_stats: bool,

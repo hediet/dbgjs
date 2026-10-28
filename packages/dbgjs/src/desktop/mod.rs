@@ -77,11 +77,16 @@ pub async fn serve(
                 result?;
                 return Ok(DesktopAttachResult { reason: DesktopCloseReason::Closed });
             }
-            message = frames.recv() => {
-                if let Some(ScreencastMessage::Frame { frame_id, data_base64, metadata, .. }) = message {
+            message = frames.recv() => match message {
+                Some(ScreencastMessage::Frame { frame_id, data_base64, metadata, .. }) => {
                     session.frame(frame_id, &data_base64, metadata).await?;
                 }
-            }
+                Some(ScreencastMessage::Visibility { visible }) => {
+                    session.output.send(DesktopServerMessage::Visibility { visible }).await?;
+                }
+                // The screencast's own result ends the session.
+                None => {}
+            },
             message = input.recv(), if session.screencast_input.is_some() => match message {
                 Some(message) => session.client_message(message).await?,
                 None => session.screencast_input = None,

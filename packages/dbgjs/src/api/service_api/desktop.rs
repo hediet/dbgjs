@@ -5,21 +5,35 @@ use super::*;
 #[link_rpc_interface(id = "dev.dbgjs.desktop")]
 pub trait DesktopApi {
     /// The target's title and that its desktop speaks RFB.
-    async fn info(target_ref: TargetRef) -> Result<DesktopInfo, JsonRpcError>;
+    async fn info(target: MachineTargetRef) -> Result<DesktopInfo, JsonRpcError>;
 
-    /// Serves `target_ref` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates
+    /// Serves `target` as an RFB 3.8 desktop (no RFB authentication; Hub consent gates
     /// the call) until the caller cancels or ends its input stream. The server sends `ready`
     /// before data. Data messages carry canonical base64 of at most 16384 bytes. Each direction
     /// starts with 262144 bytes of credit; sending data consumes credit, and the receiver returns
     /// credit only after consuming the bytes. The client sends its viewport (CSS pixels and device
     /// pixel ratio) over the stream; how the page follows it depends on `options.layout`.
+    /// `visibility` reports when the browser hides or shows the page (e.g. a minimized window);
+    /// a hidden page sends no new frames and handles input only after seconds.
     /// Not exclusive: other debugging of the target continues.
     #[input_stream(DesktopClientMessage)]
     #[output_stream(DesktopServerMessage)]
     async fn attach(
-        target_ref: TargetRef,
+        target: MachineTargetRef,
         options: DesktopOptions,
     ) -> Result<DesktopAttachResult, JsonRpcError>;
+}
+
+/// A page target on this machine, independent of contexts: a process tree's root process and the
+/// target's ID within it, as `discover_process_trees` reports them (e.g. a VS Code window
+/// `renderer-1`, an Electron page, or a browser tab). Written as `<rootPid>/<targetId>`. The
+/// service connects to the process tree itself, in its managed `dbgjs.machine` context, and
+/// keeps that connection for later calls and discovery.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineTargetRef {
+    pub root_pid: u32,
+    pub target_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -77,6 +91,7 @@ pub enum DesktopServerMessage {
     Ready,
     Data { data: String },
     Credit { bytes: u32 },
+    Visibility { visible: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
