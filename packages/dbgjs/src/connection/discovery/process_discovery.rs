@@ -716,7 +716,9 @@ mod windows_processes {
         }
         let characters =
             unsafe { std::slice::from_raw_parts(text.Buffer, usize::from(text.Length) / 2) };
-        String::from_utf16_lossy(characters)
+        // Some command lines contain NULs (e.g. WMI providers); CIM ends them at the first one.
+        let length = characters.iter().position(|&character| character == 0).unwrap_or(characters.len());
+        String::from_utf16_lossy(&characters[..length])
     }
 
     fn creation_date(handle: HANDLE) -> String {
