@@ -7,9 +7,172 @@ async (token) => {
 	}
 	const { app, BrowserWindow, webContents } = electronRequire("electron");
 	const net = electronRequire("node:net");
-	// Bridges of several dbgjs services coexist in one Electron app: each owns only the renderers it
-	// attaches (a second attach of the same webContents fails as "already attached"), and disposes
-	// itself when its control socket closes or its handshake times out, so none can outlive its owner.
+	// Every dbgjs connection to this app installs its own bridge, and each bridge disposes itself
+	// when its control socket closes or its handshake times out, so none can outlive its owner.
+	// Electron allows one `webContents.debugger` attachment per window, so the bridges share it
+	// through one process-wide registry and each client gets its own CDP session to the page.
+	const sharedDebuggers = globalThis[Symbol.for("dbgjs.electronSharedDebuggers.v1")] ??= (() => {
+		const windows = new Map();
+		const detachDebugger = (contents) => {
+			try {
+				if (!contents.isDestroyed() && contents.debugger.isAttached()) {
+					contents.debugger.detach();
+				}
+			} catch {
+				// Detaching is best effort.
+			}
+		};
+		const forget = (window) => {
+			if (windows.get(window.contents.id) !== window) {
+				return false;
+			}
+			windows.delete(window.contents.id);
+			window.contents.debugger.off("message", window.onMessage);
+			window.contents.debugger.off("detach", window.onDetach);
+			return true;
+		};
+		const closeSession = (window, session, reason) => {
+			if (session.closed) {
+				return false;
+			}
+			session.closed = true;
+			window.sessions.delete(session);
+			for (const [sessionId, owner] of window.owners) {
+				if (owner === session) {
+					window.owners.delete(sessionId);
+				}
+			}
+			session.listener.onDetach(reason);
+			return true;
+		};
+		const attachShared = (contents, force) => {
+			const existing = windows.get(contents.id);
+			if (existing) {
+				return { window: existing, stolen: false };
+			}
+			let stolen = false;
+			if (contents.debugger.isAttached()) {
+				if (!force) {
+					throw new Error(`Electron webContents ${contents.id} is already attached by another debugger`);
+				}
+				contents.debugger.detach();
+				stolen = true;
+			}
+			contents.debugger.attach("1.3");
+			const window = { contents, holds: 0, sessions: new Set(), owners: new Map() };
+			window.onMessage = (_event, method, params, sessionId) => {
+				if (!sessionId) {
+					// The shared root session only opens client sessions; it learns here when one ends.
+					const ended = method === "Target.detachedFromTarget"
+						&& [...window.sessions].find((session) => session.rootSessionId === params?.sessionId);
+					if (ended && closeSession(window, ended, "Electron renderer session detached")) {
+						release(window);
+					}
+					return;
+				}
+				const owner = window.owners.get(sessionId);
+				if (!owner) {
+					return;
+				}
+				if (method === "Target.attachedToTarget" && params?.sessionId) {
+					window.owners.set(params.sessionId, owner);
+				} else if (method === "Target.detachedFromTarget" && params?.sessionId) {
+					window.owners.delete(params.sessionId);
+				}
+				owner.listener.onMessage(method, params, sessionId === owner.rootSessionId ? undefined : sessionId);
+			};
+			window.onDetach = (_event, reason) => {
+				if (!forget(window)) {
+					return;
+				}
+				window.holds = 0;
+				for (const session of [...window.sessions]) {
+					closeSession(window, session, reason || "Electron renderer debugger detached");
+				}
+			};
+			contents.debugger.on("message", window.onMessage);
+			contents.debugger.on("detach", window.onDetach);
+			windows.set(contents.id, window);
+			return { window, stolen };
+		};
+		const release = (window) => {
+			if (windows.get(window.contents.id) === window && --window.holds === 0) {
+				forget(window);
+				detachDebugger(window.contents);
+			}
+		};
+		return {
+			/// Keeps the window's shared debugger attached and sends commands to its root session.
+			hold(contents, force) {
+				const { window, stolen } = attachShared(contents, force);
+				window.holds++;
+				let released = false;
+				return {
+					stolen,
+					send: (method, params) => contents.debugger.sendCommand(method, params ?? {}),
+					release() {
+						if (!released) {
+							released = true;
+							release(window);
+						}
+					},
+				};
+			},
+			/// Opens a client's own flattened session to the window. Commands without a session id go
+			/// to it, and its events arrive without one, as if the client owned the debugger.
+			async open(contents, force, listener) {
+				const { window, stolen } = attachShared(contents, force);
+				window.holds++;
+				try {
+					const { targetInfo } = await contents.debugger.sendCommand("Target.getTargetInfo");
+					const { sessionId } = await contents.debugger.sendCommand(
+						"Target.attachToTarget", { targetId: targetInfo.targetId, flatten: true },
+					);
+					if (windows.get(contents.id) !== window) {
+						throw new Error("Electron renderer debugger detached during attachment");
+					}
+					const session = { rootSessionId: sessionId, listener, closed: false };
+					window.sessions.add(session);
+					window.owners.set(sessionId, session);
+					return {
+						stolen,
+						async send(method, params, targetSessionId) {
+							if (session.closed) {
+								throw new Error("Electron renderer session is closed");
+							}
+							const result = await contents.debugger.sendCommand(
+								method, params ?? {}, targetSessionId ?? sessionId,
+							);
+							if (method === "Target.attachToTarget" && result?.sessionId && !session.closed) {
+								window.owners.set(result.sessionId, session);
+							}
+							return result;
+						},
+						async close() {
+							if (session.closed) {
+								return;
+							}
+							session.closed = true;
+							window.sessions.delete(session);
+							for (const [id, owner] of window.owners) {
+								if (owner === session) {
+									window.owners.delete(id);
+								}
+							}
+							if (windows.get(contents.id) === window) {
+								await contents.debugger.sendCommand("Target.detachFromTarget", { sessionId })
+									.catch(() => {});
+								release(window);
+							}
+						},
+					};
+				} catch (error) {
+					release(window);
+					throw error;
+				}
+			},
+		};
+	})();
 
 	const maxMessageBytes = 128 * 1024 * 1024;
 	const maxBufferedBytes = 128 * 1024 * 1024;
@@ -157,19 +320,14 @@ async (token) => {
 	/// only settles once the renderer is resumed, so a command that is still pending after the grace
 	/// window is proof that startup is genuinely paused.
 	const blockStartup = async (contents) => {
-		const entry = { contents, blocked: false, released: false, timer: undefined };
+		const entry = { contents, blocked: false, released: false, timer: undefined, hold: undefined };
 		startupBlocks.set(contents.id, entry);
-		let attached = false;
 		try {
-			if (!contents.debugger.isAttached()) {
-				contents.debugger.attach("1.3");
-				attached = true;
-			}
+			entry.hold = sharedDebuggers.hold(contents, false);
 		} catch (error) {
 			startupBlocks.delete(contents.id);
 			return { blocked: false, reason: String(error?.message || error) };
 		}
-		entry.attachedByBridge = attached;
 		let settled;
 		const finish = (reason) => {
 			settled = { blocked: false, reason };
@@ -179,12 +337,13 @@ async (token) => {
 			if (startupBlocks.get(contents.id) === entry) {
 				startupBlocks.delete(contents.id);
 			}
+			entry.hold.release();
 			if (wasBlocked && !contents.isDestroyed()) {
 				publishTarget("targetInfoChanged", contents);
 			}
 			return settled;
 		};
-		const pending = contents.debugger.sendCommand("Page.waitForDebugger").then(
+		const pending = entry.hold.send("Page.waitForDebugger").then(
 			() => finish("resumed"),
 			(error) => finish(String(error?.message || error)),
 		);
@@ -193,22 +352,21 @@ async (token) => {
 			delay(waitForDebuggerGraceMs).then(() => undefined),
 		]);
 		if (outcome) {
-			if (entry.attachedByBridge && !rendererClients.has(contents.id)) {
-				detachQuietly(contents);
-			}
 			startupBlocks.delete(contents.id);
 			return outcome;
 		}
 		entry.blocked = true;
 		entry.timer = setTimeout(() => {
 			if (!rendererClients.has(contents.id)) {
-				void releaseStartup(contents.id, true);
+				void releaseStartup(contents.id);
 			}
 		}, waitForDebuggerReleaseMs);
 		entry.timer.unref?.();
 		return { blocked: true };
 	};
-	const releaseStartup = async (webContentsId, detach) => {
+	/// Resumes a renderer paused at startup; its pending `Page.waitForDebugger` then settles and
+	/// releases the startup hold on the shared debugger.
+	const releaseStartup = async (webContentsId) => {
 		const entry = startupBlocks.get(webContentsId);
 		if (!entry || entry.released) {
 			return;
@@ -217,26 +375,15 @@ async (token) => {
 		startupBlocks.delete(webContentsId);
 		clearTimeout(entry.timer);
 		if (entry.contents.isDestroyed()) {
+			entry.hold.release();
 			return;
 		}
 		try {
-			await entry.contents.debugger.sendCommand("Runtime.runIfWaitingForDebugger");
+			await entry.hold.send("Runtime.runIfWaitingForDebugger");
 		} catch {
 			// The renderer already resumed or went away.
 		}
-		if (detach && entry.attachedByBridge) {
-			detachQuietly(entry.contents);
-		}
 		publishTarget("targetInfoChanged", entry.contents);
-	};
-	const detachQuietly = (contents) => {
-		try {
-			if (!contents.isDestroyed() && contents.debugger.isAttached()) {
-				contents.debugger.detach();
-			}
-		} catch {
-			// Detaching is best effort.
-		}
 	};
 	const onWebContentsCreated = (contents) => {
 		watch(contents);
@@ -255,31 +402,18 @@ async (token) => {
 		const timer = setTimeout(resolve, milliseconds);
 		timer.unref?.();
 	});
-	const removeDebuggerListeners = (entry) => {
-		entry.contents.debugger.off("message", entry.onMessage);
-		entry.contents.debugger.off("detach", entry.onDetach);
-	};
 	const releaseRenderer = async (entry, reason, notify = true) => {
 		if (entry.releasePromise) {
 			return entry.releasePromise;
 		}
 		entry.releasePromise = (async () => {
-			rendererClients.delete(entry.webContentsId);
-			removeDebuggerListeners(entry);
-			await releaseStartup(entry.webContentsId, false);
-			let cleanupError;
-			if (!entry.contents.isDestroyed() && entry.contents.debugger.isAttached()) {
-				try {
-					entry.contents.debugger.detach();
-				} catch (error) {
-					cleanupError = String(error?.message || error);
-				}
+			if (rendererClients.get(entry.webContentsId) === entry) {
+				rendererClients.delete(entry.webContentsId);
 			}
+			await releaseStartup(entry.webContentsId);
+			await entry.session?.close();
 			if (notify) {
-				writeClosed(
-					entry.socket,
-					cleanupError ? `${reason}; debugger cleanup failed: ${cleanupError}` : reason,
-				);
+				writeClosed(entry.socket, reason);
 			}
 			entry.socket.end();
 		})();
@@ -300,10 +434,10 @@ async (token) => {
 		}
 		parent.scanning = true;
 		try {
-			const { targetInfo } = await entry.contents.debugger.sendCommand(
+			const { targetInfo } = await entry.session.send(
 				"Target.getTargetInfo", {}, parentSessionId,
 			);
-			const { targetInfos } = await entry.contents.debugger.sendCommand(
+			const { targetInfos } = await entry.session.send(
 				"Target.getTargets", {}, parentSessionId,
 			);
 			if (entry.autoAttachParents.get(key) !== parent) {
@@ -320,7 +454,7 @@ async (token) => {
 				routeDebuggerMessage(entry, "Target.detachedFromTarget",
 					{ sessionId, targetId }, parentSessionId);
 				try {
-					await entry.contents.debugger.sendCommand(
+					await entry.session.send(
 						"Target.detachFromTarget", { sessionId }, parentSessionId,
 					);
 				} catch {
@@ -332,12 +466,12 @@ async (token) => {
 					continue;
 				}
 				let sessionId;
-				({ sessionId } = await entry.contents.debugger.sendCommand(
+				({ sessionId } = await entry.session.send(
 					"Target.attachToTarget", { targetId: info.targetId, flatten: true },
 					parentSessionId,
 				));
 				if (entry.autoAttachParents.get(key) !== parent) {
-					await entry.contents.debugger.sendCommand(
+					await entry.session.send(
 						"Target.detachFromTarget", { sessionId }, parentSessionId,
 					).catch(() => {});
 					return;
@@ -346,7 +480,7 @@ async (token) => {
 					if (parent.children.get(info.targetId) === sessionId) {
 						continue;
 					}
-					await entry.contents.debugger.sendCommand(
+					await entry.session.send(
 						"Target.detachFromTarget", { sessionId }, parentSessionId,
 					).catch(() => {});
 					continue;
@@ -388,7 +522,7 @@ async (token) => {
 			await delay(10);
 		}
 		await refreshAutoAttachedChildren(entry, parentSessionId);
-		const { targetInfos } = await entry.contents.debugger.sendCommand(
+		const { targetInfos } = await entry.session.send(
 			"Target.getTargets", {}, parentSessionId,
 		);
 		const findFrame = (tree, id) => {
@@ -406,7 +540,7 @@ async (token) => {
 			if (!parentTree || findFrame(result.frameTree, info.targetId)) continue;
 			let childTree;
 			try {
-				({ frameTree: childTree } = await entry.contents.debugger.sendCommand(
+				({ frameTree: childTree } = await entry.session.send(
 					"Page.getFrameTree", {}, sessionId,
 				));
 			} catch {
@@ -438,7 +572,7 @@ async (token) => {
 			}
 			let result;
 			try {
-				result = await entry.contents.debugger.sendCommand(
+				result = await entry.session.send(
 					envelope.method,
 					envelope.params ?? {},
 					envelope.sessionId,
@@ -447,6 +581,10 @@ async (token) => {
 				if (envelope.method === "Target.attachToTarget") {
 					entry.rawAttaching.delete(envelope.params?.targetId);
 				}
+			}
+			// A startup pause waits in the shared root session, not in the client's own session.
+			if (envelope.method === "Runtime.runIfWaitingForDebugger" && !envelope.sessionId) {
+				await releaseStartup(entry.webContentsId);
 			}
 			if (envelope.method === "Page.getFrameTree") {
 				await addRemoteFrameTrees(entry, envelope.sessionId, result);
@@ -481,14 +619,14 @@ async (token) => {
 				}
 			}
 			if (envelope.method === "Page.createIsolatedWorld" && envelope.sessionId) {
-				const { frameTree } = await entry.contents.debugger.sendCommand(
+				const { frameTree } = await entry.session.send(
 					"Page.getFrameTree", {}, envelope.sessionId,
 				);
 				const createChildWorlds = async (tree) => {
 					for (const child of tree.childFrames ?? []) {
 						// Existing local frames need the utility world too: Playwright
 						// creates it explicitly only for the OOPIF's main frame.
-						await entry.contents.debugger.sendCommand("Page.createIsolatedWorld",
+						await entry.session.send("Page.createIsolatedWorld",
 							{ ...envelope.params, frameId: child.frame.id }, envelope.sessionId)
 							.catch(() => {});
 						await createChildWorlds(child);
@@ -505,7 +643,7 @@ async (token) => {
 					entry.autoAttachParents.delete(key);
 					if (parent?.timer) clearTimeout(parent.timer);
 					for (const sessionId of parent?.children.values() ?? []) {
-						await entry.contents.debugger.sendCommand(
+						await entry.session.send(
 							"Target.detachFromTarget", { sessionId }, envelope.sessionId,
 						).catch(() => {});
 					}
@@ -554,37 +692,24 @@ async (token) => {
 			stolen = true;
 		}
 		const contents = find(webContentsId);
-		const startup = startupBlocks.get(webContentsId);
-		const externalOwner = !startup && contents.debugger.isAttached();
-		if (externalOwner && !force) {
-			throw new Error(
-				`Electron webContents ${webContentsId} is already attached by another debugger`,
-			);
-		}
-		if (externalOwner) {
-			contents.debugger.detach();
-			stolen = true;
-		}
 		const entry = {
 			webContentsId,
 			contents,
 			socket,
+			session: undefined,
 			autoAttachParents: new Map(),
 			announcedFrames: new Map(),
 			rawAttaching: new Set(),
-			adoptedStartup: Boolean(startup),
 			releasePromise: undefined,
-			onMessage: undefined,
-			onDetach: undefined,
 		};
-		entry.onMessage = (_event, method, params, sessionId) => {
+		const onMessage = (method, params, sessionId) => {
 			if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "iframe") {
 				const parent = entry.autoAttachParents.get(sessionId || "");
 				const targetId = params.targetInfo.targetId;
 				if (parent && !entry.rawAttaching.has(targetId)) {
 					const existing = parent.children.get(targetId);
 					if (existing && existing !== params.sessionId) {
-						void entry.contents.debugger.sendCommand("Target.detachFromTarget",
+						void entry.session?.send("Target.detachFromTarget",
 							{ sessionId: params.sessionId }, sessionId).catch(() => {});
 						return;
 					}
@@ -610,37 +735,30 @@ async (token) => {
 			}
 			routeDebuggerMessage(entry, method, params, sessionId);
 		};
-		entry.onDetach = (_event, reason) => {
-			void releaseRenderer(
-				entry,
-				reason || "Electron renderer debugger detached",
-			);
+		const onDetach = (reason) => {
+			void releaseRenderer(entry, reason);
 		};
-		contents.debugger.on("message", entry.onMessage);
-		contents.debugger.on("detach", entry.onDetach);
+		// Registered before the session opens, so a concurrent attach of this bridge sees the client.
+		rendererClients.set(webContentsId, entry);
 		try {
-			if (!entry.adoptedStartup) {
-				contents.debugger.attach("1.3");
-			}
-			rendererClients.set(webContentsId, entry);
-			if (disposed || socket.destroyed) {
-				await releaseRenderer(
-					entry,
-					disposed ? "renderer bridge was disposed during attachment" : "renderer socket closed during attachment",
-					false,
-				);
-				throw new Error(
-					disposed ? "renderer bridge was disposed during attachment" : "renderer socket closed during attachment",
-				);
-			}
-			return { entry, stolen };
+			const opened = await sharedDebuggers.open(contents, force, { onMessage, onDetach });
+			entry.session = opened;
+			stolen ||= opened.stolen;
 		} catch (error) {
-			removeDebuggerListeners(entry);
-			if (!entry.adoptedStartup && !contents.isDestroyed() && contents.debugger.isAttached()) {
-				contents.debugger.detach();
+			if (rendererClients.get(webContentsId) === entry) {
+				rendererClients.delete(webContentsId);
 			}
 			throw error;
 		}
+		if (disposed || socket.destroyed || entry.releasePromise) {
+			const reason = disposed
+				? "renderer bridge was disposed during attachment"
+				: "renderer socket closed during attachment";
+			await entry.session.close();
+			await releaseRenderer(entry, reason, false);
+			throw new Error(reason);
+		}
+		return { entry, stolen };
 	};
 	const processRendererFrame = async (entry, frame) => {
 		if (frame?.kind === "cdp" && frame.envelope) {
@@ -806,7 +924,7 @@ async (token) => {
 			if (!waitForDebuggerOnStart) {
 				for (const webContentsId of [...startupBlocks.keys()]) {
 					if (!rendererClients.has(webContentsId)) {
-						void releaseStartup(webContentsId, true);
+						void releaseStartup(webContentsId);
 					}
 				}
 			}
@@ -826,7 +944,7 @@ async (token) => {
 				[...rendererClients.values()].map((entry) => releaseRenderer(entry, reason)),
 			);
 			const resumed = Promise.all(
-				[...startupBlocks.keys()].map((webContentsId) => releaseStartup(webContentsId, true)),
+				[...startupBlocks.keys()].map((webContentsId) => releaseStartup(webContentsId)),
 			);
 			for (const socket of pendingSockets) {
 				socket.destroy();

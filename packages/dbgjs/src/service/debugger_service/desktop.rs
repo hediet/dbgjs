@@ -1,7 +1,8 @@
 use super::*;
 use crate::api::service_api::{
     ConnectionStatus, ContextKind, ContextSnapshot, DesktopApi, DesktopAttachResult, DesktopClientMessage, DesktopInfo,
-    DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTargetRef, MutationOptions,
+    DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTarget, MachineTargetRef, MutationOptions,
+    ProcessRootKind, ServiceApi,
 };
 use linkrpc::prelude::StreamReceiver;
 
@@ -27,11 +28,12 @@ static MACHINE_CONTEXT_SETUP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const
 #[async_trait::async_trait]
 impl DesktopApi for DebuggerService {
     async fn info(&self, ctx: &CallCtx, target: MachineTargetRef) -> Result<DesktopInfo, JsonRpcError> {
-        let (_, title) = self.machine_target(ctx, &target).await?;
+        let (target, _, title) = self.machine_target(ctx, &target).await?;
         Ok(DesktopInfo {
             title,
             available: true,
             protocol: DesktopProtocol::Rfb,
+            target,
         })
     }
 
@@ -43,7 +45,7 @@ impl DesktopApi for DebuggerService {
         mut input: StreamReceiver<DesktopClientMessage>,
         output: StreamSender<DesktopServerMessage>,
     ) -> Result<DesktopAttachResult, JsonRpcError> {
-        let (target_ref, title) = self.machine_target(ctx, &target).await?;
+        let (_, target_ref, title) = self.machine_target(ctx, &target).await?;
         let _activity = self.connection_activity(&target_ref.connection).await;
         let (debugger, owned) = self.stream_target(&target_ref, "desktop").await?;
         let result = crate::desktop::serve(debugger.clone(), title, options, &mut input, output, ctx.cancelled()).await;
@@ -119,8 +121,16 @@ impl DebuggerService {
     }
 
     /// Resolves `target` to a target of the machine context, connecting its process tree if
-    /// needed, and returns the target's title.
-    async fn machine_target(&self, ctx: &CallCtx, target: &MachineTargetRef) -> Result<(TargetRef, String), JsonRpcError> {
+    /// needed, and returns the resolved target and its title.
+    async fn machine_target(
+        &self,
+        ctx: &CallCtx,
+        target: &MachineTargetRef,
+    ) -> Result<(MachineTarget, TargetRef, String), JsonRpcError> {
+        let target = match target {
+            MachineTargetRef::Target(target) => target.clone(),
+            MachineTargetRef::Window(window) => self.machine_window(ctx, &window.window).await?,
+        };
         self.ensure_machine_connection(ctx, target.root_pid).await?;
         let connection = machine_connection(target.root_pid);
         let deadline = tokio::time::Instant::now() + MACHINE_TARGET_TIMEOUT;
@@ -130,7 +140,8 @@ impl DebuggerService {
                 node.connection_id == connection.connection_id && node.target.target_id == target.target_id
             }) {
                 let title = node.target.title.clone();
-                return Ok((TargetRef { connection, target_id: target.target_id.clone() }, title));
+                let target_ref = TargetRef { connection, target_id: target.target_id.clone() };
+                return Ok((target, target_ref, title));
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, format!(
@@ -140,11 +151,83 @@ impl DebuggerService {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+
+    /// The first page titled `title`: among the machine context's connected process trees, else
+    /// among all VS Code, Electron, and browser process trees.
+    async fn machine_window(&self, ctx: &CallCtx, title: &str) -> Result<MachineTarget, JsonRpcError> {
+        if let Ok(context) = ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await {
+            let connected = context
+                .connections
+                .iter()
+                .filter(|connection| matches!(connection.status, ConnectionStatus::Connected { .. }))
+                .filter_map(|connection| match connection.configuration {
+                    ConnectionConfiguration::ProcessTree { root_pid } => Some((connection.id.as_str(), root_pid)),
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>();
+            if let Some(found) = context.target_forest.iter().find_map(|node| {
+                let root_pid = *connected.get(node.connection_id.as_str())?;
+                is_window(&node.target.target_type, &node.target.title, title).then(|| MachineTarget {
+                    root_pid,
+                    target_id: node.target.target_id.clone(),
+                })
+            }) {
+                return Ok(found);
+            }
+        }
+        let discovered = futures_util::future::join_all(
+            [ProcessRootKind::Vscode, ProcessRootKind::Electron, ProcessRootKind::Browser]
+                .map(|root_kind| ServiceApi::discover_process_trees(self, ctx, Some(root_kind), false, true)),
+        )
+        .await;
+        let mut failures = Vec::new();
+        for result in discovered {
+            match result {
+                Ok(trees) => {
+                    if let Some(found) = trees.iter().find_map(|tree| {
+                        tree.targets.iter().find_map(|target| {
+                            is_window(&target.target.target_type, &target.target.title, title).then(|| MachineTarget {
+                                root_pid: tree.root_process_id,
+                                target_id: target.target.target_id.clone(),
+                            })
+                        })
+                    }) {
+                        return Ok(found);
+                    }
+                }
+                Err(error) => failures.push(error.message),
+            }
+        }
+        Err(JsonRpcError::new(
+            error_codes::INVALID_PARAMS,
+            if failures.is_empty() {
+                format!("no page is titled \"{title}\"")
+            } else {
+                format!("no page is titled \"{title}\"; discovery failed: {}", failures.join("; "))
+            },
+        ))
+    }
+}
+
+fn is_window(target_type: &str, title: &str, wanted: &str) -> bool {
+    target_type == "page" && title.trim().to_lowercase() == wanted.trim().to_lowercase()
 }
 
 fn machine_connection(root_pid: u32) -> ConnectionRef {
     ConnectionRef {
         context_id: MACHINE_CONTEXT.to_owned(),
         connection_id: format!("root-{root_pid}"),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::is_window;
+
+    #[test]
+    fn windows_match_page_titles_ignoring_case_and_surrounding_whitespace() {
+        assert!(is_window("page", " Agents - Visual Studio Code ", "agents - visual studio code"));
+        assert!(is_window("page", "Grüße", "GRÜẞE"));
+        assert!(!is_window("worker", "Agents", "Agents"));
+        assert!(!is_window("page", "Agents 2", "Agents"));
     }
 }

@@ -26,14 +26,59 @@ function helper(rootPid = process.pid, overrides = {}) {
 		if (overrides.fetchJson) fetchJson = overrides.fetchJson;
 		if (overrides.ensureInspector) ensureInspector = overrides.ensureInspector;
 		if (overrides.commandLineArgument) commandLineArgument = overrides.commandLineArgument;
+		if (overrides.listProcesses) listProcesses = overrides.listProcesses;
 		return { parseUnixProcesses, parseLsofListeners, parseLinuxTcpListeners,
 			isNodeProcess, isBrowserProcess, parseCommandLineArgument, argumentValue,
 			listProcesses, listListeners, ensureRootEndpoint, ensureInspector,
 			processInstanceId, electronFusePath, electronInspectorFuseEnabled,
-			assertElectronInspectorSignalSupported };`,
+			assertElectronInspectorSignalSupported, handleCommand };`,
 	)(execFileCallback, randomUUID, open, readFile, readdir, readlink, rm,
 		basename, isAbsolute, join, posix, tmpdir, promisify, rootPid, overrides);
 }
+
+/// On Windows the provider asks the dbgjs service for processes; tests that need real processes
+/// answer for it with the CIM query whose form the service reproduces.
+async function cimProcesses() {
+	const { stdout } = await promisify(execFileCallback)("powershell.exe", [
+		"-NoProfile", "-NonInteractive", "-Command",
+		"@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate) | ConvertTo-Json -Compress",
+	], { windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 60_000 });
+	return JSON.parse(stdout).map((candidate) => ({
+		pid: Number(candidate.ProcessId),
+		parentPid: Number(candidate.ParentProcessId),
+		name: String(candidate.Name || ""),
+		commandLine: String(candidate.CommandLine || ""),
+		creationDate: String(candidate.CreationDate || ""),
+	}));
+}
+
+test("on Windows the service answers process listings", { skip: process.platform !== "win32" }, async () => {
+	const api = helper();
+	const written = [];
+	const write = process.stdout.write;
+	process.stdout.write = (line) => written.push(String(line));
+	let listing;
+	try {
+		listing = api.listProcesses();
+	} finally {
+		process.stdout.write = write;
+	}
+	const request = JSON.parse(written.join(""));
+	assert.equal(request.kind, "listProcesses");
+	const processes = [{ pid: 4, parentPid: 0, name: "System", commandLine: "", creationDate: "/Date(1)/" }];
+	api.handleCommand(JSON.stringify({ command: "processes", id: request.id, processes }));
+	assert.deepEqual(await listing, processes);
+
+	process.stdout.write = (line) => written.push(String(line));
+	try {
+		listing = api.listProcesses();
+	} finally {
+		process.stdout.write = write;
+	}
+	const failed = JSON.parse(written.at(-1));
+	api.handleCommand(JSON.stringify({ command: "processes", id: failed.id, error: "query failed" }));
+	await assert.rejects(listing, /query failed/);
+});
 
 test("browser roots are recognized from the shared list on every platform", () => {
 	const api = helper();
@@ -251,7 +296,7 @@ test("discovers and connects to the inspector owned by a real process", { timeou
 			});
 			child.once("exit", (code) => reject(new Error(`inspected child exited: ${code}`)));
 		});
-		const api = helper(child.pid);
+		const api = helper(child.pid, process.platform === "win32" ? { listProcesses: cimProcesses } : {});
 		const processes = await api.listProcesses();
 		const childProcess = processes.find((candidate) => candidate.pid === child.pid);
 		assert.ok(childProcess);

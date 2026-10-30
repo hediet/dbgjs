@@ -14,7 +14,7 @@ use crate::api::service_api::{
     ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot, ProcessTreeSnapshot,
 };
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 // Cold PowerShell/CIM startup on hosted Windows runners can exceed 15 seconds.
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -603,6 +603,170 @@ fn configure_background_command(_command: &mut Command) {}
 
 #[cfg(windows)]
 async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
+    tokio::task::spawn_blocking(windows_processes::snapshot)
+        .await
+        .map_err(|error| ProcessDiscoveryError::QueryFailed(error.to_string()))?
+}
+
+/// All processes in the form the process-tree provider uses, so that on Windows it asks the
+/// service instead of starting PowerShell for every scan.
+pub(crate) async fn provider_processes() -> Result<Vec<serde_json::Value>, ProcessDiscoveryError> {
+    Ok(query_windows_processes()
+        .await?
+        .into_iter()
+        .map(|process| {
+            serde_json::json!({
+                "pid": process.process_id,
+                "parentPid": process.parent_process_id,
+                "name": process.name,
+                "commandLine": process.command_line,
+                "creationDate": process.creation_date,
+            })
+        })
+        .collect())
+}
+
+/// Lists processes natively, reporting the values `Get-CimInstance Win32_Process` would, but in
+/// milliseconds instead of a PowerShell start. The process-tree provider still names targets from
+/// its CIM query, so `CreationDate` keeps the `/Date(<ms>)/` form of PowerShell's JSON. The
+/// executable path is the resolved image file, where CIM reports the path as launched.
+#[cfg(windows)]
+mod windows_processes {
+    use super::{ProcessDiscoveryError, WindowsProcess};
+    use windows_sys::Wdk::System::Threading::{
+        NtQueryInformationProcess, ProcessCommandLineInformation,
+    };
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+
+    struct OwnedHandle(HANDLE);
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    pub(super) fn snapshot() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(ProcessDiscoveryError::Query(std::io::Error::last_os_error()));
+        }
+        let snapshot = OwnedHandle(snapshot);
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut path_buffer = vec![0u16; 32 * 1024];
+        let mut processes = Vec::new();
+        let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+        while more {
+            processes.push(process(&entry, &mut path_buffer));
+            more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+        }
+        Ok(processes)
+    }
+
+    fn process(entry: &PROCESSENTRY32W, path_buffer: &mut [u16]) -> WindowsProcess {
+        let name_length = entry
+            .szExeFile
+            .iter()
+            .position(|&character| character == 0)
+            .unwrap_or(entry.szExeFile.len());
+        // Processes of other users or protected processes may not open; like CIM, they are still
+        // listed, just without the details.
+        let handle = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID)
+        };
+        let handle = (!handle.is_null()).then(|| OwnedHandle(handle));
+        WindowsProcess {
+            process_id: entry.th32ProcessID,
+            parent_process_id: entry.th32ParentProcessID,
+            name: String::from_utf16_lossy(&entry.szExeFile[..name_length]),
+            command_line: handle.as_ref().map(|handle| command_line(handle.0)).unwrap_or_default(),
+            creation_date: handle.as_ref().map(|handle| creation_date(handle.0)).unwrap_or_default(),
+            executable_path: handle
+                .as_ref()
+                .map(|handle| image_path(handle.0, path_buffer))
+                .unwrap_or_default(),
+            vscode_process_type: None,
+        }
+    }
+
+    fn command_line(handle: HANDLE) -> String {
+        let mut length = 0u32;
+        unsafe {
+            NtQueryInformationProcess(
+                handle,
+                ProcessCommandLineInformation,
+                std::ptr::null_mut(),
+                0,
+                &mut length,
+            )
+        };
+        if length == 0 {
+            return String::new();
+        }
+        // The result is a UNICODE_STRING followed by its characters, so it needs pointer alignment.
+        let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                ProcessCommandLineInformation,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * size_of::<usize>()) as u32,
+                &mut length,
+            )
+        };
+        if status < 0 {
+            return String::new();
+        }
+        let text = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
+        if text.Buffer.is_null() {
+            return String::new();
+        }
+        let characters =
+            unsafe { std::slice::from_raw_parts(text.Buffer, usize::from(text.Length) / 2) };
+        // Some command lines contain NULs (e.g. WMI providers); CIM ends them at the first one.
+        let length = characters.iter().position(|&character| character == 0).unwrap_or(characters.len());
+        String::from_utf16_lossy(&characters[..length])
+    }
+
+    fn creation_date(handle: HANDLE) -> String {
+        let empty = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut created, mut exited, mut kernel, mut user) = (empty, empty, empty, empty);
+        if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } == 0
+        {
+            return String::new();
+        }
+        let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        // FILETIME counts 100 ns since 1601; PowerShell writes milliseconds since 1970.
+        let milliseconds = (ticks / 10_000) as i64 - 11_644_473_600_000;
+        format!("/Date({milliseconds})/")
+    }
+
+    fn image_path(handle: HANDLE, buffer: &mut [u16]) -> String {
+        let mut size = buffer.len() as u32;
+        if unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size)
+        } == 0
+        {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buffer[..size as usize])
+    }
+}
+
+/// The CIM query the native listing replaced; the process-tree provider still uses it.
+#[cfg(all(test, windows))]
+async fn query_cim_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     // Without a console, Windows PowerShell writes stdout in the OEM code page, so any
     // non-ASCII command line would make the whole listing invalid UTF-8.
@@ -1657,6 +1821,62 @@ mod tests {
         assert!(!current.command_line.is_empty());
         assert!(!current.creation_date.is_empty());
         assert!(!current.executable_path.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_windows_processes_match_cim() {
+        // The process-tree provider names targets from CIM, so both must agree exactly.
+        let cim = query_cim_processes().await.unwrap();
+        let native = query_windows_processes()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|process| (process.process_id, process))
+            .collect::<BTreeMap<_, _>>();
+        let mut compared = 0;
+        let mut mismatches = Vec::new();
+        for expected in cim.iter().filter(|process| {
+            process.process_id != 0 && !process.command_line.is_empty()
+        }) {
+            // A process that exited, or whose PID was reused, between the two queries is skipped,
+            // and so is one that exited before it could be opened.
+            let Some(actual) = native.get(&expected.process_id) else {
+                continue;
+            };
+            if actual.creation_date.is_empty() {
+                continue;
+            }
+            if actual.creation_date != expected.creation_date {
+                if actual.name != expected.name {
+                    continue;
+                }
+                mismatches.push(format!(
+                    "{} creation {:?} != {:?}",
+                    expected.process_id, actual.creation_date, expected.creation_date
+                ));
+                continue;
+            }
+            compared += 1;
+            let process_id = expected.process_id;
+            for (field, actual, expected) in [
+                ("name", &actual.name, &expected.name),
+                ("command line", &actual.command_line, &expected.command_line),
+            ] {
+                if actual != expected {
+                    mismatches.push(format!("{process_id} {field} {actual:?} != {expected:?}"));
+                }
+            }
+            // CIM reports the path as launched; the native listing reports the resolved file.
+            if actual.executable_path.is_empty() != expected.executable_path.is_empty() {
+                mismatches.push(format!("{process_id} path {:?}", actual.executable_path));
+            }
+            if actual.parent_process_id != expected.parent_process_id {
+                mismatches.push(format!("{} parent differs", expected.process_id));
+            }
+        }
+        assert!(compared > 0, "no process could be compared");
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
     #[cfg(windows)]

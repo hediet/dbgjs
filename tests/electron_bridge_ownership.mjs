@@ -12,6 +12,9 @@ class FakeDebugger extends EventEmitter {
 		this.failNextCommand = undefined;
 		this.runIfWaitingCount = 0;
 		this.pendingWaitForDebugger = undefined;
+		this.sessions = new Set();
+		this.nextSession = 0;
+		this.commandSessions = [];
 	}
 
 	isAttached() {
@@ -32,15 +35,36 @@ class FakeDebugger extends EventEmitter {
 		}
 		this.attached = false;
 		this.detachCount++;
+		this.sessions.clear();
 		this.pendingWaitForDebugger?.resolve({});
 		this.pendingWaitForDebugger = undefined;
 		this.emit("detach", {}, "detached");
 	}
 
-	async sendCommand(method) {
+	async sendCommand(method, params = {}, sessionId) {
+		if (!this.attached) {
+			throw new Error("debugger is not attached");
+		}
+		if (sessionId && !this.sessions.has(sessionId)) {
+			throw new Error(`no session ${sessionId}`);
+		}
+		this.commandSessions.push(sessionId);
 		if (method === this.failNextCommand) {
 			this.failNextCommand = undefined;
 			throw new Error(`deterministic ${method} initialization failure`);
+		}
+		if (method === "Target.getTargetInfo") {
+			return { targetInfo: { targetId: "page-target", type: "page" } };
+		}
+		if (method === "Target.attachToTarget") {
+			const child = `session-${++this.nextSession}`;
+			this.sessions.add(child);
+			return { sessionId: child };
+		}
+		if (method === "Target.detachFromTarget") {
+			this.sessions.delete(params.sessionId);
+			this.emit("message", {}, "Target.detachedFromTarget", { sessionId: params.sessionId }, sessionId ?? "");
+			return {};
 		}
 		// Chromium only answers `Page.waitForDebugger` once the renderer is resumed, so the fake
 		// keeps the promise pending exactly like a genuinely blocked renderer would.
@@ -49,7 +73,8 @@ class FakeDebugger extends EventEmitter {
 				this.pendingWaitForDebugger = { resolve, reject };
 			});
 		}
-		if (method === "Runtime.runIfWaitingForDebugger") {
+		// The startup pause belongs to the root session that requested it.
+		if (method === "Runtime.runIfWaitingForDebugger" && !sessionId) {
 			this.runIfWaitingCount++;
 			this.pendingWaitForDebugger?.resolve({});
 			this.pendingWaitForDebugger = undefined;
@@ -152,8 +177,8 @@ windows[1].isDestroyed = () => true;
 assert.equal(bridge.list().find((target) => target.webContentsId === shared.id).primaryWindowId, undefined);
 allContents.pop();
 
-const connect = (role, force = false, webContentsId = contents.id) => new Promise((resolve, reject) => {
-	const socket = net.connect({ host: "127.0.0.1", port });
+const connect = (role, force = false, webContentsId = contents.id, endpoint = { port, token }) => new Promise((resolve, reject) => {
+	const socket = net.connect({ host: "127.0.0.1", port: endpoint.port });
 	let buffer = "";
 	socket.setEncoding("utf8");
 	socket.on("error", reject);
@@ -169,7 +194,7 @@ const connect = (role, force = false, webContentsId = contents.id) => new Promis
 	});
 	socket.on("connect", () => {
 		socket.write(`${JSON.stringify({
-			token,
+			token: endpoint.token,
 			role,
 			webContentsId: role === "renderer" ? webContentsId : undefined,
 			force,
@@ -289,6 +314,58 @@ console.log(`initialization-cleanup: attached=${fakeDebugger.isAttached()}`);
 const retry = await connect("renderer");
 console.log(`retry-after-initialization-failure: ${retry.frame.ready ? "created" : "failed"}`);
 await closeRenderer(retry);
+
+// Each dbgjs connection installs its own bridge; their clients share the window's one debugger
+// attachment, and each works in its own session as if it owned the debugger.
+const secondToken = "second-connection-token";
+const secondBridge = await install(secondToken);
+const attachesBeforeSharing = fakeDebugger.attachCount;
+const firstClient = await connect("renderer");
+const secondClient = await connect("renderer", false, contents.id, { port: secondBridge.endpoint().port, token: secondToken });
+console.log(
+	`shared: first=${firstClient.frame.ready ? "created" : "failed"} second=${secondClient.frame.ready ? "created" : "failed"} attaches=${fakeDebugger.attachCount - attachesBeforeSharing} sessions=${fakeDebugger.sessions.size}`,
+);
+const [firstSession, secondSession] = [...fakeDebugger.sessions];
+await sendCommand(secondClient, 1, "Runtime.evaluate");
+console.log(`shared-command: session=${fakeDebugger.commandSessions.at(-1) === secondSession ? "own" : "other"}`);
+const received = [];
+for (const [name, client] of [["first", firstClient], ["second", secondClient]]) {
+	client.socket.removeAllListeners("data");
+	client.socket.on("data", (chunk) => {
+		for (const line of chunk.split("\n").filter(Boolean)) {
+			const frame = JSON.parse(line);
+			if (frame.kind === "cdp" && frame.envelope.method === "Runtime.consoleAPICalled") {
+				received.push(`${name}${frame.envelope.sessionId ? `@${frame.envelope.sessionId}` : ""}`);
+			}
+		}
+	});
+}
+fakeDebugger.emit("message", {}, "Runtime.consoleAPICalled", {}, firstSession);
+await new Promise((resolve) => setTimeout(resolve, 50));
+console.log(`shared-event: delivered=${received.join(",")}`);
+await closeRenderer(firstClient);
+console.log(`shared-release-one: attached=${fakeDebugger.isAttached()} sessions=${fakeDebugger.sessions.size}`);
+await closeRenderer(secondClient);
+console.log(`shared-release-all: attached=${fakeDebugger.isAttached()}`);
+const waitClosed = ({ socket }) => new Promise((resolve) => {
+	socket.removeAllListeners("data");
+	socket.on("data", (chunk) => {
+		if (chunk.split("\n").filter(Boolean).some((line) => JSON.parse(line).kind === "closed")) {
+			resolve(true);
+		}
+	});
+});
+const detachedClients = [
+	await connect("renderer"),
+	await connect("renderer", false, contents.id, { port: secondBridge.endpoint().port, token: secondToken }),
+];
+const closedClients = detachedClients.map(waitClosed);
+fakeDebugger.detach();
+console.log(`shared-external-detach: closed=${(await Promise.all(closedClients)).length}`);
+const afterDetach = await connect("renderer");
+console.log(`shared-reattach-after-detach: ${afterDetach.frame.ready ? "created" : "failed"}`);
+await closeRenderer(afterDetach);
+await secondBridge.dispose();
 
 // Renderer discovery is pushed by Electron's own lifecycle events, never polled, and stays silent
 // until a client asks for it.
