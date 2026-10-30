@@ -152,8 +152,8 @@ impl DebuggerService {
         }
     }
 
-    /// The first page titled `title`: among the machine context's connected process trees, else
-    /// among all VS Code, Electron, and browser process trees.
+    /// A page titled `title`: among the machine context's connected process trees, else the first
+    /// one a VS Code, Electron, or browser process-tree discovery finds.
     async fn machine_window(&self, ctx: &CallCtx, title: &str) -> Result<MachineTarget, JsonRpcError> {
         if let Ok(context) = ContextApi::get_context(self, ctx, MACHINE_CONTEXT.to_owned()).await {
             let connected = context
@@ -175,13 +175,22 @@ impl DebuggerService {
                 return Ok(found);
             }
         }
-        let discovered = futures_util::future::join_all(
-            [ProcessRootKind::Vscode, ProcessRootKind::Electron, ProcessRootKind::Browser]
-                .map(|root_kind| ServiceApi::discover_process_trees(self, ctx, Some(root_kind), false, true)),
-        )
-        .await;
+        // Each kind is discovered in its own task, and the first one that finds the title answers:
+        // a VS Code window does not wait for every Electron app and browser to connect. The other
+        // discoveries finish in the background, so later lookups find those trees connected.
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        for root_kind in [ProcessRootKind::Vscode, ProcessRootKind::Electron, ProcessRootKind::Browser] {
+            let service = self.clone();
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                let discovered =
+                    ServiceApi::discover_process_trees(&service, &CallCtx::default(), Some(root_kind), false, true).await;
+                let _ = sender.send(discovered);
+            });
+        }
+        drop(sender);
         let mut failures = Vec::new();
-        for result in discovered {
+        while let Some(result) = receiver.recv().await {
             match result {
                 Ok(trees) => {
                     if let Some(found) = trees.iter().find_map(|tree| {
