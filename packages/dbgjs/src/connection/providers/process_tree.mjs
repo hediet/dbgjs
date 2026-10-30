@@ -11,8 +11,6 @@ const processMode = process.env.DBGJS_PROCESS_MODE || "tree";
 // Supplied by the Rust service, which owns the list of Chromium browser executable names.
 const browserExecutables = new Set(JSON.parse(process.env.DBGJS_BROWSER_EXECUTABLES || "[]"));
 const pollIntervalMs = 2_000;
-const startupSnapshotMaxAgeMs = 10_000;
-let startupSnapshot;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
 const expandedProcessIds = new Set([rootPid]);
@@ -37,7 +35,6 @@ main().catch(reportError);
 async function main() {
 	const processes = await listProcesses();
 	const listeners = await listListeners(processes);
-	startupSnapshot = { processes, listeners, takenAt: Date.now() };
 	const root = processes.find((candidate) => candidate.pid === rootPid);
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
@@ -166,15 +163,8 @@ function scan() {
 		if (processMode === "single") {
 			return;
 		}
-		// The first scan after startup reuses the startup listing instead of querying again, so
-		// a new connection publishes its targets without waiting for another (on Windows, slow
-		// PowerShell) process query.
-		const snapshot = startupSnapshot && Date.now() - startupSnapshot.takenAt <= startupSnapshotMaxAgeMs
-			? startupSnapshot
-			: undefined;
-		startupSnapshot = undefined;
 		try {
-			await reconcile(snapshot?.processes, snapshot?.listeners);
+			await reconcile();
 		} catch (error) {
 			console.error(`process-tree discovery failed: ${error?.stack ?? error}`);
 		}
