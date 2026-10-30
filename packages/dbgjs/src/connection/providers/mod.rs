@@ -40,9 +40,6 @@ use node_executable::{NodeExecutableNotFound, resolve_node_executable};
 use crate::service::virtual_browser_root::{TargetEndpoint, VirtualBrowserRoot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
-/// Process-tree providers list processes through PowerShell/CIM on Windows, whose cold start on
-/// hosted runners can exceed 30 seconds.
-const PROCESS_TREE_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const RAW_CDP_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const PLAYWRIGHT_HELPER: &str = include_str!("playwright.mjs");
 const CHROME_HELPER: &str = include_str!("chrome.mjs");
@@ -342,7 +339,6 @@ impl ConnectionRuntime {
                 let launch = launch_provider(
                     PROCESS_TREE_HELPER,
                     "process",
-                    PROCESS_TREE_STARTUP_TIMEOUT,
                     true,
                     [
                         ("DBGJS_PROCESS_ROOT_PID", process_id.to_string()),
@@ -381,7 +377,6 @@ impl ConnectionRuntime {
                 let launch = launch_provider(
                     CHROME_HELPER,
                     "Chrome",
-                    PLAYWRIGHT_STARTUP_TIMEOUT,
                     false,
                     [
                         ("DBGJS_PROVIDER_URL", url.clone()),
@@ -420,7 +415,6 @@ impl ConnectionRuntime {
                 let launch = launch_provider(
                     NODE_HELPER,
                     "Node.js",
-                    PLAYWRIGHT_STARTUP_TIMEOUT,
                     true,
                     [
                         ("DBGJS_NODE_PROGRAM", program.clone()),
@@ -503,7 +497,6 @@ impl ConnectionRuntime {
         let mut launch = launch_provider(
             PROCESS_TREE_HELPER,
             "process tree",
-            PROCESS_TREE_STARTUP_TIMEOUT,
             true,
             [
                 ("DBGJS_PROCESS_ROOT_PID", root_pid.to_string()),
@@ -1394,7 +1387,6 @@ async fn launch_playwright(
 async fn launch_provider<const N: usize>(
     helper: &str,
     provider_name: &'static str,
-    startup_timeout: Duration,
     capture_events: bool,
     environment: [(&str, String); N],
 ) -> Result<ProviderLaunch, ConnectionProviderError> {
@@ -1425,7 +1417,7 @@ async fn launch_provider<const N: usize>(
         .take()
         .ok_or(ConnectionProviderError::MissingProviderStdout)?;
     let mut lines = BufReader::new(stdout).lines();
-    let line = match timeout(startup_timeout, lines.next_line()).await {
+    let line = match timeout(PLAYWRIGHT_STARTUP_TIMEOUT, lines.next_line()).await {
         Err(_) => {
             terminate_provider(&mut child).await;
             return Err(ConnectionProviderError::NamedStartupTimeout(provider_name));

@@ -823,8 +823,7 @@ async function powershell(script) {
 	], {
 		windowsHide: true,
 		maxBuffer: 16 * 1024 * 1024,
-		// A cold CIM start on hosted Windows runners can exceed 30 seconds.
-		timeout: 60_000,
+		timeout: 30_000,
 	});
 	const text = stdout.trim();
 	return text ? JSON.parse(text) : [];
