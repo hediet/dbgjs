@@ -19,6 +19,8 @@ let scanQueue = Promise.resolve();
 let running = true;
 let discoveryEnabled = false;
 let wake = () => {};
+const pendingProcessListings = new Map();
+let nextProcessListing = 0;
 
 if (!["win32", "linux", "darwin"].includes(process.platform)) {
 	throw new Error(`existing process-tree discovery is unsupported on ${process.platform}`);
@@ -33,6 +35,8 @@ if (!Number.isSafeInteger(rootPid) || rootPid <= 0) {
 main().catch(reportError);
 
 async function main() {
+	// Commands include the service's answers to process listings, which startup already needs.
+	readControlCommands();
 	const processes = await listProcesses();
 	const listeners = await listListeners(processes);
 	const root = processes.find((candidate) => candidate.pid === rootPid);
@@ -46,7 +50,6 @@ async function main() {
 		browserEndpoint: browser?.electron ? browser.endpoint : undefined,
 	})}\n`);
 
-	readControlCommands();
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
 
@@ -95,6 +98,16 @@ function handleCommand(line) {
 		command = JSON.parse(line);
 	} catch (error) {
 		console.error(`ignored invalid process-tree command: ${error?.message ?? error}`);
+		return;
+	}
+	if (command?.command === "processes") {
+		const listing = pendingProcessListings.get(command.id);
+		pendingProcessListings.delete(command.id);
+		if (command.error) {
+			listing?.reject(new Error(command.error));
+		} else {
+			listing?.resolve(command.processes);
+		}
 		return;
 	}
 	if (command?.command === "setDiscovery") {
@@ -669,17 +682,13 @@ async function listProcesses() {
 		]);
 		return parseUnixProcesses(commands.stdout, names.stdout);
 	}
-	const value = await powershell(`
-		@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate) |
-			ConvertTo-Json -Compress
-	`);
-	return asArray(value).map((candidate) => ({
-		pid: Number(candidate.ProcessId),
-		parentPid: Number(candidate.ParentProcessId),
-		name: String(candidate.Name || ""),
-		commandLine: String(candidate.CommandLine || ""),
-		creationDate: String(candidate.CreationDate || ""),
-	}));
+	// On Windows the service lists processes natively, in the form of `Get-CimInstance Win32_Process`;
+	// a PowerShell query per scan would take about a second, and much longer while WMI starts.
+	const id = ++nextProcessListing;
+	return new Promise((resolve, reject) => {
+		pendingProcessListings.set(id, { resolve, reject });
+		process.stdout.write(`${JSON.stringify({ kind: "listProcesses", id })}\n`);
+	});
 }
 
 function parseUnixProcesses(commands, names) {
@@ -814,21 +823,6 @@ async function listLinuxListeners(processes) {
 	return [...listeners.values()];
 }
 
-async function powershell(script) {
-	const { stdout } = await execFile("powershell.exe", [
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		`$ErrorActionPreference = "Stop"; ${script}`,
-	], {
-		windowsHide: true,
-		maxBuffer: 16 * 1024 * 1024,
-		timeout: 30_000,
-	});
-	const text = stdout.trim();
-	return text ? JSON.parse(text) : [];
-}
-
 function processDescendants(processes, pid) {
 	const children = new Map();
 	for (const candidate of processes) {
@@ -910,10 +904,6 @@ async function poll(operation, timeoutMs) {
 		await delay(100);
 	} while (Date.now() < deadline);
 	return undefined;
-}
-
-function asArray(value) {
-	return Array.isArray(value) ? value : value ? [value] : [];
 }
 
 function delay(milliseconds) {

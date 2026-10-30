@@ -1124,6 +1124,9 @@ impl ConnectionRuntime {
                     }
                     ProviderEvent::ScanComplete { .. } => {}
                     ProviderEvent::ActivationComplete { .. } => {}
+                    // A single-process provider lists processes only during startup, which
+                    // `launch_provider` answers.
+                    ProviderEvent::ListProcesses { .. } => {}
                 }
             }
         });
@@ -1417,7 +1420,27 @@ async fn launch_provider<const N: usize>(
         .take()
         .ok_or(ConnectionProviderError::MissingProviderStdout)?;
     let mut lines = BufReader::new(stdout).lines();
-    let line = match timeout(PLAYWRIGHT_STARTUP_TIMEOUT, lines.next_line()).await {
+    // Before its handshake, a process-tree provider asks for the process list it starts from.
+    let mut stdin = child.stdin.take();
+    let startup = timeout(PLAYWRIGHT_STARTUP_TIMEOUT, async {
+        loop {
+            let Some(line) = lines.next_line().await? else {
+                return Ok(None);
+            };
+            if let Ok(ProviderEvent::ListProcesses { id }) = serde_json::from_str(&line) {
+                if let Some(stdin) = stdin.as_mut() {
+                    let command = format!("{}\n", process_listing_command(id).await);
+                    stdin.write_all(command.as_bytes()).await?;
+                    stdin.flush().await?;
+                }
+                continue;
+            }
+            return Ok::<_, std::io::Error>(Some(line));
+        }
+    })
+    .await;
+    child.stdin = stdin;
+    let line = match startup {
         Err(_) => {
             terminate_provider(&mut child).await;
             return Err(ConnectionProviderError::NamedStartupTimeout(provider_name));
@@ -1634,6 +1657,18 @@ pub(crate) enum ProviderEvent {
         endpoint: Option<String>,
         error: Option<String>,
     },
+    /// The provider asks for all processes; answer with [`process_listing_command`].
+    ListProcesses {
+        id: u64,
+    },
+}
+
+/// The control command that answers a provider's `listProcesses` request.
+pub(crate) async fn process_listing_command(id: u64) -> serde_json::Value {
+    match crate::connection::discovery::process_discovery::provider_processes().await {
+        Ok(processes) => serde_json::json!({ "command": "processes", "id": id, "processes": processes }),
+        Err(error) => serde_json::json!({ "command": "processes", "id": id, "error": error.to_string() }),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

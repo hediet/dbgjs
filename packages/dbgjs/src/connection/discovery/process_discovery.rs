@@ -608,6 +608,24 @@ async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscove
         .map_err(|error| ProcessDiscoveryError::QueryFailed(error.to_string()))?
 }
 
+/// All processes in the form the process-tree provider uses, so that on Windows it asks the
+/// service instead of starting PowerShell for every scan.
+pub(crate) async fn provider_processes() -> Result<Vec<serde_json::Value>, ProcessDiscoveryError> {
+    Ok(query_windows_processes()
+        .await?
+        .into_iter()
+        .map(|process| {
+            serde_json::json!({
+                "pid": process.process_id,
+                "parentPid": process.parent_process_id,
+                "name": process.name,
+                "commandLine": process.command_line,
+                "creationDate": process.creation_date,
+            })
+        })
+        .collect())
+}
+
 /// Lists processes natively, reporting the values `Get-CimInstance Win32_Process` would, but in
 /// milliseconds instead of a PowerShell start. The process-tree provider still names targets from
 /// its CIM query, so `CreationDate` keeps the `/Date(<ms>)/` form of PowerShell's JSON. The

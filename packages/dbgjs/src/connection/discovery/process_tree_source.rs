@@ -23,7 +23,7 @@ use crate::cdp::{
     TargetAttachedToTargetParams, TargetDetachedFromTargetParams, TargetTargetCreatedParams,
     TargetTargetDestroyedParams, TargetTargetInfo, TargetTargetInfoChangedParams,
 };
-use crate::connection::providers::ProviderEvent;
+use crate::connection::providers::{ProviderEvent, process_listing_command};
 use crate::connection::transport::electron_renderer_transport::{
     BridgeEvent, ElectronRendererBridge, ElectronRendererTarget,
 };
@@ -248,6 +248,13 @@ impl ProcessTreeTargetSource {
                         {
                             let _ = waiter.send(result);
                         }
+                    }
+                    ProviderEvent::ListProcesses { id } => {
+                        // Answered concurrently, so other provider events are not held up.
+                        let source = source.clone();
+                        tokio::spawn(async move {
+                            source.send_command(process_listing_command(id).await).await;
+                        });
                     }
                 }
             }
