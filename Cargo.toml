@@ -12,3 +12,12 @@ debug = 1
 
 [profile.test]
 debug = 1
+
+# Distribution builds. A smaller executable also starts faster: on Windows, Defender scans the
+# whole unsigned executable on every launch. Panics keep unwinding so a failed service task does
+# not abort the service.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"

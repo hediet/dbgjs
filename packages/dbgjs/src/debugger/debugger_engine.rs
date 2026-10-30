@@ -2018,7 +2018,10 @@ fn script_may_expose_breakpoint(
 }
 
 fn script_may_expose_source(script: &ScriptState, source_url: &str) -> bool {
-    source_urls_match(&script.url, source_url) || script.source_map_url.is_some()
+    source_urls_match(&script.url, source_url)
+        || script.source_map_url.is_some()
+        // A short path such as `shop.js` names a plain script by its URL's path suffix.
+        || friendly_source_matches(&script.url, source_url)
 }
 
 fn script_has_frame_demand(state: &DebuggerState, script: &ScriptKey) -> bool {
@@ -3217,6 +3220,41 @@ mod tests {
         assert!(matches!(
             requested_again.state.scripts[&script].source,
             ScriptSourceState::Pending(_)
+        ));
+    }
+
+    #[test]
+    fn short_path_breakpoint_hydrates_a_plain_script_with_that_path_suffix() {
+        let (state, session) = configured_session();
+        let parsed = ["http://localhost:8080/static/shop.js", "http://localhost:8080/other.js"]
+            .into_iter()
+            .fold(state, |state, url| {
+                reduce(
+                    &state,
+                    Input::ScriptParsed {
+                        session: session.clone(),
+                        script_id: url.into(),
+                        url: url.into(),
+                        hash: url.into(),
+                        source_map_url: None,
+                    },
+                )
+                .state
+            });
+        let with_breakpoint = reduce(
+            &parsed,
+            Input::SetBreakpoint {
+                key: breakpoint_key(),
+                source_url: "shop.js".into(),
+                position: Position::ZERO,
+                condition: None,
+            },
+        );
+
+        assert!(matches!(
+            with_breakpoint.effects.as_slice(),
+            [Effect::FetchScriptSource { script, .. }]
+                if script.script_id == "http://localhost:8080/static/shop.js"
         ));
     }
 
