@@ -14,7 +14,7 @@ use crate::api::service_api::{
     ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot, ProcessTreeSnapshot,
 };
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 // Cold PowerShell/CIM startup on hosted Windows runners can exceed 15 seconds.
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
